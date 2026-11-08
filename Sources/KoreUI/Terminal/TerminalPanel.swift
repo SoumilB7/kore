@@ -33,7 +33,7 @@ final class TerminalEntry: Identifiable {
         self.chat = chat
         original = command
         let view = TerminalView(frame: CGRect(x: 0, y: 0, width: 760, height: 220),
-                                font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+                                font: TerminalShell.font,
                                 options: TerminalOptions(cursorStyle: .steadyBar, scrollback: 1_000))
         // No LocalProcess and no input delegate: keys and paste cannot reach the agent.
         output = view
@@ -288,10 +288,10 @@ extension Layout {
         static let height: CGFloat = 240
         static let minimum: CGFloat = 120
         static let chatMinimum: CGFloat = 120
-        static let header: CGFloat = 32
+        @MainActor static var header: CGFloat { Zoom.pt(32) }
         /// The sash's height, laid out between the chat and the panel.
         static let sash: CGFloat = 6
-        static let listWidth: CGFloat = 150
+        @MainActor static var listWidth: CGFloat { Zoom.pt(150) }
         /// The text's inset from the panel's sides and header.
         static let side = Space.xxxl
         static let top = Space.sm

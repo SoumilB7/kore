@@ -241,11 +241,17 @@ final class BoxBinding {
     func newChat(_ provider: Provider) -> Chat { chat(provider, id: nil, title: nil) }
 
     /// A fork of a chat here, made on the box from where it starts: its CLI shows the history
-    /// before that point, as a fork on this Mac does.
-    func forkChat(of original: Chat, from: String, at: String, title: String) -> Chat {
+    /// before that point, as a fork on this Mac does, with its original's settings (its login,
+    /// fast, plan, auto-compact point; its Arsenal tier unless `arsenal` is false: an agent's fork).
+    func forkChat(of original: Chat, from: String, at: String, title: String, arsenal: Bool = true) -> Chat {
+        let login = (original.services as? BoxChatServices)?.chatId.flatMap { connection.chats[$0]?.controls?.login }
+        var settings = ChatSettings(of: original, draft: false, login: login)
+        settings.at = nil
+        if !arsenal { settings.arsenal = nil }
+        settings.arsenal = BoxTools.said(settings.arsenal, caps: connection.caps)
         let making = LinkChatBackend.Making(
             model: original.controls.modelId ?? original.launchModel, forkFrom: from, forkAt: at, title: title, mode: original.controls.mode,
-            effort: original.controls.effort)
+            effort: original.controls.effort, settings: settings)
         return chat(original.provider, id: nil, title: title, making: making, forkedFrom: original.title)
     }
 
@@ -387,7 +393,7 @@ final class BoxChatServices: ChatServices {
     /// Its chat, for the box's renames.
     private weak var chat: Chat?
     /// What a chat new from here is made with on the box (a fork's start).
-    private let making: LinkChatBackend.Making?
+    let making: LinkChatBackend.Making?
     /// Its backend, for what the box keeps with the chat (1.9), and the draft the box last had.
     private weak var backend: LinkChatBackend?
     /// Being made on the box: its id isn't known here yet.
@@ -418,6 +424,8 @@ final class BoxChatServices: ChatServices {
         }
         backend.onCreated = { [weak self, weak backend] id in
             self?.chatId = id
+            // Known on the box now: a tier on is kept under its id there.
+            if let chat = self?.chat { Arsenal.shared.identified(chat) }
             // What the box listed meanwhile, now this chat is known.
             self?.binding?.adoptChats()
             // A chat made here (a fork) keeps the point it started with on the box.
@@ -480,9 +488,14 @@ final class BoxChatServices: ChatServices {
         self.chat = chat
         if let chatId, let line = ChatPlaces.shared.takeNote(connection.alias, chatId) { chat.note(line) }
         chat.ownPopups()
-        // Modes above Auto are set on the box itself: the picker doesn't offer them.
+        // Box chats go up to Auto (`LinkPolicy.raiseCap`): the picker doesn't offer the modes above.
         chat.controls.levelCap = LinkPolicy.raiseCap.rawValue
-        chat.controls.levelCapNote = "Set on \(NodeNames.name(connection.alias)) itself"
+        chat.controls.levelCapNote = LinkPolicy.boxCapLine
+        // Its tier from before (Kore or the box restarted), once it's in its window: said to the box
+        // with its first look, so the box doesn't take the Mac's nothing for off.
+        Task { @MainActor [weak chat] in
+            if let chat { Arsenal.shared.restore(chat) }
+        }
     }
     func closed(_ chat: Chat) { app.closed(chat) }
     func planWindows(_ cli: String, _ snapshot: PlanSnapshot?) {}

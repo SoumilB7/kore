@@ -1,4 +1,5 @@
 import Foundation
+import LinkProtocol
 import KoreUI
 
 /// Who may use the agent channel: the master switch (a setting, with no control yet) and each
@@ -13,7 +14,7 @@ package enum AgentGrants {
     package static var enabled: Bool { defaults.bool(forKey: switchKey) }
 
     /// Connects Arsenal to this, at launch, before any chat registers: the switch as saved, so each
-    /// chat's kept tier comes back as it registers. Watch, Own and Drive have commands; a tier not built yet is
+    /// chat's kept tier comes back as it registers. Watch, Own, Drive and Device have commands; a tier not built yet is
     /// Off here, and external callers stay Off.
     package static func install() {
         AgentTaps.setAllowed = { setEnabled($0) }
@@ -22,6 +23,7 @@ package enum AgentGrants {
             case .watch: .watch
             case .own: .own
             case .drive: .drive
+            case .device: .device
             case .full, nil: .off
             }
             set(granted, chat: chat)

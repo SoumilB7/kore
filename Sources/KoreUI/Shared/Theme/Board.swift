@@ -28,11 +28,11 @@ extension Size {
         /// The grip at a divider's middle (across, along).
         static let grip = CGSize(width: 6, height: 28)
         /// A slot's ＋ and ×.
-        static let slotButton: CGFloat = 22
+        @MainActor static var slotButton: CGFloat { Zoom.pt(22) }
         /// A slot's dashed outline: dash and space.
         static let slotDash: [CGFloat] = [4, 3]
         /// A tile's header in a card or full tile; the move handle.
-        static let tileHeader: CGFloat = 30
+        @MainActor static var tileHeader: CGFloat { Zoom.pt(30) }
         /// A gutter pulls to a snap point this close.
         static let snapPull: CGFloat = 8
         /// The keyboard's step for a boundary when no snap point is nearer.
@@ -50,7 +50,7 @@ extension Size {
         /// A section's swatch before its name.
         static let swatch: CGFloat = 8
         /// The section header's ＋ and ⋯.
-        static let headerButton: CGFloat = 22
+        @MainActor static var headerButton: CGFloat { Zoom.pt(22) }
         /// The card's last reply: at most this much of it is kept.
         static let excerpt = 600
         /// The layout steps ⌘Z goes back through.

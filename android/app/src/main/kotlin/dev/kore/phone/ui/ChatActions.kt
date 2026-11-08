@@ -106,7 +106,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     }
     /**
      * Arsenal, only while it's on: the Mac's mark (a bolt in a ring) in the tier's colour, 20 dp in
-     * a 28×36 dp target. A tap opens the options sheet, whose Arsenal part shows the tier and Stop all.
+     * a 28×36 dp target. A tap opens the options sheet, whose Arsenal part shows the tier and Stop agent control.
      */
     private val arsenalMark = android.widget.ImageView(activity).apply {
         setImageResource(dev.kore.phone.R.drawable.ic_arsenal)
@@ -192,7 +192,11 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         setPadding(pad, pad, pad, pad)
         contentDescription = "Attach"
         pressFill(null, Tone.l2, 18)
-        setOnClickListener { if (uploadsOn()) chooseAttachment() else quiet("Uploads arrive with Kore's next update.") }
+        setOnClickListener {
+            val caps = Offers.caps(link()?.welcome?.value)
+            val box = link()?.device?.value?.kind == dev.kore.link.trust.NodeKind.BOX
+            Offers.uploadsOff(caps, control = "history" in caps || !box, box = box, name = link()?.name ?: "there")?.let { quiet(it) } ?: chooseAttachment()
+        }
     }
     /** The attachments, inside the composer above the field: 52 thumbnails, 8 apart. */
     private val chips = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
@@ -342,6 +346,9 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     private var note = ""
     private var cardKey: String? = null
     private val pending = HashMap<String, String>()
+    /** A message went: the transcript goes to its end and follows it. */
+    var sent: () -> Unit = {}
+
     /** What a send carried, so one that expired offline can be sent again with a tap. */
     private val sentText = HashMap<String, String>()
     private var retryText: String? = null
@@ -420,11 +427,9 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         note = when (r.str("code")) {
             "denied.sendCap" -> "This chat only takes messages on the Mac."
             "denied.raiseMode" -> r.str("message") ?: "That needs your fingerprint first."
-            // A risky card's Allow without the fingerprint: nothing was sent.
-            "cancelled" -> "Allow needs your fingerprint."
             "stale.card", "gone.card" -> "That card changed. Look again."
             "rateLimited" -> "Too fast. Try again in a moment."
-            else -> "Not sent (${r.str("code") ?: "refused"})."
+            else -> deviceWords(r.str("message"))?.let { "Not sent: $it" } ?: "Not sent (${r.str("code") ?: "refused"})."
         }
         showStatus()
     }
@@ -479,6 +484,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         val text = retryText ?: return
         val l = link() ?: return quiet("Not connected")
         val id = l.send(chatId, text)
+        sent()
         pending[id] = "send"
         sentText[id] = text
         retryText = null
@@ -498,6 +504,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         attachments.clear()
         showChips()
         val id = l.send(chatId, text, blobs)
+        sent()
         // Sent: the draft goes everywhere (after the message, so it never goes first).
         drafts.sent(clock())
         scheduleDraft()
@@ -515,9 +522,6 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     }
     private val attachments = ArrayList<Attachment>()
     private var shot: Uri? = null
-
-    /** Uploads only once the Mac side offers them (link 1.1); until then 📎 says so instead. */
-    private fun uploadsOn(): Boolean = hasCap("blob") || hasCap("upload")
 
     /** What the Mac side offers this link (welcome `caps`): "blob" for uploads, "commands" for the "/" list. */
     private fun hasCap(name: String): Boolean {
@@ -844,13 +848,14 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         segmented(tiers.map { it to arsenalShort(it) }, current, marked = tiers.filter { C.arsenalRaises(current, it) }.toSet()) { t ->
             if (C.arsenalRaises(current, t)) { dismiss(); raisePrompt(C.arsenalName(t), "arsenal.$t") } else run("arsenal", C.setArsenal(chatId, t))
         }
-        if (current != "off") item("Stop all", glyph = "■", danger = true, tag = "arsenal stop") { run("arsenalStop", C.arsenalStopAll()) }
+        if (current != "off") item("Stop agent control", glyph = "■", danger = true, tag = "arsenal stop") { run("arsenalStop", C.arsenalStopAll()) }
     }
 
     /** A tier's name short enough for a quarter of the segment; the raise sheet says it in full. */
     private fun arsenalShort(tier: String) = when (tier) {
         "own" -> "Act lim."
         "drive" -> "Unlim."
+        "device" -> "Device"
         else -> dev.kore.link.node.Control.arsenalName(tier)
     }
 
@@ -882,11 +887,11 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             when (kind) {
                 "fork" -> r.str("chatId")?.let { id ->
                     activity.startActivity(Intent(activity, ChatActivity::class.java).putExtra("chat", id))
-                } ?: quiet("Forked on the Mac")
+                } ?: quiet("Forked on ${link()?.name ?: "the Mac"}")
                 "close" -> activity.finish()
                 "select" -> quiet("Shown on the Mac")
                 "compact" -> quiet("Compacting…")
-                "revert" -> quiet("Reverted")
+                "revert" -> quiet("Rolled back")
                 "sendAtReset" -> quiet("")
                 "rename" -> quiet("")
                 else -> Unit
@@ -902,7 +907,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             return
         }
         if (kind in setOf("model", "effort", "fast", "autoCompact")) want.remove(kind)
-        val words = if (code == "denied.raiseMode") r.str("message") ?: refusalWords(code) else refusalWords(code)
+        val words = refusalWords(code, r.str("message"))
         val sheet = live.lastOrNull { it.isShowing }
         if (sheet != null) { sheet.say(words); sheet.refresh() } else quiet(words)
     }
@@ -1039,15 +1044,15 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     val turnRunning: Boolean get() = running
 
     /**
-     * "Revert to here", the Mac's rollback: asks first (what follows leaves the chat; files stay
+     * "Roll back to here", the Mac's rollback: asks first (what follows leaves the chat; files stay
      * as they are), never under a running turn.
      */
     fun revert(entryId: String, after: Boolean) {
-        if (running) return quiet("Stop the turn first, then revert.")
+        if (running) return quiet("Stop the turn first, then roll back.")
         lateinit var s: Sheet
         s = Sheet(activity, K.err).show {
-            title("Revert to here?", revertLine(prompt = !after))
-            buttons("Revert", danger = true) {
+            title("Roll back to here?", revertLine(prompt = !after))
+            buttons("Roll back, files stay", danger = true) {
                 s.dismiss()
                 run("revert", dev.kore.link.node.Control.rollback(chatId, entryId, after))
             }
@@ -1286,12 +1291,13 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
 fun arsenalTint(tier: String?): Int = when (tier) {
     "watch" -> Tone.b200
     "own" -> Tone.b400
+    "device" -> Tone.b500
     "full" -> Tone.warn
     else -> Tone.accent
 }
 
 /**
- * The Revert sheet's line (design spec §8), as this revert does it: the chat goes back, and on a
+ * The Roll back sheet's line (design spec §8), as this rollback does it: the chat goes back, and on a
  * prompt its text returns to the field. Files aren't touched by it, so the spec's files line never shows.
  */
 fun revertLine(prompt: Boolean): String =

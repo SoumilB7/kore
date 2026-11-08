@@ -1,14 +1,14 @@
 #!/bin/zsh
-# Publishes v<VERSION> as Kore's ONE GitHub release: three install lines, this version's
+# Publishes v<VERSION> as Kore's latest GitHub release: three install lines, this version's
 # CHANGELOG.md highlights, and the files the installers and updates download, all listed in a
-# signed SHA256SUMS. Once the new release is up, every other release and its tag is deleted, so
-# the Releases page only ever shows the latest. Tags HEAD; commit first.
+# signed SHA256SUMS. Older releases and tags stay: the new one is marked latest.
+# Tags HEAD; commit first.
 #
 #   scripts/release.sh --prepare     build every file fresh for HEAD, sign SHA256SUMS with the
 #                                    Keychain key, write notes.md, show the summary; publishes nothing
 #   scripts/release.sh               publish what --prepare made (same commit, signature checked):
 #                                    shows the summary, then asks on the terminal before anything
-#                                    goes up, and again before older releases and tags are deleted
+#                                    goes up
 #   scripts/release.sh --dry-run     everything with a throwaway key; publishes nothing
 #
 # The files, each with one reader:
@@ -189,11 +189,6 @@ fi
 [[ -r /dev/tty ]] || { print -u2 "publishing asks on a terminal: run it in Terminal"; exit 1; }
 print -n "\nPublish $title now? [y/N] " > /dev/tty; read -r answer < /dev/tty
 [[ $answer == [yY] ]] || { print "not published"; exit 1; }
-drop=""
-if (( ${#older} + ${#oldtags} )); then
-    print -n "Then delete releases ${older[*]:-none} and tags ${oldtags[*]:-none}, so only $TAG shows? [y/N] " > /dev/tty
-    read -r answer < /dev/tty; [[ $answer == [yY] ]] && drop=1
-fi
 
 # The tag is the repo owner's, whatever the local git identity is, and dated like the commit.
 GIT_COMMITTER_NAME=SoumilB7 GIT_COMMITTER_EMAIL=107888098+SoumilB7@users.noreply.github.com \
@@ -201,25 +196,11 @@ GIT_COMMITTER_NAME=SoumilB7 GIT_COMMITTER_EMAIL=107888098+SoumilB7@users.noreply
 git -c credential.helper= -c credential.helper='!gh auth git-credential' push --quiet origin "$TAG"
 gh release create "$TAG" --verify-tag --title "$title" --notes "$notes" --latest $files
 
-# Only once the new one is up with every file: every other release and tag goes.
+# The new one is up with every file before the phone copy below.
 up=$(gh release view "$TAG" --json assets --jq '.assets | length')
 (( up == ${#files} )) || { print -u2 "$TAG is up with $up of ${#files} files: older releases kept"; exit 1; }
 # This Mac offers the release's phone app to linked phones (the Mac-copy update), only once the
 # release is up: a prepared but unpublished build is never offered.
 phone="$HOME/Library/Application Support/Kore/phone-app"
 mkdir -p "$phone" && cp "$OUT/SHA256SUMS" "$OUT/SHA256SUMS.sig" "$OUT/kore.apk" "$phone/"
-[[ -n $drop ]] || { echo "published $TAG; older releases and tags kept"; exit 0; }
-for old in $(gh release list --limit 200 --json tagName --jq '.[].tagName'); do
-    [[ "$old" == "$TAG" ]] && continue
-    gh release delete "$old" --cleanup-tag --yes
-    git tag -d "$old" >/dev/null 2>&1 || true
-    echo "removed $old"
-done
-# Tags left from releases deleted by hand go too: the tags page shows only this one.
-for old in $(git ls-remote --tags --refs origin 'v*' | sed 's|.*refs/tags/||'); do
-    [[ "$old" == "$TAG" ]] && continue
-    git -c credential.helper= -c credential.helper='!gh auth git-credential' push --quiet origin ":refs/tags/$old"
-    git tag -d "$old" >/dev/null 2>&1 || true
-    echo "removed tag $old"
-done
-echo "published $TAG, the only release"
+echo "published $TAG; older releases and tags kept"

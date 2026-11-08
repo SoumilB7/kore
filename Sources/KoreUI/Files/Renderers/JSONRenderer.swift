@@ -245,7 +245,7 @@ private final class TreeCanvas: CanvasView {
             gutter = 0
             return
         }
-        gutter = ceil((String(last) as NSString).size(withAttributes: lineNumbers).width + 2 * Size.Tree.trailing)
+        gutter = ceil((String(last) as NSString).size(withAttributes: lineNumbers).width + 2 * Size.JSONTree.trailing)
     }
 
     /// The roots open, and their children too while that stays a screenful or so.
@@ -312,7 +312,7 @@ private final class TreeCanvas: CanvasView {
     }
 
     private func indentX(_ depth: Int32) -> CGFloat {
-        gutter + Size.Tree.leading + CGFloat(depth) * Size.Tree.indent * zoom
+        gutter + Size.JSONTree.leading + CGFloat(depth) * Size.JSONTree.indent * zoom
     }
 
     // MARK: Drawing
@@ -325,13 +325,13 @@ private final class TreeCanvas: CanvasView {
         let selected = selectedRow
         let focused = window?.firstResponder === self
         let activeParent = selectedNode.map { index.nodes[$0].parent }
-        let box = Size.Tree.chevronBox * zoom
+        let box = Size.JSONTree.chevronBox * zoom
 
         for row in first...last {
             let item = rows[row]
             let node = index.nodes[Int(item.node)]
             let y = CGFloat(row) * rowHeight
-            let fill = NSRect(x: gutter + Size.Tree.rowInset, y: y, width: bounds.width - gutter - 2 * Size.Tree.rowInset, height: rowHeight)
+            let fill = NSRect(x: gutter + Size.JSONTree.rowInset, y: y, width: bounds.width - gutter - 2 * Size.JSONTree.rowInset, height: rowHeight)
             if row == selected {
                 NSColor(focused ? Theme.Row.selectedFocused : Theme.Row.selected(.window)).setFill()
                 NSBezierPath(roundedRect: fill, xRadius: Radius.chip, yRadius: Radius.chip).fill()
@@ -357,7 +357,7 @@ private final class TreeCanvas: CanvasView {
             let text = label(item, node, index)
             let textX = x + box
             let line = ceil(font.ascender - font.descender + font.leading)
-            let rect = NSRect(x: textX, y: y + (rowHeight - line) / 2, width: max(0, bounds.width - textX - Size.Tree.trailing), height: line)
+            let rect = NSRect(x: textX, y: y + (rowHeight - line) / 2, width: max(0, bounds.width - textX - Size.JSONTree.trailing), height: line)
             if matches.contains(Int(item.node)) {
                 let width = min(text.size().width, rect.width)
                 NSColor(Theme.JSONTree.match).setFill()
@@ -367,7 +367,7 @@ private final class TreeCanvas: CanvasView {
             text.draw(with: rect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
             if !index.rootLines.isEmpty, item.depth == 0, let root = index.roots.firstIndex(of: UInt32(item.node)) {
                 (String(index.rootLines[root]) as NSString).draw(
-                    with: NSRect(x: 0, y: rect.minY, width: gutter - Size.Tree.trailing, height: line),
+                    with: NSRect(x: 0, y: rect.minY, width: gutter - Size.JSONTree.trailing, height: line),
                     options: [.usesLineFragmentOrigin], attributes: lineNumbers)
             }
         }
@@ -559,7 +559,7 @@ private final class TreeCanvas: CanvasView {
         let p = point(event)
         guard let row = rowAt(p) else { return }
         let x = indentX(rows[row].depth)
-        let onChevron = p.x >= x && p.x < x + Size.Tree.chevronBox * zoom
+        let onChevron = p.x >= x && p.x < x + Size.JSONTree.chevronBox * zoom
         select(row)
         if onChevron || event.clickCount == 2 { toggle(row, all: event.modifierFlags.contains(.option)) }
     }

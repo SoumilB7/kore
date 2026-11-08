@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import LinkProtocol
 import Tailnet
 
 /// One caller's connection: lines in and out on the channel's queue. What Kore sends is queued,

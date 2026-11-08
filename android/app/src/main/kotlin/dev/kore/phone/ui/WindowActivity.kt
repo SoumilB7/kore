@@ -24,6 +24,8 @@ class WindowActivity : NodeActivity() {
 
     private var more: android.view.View? = null
     private val isBox get() = link?.device?.value?.kind == dev.kore.link.trust.NodeKind.BOX
+    /** What the device says it does (groups and boards are a Mac's). */
+    private fun caps(): Set<String> = Offers.caps(link?.welcome?.value)
 
     override fun body(): View {
         more = barButton(barTitle, "⋮", "More") { windowSheet() }.apply { visibility = View.GONE }
@@ -207,7 +209,8 @@ class WindowActivity : NodeActivity() {
         val items = ArrayList<PopMenu.Item>()
         items += PopMenu.Item("Rename…", enabled = can?.bool("rename") != false) { renameSheet(chat.str("title").orEmpty()) { act(Control.rename(chatId, it)) } }
         if (!isBox) items += PopMenu.Item("Show on the Mac") { act(Control.select(chatId)) { Quiet.say(this, "Shown on the Mac") } }
-        items += PopMenu.Item("Group", sub = {
+        val offered = Offers.tabItems(caps(), isBox, boards.isNotEmpty(), CloseHold.offered(chat, isBox))
+        if ("Group" in offered) items += PopMenu.Item("Group", sub = {
             groups.map { g ->
                 PopMenu.Item(g.str("name")?.ifBlank { null } ?: "Group", dot = groupColor(g.str("color")), checked = g.str("id") == tab.str("groupId")) {
                     if (g.str("id") != tab.str("groupId")) act(Control.groupSet(windowId, tabId, g.str("id")))
@@ -215,7 +218,7 @@ class WindowActivity : NodeActivity() {
             } + PopMenu.Item("New group") { act(Control.groupSet(windowId, tabId, Control.NEW_GROUP)) } +
                 listOfNotNull(tab.str("groupId")?.let { PopMenu.Item("Remove from group", rule = true) { act(Control.groupSet(windowId, tabId, null)) } })
         })
-        if (boards.isNotEmpty()) items += PopMenu.Item("Attach to board", sub = {
+        if ("Attach to board" in offered) items += PopMenu.Item("Attach to board", sub = {
             boards.flatMap { b ->
                 val bid = b.str("id") ?: return@flatMap emptyList()
                 val sections = b.obj("board")?.objs("sections").orEmpty()
@@ -225,7 +228,7 @@ class WindowActivity : NodeActivity() {
                     PopMenu.Item("$name · New section") { act(Control.boardAttach(windowId, chatId, bid, Control.NEW_SECTION)) }
             }
         })
-        if (CloseHold.offered(chat, isBox)) items += PopMenu.Item("Close tab", danger = true, rule = true) { closeChat(chat) }
+        if ("Close tab" in offered) items += PopMenu.Item("Close tab", danger = true, rule = true) { closeChat(chat) }
         PopMenu(this).show(anchor, items)
     }
 
@@ -323,7 +326,8 @@ class WindowActivity : NodeActivity() {
                 setOnClickListener { choosingModel = id; refresh() }
             }
         }
-        item("Board", glyph = "▦") { dismiss(); act(Control.boardNew(windowId)) { Quiet.say(this@WindowActivity, "New board on $macName") } }
+        val more = Offers.newItems(caps(), w.bool("canReopenTab"))
+        if ("Board" in more) item("Board", glyph = "▦") { dismiss(); act(Control.boardNew(windowId)) { Quiet.say(this@WindowActivity, "New board on $macName") } }
         val boards = w.objs("tabs").filter { it.str("kind") == "board" }
         val groups = w.objs("groups")
         if (boards.isNotEmpty() || groups.isNotEmpty()) {
@@ -349,7 +353,7 @@ class WindowActivity : NodeActivity() {
                 }
             }
         }
-        if (w.bool("canReopenTab")) item("Reopen closed tab", glyph = "↺") { dismiss(); act(Control.tabReopen(windowId)) }
+        if ("Reopen closed tab" in more) item("Reopen closed tab", glyph = "↺") { dismiss(); act(Control.tabReopen(windowId)) }
     }
 }
 

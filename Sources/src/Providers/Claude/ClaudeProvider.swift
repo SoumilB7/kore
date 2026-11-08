@@ -39,7 +39,20 @@ extension ProviderDescriptor {
             // Opus 5.5 fast: $8/$40 per MTok against $4/$20; paid from usage credits, not the plan.
             fastCost: FastCost(times: "2×", detail: "Fast mode: 2× the price per token, paid from usage credits")),
         account: .claude,
-        install: InstallWording(maker: "Anthropic", source: "claude.ai · into ~/.local/bin · about a minute · no Node needed"))
+        install: InstallWording(maker: "Anthropic", source: "claude.ai · into ~/.local/bin · about a minute · no Node needed"),
+        fastMode: true,
+        // The CLI's own built-ins it runs headless, as claude 2.1.318's `initialize` lists them;
+        // its full list (skills, plugins, project commands) comes once it starts.
+        commands: [
+            SlashCommand(
+                name: "compact", description: "Free up context by summarizing the conversation so far",
+                hint: "<optional custom summarization instructions>", kind: .command),
+            SlashCommand(name: "context", description: "Show current context usage", hint: "", kind: .command),
+            SlashCommand(name: "init", description: "Initialize a new CLAUDE.md file with codebase documentation", hint: "", kind: .command),
+            SlashCommand(
+                name: "security-review", description: "Complete a security review of the pending changes on the current branch", hint: "",
+                kind: .command),
+        ])
 }
 
 /// the claude CLI's permission modes as its VS Code extension's picker shows them (labels, icons,

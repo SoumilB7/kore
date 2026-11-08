@@ -285,61 +285,32 @@ class NodeClientTest {
         respond = { m -> if (m.s("t") == "raise.chal") buildJsonObject { put("t", "raise.chal"); put("id", m.s("id")); put("nonce", Base64.getEncoder().encodeToString(nonce)) } else null }
     }
 
-    @Test fun allowOnARiskyCardCarriesTheFingerprintOverItsDigest() = runTest {
-        val key = dev.kore.link.trust.SoftwareIdentity.fresh()
-        val nonce = ByteArray(32) { (it * 3).toByte() }
-        val link = raiseNode(nonce)
-        val rig = Rig(this, listOf({ link }), signer = { d -> key.sign(d) })
-        rig.client.start()
-        runCurrent()
-        link.push(cardChat("shell"))
-        runCurrent()
-        val id = rig.client.answer("c1", "k1", "allow")
-        runCurrent()
-        val chal = link.sent.single { it.s("t") == "raise.chal" }
-        assertEquals("approve.d1g", chal.s("modeId"))
-        val cmd = link.sent.single { it.s("t") == "cmd" }
-        assertEquals(id, cmd.s("id"))
-        val answer = cmd.cmd()
-        assertEquals("chat.answer", answer.s("type"))
-        assertEquals("d1g", answer.s("digest"))
-        assertArrayEquals(nonce, Base64.getDecoder().decode(answer.s("nonce")))
-        val digest = Raise.digest(link.binding, nonce, "c1", "approve.d1g")
-        assertTrue(dev.kore.link.trust.IdentityProof.verify(Base64.getDecoder().decode(answer.s("sig")), digest, key.publicKey))
-    }
-
-    @Test fun denyAndPlainCardsAreATap() = runTest {
+    @Test fun everyAnswerIsAPlainTapRiskyAllowToo() = runTest {
         var asked = 0
         val link = raiseNode(ByteArray(32))
         val rig = Rig(this, listOf({ link }), signer = { asked++; ByteArray(8) })
         rig.client.start()
         runCurrent()
-        link.push(cardChat("network"))
-        runCurrent()
-        rig.client.answer("c1", "k1", "deny")
-        runCurrent()
-        link.push(cardChat(null))
-        runCurrent()
-        rig.client.answer("c1", "k1", "allow")
-        runCurrent()
+        val ids = mutableListOf<String?>()
+        for ((risk, action) in listOf("shell" to "allow", "write" to "allow", "network" to "allow", "network" to "deny", null to "allow")) {
+            link.push(cardChat(risk))
+            runCurrent()
+            ids += rig.client.answer("c1", "k1", action)
+            runCurrent()
+        }
+        // No fingerprint, no nonce asked for, nothing signed: the answer alone, over the card's digest.
         assertEquals(0, asked)
         assertEquals(0, link.sent.count { it.s("t") == "raise.chal" })
-        assertEquals(listOf(null, null), link.sent.filter { it.s("t") == "cmd" }.map { it.cmd().s("sig") })
-    }
-
-    @Test fun aRiskyAllowWithoutTheFingerprintIsCancelledAndNotSent() = runTest {
-        val link = raiseNode(ByteArray(32))
-        val rig = Rig(this, listOf({ link }), signer = { null })
-        val results = mutableListOf<JsonObject>()
-        backgroundScope.launch { rig.client.results.collect { results += it } }
-        rig.client.start()
-        runCurrent()
-        link.push(cardChat("write"))
-        runCurrent()
-        val id = rig.client.answer("c1", "k1", "allow")
-        runCurrent()
-        assertEquals(0, link.sent.count { it.s("t") == "cmd" })
-        assertEquals(listOf(id to "cancelled"), results.map { it.s("id") to it.s("code") })
+        val cmds = link.sent.filter { it.s("t") == "cmd" }
+        assertEquals(ids, cmds.map { it.s("id") })
+        assertEquals(listOf("allow", "allow", "allow", "deny", "allow"), cmds.map { it.cmd().s("action") })
+        for (c in cmds) {
+            val answer = c.cmd()
+            assertEquals("chat.answer", answer.s("type"))
+            assertEquals("d1g", answer.s("digest"))
+            assertEquals(null, answer.s("nonce"))
+            assertEquals(null, answer.s("sig"))
+        }
     }
 
     @Test fun aNewFingerprintKeyWaitsForTheMacsOneResult() = runTest {

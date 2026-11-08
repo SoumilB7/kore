@@ -50,7 +50,7 @@ package final class HostServices: ChatServices {
         or codex chat (on this machine, or with place mac on the Mac), kore_send sends a message to another chat, \
         kore_list_chats and kore_read_chat read chats, kore_set_model changes this chat's model, and more. \
         Ordinary coding needs none of them. Use them when the user asks for something in Kore, such as another tab \
-        or agent. They work only at a tier that covers the request (Read, Act limited, Act unlimited); otherwise a \
+        or agent. They work only at a tier that covers the request (Read, Act limited, Act unlimited, Act device); otherwise a \
         tool answers how the user changes it: tell the user that. Never run the claude or codex CLI yourself in place \
         of a Kore chat.
         """

@@ -103,7 +103,7 @@ struct LoginMeters: View {
     /// As wide as the longest limit name these logins show, at the caption's size (at most
     /// `Size.usageTitleMax`), so the bars start together and get the rest of the row.
     static func labelWidth(_ states: [LoginUsage.State], now: Date) -> CGFloat {
-        let font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        let font = NSFont.monospacedDigitSystemFont(ofSize: Zoom.pt(11), weight: .regular)
         let names = states.flatMap { state -> [PlanLimit] in
             if case .ready(let reading, _) = state { return LoginUsage.bars(reading) }
             return []

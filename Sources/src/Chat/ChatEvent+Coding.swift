@@ -187,6 +187,9 @@ extension ChatEvent: Codable {
             try t.put("id", id)
         case .planReady:
             _ = try Tagged(encoder, "planReady")
+        case .controlsSet(let set):
+            var t = try Tagged(encoder, "controlsSet")
+            try t.put("set", set)
         case .exited(let status):
             var t = try Tagged(encoder, "exited")
             try t.put("status", status)
@@ -236,6 +239,7 @@ extension ChatEvent: Codable {
         case "modeChanged": self = .modeChanged(try u.get("change"))
         case "planModeChanged": self = .planModeChanged(try u.get("change"))
         case "fastModeChanged": self = .fastModeChanged(try u.get("report"))
+        case "controlsSet": self = .controlsSet(try u.get("set"))
         case "remoteControl": self = .remoteControl(try u.opt("remote"))
         case "remoteControlUnavailable": self = .remoteControlUnavailable(try u.opt("reason"))
         case "turnStarted": self = .turnStarted(try u.get("turn"), origin: try u.get("origin"), at: try u.get("at"))
@@ -330,6 +334,7 @@ extension ChatCommand: Codable {
         case .setAutoCompact(let at): try t.put("at", at)
         case .setDraft(let text): try t.put("text", text)
         case .setArsenal(let tier): try t.put("tier", tier)
+        case .setPlanAllow(let on): try t.put("on", on)
         case .interrupt, .forkAtEnd, .earlierMessages, .usage, .listModels, .close, .draft, .unknown: break
         }
     }
@@ -371,6 +376,7 @@ extension ChatCommand: Codable {
         case "setDraft": self = .setDraft(try u.get("text"))
         case "draft": self = .draft
         case "setArsenal": self = .setArsenal(try u.opt("tier"))
+        case "setPlanAllow": self = .setPlanAllow(try u.get("on"))
         default: self = .unknown(u.type)
         }
     }

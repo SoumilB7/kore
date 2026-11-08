@@ -535,6 +535,17 @@ private struct TreeList: View, Equatable {
     }
 }
 
+/// The tree's horizontal metrics, read once on the main actor for a shape that draws off it.
+struct TreeMetrics: Equatable {
+    var inset: CGFloat = 0, leading: CGFloat = 0, indent: CGFloat = 0, chevronBox: CGFloat = 0
+    @MainActor init() {
+        inset = Size.Tree.rowInset
+        leading = Size.Tree.leading
+        indent = Size.Tree.indent
+        chevronBox = Size.Tree.chevronBox
+    }
+}
+
 /// 1pt lines at each ancestor's chevron centre, one path a colour.
 struct TreeGuides: Shape {
     let depth: Int
@@ -542,11 +553,13 @@ struct TreeGuides: Shape {
     var except: Int?
     /// This line alone.
     var only: Int?
+    /// The rows' metrics at the window's zoom, read where the guides are made.
+    var tree: TreeMetrics
 
     func path(in rect: CGRect) -> Path {
         var path = Path()
         for level in 0..<depth where only.map({ $0 == level }) ?? (level != except) {
-            let x = Size.Tree.rowInset + Size.Tree.leading + CGFloat(level) * Size.Tree.indent + Size.Tree.chevronBox / 2
+            let x = tree.inset + tree.leading + CGFloat(level) * tree.indent + tree.chevronBox / 2
             path.addRect(CGRect(x: x, y: 0, width: Stroke.hairline, height: rect.height))
         }
         return path
@@ -770,8 +783,8 @@ private struct TreeRow: View, Equatable {
     @ViewBuilder private var guides: some View {
         if row.depth > 0 {
             ZStack {
-                TreeGuides(depth: row.depth, except: activeGuide).fill(Theme.Tree.guide)
-                if let activeGuide { TreeGuides(depth: row.depth, only: activeGuide).fill(Theme.Tree.guideActive) }
+                TreeGuides(depth: row.depth, except: activeGuide, tree: TreeMetrics()).fill(Theme.Tree.guide)
+                if let activeGuide { TreeGuides(depth: row.depth, only: activeGuide, tree: TreeMetrics()).fill(Theme.Tree.guideActive) }
             }
             .allowsHitTesting(false)
         }

@@ -92,7 +92,7 @@ struct ChatMoveTests {
         try write(Self.rows(macFolder, count: 2, from: 400), macFile, append: true)
 
         // Send it back: only the new tail travels.
-        let back = try await s.moves.sendBack(s.moves.store.session(Self.session)!, title: "Repos", modelId: "haiku", effort: nil, mode: nil, mirrored: 1).get()
+        let back = try await s.moves.sendBack(s.moves.store.session(Self.session)!, title: "Repos", settings: ChatSettings(modelId: "haiku"), mirrored: 1).get()
         #expect(back.chatId == hc.id && hc.ownedHere && hc.gen == 2)
         #expect(try String(contentsOf: boxFile, encoding: .utf8) == Self.rows(boxFolder, count: 402))
         #expect(s.moves.store.session(Self.session) == nil)

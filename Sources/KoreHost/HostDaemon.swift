@@ -46,6 +46,8 @@ package final class HostDaemon {
     var askers: [ObjectIdentifier: (socket: HostSocket, asked: Bool)] = [:]
     var toolCalls: [String: HostToolCall] = [:]
     var toolSerial = 0
+    /// The calls the box answers itself: limits, waits (`HostArsenal`).
+    let boxArsenal = HostArsenal()
     /// 1.9: the folder's past sessions as each CLI on the box lists them (tests set their own),
     /// and the box's own titles and archive for them (`history.json`, read on first use).
     package var pastSessions: @Sendable (_ provider: ProviderDescriptor, _ folder: URL) async -> [SessionSummary]? = { provider, folder in
@@ -187,6 +189,8 @@ package final class HostDaemon {
         chats = all.filter { $0.record.closed != true }
         closedChats = all.filter { $0.record.closed == true }
         for chat in chats { watch(chat) }
+        // A box that stopped without ending its CLIs (a crash, a kill) closes what they left open.
+        for chat in all { chat.settleAfterCrash() }
         terminals.ran = { [weak self] folder in self?.git.touched(folder) }
         sweepStaging()
     }
@@ -225,7 +229,7 @@ package final class HostDaemon {
         tailnetChoices += 1
         stopKoreTailnet(wait: true)
         terminals.stopAll()
-        for chat in chats { chat.sleep() }
+        for chat in chats { chat.sleep(final: true) }
         guard let lock else { return }
         listener?.stop()
         agentListener?.stop()
@@ -266,15 +270,27 @@ package final class HostDaemon {
         return standard
     }
 
+    /// `settings`: what came with it (a copy, a move, a fork). Its login when this box has it,
+    /// else the folder's; its Arsenal tier at most one this box takes. What gave way is said in
+    /// `carriedNote`, one line.
     package func newChat(
         folder: String, provider: String, modelId: String?, fork: (from: String, at: String)? = nil, title: String? = nil, mode: String? = nil,
-        effort: String? = nil, session: String? = nil
+        effort: String? = nil, session: String? = nil, settings: ChatSettings? = nil
     ) -> HostChat? {
+        let login = carried(login: settings?.login, provider: provider, fallback: provider == "claude" ? accounts.folderDefault(folder) : nil)
         guard config.folders.contains(folder), !HostConfig.missing(folder), Registry.provider(provider) != nil,
             let chat = try? HostChat.create(
                 provider: provider, folder: folder, modelId: modelId, in: paths.chats, fork: fork, title: title, mode: mode, effort: effort,
-                session: session, account: provider == "claude" ? accounts.folderDefault(folder) : nil)
+                session: session, account: login.account)
         else { return nil }
+        var notes = [login.note].compactMap { $0 }
+        if let settings {
+            chat.carry(settings)
+            let tier = carried(tier: settings.arsenal)
+            chat.arsenal = tier.tier
+            if let note = tier.note { notes.append(note) }
+        }
+        chat.carriedNote = notes.isEmpty ? nil : notes.joined(separator: " · ")
         // A chat in a closed window's folder opens its window again.
         setClosed(folder, false, broadcast: false)
         chats.append(chat)
@@ -284,6 +300,21 @@ package final class HostDaemon {
     }
 
     package func chat(_ id: String) -> HostChat? { chats.first { $0.id == id } }
+
+    /// A login a chat brought: its own when this box has it (nil for the default), else
+    /// `fallback`, said in one line. A Codex chat keeps the box's one login.
+    func carried(login: String?, provider: String, fallback: String?) -> (account: String?, note: String?) {
+        guard provider == "claude", let login else { return (fallback, nil) }
+        if accounts.exists(login) { return (login == LinkAccount.main ? nil : login, nil) }
+        return (fallback, "\(login) isn't signed in here · on \(fallback ?? LinkAccount.main)")
+    }
+
+    /// An Arsenal tier a chat brought: at most one this box takes, said in one line when lower.
+    func carried(tier: String?) -> (tier: String?, note: String?) {
+        let kept = ChatSettings.cap(tier, to: BoxTools.tiers)
+        guard let tier, kept != tier else { return (kept, nil) }
+        return (kept, "Arsenal \(ChatSettings.tierName(tier)) isn't on this box · \(kept.map(ChatSettings.tierName) ?? "off")")
+    }
 
     /// A model the CLI offers on this box: in its list once it has listed one, else a plain id.
     func offers(model: String, _ provider: String) -> Bool {
@@ -302,7 +333,7 @@ package final class HostDaemon {
     /// A tab closed on a client: the chat leaves the box's windows and its CLI ends. Its record
     /// and logs stay on disk, marked closed.
     func close(_ hc: HostChat) {
-        sleep(hc)
+        sleep(hc, final: true)
         hc.markClosed(at: Date())
         hc.stream.close()
         chats.removeAll { $0 === hc }
@@ -317,6 +348,7 @@ package final class HostDaemon {
         for connection in connections where connection.proven && connection.takesPushes() {
             connection.send(.delta(rev: connection.nextRev(), windows: windows, chats: nil, removed: [hc.id]))
         }
+        arsenalNoted(hc)
     }
 
     /// Closed chats kept for reopening.
@@ -379,10 +411,13 @@ package final class HostDaemon {
         return chat
     }
 
-    func sleep(_ hc: HostChat) {
+    /// `final`: the CLI ends for more than a rest (a close, a cut, a move): nothing it offered stands.
+    package func sleep(_ hc: HostChat, final: Bool = false) {
         idleStops.removeValue(forKey: hc.id)?.cancel()
         if hc.cliRunning { HostJournal.note("cli stop", ["chat": hc.id, "cli": hc.record.provider]) }
-        hc.sleep()
+        hc.sleep(final: final)
+        // What its last events armed goes too: there's no CLI to stop.
+        idleStops.removeValue(forKey: hc.id)?.cancel()
         broadcast(chats: [hc])
         // The CLI's pipes and the chat's state go with it: their memory goes back once they have.
         DispatchQueue.main.asyncAfter(deadline: .now() + 1) { MainActor.assumeIsolated { HostMemory.releaseSoon() } }
@@ -418,6 +453,7 @@ package final class HostDaemon {
             if let ended = attention.turnEnded(hc, turn: turn, outcome: outcome, at: now()) { sendAttention([ended]) }
         }
         hc.noted(chat)
+        arsenalNoted(hc)
         armIdle(hc)
         broadcast(chats: [hc])
     }
@@ -641,7 +677,7 @@ package final class HostDaemon {
             proto: LinkVersion(major: LinkProto.major, minor: LinkProto.boxMinor), epoch: epoch,
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
-            caps: ["tx", "attn", "commands", "control", "box"] + (control != .watch ? ["history"] : [])
+            caps: ["tx", "attn", "commands", "control", "box", BoxTools.deviceCap] + (control != .watch ? ["history", "blob", "diff"] : [])
                 + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap] : []))
     }
 
@@ -722,19 +758,24 @@ package final class HostDaemon {
 
     /// What a grant may do: `watch` reads, `act` works in chats and folders, `full` also the accounts.
     /// The command's result; nil when it comes later, through `reply` (an account's call).
-    package func apply(_ command: LinkCommand, id: String, control: GrantControl, reply: @escaping @MainActor (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
+    /// `phone`: the client is a phone (its device's kind), whose folder adds stay in the home.
+    package func apply(
+        _ command: LinkCommand, id: String, control: GrantControl, phone: Bool = false, reply: @escaping @MainActor (LinkMessage.Result) -> Void
+    ) -> LinkMessage.Result? {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
-        guard control != .watch else { return fail(.deniedControl, "This grant only watches.") }
+        guard control != .watch else { return fail(.deniedControl, LinkPolicy.watchOnly) }
         let hc = command.chatId.flatMap(chat)
         if command.chatId != nil, hc == nil { return fail(.goneChat, "No such chat on this box.") }
         if let hc, let refusal = Self.held(hc) { return fail(refusal.code, refusal.message) }
         switch command {
         case .send(_, let text, let blobs):
             guard let hc else { return fail(.goneChat, "") }
-            guard blobs.isEmpty else { return fail(.invalid, "Attach files from a full grant.") }
             if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
+            // Uploaded files (`blob.put`), kept on the box until a turn has read them.
+            let files = blobs.compactMap { self.blobs[$0] }
+            guard files.count == blobs.count else { return fail(.goneBlob, "A file wasn't uploaded, or expired. Attach it again.") }
             guard let chat = live(hc) else { return fail(.busy, "Too many CLIs are running on this box.") }
-            guard chat.sendFromLink(text) else { return fail(.busy, "The chat can't take a message right now.") }
+            guard chat.sendFromLink(text, files: files) else { return fail(.busy, "The chat can't take a message right now.") }
             armIdle(hc)
             broadcast(chats: [hc])
             return .init(id: id, ok: true)
@@ -764,15 +805,21 @@ package final class HostDaemon {
         case .setMode(_, let modeId):
             guard let hc else { return fail(.goneChat, "") }
             if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
-            hc.live(services: services).setMode(modeId, remember: false)
-            if let chat = hc.chat { hc.noted(chat) }
+            // A sleeping chat keeps it for its next start: no chat is made for it.
+            if let chat = hc.chat {
+                chat.setMode(modeId, remember: false)
+                hc.noted(chat)
+            } else {
+                hc.setMode(modeId)
+            }
             armIdle(hc)
             broadcast(chats: [hc])
             return .init(id: id, ok: true)
         case .setPlan(_, let on):
             guard let hc else { return fail(.goneChat, "") }
             if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
-            hc.live(services: services).setPlanMode(on)
+            hc.chat?.setPlanMode(on)
+            hc.setPlanMode(on)
             armIdle(hc)
             broadcast(chats: [hc])
             return .init(id: id, ok: true)
@@ -790,9 +837,9 @@ package final class HostDaemon {
             if case .deny(let code, let message) = LinkPolicy.checkBox(kind, args, facts, control: control == .full ? .full : .standard, levels: levels) {
                 return fail(code, message)
             }
-            return self.control(kind, args, id: id, control: control, reply: reply)
+            return self.control(kind, args, id: id, control: control, phone: phone, reply: reply)
         case .unknown:
-            return fail(.invalid, "Unknown command.")
+            return fail(.invalid, LinkPolicy.unknownCommand)
         }
     }
 
@@ -804,7 +851,11 @@ package final class HostDaemon {
         if let level = args?.level, !offers(effort: level, provider) { return .init(id: id, ok: false, code: .invalid, message: "The CLI doesn't offer that effort.") }
         // 1.5: a fork's start (`sessionId`, `entryId`), and its title, mode and effort.
         let fork = args?.sessionId.flatMap { from in args?.entryId.map { (from: from, at: $0) } }
-        guard let hc = newChat(folder: folder, provider: provider, modelId: modelId, fork: fork, title: args?.title, mode: args?.mode, effort: args?.level) else {
+        guard
+            let hc = newChat(
+                folder: folder, provider: provider, modelId: modelId, fork: fork, title: args?.title, mode: args?.mode, effort: args?.level,
+                settings: args?.settings?.withoutDraft)
+        else {
             return .init(id: id, ok: false, code: .invalid, message: "No such CLI, or the folder isn't served.")
         }
         return .init(id: id, ok: true, chatId: hc.id, windowId: Self.windowID(folder))
@@ -824,7 +875,9 @@ package final class HostDaemon {
         }
     }
 
-    private func control(_ kind: ControlKind, _ args: ControlArgs, id: String, control: GrantControl, reply: @escaping @MainActor (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
+    private func control(
+        _ kind: ControlKind, _ args: ControlArgs, id: String, control: GrantControl, phone: Bool, reply: @escaping @MainActor (LinkMessage.Result) -> Void
+    ) -> LinkMessage.Result? {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
         switch kind {
         case .chatNew:
@@ -862,9 +915,19 @@ package final class HostDaemon {
                 return fail(.invalid, "The chat's CLI doesn't offer that model.")
             }
             if let chat = hc.chat, let option = chat.controls.models.first(where: { $0.id == model }) {
+                // A model without the effort takes its nearest level below, kept with the chat.
                 chat.setModel(option)
-            } else if let chat = hc.chat {
                 chat.launchModel = model
+                if let level = chat.controls.effort, level != hc.record.effort {
+                    chat.launchEffort = level
+                    hc.setEffort(level)
+                }
+            } else {
+                hc.chat?.launchModel = model
+                if let level = fallbackEffort(model, hc) {
+                    hc.chat?.launchEffort = level
+                    hc.setEffort(level)
+                }
             }
             hc.setModel(model)
             broadcast(chats: [hc])
@@ -885,24 +948,45 @@ package final class HostDaemon {
             return .init(id: id, ok: true)
         case .chatSetFast:
             guard let hc = args.chatId.flatMap(chat), let on = args.on else { return fail(.invalid, "Name the chat and on or off.") }
-            guard let chat = hc.chat, chat.controls.fastModeShown, on == false || chat.controls.fastOffered != false else {
+            if let chat = hc.chat {
+                // A running CLI switches now, once it has said fast mode is there (both say it as they start).
+                guard chat.controls.fastModeShown, on == false || chat.controls.fastOffered != false else {
+                    return fail(.invalid, "Fast mode isn't offered for this chat now.")
+                }
+                chat.setFastMode(on)
+            } else if on, !offersFast(hc) {
                 return fail(.invalid, "Fast mode isn't offered for this chat now.")
             }
-            chat.setFastMode(on)
+            // Kept for its next start too, whether or not its CLI runs now.
+            hc.setFast(on)
+            broadcast(chats: [hc])
+            return .init(id: id, ok: true)
+        case .chatSetPlanAllow:
+            guard let hc = args.chatId.flatMap(chat), let on = args.on else { return fail(.invalid, "Name the chat and on or off.") }
+            hc.setPlanAllow(on)
             broadcast(chats: [hc])
             return .init(id: id, ok: true)
         case .foldersList:
             return .init(id: id, ok: true, folders: folders)
         case .folderAdd:
-            guard let path = args.path, addFolder(path) != nil else { return fail(.goneFolder, "An absolute path to a folder on the box.") }
-            return .init(id: id, ok: true, folders: folders)
+            // A phone's Open here (it asks, never runs): a folder in the home only, no hidden name,
+            // and really there (its links resolved inside the home). A Mac's grant adds any.
+            if phone, control < .full {
+                let home = HostPaths.home(sessionEnv).path
+                if case .deny(let code, let message) = LinkPolicy.checkHomeFolders(kind, args, home: home) { return fail(code, message) }
+                if case .failure(let refusal) = HostFiles(home: home, served: []).place(args.path ?? "", .homeOrServed) {
+                    return fail(refusal.code, refusal.message)
+                }
+            }
+            guard let path = args.path, let added = addFolder(path) else { return fail(.goneFolder, "An absolute path to a folder on the box.") }
+            return .init(id: id, ok: true, windowId: Self.windowID(added), folders: folders)
         case .authGh:
             guard control == .full else { return fail(.deniedControl, "GitHub's sign-in needs a grant with full control.") }
             return gitHub(id: id, reply: reply)
         case .accountUsage where args.login == nil:
             // 1.14: a client that acts (a phone) asks for its logins' usage: read again where due,
             // pushed in `clis[].usage`. Read-only, and nothing about a login is named.
-            guard control >= .act else { return fail(.deniedControl, "This grant only watches.") }
+            guard control >= .act else { return fail(.deniedControl, LinkPolicy.watchOnly) }
             planUsage.refresh(args.provider ?? "")
             return .init(id: id, ok: true)
         case .accountSignIn, .accountSubmit, .accountCancel, .accountSignOut, .accountRefresh, .accountList, .accountUsage, .accountSwitch:
@@ -910,11 +994,11 @@ package final class HostDaemon {
             return account(kind, args, id: id, reply: reply)
         case .chatRename, .chatFork, .chatCompact, .chatSetAutoCompact, .chatRetry, .chatContinue, .chatSendAtReset, .chatCancelContinue,
             .chatSetDraft, .chatSetArsenal, .arsenalStopAll:
-            return chatOp(kind, args, id: id, reply: reply)
+            return chatOp(kind, args, id: id, control: control, reply: reply)
         case .historyOpen, .historyRename, .historyArchive:
             return historyOp(kind, args, id: id, reply: reply)
         default:
-            return fail(.invalid, "Not taken here.")
+            return fail(.invalid, LinkPolicy.notTaken)
         }
     }
 
@@ -1068,7 +1152,7 @@ package final class HostDaemon {
             // first; this holds even if a rule there changes).
             return .init(id: id, ok: false, code: .invalid, message: LinkPolicy.boxSignOutRefused)
         default:
-            return .init(id: id, ok: false, code: .invalid, message: "Not taken here.")
+            return .init(id: id, ok: false, code: .invalid, message: LinkPolicy.notTaken)
         }
     }
 
@@ -1117,7 +1201,7 @@ package final class HostDaemon {
             if let hc { switchAccount(hc, to: login) }
             return .init(id: id, ok: true, login: hc.map { $0.record.account ?? LinkAccount.main }, folderLogin: accounts.folderDefault(folder) ?? LinkAccount.main)
         default:
-            return fail(.invalid, "Not taken here.")
+            return fail(.invalid, LinkPolicy.notTaken)
         }
     }
 
@@ -1128,10 +1212,29 @@ package final class HostDaemon {
         guard hc.record.account != account else { return }
         hc.setAccount(account)
         HostJournal.note("account switch", ["chat": hc.id, "account": login])
+        // Every client shows the chat's login, its CLI running or not.
+        defer { broadcast(chats: [hc]) }
         guard let chat = hc.chat else { return }
         if chat.hasWork { chat.stopAllWork() }
         chat.accountChanged()
-        broadcast(chats: [hc])
+    }
+
+    /// The effort a chat's model change leaves it on while its CLI sleeps: the nearest the model
+    /// offers below the one it has, from the CLI's list (nil: no change, or no list).
+    func fallbackEffort(_ model: String, _ hc: HostChat) -> String? {
+        guard let cli = clis.first(where: { $0.provider == hc.record.provider }),
+            let option = cli.models.first(where: { $0.id == model }), let current = hc.record.controls?.effort ?? hc.record.effort
+        else { return nil }
+        let level = EffortScale.fallback(current, offered: option.efforts, scale: cli.effortScale)
+        return level == current ? nil : level
+    }
+
+    /// Whether the chat's model has fast mode, as its CLI last listed it (true while unknown).
+    func offersFast(_ hc: HostChat) -> Bool {
+        guard let model = hc.record.controls?.modelId ?? hc.record.modelId,
+            let option = clis.first(where: { $0.provider == hc.record.provider })?.models.first(where: { $0.id == model })
+        else { return true }
+        return option.fast
     }
 
     /// The sign-in a box uses when the client names none.

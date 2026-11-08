@@ -90,3 +90,84 @@ final class ArsenalOpen: ChatStoryline {
         ]
     }
 }
+
+/// `kore send` to a chat that isn't open (the owner, 2026-11-20): a closed chat, named by its title
+/// or its History id, opens as `kore open` opens it, resumed, its Arsenal off, then takes the
+/// message with who sent it; an unknown name opens nothing.
+final class ArsenalSendWake: ChatStoryline {
+    override class var tags: Set<Tag> { [.agentChannel] }
+    override class var script: CLIScript {
+        CLIScript(turns: [CLIScript.reply("Ready."), CLIScript.reply("Ready."), CLIScript.reply("Woken."), CLIScript.reply("Again.")])
+    }
+
+    @MainActor private final class Past { var session = "" }
+
+    /// `kore <arguments>` as a, with b's past session's start where `{session}` stands.
+    private struct AsA: Step {
+        let arguments: [String]
+        let what: String
+        let check: @MainActor (Int32, String) -> Bool
+        var label: String { "kore \(arguments.joined(separator: " ")) (in a): \(what)" }
+        var timeout: Duration? { .seconds(30) }
+
+        @MainActor func run(_ story: StoryContext) async throws {
+            let full = story.stash(Past.self) { Past() }.session
+            let check = self.check
+            let filled = arguments.map { $0.replacingOccurrences(of: "{full}", with: full).replacingOccurrences(of: "{session}", with: String(full.prefix(8))) }
+            try await KoreAs(filled, .chat("a"), what) { status, out, _ in
+                check(status, out)
+            }.run(story)
+        }
+    }
+
+    override func steps() -> [any Step] {
+        let directory = URL(fileURLWithPath: "/tmp/ksw-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let codex = variant == .codex
+        return super.steps() + [
+            Do("a's chat, at a socket of this run's, Arsenal allowed") { story in
+                let cast = AgentCast.of(story)
+                cast.directory = directory
+                cast.chats["a"] = try story.activeChat()
+                AgentChannel.directory = directory
+                AgentGrants.stopAll()
+                ArsenalMemory.clear()
+                Arsenal.shared.setAllowed(true)
+            },
+            SendTo("a", "hello"), TurnsDone("a", 1),
+        ] + (codex ? [Do("a in Codex's Full access") { story in try AgentCast.of(story).chat("a").storySetMode("fullAccess") }] : []) + [
+            Do("a at Act unlimited") { story in Arsenal.shared.choose(.drive, try AgentCast.of(story).chat("a")) },
+
+            // b: said something in, then closed: a past chat of the folder, titled "plans".
+            CastChat("b"), SendTo("b", "plans"), TurnsDone("b", 1),
+            Do("b's session, and b closed") { story in
+                let b = try AgentCast.of(story).chat("b")
+                story.stash(Past.self) { Past() }.session = b.sessionId ?? ""
+                ScriptedWorld.shared.list(b.sessionId ?? "", provider: b.provider.id, folder: b.folder, title: "plans")
+                guard let workspace = story.app.workspace, let tab = workspace.tabs.first(where: { $0.chat === b }) else { throw StoryFailure.modelMissing("b's tab") }
+                workspace.linkSelect(tab)
+            },
+            Command(.closeTab),
+            Expect("b closed") { story in !(story.app.workspace?.tabs.contains { $0.chat === (try? AgentCast.of(story).chat("b")) } ?? true) },
+
+            // Unknown: one line, exit 1, nothing opened.
+            AsA(arguments: ["send", "nothing-like-this", "hi"], what: "no such chat") { status, out in status == 1 && out.contains("No open or past chat matches") },
+            // By its title: opened, resumed, in front, Arsenal off, the message sent with who sent it.
+            AsA(arguments: ["send", "plans", "wake up"], what: "b woken and sent") { status, out in status == 0 && out.contains("Opened “plans”. Sent.") },
+            Expect("b's session in front, Arsenal off") { story in
+                let shown = try story.activeChat()
+                return shown.sessionId == story.stash(Past.self) { Past() }.session && shown.arsenal == nil
+            },
+            Expect.rows("the woken chat has the message, and who sent it") { rows in
+                rows.contains { $0.kind == "notice" && $0.text.hasPrefix("Arsenal · sent by") } && rows.contains { $0.kind == "user" && $0.text == "wake up" }
+            },
+            // Open now: by its session id, as to any open chat. The scripted CLI's ids share their
+            // start, so the start alone names several: refused with each, nothing sent.
+            AsA(arguments: ["send", "{session}", "again"], what: "a start several open chats share") { status, out in
+                status == 1 && out.contains("Several open chats' sessions start with")
+            },
+            AsA(arguments: ["send", "{full}", "again"], what: "open now: sent as before") { status, out in
+                status == 0 && !out.contains("Opened") && (out.contains("Sent.") || out.contains("Queued"))
+            },
+        ]
+    }
+}

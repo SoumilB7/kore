@@ -104,8 +104,13 @@ package enum AgentTools {
                 ("timeout", "integer", "Seconds, 300 at most (default 300)."),
             ], required: []),
         Tool(
-            name: "kore_send", command: "chat.send", description: "Send a message to another chat, as the user would type it, queued while it works. It shows who sent it. Only chats at this chat's mode or lower (Act unlimited).",
-            args: [chatArg, ("text", "string", "The message. A \"/\" command that chat's CLI has goes too, except sign-in, account, permission and settings ones (mode and model: their own tools); never a \"!\" line.")], required: ["chat", "text"]),
+            name: "kore_send", command: "chat.send",
+            description: "Send a message to another chat, as the user would type it, queued while it works. It shows who sent it. A chat that isn't open (closed, or in History) is opened first, as kore_open_chat opens it, then sent; a title several past chats share is refused with their ids. Only chats at this chat's mode or lower (Act unlimited).",
+            args: [
+                ("chat", "string", "The chat: its title (any part only it has), its short id, its CLI session id (or the start of it), or a past chat's id from kore_history."),
+                ("text", "string", "The message. A \"/\" command that chat's CLI has goes too, except sign-in, account, permission and settings ones (mode and model: their own tools); never a \"!\" line."),
+                ("folder", "string", "Look only in this folder's window, as kore_history names one (default: open chats anywhere, then this chat's window's History). Past chats wake only in this chat's own folder."),
+            ], required: ["chat", "text"]),
         Tool(name: "kore_stop", command: "chat.stop", description: "Stop another chat's turn (Act unlimited).", args: [chatArg], required: ["chat"]),
         Tool(
             name: "kore_open_chat", command: "chat.open",
@@ -127,7 +132,7 @@ package enum AgentTools {
             required: ["ask", "text"]),
         Tool(
             name: "kore_fetch", command: "file.fetch",
-            description: "Copy one file from a folder a Kore window has open (this Mac's, or a box's as device:path) into this chat's .kore/inbox/. Copies only, 50 MB at most, never a secret-looking path (.env, keys, credentials, .ssh); 50 an hour (Act unlimited).",
+            description: "Copy one file from a folder a Kore window has open (this Mac's, or a box's as device:path) into this chat's .kore/inbox/. Copies only, 50 MB at most, never a secret-looking path (.env, keys, credentials, .ssh); 50 an hour (Act unlimited; from another device, Act device).",
             args: [("path", "string", "device:path (a box's name, then its path), or a path on this chat's device.")], required: ["path"]),
         Tool(name: "kore_show_tab", command: "tab.show", description: "Bring a chat's tab to the front (Act unlimited).", args: [chatArg], required: ["chat"]),
         Tool(
@@ -155,12 +160,13 @@ package enum AgentTools {
 
     package static let ownCommands = ["chat.options", "chat.rename", "chat.model", "chat.effort", "chat.fast", "chat.mode", "chat.compact"]
 
-    /// A tier's name as the user sees it, from its wire id (`watch`, `own`, `drive`, `full`, `off`).
+    /// A tier's name as the user sees it, from its wire id (`watch`, `own`, `drive`, `device`, `full`, `off`).
     package static func tierName(_ id: String) -> String {
         switch id {
         case "watch": "Read"
         case "own": "Act limited"
         case "drive": "Act unlimited"
+        case "device": "Act device"
         case "full": "Full"
         case "off", "": "Off"
         default: id
@@ -177,6 +183,8 @@ package enum AgentTools {
         case "chat.fork": 75
         case "file.fetch", "chat.reply": 120
         case "chat.open": 30
+        // A chat that isn't open is woken first: opened, its CLI started, then sent.
+        case "chat.send": 60
         default: 10
         }
     }
@@ -204,15 +212,17 @@ package enum AgentTools {
     /// Kore's off, or this chat's Arsenal is: what the agent tells the user. A chat on a box
     /// reaches Kore through this server alone, so Codex's sandbox doesn't come into it.
     package static func offLine(box: Bool = false) -> String {
-        box
-            ? "Arsenal is off for this chat. The user turns it on: right-click its tab → Arsenal, or ⌥⌘K."
-            : "Arsenal is off for this chat. The user turns it on: right-click its tab → Arsenal, or ⌥⌘K (a Codex chat needs Full access)."
+        "Arsenal is off for this chat. " + howLine + (box ? "" : " A Codex chat needs Full access.")
     }
+
+    /// How the user sets a chat's Arsenal, said the same wherever it's said: on from the tab, its
+    /// tier from the icon that shows in the window's top row while it's on.
+    package static let howLine =
+        "The user turns it on from the chat's tab (right-click → Arsenal, or ⌥⌘K) and picks a tier from the Arsenal icon at the top right of Kore's window."
 
     /// A command above the chat's tier: which one it needs.
     package static func tierLine(_ command: String, has tier: String) -> String {
-        "This needs Arsenal's \(tierName(tierNeeded(command))) tier; this chat has \(tierName(tier)). "
-            + "The user picks a tier from the Arsenal icon at the top right of Kore's window."
+        "This needs Arsenal's \(tierName(tierNeeded(command))) tier; this chat has \(tierName(tier)). " + howLine
     }
 
     /// Kore's line for a call (its result, or a `bye`) as the agent reads it, the same from

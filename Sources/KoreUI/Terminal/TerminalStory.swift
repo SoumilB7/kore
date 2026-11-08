@@ -45,4 +45,6 @@ extension Workspace {
     package static var storyExplorerRange: ClosedRange<CGFloat> { Layout.Explorer.minWidth...Layout.Explorer.maxWidth }
     package static var storyExplorerOwnWidth: CGFloat { Layout.Explorer.width }
     package var storyTerminalMaximized: Bool { terminals.maximized }
+    /// The active terminal's font size (it follows the window's zoom).
+    package var storyTerminalFontSize: CGFloat? { terminals.active?.view.font.pointSize }
 }

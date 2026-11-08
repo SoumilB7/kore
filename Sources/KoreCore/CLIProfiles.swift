@@ -26,7 +26,11 @@ public enum CLIProfiles {
         var mainEmail: [String: String] = [:]
         /// Optional, so a list saved before it reads.
         var mainWorkspace: [String: String]?
-        /// Logins moved to a box: by CLI, each email (lowercased) and the box it's signed in on.
+        /// Logins Kore moved to another device (a box, another Mac), until they're back: by CLI,
+        /// each email (lowercased) and the place's key. Only a move Kore made writes one.
+        var moves: [String: [String: String]]?
+        /// 0.3.4's marks, which also took an email a box merely listed signed in there (the same
+        /// account signed in there on its own): read once, kept only where a move record backs it.
         var moved: [String: [String: String]]?
     }
 
@@ -61,20 +65,54 @@ public enum CLIProfiles {
 
     private static var saved: Saved {
         if let saved = state.value { return saved }
-        let read = (try? Data(contentsOf: directory.appendingPathComponent("accounts.json")))
+        var read = (try? Data(contentsOf: directory.appendingPathComponent("accounts.json")))
             .flatMap { try? JSONDecoder().decode(Saved.self, from: $0) } ?? Saved()
+        if let old = read.moved {
+            read.moves = backed(old, read)
+            read.moved = nil
+            write(read)
+        }
         state.set(read)
         return read
+    }
+
+    private static func write(_ value: Saved) {
+        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        if let data = try? JSONEncoder().encode(value) {
+            try? data.write(to: directory.appendingPathComponent("accounts.json"), options: .atomic)
+        }
+    }
+
+    /// The move records beside the list (`LoginMoves`' `login-moves.json`): what a box is still
+    /// owed of a move. One owed `commitImport` is a login Kore moved there.
+    private struct Owed: Decodable {
+        var box: String
+        var cli: String
+        var login: String
+        var pending: [String: [String: String]]
+    }
+
+    /// Of 0.3.4's marks, those a move record backs; an email match alone is dropped.
+    private static func backed(_ old: [String: [String: String]], _ saved: Saved) -> [String: [String: String]]? {
+        let file = directory.deletingLastPathComponent().appendingPathComponent("login-moves.json")
+        let owed = ((try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([Owed].self, from: $0) } ?? [])
+            .filter { $0.pending["commitImport"] != nil }
+        var kept: [String: [String: String]] = [:]
+        for (cli, marks) in old {
+            for (email, box) in marks {
+                let ids = (saved.mainEmail[cli]?.lowercased() == email ? ["main"] : [])
+                    + (saved.added[cli] ?? []).filter { $0.email?.lowercased() == email }.map(\.id)
+                if owed.contains(where: { $0.cli == cli && $0.box == box && ids.contains($0.login) }) { kept[cli, default: [:]][email] = box }
+            }
+        }
+        return kept.isEmpty ? nil : kept
     }
 
     private static func change(_ edit: (inout Saved) -> Void) {
         var value = saved
         edit(&value)
         state.set(value)
-        try? FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(value) {
-            try? data.write(to: directory.appendingPathComponent("accounts.json"), options: .atomic)
-        }
+        write(value)
     }
 
     public static func supports(_ cli: String) -> Bool { variables[cli] != nil }
@@ -86,26 +124,27 @@ public enum CLIProfiles {
     public static func mainEmail(_ cli: String) -> String? { saved.mainEmail[cli] }
     public static func mainWorkspace(_ cli: String) -> String? { saved.mainWorkspace?[cli] }
 
-    /// The box a login with this email is signed in on instead of this Mac (its owner moved it
-    /// there), as a box's account list last said.
+    /// The place (a box's alias, another Mac's key) Kore moved the login with this email to,
+    /// until it's back. Only a move Kore made says so: the same account signed in on a box by
+    /// itself has its own tokens and is never "moved".
     public static func movedTo(_ cli: String, email: String?) -> String? {
         guard let email = email?.lowercased(), !email.isEmpty else { return nil }
-        return saved.moved?[cli]?[email]
+        return saved.moves?[cli]?[email]
     }
 
-    /// What `box` says is signed in there now, of this Mac's logins: those emails are on `box`,
-    /// and no others are any more. Whether that changed the list.
+    /// What `box` says is signed in there now: a login Kore moved there that it no longer lists
+    /// is gone from there (moved back, signed out there). It never marks one. Whether that
+    /// changed the list.
     @discardableResult
-    public static func noteMoved(_ cli: String, box: String, emails: Set<String>) -> Bool {
+    public static func noteGone(_ cli: String, box: String, signedIn emails: Set<String>) -> Bool {
         let now = Set(emails.map { $0.lowercased() })
-        var marks = saved.moved?[cli] ?? [:]
+        var marks = saved.moves?[cli] ?? [:]
         for (email, on) in marks where on == box && !now.contains(email) { marks[email] = nil }
-        for email in now { marks[email] = box }
-        guard marks != saved.moved?[cli] ?? [:] else { return false }
+        guard marks != saved.moves?[cli] ?? [:] else { return false }
         change {
-            var moved = $0.moved ?? [:]
-            moved[cli] = marks.isEmpty ? nil : marks
-            $0.moved = moved
+            var moves = $0.moves ?? [:]
+            moves[cli] = marks.isEmpty ? nil : marks
+            $0.moves = moves.isEmpty ? nil : moves
         }
         return true
     }
@@ -114,17 +153,17 @@ public enum CLIProfiles {
     public static func markMoved(_ cli: String, email: String?, box: String) {
         guard let email = email?.lowercased(), !email.isEmpty else { return }
         change {
-            var moved = $0.moved ?? [:]
-            moved[cli, default: [:]][email] = box
-            $0.moved = moved
+            var moves = $0.moves ?? [:]
+            moves[cli, default: [:]][email] = box
+            $0.moves = moves
         }
     }
 
     /// The login is back on this Mac (read signed in here): no longer said to be on a box.
     @discardableResult
     public static func noteBack(_ cli: String, email: String?) -> Bool {
-        guard let email = email?.lowercased(), saved.moved?[cli]?[email] != nil else { return false }
-        change { $0.moved?[cli]?[email] = nil }
+        guard let email = email?.lowercased(), saved.moves?[cli]?[email] != nil else { return false }
+        change { $0.moves?[cli]?[email] = nil }
         return true
     }
 

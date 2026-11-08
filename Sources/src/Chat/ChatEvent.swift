@@ -20,6 +20,9 @@ package enum ChatEvent: Sendable {
     case planModeChanged(PlanModeChange)
     /// Fast mode as the CLI reports it: when it starts, after each turn, and after a switch.
     case fastModeChanged(FastModeReport)
+    /// Controls set elsewhere, not reported by a CLI: a box's chat changed from another client
+    /// (its meta says them). What's there is the chat's now; nil keeps what it has.
+    case controlsSet(ControlsSet)
     /// The CLI's own remote control of the chat, as it changes; nil once it's off.
     case remoteControl(RemoteControl?)
     /// Why the CLI can't offer remote control at all (Claude's `remote_control_available`);
@@ -142,6 +145,19 @@ package enum ChatEvent: Sendable {
     /// newest page is read from its end first): the transcript is built again from it, keeping
     /// what came after the replay.
     case historyReplaced([ChatEvent])
+}
+
+/// A box chat's model, effort and "Allow commands in Plan" as its box keeps them (`controlsSet`).
+package struct ControlsSet: Sendable, Equatable, Codable {
+    package var model: String?
+    package var effort: String?
+    package var planAllow: Bool?
+
+    package init(model: String? = nil, effort: String? = nil, planAllow: Bool? = nil) {
+        self.model = model
+        self.effort = effort
+        self.planAllow = planAllow
+    }
 }
 
 /// Who changed a mode.
@@ -616,11 +632,9 @@ package struct Approval: Identifiable, Sendable, Codable {
     /// Why Always allow is offered but can't be picked here (a box's chat sets it on the box
     /// itself): the card shows it dim, saying so. Nil where it can, or isn't offered.
     package var alwaysAllowNote: String? = nil
-    /// What asks, for the link's risk rule (`CardRisk`): Claude's tool name, or Codex's approval
-    /// kind (`commandExecution`, `commandExecution.network`, `fileChange`, `permissions`).
+    /// What asks: Claude's tool name, or Codex's approval kind (`commandExecution`,
+    /// `commandExecution.network`, `fileChange`, `permissions`).
     package var tool: String? = nil
-    /// The paths the ask would write, as the CLI gave them.
-    package var targets: [String]? = nil
     /// Cross-session messages the CLI held (`ClaudePeerHolds`): who says they sent them. Set,
     /// this is that card, not the CLI's: Allow lets them in, Deny refuses them.
     package var held: [HeldSender]? = nil
@@ -666,7 +680,6 @@ package struct Approval: Identifiable, Sendable, Codable {
             agent: agent)
         copy.signIn = signIn
         copy.tool = tool
-        copy.targets = targets
         copy.held = held
         copy.allowNote = allowNote
         copy.autoStop = autoStop
@@ -736,7 +749,7 @@ extension AgentID {
 
 extension Approval {
     enum CodingKeys: String, CodingKey {
-        case id, title, detail, body, canAlwaysAllow, questions, plan, changes, agent, signIn, alwaysAllowNote, tool, targets, held,
+        case id, title, detail, body, canAlwaysAllow, questions, plan, changes, agent, signIn, alwaysAllowNote, tool, held,
             allowNote, autoStop, retryMessage, alwaysRule
     }
 
@@ -756,7 +769,6 @@ extension Approval {
         signIn = try c.decodeIfPresent(Bool.self, forKey: .signIn) ?? false
         alwaysAllowNote = try c.decodeIfPresent(String.self, forKey: .alwaysAllowNote)
         tool = try c.decodeIfPresent(String.self, forKey: .tool)
-        targets = try c.decodeIfPresent([String].self, forKey: .targets)
         held = try c.decodeIfPresent([HeldSender].self, forKey: .held)
         allowNote = try c.decodeIfPresent(String.self, forKey: .allowNote)
         autoStop = try c.decodeIfPresent(Bool.self, forKey: .autoStop) ?? false
@@ -778,7 +790,6 @@ extension Approval {
         try c.encode(signIn, forKey: .signIn)
         try c.encodeIfPresent(alwaysAllowNote, forKey: .alwaysAllowNote)
         try c.encodeIfPresent(tool, forKey: .tool)
-        try c.encodeIfPresent(targets, forKey: .targets)
         try c.encodeIfPresent(held, forKey: .held)
         try c.encodeIfPresent(allowNote, forKey: .allowNote)
         if autoStop { try c.encode(autoStop, forKey: .autoStop) }

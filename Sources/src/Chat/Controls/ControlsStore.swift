@@ -92,6 +92,10 @@ package final class ControlsStore {
                 fastOffered = offered
                 fastUnavailable = offered ? nil : report.unavailable ?? "Unavailable for this account"
             }
+        case .controlsSet(let set):
+            if let model = set.model { modelId = model }
+            if let effort = set.effort { self.effort = effort }
+            if let on = set.planAllow { planAllow = on }
         case .remoteControl(let state):
             remote = state
         case .remoteControlUnavailable(let reason):
@@ -112,7 +116,7 @@ package final class ControlsStore {
     /// The most permissive level the picker offers: a box's chat stops at Auto (3), the most a
     /// box takes from a Mac. Nil: every mode.
     @ObservationIgnored package var levelCap: Int?
-    /// Why the modes past `levelCap` can't be picked here ("Set on mybox itself"): the picker
+    /// Why the modes past `levelCap` can't be picked here ("Box chats go up to Auto"): the picker
     /// shows them dim, saying so.
     @ObservationIgnored package var levelCapNote: String?
 

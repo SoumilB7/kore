@@ -706,11 +706,11 @@ package final class TranscriptLog {
             entry.inTurn = true
             entry.turn = current
             let anchor = after.flatMap { tools[$0] ?? blocks[$0] }.flatMap { position[$0] }
-            if let anchor, anchor + 1 < entries.count {
-                insert(entry, at: anchor + 1)
-            } else {
-                append(entry)
-            }
+            // One taken at the same boundary before it stays first: the CLI's order, which is what
+            // the model read (and the send order, as Kore sends one at a time).
+            var at = anchor.map { $0 + 1 } ?? entries.count
+            while at < entries.count, entries[at].kind == .user, entries[at].inTurn, entries[at].turn == current { at += 1 }
+            if at < entries.count { insert(entry, at: at) } else { append(entry) }
         case .nextTurn:
             // Sent with Kore's id, which the CLI keeps (or its backend maps): a rollback finds it by it.
             user(entry.text, attachments: entry.attachments, source: id, chipsFrom: entry.id)

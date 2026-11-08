@@ -706,15 +706,12 @@ package final class AccountStore {
         }
     }
 
-    /// What a box says is signed in there (`account.list`): this Mac's logins with those emails
-    /// show as on that box, unless read signed in here this run.
+    /// What a box says is signed in there (`account.list`): a login Kore moved there that it no
+    /// longer lists isn't on it any more. The same email signed in there is never taken for a
+    /// move: signed in there on its own, it has its own tokens.
     package func noteBox(_ box: String, cli: String, signedIn emails: [String]) {
         guard !onBox else { return }
-        let here = signedInHere[cli, default: []]
-        let mine = ([(nil as String?, CLIProfiles.mainEmail(cli))] + CLIProfiles.added(cli).map { ($0.id, $0.email) })
-            .filter { !here.contains(Self.loginKey($0.0)) }.compactMap { $0.1?.lowercased() }
-        let moved = Set(emails.map { $0.lowercased() }).intersection(mine)
-        if CLIProfiles.noteMoved(cli, box: box, emails: moved) { loginsVersion += 1 }
+        if CLIProfiles.noteGone(cli, box: box, signedIn: Set(emails)) { loginsVersion += 1 }
     }
 
     /// Main and the added logins, once there's more than main; a box's accounts on a box.

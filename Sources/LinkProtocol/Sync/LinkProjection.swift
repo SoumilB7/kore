@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 import src
 
 /// What the projector reads beyond the transcript's log: a message's files, and markdown as
@@ -22,6 +23,50 @@ package enum LinkProjection {
     /// A tool's output: its start and its end.
     package static let resultHead = 1024
     package static let resultTail = 3 * 1024
+
+    // MARK: Diffs
+
+    /// The most of one file's change `diff.get` sends.
+    package static let diffCap = 256 * 1024
+
+    /// A file's change as hunks, with "+", "-" or " " before each line; cut at `diffCap`.
+    package static func hunks(_ change: FileChange) -> ([LinkMessage.Hunk], Bool) {
+        var size = 0
+        var out: [LinkMessage.Hunk] = []
+        for hunk in change.hunks {
+            var lines: [String] = []
+            for line in hunk.lines {
+                let mark = switch line.kind {
+                case .add: "+"
+                case .remove: "-"
+                case .context: " "
+                }
+                let text = mark + line.text
+                size += text.utf8.count + 1
+                if size > diffCap {
+                    out.append(.init(oldStart: hunk.oldStart, newStart: hunk.newStart, lines: lines))
+                    return (out, true)
+                }
+                lines.append(text)
+            }
+            out.append(.init(oldStart: hunk.oldStart, newStart: hunk.newStart, lines: lines))
+        }
+        return (out, change.isTruncated)
+    }
+
+    // MARK: Cards
+
+    /// A permission's (or a plan's ready) answers, the same on a Mac and a box: a call Auto refused
+    /// outright takes OK only, its line saying why; one Auto asked about runs once; Always allow
+    /// only where the CLI offers it and Auto didn't stop the call, with its rule as the tooltip.
+    package static func permissionActions(_ approval: Approval) -> [CardAction] {
+        if approval.autoStop, approval.allowNote != nil { return [.init(id: .deny, label: "OK", style: .neutral)] }
+        let always: [CardAction] =
+            approval.canAlwaysAllow && !approval.autoStop
+            ? [.init(id: .allowAlways, label: "Always allow", style: .neutral, refused: true, help: approval.alwaysHelp.isEmpty ? nil : approval.alwaysHelp)] : []
+        return [.init(id: .allow, label: approval.autoStop ? "Run once" : "Allow", style: .primary, refused: approval.allowNote != nil ? true : nil)]
+            + always + [.init(id: .deny, label: "Deny", style: .destructive)]
+    }
 
     // MARK: Transcript
 

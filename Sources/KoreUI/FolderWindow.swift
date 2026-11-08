@@ -41,8 +41,9 @@ struct FolderWindow: View {
                 TitleRow(onFullScreenChange: { fullScreen.value = $0 }) {
                     TabBar(
                         workspace: workspace,
-                        // Full screen has no title bar inset; keep the same 40pt row.
-                        height: fullScreen.value ? 40 : max(geometry.safeAreaInsets.top, 28),
+                        // Full screen has no title bar inset; keep the same 40pt row. Zoomed in, the
+                        // row grows with its tabs.
+                        height: Zoom.titleRow(bar: fullScreen.value ? 40 : max(geometry.safeAreaInsets.top, 28), scale: Zoom.shared.scale),
                         leadingInset: fullScreen.value ? 10 : 82,
                         explorerDock: docked ? workspace.explorerWidth : devicesDocked ? workspace.devicesWidth : nil,
                         historyOpen: $historyOpen.value,

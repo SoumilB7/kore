@@ -102,6 +102,87 @@ final class QueuedMessage: ChatStoryline {
     }
 }
 
+/// Two messages sent while a command runs, A then B: the CLI gets them A then B, and the chat
+/// shows them A then B, both taken at the command's end (one boundary), both left for after
+/// the turn (each starts a turn of its own), and both sent during a compaction (they go as it
+/// ends). B once showed above A (the owner, 2026-11-20).
+final class QueuedTwoKeepOrder: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    static let a = "also I want a toggle", b = "it will never turn off by default"
+    static let a2 = "and one more", b2 = "and the last one"
+    static let a3 = "after compacting", b3 = "and then this"
+    override class var script: CLIScript {
+        let command: Beat = .tool(name: "Bash", detail: "sleep 5", output: "ok", wait: .release)
+        let taken: [Beat] = [.startTurn, command, .takeQueued, .takeQueued, .stream(.answer, "Both read.\n\n"), .finishTurn(.completed)]
+        // The two taken count as sends: the next message plays the fourth turn.
+        let held: [Beat] = [.startTurn, command, .finishTurn(.completed)]
+        return CLIScript(turns: [taken, CLIScript.reply("-"), CLIScript.reply("-"), held, CLIScript.reply("OK")], compact: CLIScript.heldCompaction)
+    }
+
+    override func steps() -> [any Step] {
+        let users = { (rows: [StoryRow]) in rows.filter { $0.kind == "user" } }
+        let queued = { (story: StoryContext) throws -> [Call] in
+            try story.scriptedBackend().log.filter { if case .queued = $0 { true } else { false } }
+        }
+        let started = { (n: Int) in
+            Expect("turn \(n) to start") { story in
+                story.chatEvents().filter { if case .turnStarted = $0 { true } else { false } }.count == n
+            }
+        }
+        return super.steps() + [
+            Send("Run the command"),
+            started(1),
+            Queue(Self.a),
+            Queue(Self.b),
+            Expect("the CLI to have both before the command ends") { try queued($0).count == 2 },
+            Release(),
+            TurnFinished(1),
+            Expect("the CLI got A then B", found: { (try? queued($0)).map { "\($0)" } }) { try queued($0) == [.queued(Self.a), .queued(Self.b)] },
+            Expect.rows("A then B, both in the turn") { rows in
+                users(rows).map(\.text) == ["Run the command", Self.a, Self.b] && users(rows).dropFirst().allSatisfy(\.inTurn)
+            },
+            Expect("shown A then B", found: { (try? $0.activeChat().storyTranscript.sectionHeaders)?.joined(separator: " / ") }) {
+                try $0.activeChat().storyTranscript.sectionHeaders == ["Run the command", Self.a, Self.b]
+            },
+            Send("Run it again"),
+            started(2),
+            Queue(Self.a2),
+            Queue(Self.b2),
+            Expect("the CLI to have both before the command ends") { try queued($0).count == 4 },
+            Release(),
+            TurnFinished(4),
+            Expect("the CLI got all four in order", found: { (try? queued($0)).map { "\($0)" } }) {
+                try queued($0) == [.queued(Self.a), .queued(Self.b), .queued(Self.a2), .queued(Self.b2)]
+            },
+            Expect.rows("after the turn: A2's turn, then B2's") { rows in
+                users(rows).map(\.text) == ["Run the command", Self.a, Self.b, "Run it again", Self.a2, Self.b2]
+                    && users(rows).suffix(2).allSatisfy { !$0.inTurn }
+            },
+            Expect("shown in that order", found: { (try? $0.activeChat().storyTranscript.sectionHeaders)?.joined(separator: " / ") }) {
+                try $0.activeChat().storyTranscript.sectionHeaders
+                    == ["Run the command", Self.a, Self.b, "Run it again", Self.a2, Self.b2]
+            },
+            StartCompact(),
+            Do("Send two during the compaction") { story in
+                for text in [Self.a3, Self.b3] { try story.activeChat().storySend(text) }
+            },
+            Expect("both held, shown queued") { story in
+                story.chatEvents().filter { if case .messageQueued(_, let text, _) = $0 { [Self.a3, Self.b3].contains(text) } else { false } }.count == 2
+            },
+            Release(),
+            TurnFinished(6),
+            Expect("the CLI got A3 then B3", found: { (try? $0.scriptedBackend().log.suffix(4)).map { "\($0)" } }) { story in
+                let log = try story.scriptedBackend().log
+                guard let a = log.firstIndex(of: .send(Self.a3)), let b = log.firstIndex(of: .queued(Self.b3)) else { return false }
+                return a < b
+            },
+            Expect("shown A3 then B3, last", found: { (try? $0.activeChat().storyTranscript.sectionHeaders)?.joined(separator: " / ") }) {
+                try $0.activeChat().storyTranscript.sectionHeaders.suffix(2) == [Self.a3, Self.b3]
+            },
+        ]
+    }
+}
+
 /// ⌘Z in the composer undoes the typing in the field and in the chat's draft alike, and ⇧⌘Z
 /// brings it back to both.
 final class ComposerUndo: ChatStoryline {

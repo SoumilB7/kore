@@ -26,12 +26,9 @@ package enum LinkPolicy {
         package struct Card: Sendable, Equatable {
             package var kind: LinkCard.Kind
             package var digest: String
-            /// A permission a phone approves only with its fingerprint (`CardRisk`).
-            package var risk: CardRisk?
-            package init(kind: LinkCard.Kind, digest: String, risk: CardRisk? = nil) {
+            package init(kind: LinkCard.Kind, digest: String) {
                 self.kind = kind
                 self.digest = digest
-                self.risk = risk
             }
         }
 
@@ -77,7 +74,7 @@ package enum LinkPolicy {
     package static let maxSignInInput = 4096
     /// Arsenal's built tiers, lowest first: what `chat.setArsenal` takes besides "off". Full isn't
     /// built, so it is refused.
-    package static let arsenalTiers = ["watch", "own", "drive"]
+    package static let arsenalTiers = ["watch", "own", "drive", "device"]
 
     package static func check(_ command: LinkCommand, _ chat: ChatFacts?, control: LinkControlLevel = .standard) -> Verdict {
         switch command {
@@ -203,12 +200,12 @@ package enum LinkPolicy {
         case .send(let text, let files, _, _):
             return check(.send(chatId: "", text: text, blobs: files.map(\.blob)), chat, control: control)
         case .respond(let approval, let decision):
-            if chat.cards[approval]?.kind == .signIn { return .deny(.signIn, "Sign-ins are answered on the box itself.") }
+            if chat.cards[approval]?.kind == .signIn { return .deny(.signIn, boxSignInLine) }
             switch decision {
-            case .allowAlways: return .deny(.alwaysAllow, "Always allow is set on the box itself.")
+            case .allowAlways: return .deny(.alwaysAllow, boxAlwaysAllowLine)
             // Into the chat's own mode: leaving plan's rule. Into Accept edits: under Auto.
             case .approvePlan(let acceptEdits):
-                return acceptEdits || mayLeavePlan(chat, control: control) ? .allow : .deny(.raiseMode, "Leaving plan into that mode is set on the box itself.")
+                return acceptEdits || mayLeavePlan(chat, control: control) ? .allow : .deny(.raiseMode, boxCapLine)
             case .allow, .deny, .keepPlanning, .answers: return .allow
             }
         case .setMode(let mode):
@@ -225,8 +222,8 @@ package enum LinkPolicy {
             // Only the row of a typed /compact, the one a chat shows without sending.
             return Chat.compactCommand(text) != nil && text.utf8.count <= maxText ? .allow : .deny(.invalid, "Only a /compact row is kept that way.")
         case .setRemoteControl:
-            // The CLI's own remote hands the chat to another service: only on the box itself.
-            return .deny(.command, "Remote control of a box's chat is turned on on the box.")
+            // The CLI's own remote hands the chat to another service: not from here.
+            return .deny(.command, "Remote control isn't offered for box chats.")
         case .setAutoCompact(let at):
             return at.map { (1...100).contains($0) } ?? true ? .allow : .deny(.invalid, "A percentage from 1 to 100, or off.")
         case .setDraft(let text):
@@ -236,7 +233,7 @@ package enum LinkPolicy {
             return check(.chatSetArsenal, ControlArgs(tier: tier ?? "off"), chat, control: control)
         case .interrupt, .setModel, .setEffort, .setFastMode, .stopAgent, .stopCommand, .backgroundCommand, .commandOutput, .watchCommands,
             .agentHistory, .fork, .forkAtEnd, .rollback, .earlier, .earlierMessages, .unloadPoint, .unloaded, .usage, .useReset, .relaunch,
-            .listModels, .close, .draft:
+            .listModels, .close, .draft, .setPlanAllow:
             return .allow
         case .unknown:
             return .deny(.invalid, "Unknown call.")
@@ -276,6 +273,17 @@ package enum LinkPolicy {
             if args.modelId != nil, !plainID(args.modelId) { return .deny(.invalid, "That isn't a model.") }
             if args.level != nil, !plainID(args.level) { return .deny(.invalid, "That isn't an effort.") }
             if let title = args.title, title.count > maxTitle || title.contains(where: \.isNewline) { return .deny(.invalid, "A title is one line, up to 200 characters.") }
+            if let settings = args.settings {
+                if !settings.plain { return .deny(.invalid, "Those aren't a chat's settings.") }
+                if let mode = settings.mode, (levels[mode] ?? .danger) > (control == .full ? raiseCap : leavePlanMaxLevel) {
+                    return .deny(.raiseMode, "A new chat can't start in that mode from here.")
+                }
+                // What only a full grant sets on a chat: an Arsenal tier on, its login, commands
+                // allowed in Plan.
+                if control != .full, settings.arsenal != nil || settings.login != nil || settings.planAllow == true {
+                    return .deny(.deniedControl, "That needs a grant with full control.")
+                }
+            }
             return .allow
         case .chatSetModel:
             return plainID(args.modelId) ? .allow : .deny(.invalid, "Name the chat and the model.")
@@ -385,6 +393,11 @@ package enum LinkPolicy {
             // Off lowers; a tier on raises what the chat's agent may do: full grants only.
             if (args.tier ?? "off") != "off", case .deny(let code, let message) = full() { return .deny(code, message) }
             return check(kind, args, chat, control: .full)
+        case .chatSetPlanAllow:
+            // Off lowers; on lets the chat allow every command while planning: full grants only.
+            guard let on = args.on else { return .deny(.invalid, "Name the chat and on or off.") }
+            if on, case .deny(let code, let message) = full() { return .deny(code, message) }
+            return .allow
         case .authGh:
             return full()
         case .accountSignIn:
@@ -439,6 +452,7 @@ package enum LinkPolicy {
                 if args.modelId != nil, !plainID(args.modelId) { return .deny(.invalid, "That isn't a model.") }
                 if args.level != nil, !plainID(args.level) { return .deny(.invalid, "That isn't an effort.") }
                 if let title = args.title, title.count > maxTitle || title.contains(where: \.isNewline) { return .deny(.invalid, "A title is one line, up to 200 characters.") }
+                if let settings = args.settings, !settings.plain { return .deny(.invalid, "Those aren't a chat's settings.") }
             }
             if let host = args.host, host.count > 100 || host.contains(where: \.isNewline) { return .deny(.invalid, "A name is one line.") }
             return .allow
@@ -474,13 +488,25 @@ package enum LinkPolicy {
                 for line in [args.title, args.copiedFrom].compactMap({ $0 }) where line.count > maxTitle * 2 || line.contains(where: \.isNewline) {
                     return .deny(.invalid, "A title is one line.")
                 }
+                if let settings = args.settings, !settings.plain { return .deny(.invalid, "Those aren't a chat's settings.") }
                 return .allow
             }
             return .allow
         default:
-            return .deny(.invalid, "Not taken here.")
+            return .deny(.invalid, notTaken)
         }
     }
+
+    /// What a box says of a command it doesn't take (a Mac's window groups and boards): worded for
+    /// the person who asked. Boxes before 0.3.5 said `notTakenBefore`.
+    package static let notTaken = "A box doesn't do that."
+    package static let notTakenBefore = "Not taken here."
+    /// What a box says of a command newer than its kore-host. Boxes before 0.3.5 said
+    /// `unknownBefore`.
+    package static let unknownCommand = "The box's kore-host needs an update for that."
+    package static let unknownBefore = "Unknown command."
+    /// What a box says to a device whose grant only watches, of anything more.
+    package static let watchOnly = "This device can only watch here."
 
     /// The answers each kind of card takes over the link. `approvePlan` starts the work in Manual.
     package static func actions(_ kind: LinkCard.Kind) -> Set<CardAction.ID> {
@@ -496,6 +522,12 @@ package enum LinkPolicy {
     /// The highest a full-control client may raise a mode (owner, 2026-11-10: Auto, not Bypass or
     /// Full access).
     package static let raiseCap = ModeLevel.auto
+    /// What a box chat's picker and refusals say of the cap.
+    package static let boxCapLine = "Box chats go up to Auto"
+    /// Always allow from here: the box refuses it, and its cards don't offer it.
+    package static let boxAlwaysAllowLine = "Always allow isn't offered for box chats yet"
+    /// A CLI's sign-in in a box chat: not answered from here.
+    package static let boxSignInLine = "Sign-ins in box chats aren't answered from here yet"
 
     /// The modes the link may switch a chat to: its own level and below; with full control, also
     /// up to Auto.

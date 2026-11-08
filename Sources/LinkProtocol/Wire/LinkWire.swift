@@ -328,12 +328,15 @@ package struct CardAction: Codable, Sendable, Equatable {
     package var label: String
     package var style: Style
     package var refused: Bool?
+    /// The answer's tooltip: Always allow's rule as it reads (`Always allow `npm test``).
+    package var help: String?
 
-    package init(id: ID, label: String, style: Style, refused: Bool? = nil) {
+    package init(id: ID, label: String, style: Style, refused: Bool? = nil, help: String? = nil) {
         self.id = id
         self.label = label
         self.style = style
         self.refused = refused
+        self.help = help
     }
 }
 
@@ -384,16 +387,11 @@ package struct LinkCard: Codable, Sendable, Equatable {
     package var actions: [CardAction]
     /// Base64 SHA-256 of the card's canonical encoding (`LinkCardDigest`), over its full content.
     package var digest: String
-    /// Phase 18: a shell command, a write outside the chat's folder or network access. A phone's
-    /// Allow carries its fingerprint signature (`LinkRaiseWire`); absent for a plain card.
-    package var risk: CardRisk?
 
     package init(
         id: String, kind: Kind, title: String, detail: String? = nil, body: String? = nil, bodyLen: Int? = nil,
-        plan: [Block]? = nil, questions: [LinkQuestion]? = nil, agent: String? = nil, actions: [CardAction], digest: String,
-        risk: CardRisk? = nil
+        plan: [Block]? = nil, questions: [LinkQuestion]? = nil, agent: String? = nil, actions: [CardAction], digest: String
     ) {
-        self.risk = risk
         self.id = id
         self.kind = kind
         self.title = title

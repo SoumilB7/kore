@@ -26,7 +26,7 @@ enum LinkSnapshot {
                 id: p.id, name: p.name,
                 modes: p.modes.map { ModeInfo(id: $0.id, label: $0.label, level: level($0), listed: $0.listed) },
                 planToggle: p.planToggle.map { PlanToggleInfo(id: $0.id, label: $0.label) },
-                features: ProviderFeatures(effort: true, fastMode: p.id == "claude"))
+                features: ProviderFeatures(effort: true, fastMode: p.fastMode))
         }
     }
 
@@ -124,32 +124,9 @@ enum LinkSnapshot {
     }
 
     /// The most of a diff sent: 256 KiB of lines.
-    static let diffCap = 256 * 1024
+    static let diffCap = LinkProjection.diffCap
 
-    /// A file's change as hunks, with "+", "-" or " " before each line; cut at `diffCap`.
-    static func hunks(_ change: FileChange) -> ([LinkMessage.Hunk], Bool) {
-        var size = 0
-        var out: [LinkMessage.Hunk] = []
-        for hunk in change.hunks {
-            var lines: [String] = []
-            for line in hunk.lines {
-                let mark = switch line.kind {
-                case .add: "+"
-                case .remove: "-"
-                case .context: " "
-                }
-                let text = mark + line.text
-                size += text.utf8.count + 1
-                if size > diffCap {
-                    out.append(.init(oldStart: hunk.oldStart, newStart: hunk.newStart, lines: lines))
-                    return (out, true)
-                }
-                lines.append(text)
-            }
-            out.append(.init(oldStart: hunk.oldStart, newStart: hunk.newStart, lines: lines))
-        }
-        return (out, change.isTruncated)
-    }
+    static func hunks(_ change: FileChange) -> ([LinkMessage.Hunk], Bool) { LinkProjection.hunks(change) }
 
     /// Each CLI's models, read from its open chats (a CLI says them once it runs), its account,
     /// and its logins' usage as this Mac knows it (`AccountStore.linkUsage`).
@@ -208,7 +185,7 @@ enum LinkSnapshot {
         let modes = Dictionary(chat.controls.availableModes.map { ($0.id, Self.level($0)) }, uniquingKeysWith: { a, _ in a })
         let current = chat.provider.modes.first { $0.id == chat.controls.mode }.map(Self.level) ?? .danger
         var waiting: [String: LinkPolicy.ChatFacts.Card] = [:]
-        for card in cards(chat) { waiting[card.id] = .init(kind: card.kind, digest: card.digest, risk: card.risk) }
+        for card in cards(chat) { waiting[card.id] = .init(kind: card.kind, digest: card.digest) }
         let all = chat.controls.linkCommands
         return LinkPolicy.ChatFacts(
             level: current, planOn: chat.provider.planToggle != nil && chat.controls.planMode, modes: modes, cards: waiting,
@@ -300,13 +277,16 @@ enum LinkSnapshot {
     /// The link's client has full control this run.
     static var fullControl: Bool { LinkHost.current?.run.control == .full }
 
+    /// The "Implement this plan?" card's answers, in the Mac card's words.
+    static let implementActions: [CardAction] = [
+        .init(id: .implement, label: CardLabels.Implement.implement, style: .primary), .init(id: .stay, label: CardLabels.Implement.stay, style: .neutral),
+    ]
+
     static func cards(_ chat: Chat) -> [LinkCard] {
         var out = chat.approvals.pending.map { card($0, in: chat) }
         if chat.approvals.offerImplementPlan {
-            let actions: [CardAction] = [
-                .init(id: .implement, label: "Yes, implement it", style: .primary), .init(id: .stay, label: "Stay in Plan", style: .neutral),
-            ]
-            let title = "Implement this plan?"
+            let actions = implementActions
+            let title = CardLabels.Implement.title
             let digest = LinkCardDigest(kind: .planReady, title: title, detail: nil, body: nil, plan: nil, questions: nil, actions: actions).digest
             out.append(LinkCard(id: planReadyID, kind: .planReady, title: title, actions: actions, digest: digest))
         }
@@ -334,10 +314,10 @@ enum LinkSnapshot {
         case .plan:
             plan = doc(capped(approval.plan ?? "", planCap).text)
             actions = [
-                .init(id: .approvePlan, label: "Yes, manually approve edits", style: .primary),
+                .init(id: .approvePlan, label: CardLabels.Plan.approve, style: .primary),
                 // Full control may take it (`LinkPolicy`): it raises the mode only to Edit automatically.
-                .init(id: .approvePlanAcceptEdits, label: "Yes, and auto-accept edits", style: .neutral, refused: fullControl ? nil : true),
-                .init(id: .keepPlanning, label: "No, keep planning", style: .neutral),
+                .init(id: .approvePlanAcceptEdits, label: CardLabels.Plan.autoAccept, style: .neutral, refused: fullControl ? nil : true),
+                .init(id: .keepPlanning, label: CardLabels.Plan.keepPlanning, style: .neutral),
             ]
         case .questions:
             questions = approval.questions.map { q in
@@ -346,23 +326,17 @@ enum LinkSnapshot {
                     options: q.options.map { .init(label: $0.label, description: $0.description, preview: $0.preview) }, multiple: q.multiple,
                     secret: q.secret, other: q.other)
             }
-            actions = [.init(id: .submitAnswers, label: "Submit", style: .primary), .init(id: .deny, label: "Skip", style: .neutral)]
+            actions = [.init(id: .submitAnswers, label: CardLabels.Question.submit, style: .primary), .init(id: .deny, label: CardLabels.Question.skip, style: .neutral)]
         case .permission, .planReady:
-            // A call Auto refused outright: OK only, its line says why.
-            actions = approval.autoStop && approval.allowNote != nil ? [.init(id: .deny, label: "OK", style: .neutral)] :
-                [.init(id: .allow, label: approval.autoStop ? "Run once" : "Allow", style: .primary, refused: approval.allowNote != nil ? true : nil)]
-                + (approval.canAlwaysAllow && !approval.autoStop ? [.init(id: .allowAlways, label: "Always allow", style: .neutral, refused: true)] : [])
-                + [.init(id: .deny, label: "Deny", style: .destructive)]
+            actions = LinkProjection.permissionActions(approval)
         }
         let digest = LinkCardDigest(
             kind: kind, title: approval.title, detail: approval.detail, body: approval.body, plan: approval.plan, questions: questions,
             actions: actions
         ).digest
-        let risk = kind == .permission ? CardRisk.classify(tool: approval.tool, targets: approval.targets ?? [], folder: chat.folder.path) : nil
         return LinkCard(
             id: approval.id, kind: kind, title: approval.title, detail: approval.detail, body: body?.text,
-            bodyLen: body?.cut == true ? body?.length : nil, plan: plan, questions: questions, agent: agent, actions: actions, digest: digest,
-            risk: risk)
+            bodyLen: body?.cut == true ? body?.length : nil, plan: plan, questions: questions, agent: agent, actions: actions, digest: digest)
     }
 
     // MARK: Transcript

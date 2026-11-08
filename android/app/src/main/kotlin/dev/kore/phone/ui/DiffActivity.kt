@@ -55,7 +55,7 @@ class DiffActivity : NodeActivity() {
 
     private fun show(r: JsonObject?) {
         if (r == null || r.str("t") == "result") {
-            state.text = if (r == null) "$macName didn't answer." else refusalWords(r.str("code"))
+            state.text = if (r == null) "$macName didn't answer." else refusalWords(r.str("code"), r.str("message"))
             return
         }
         lines.clear()

@@ -80,6 +80,15 @@ object Control {
     fun newChatInFolder(folder: String, provider: String) = cmd("chat.new") { put("folder", folder); put("provider", provider) }
     /** The folders a box serves (its windows). */
     fun foldersList() = cmd("folders.list")
+    /**
+     * A box's folders for a phone's browser: under [path] (null: its user's home), subfolders only,
+     * inside that home, no hidden ones (kore-host checks each again; an older one refuses all).
+     */
+    fun fsList(path: String?) = cmd("fs.list") { putOpt("path", path) }
+    /** A new folder at [path] (absolute), in the box user's home. */
+    fun fsMkdir(path: String) = cmd("fs.mkdir") { put("path", path) }
+    /** A box folder served from now on (Open here): its window comes back as `windowId`. */
+    fun folderAdd(path: String) = cmd("folder.add") { put("path", path) }
 
     fun newChat(windowId: String, provider: String, modelId: String? = null, place: Place? = null) = cmd("chat.new") {
         put("windowId", windowId)
@@ -97,13 +106,14 @@ object Control {
     // `full` is never sent.
 
     /** Arsenal's tiers by wire id, lowest first. */
-    val ARSENAL_TIERS = listOf("off", "watch", "own", "drive")
+    val ARSENAL_TIERS = listOf("off", "watch", "own", "drive", "device")
     /** A tier's name as Kore shows it. */
     fun arsenalName(tier: String?): String = when (tier ?: "off") {
         "off" -> "Off"
         "watch" -> "Read"
         "own" -> "Act limited"
         "drive" -> "Act unlimited"
+        "device" -> "Act device"
         else -> tier!!
     }
     /** Whether moving a chat from [from] to [to] raises it (and so needs the fingerprint). */

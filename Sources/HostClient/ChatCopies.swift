@@ -39,26 +39,54 @@ package struct CopySource {
     package var title: String
     /// Its transcript on this Mac, when the History listing said (a chat from before a rename).
     package var known: String?
+    /// A chat on this Mac: its settings as its tab (or what Kore keeps for its session) has them.
+    /// A box's come from the box.
+    package var settings: ChatSettings?
 
-    package init(end: CopyEnd, id: String, provider: String, title: String, known: String? = nil) {
+    package init(end: CopyEnd, id: String, provider: String, title: String, known: String? = nil, settings: ChatSettings? = nil) {
         self.end = end
         self.id = id
         self.provider = provider
         self.title = title
         self.known = known
+        self.settings = settings
     }
 }
 
-/// A copy made: its new session, and on a box the chat made for it.
+/// A copy made: its new session, and on a box the chat made for it, with the settings it carried
+/// (no draft for a copy: the original keeps it) and what gave way where it landed, a line each.
 package struct ChatCopy: Sendable, Equatable {
     package var provider: String
     package var session: String
     package var chatId: String?
     package var title: String?
-    package var modelId: String?
-    package var effort: String?
-    package var mode: String?
+    package var settings = ChatSettings()
+    /// The settings came whole (this Mac's, or a box's that says them): an Arsenal tier absent is
+    /// off. False: a box from before them said only model, effort and mode.
+    package var whole = true
+    package var notes: [String] = []
     package var cost = MoveCost()
+
+    package var modelId: String? { settings.modelId }
+    package var effort: String? { settings.effort }
+    package var mode: String? { settings.mode }
+}
+
+extension ChatSettings {
+    /// As said to box `connection`: a tier it doesn't take is the one below (Act device to an
+    /// older box is Act unlimited), and none while this Mac's chats can't use Arsenal
+    /// (`arsenal` false), said in `notes`.
+    @MainActor package func said(to connection: HostConnection, arsenal allowed: Bool = true, notes: inout [String]) -> ChatSettings {
+        var said = self
+        said.arsenal = allowed ? BoxTools.said(arsenal, caps: connection.caps) : nil
+        if let asked = arsenal, said.arsenal != asked {
+            notes.append(
+                allowed
+                    ? "Arsenal \(Self.tierName(asked)) isn't on \(NodeNames.name(connection.alias)) · \(said.arsenal.map(Self.tierName) ?? "off")"
+                    : "Arsenal \(Self.tierName(asked)) is off · chats can't use Arsenal here")
+        }
+        return said
+    }
 }
 
 @MainActor
@@ -74,6 +102,8 @@ package struct ChatCopies {
     package var progress: (@MainActor (_ bytes: Int64, _ total: Int64) -> Void)?
     /// Stops a running rsync (the bar's Cancel): the copy fails before anything is placed.
     package var stopper: Spawn?
+    /// This Mac lets chats use Arsenal: a tier goes with a copy to a box only then.
+    package var arsenalAllowed = true
 
     package init(env: [String: String] = ProcessInfo.processInfo.environment, staging: URL, trash: URL) {
         self.env = env
@@ -94,11 +124,18 @@ package struct ChatCopies {
     /// `source` copied to `target` as session `new`. `line`: the copy's line above its history
     /// ("copied from “Repos” · mybox"); `stop`: a working box chat stops first (a cut); `whole`:
     /// the source has stopped, so the copy must have every row (a cut, checked before it goes).
+    /// `draft`: the copy takes the source's draft too (a cut; a copy leaves it with its original).
     package func copy(
         _ source: CopySource, to target: CopyEnd, as new: String = SessionCopy.newId(), title: String? = nil, line: String? = nil, stop: Bool = false,
-        whole: Bool = false
+        whole: Bool = false, draft: Bool = false
     ) async -> Result<ChatCopy, MoveFailure> {
         let title = title ?? source.title
+        func carried(_ settings: ChatSettings?) -> ChatSettings {
+            guard var settings = settings?.linkable else { return ChatSettings() }
+            if !draft { settings.draft = nil }
+            settings.at = nil
+            return settings
+        }
         switch source.end {
         case .mac(let from):
             let found = SessionCopy.files(provider: source.provider, session: source.id, folder: from, known: source.known, env: env)
@@ -118,11 +155,12 @@ package struct ChatCopies {
                     }
                 }.value
                 if case .success = placed { progress?(total, total) }
-                return placed.map { _ in ChatCopy(provider: provider, session: new, title: title) }
+                let settings = carried(source.settings)
+                return placed.map { _ in ChatCopy(provider: provider, session: new, title: title, settings: settings) }
             case .box(let moves, let folder):
                 return await push(
                     found, provider: source.provider, old: source.id, folders: SessionCopy.spellings(from), to: metered(moves, base: 0, total: total), folder: folder, as: new,
-                    settings: ChatCopy(provider: source.provider, session: new, title: title), line: line)
+                    settings: ChatCopy(provider: source.provider, session: new, title: title, settings: carried(source.settings)), line: line)
             }
         case .box(let moves, let folder):
             guard moves.connection.copiesChats else { return .failure(MoveFailure("Update kore-host on \(NodeNames.name(moves.connection.alias)) to copy chats")) }
@@ -146,8 +184,9 @@ package struct ChatCopies {
             cost.rsyncSent += pulled.sent
             guard pulled.ok else { return .failure(MoveFailure("Couldn't copy the session: \(pulled.said)")) }
             let found = SessionFiles.Found(root: stage, files: files)
-            var made = ChatCopy(
-                provider: info.provider, session: new, title: title, modelId: info.modelId, effort: info.effort, mode: info.mode, cost: cost)
+            // A box from before `settings` says the four it knows.
+            let settings = carried(info.settings ?? ChatSettings(modelId: info.modelId, effort: info.effort, mode: info.mode))
+            var made = ChatCopy(provider: info.provider, session: new, title: title, settings: settings, whole: info.settings != nil, cost: cost)
             switch target {
             case .mac(let to):
                 let (env, old, folders) = (env, info.sessionId, info.folders)
@@ -191,14 +230,18 @@ package struct ChatCopies {
         made.cost.rsyncReceived += pushed.received
         made.cost.files = found.files.count
         guard pushed.ok else { return await abort("Couldn't copy the session: \(pushed.said)") }
+        made.settings = settings.settings.said(to: connection, arsenal: arsenalAllowed, notes: &made.notes).linkable
         let commit = ControlArgs(
-            title: settings.title.map { String($0.prefix(LinkPolicy.maxTitle)) }, modelId: settings.modelId.flatMap { LinkPolicy.plainID($0) ? $0 : nil },
-            level: settings.effort.flatMap { LinkPolicy.plainID($0) ? $0 : nil }, sourceId: old, provider: provider, sessionId: new, mode: settings.mode,
-            folder: folder, folders: folders, phase: MovePhase.commit.rawValue, moveId: moveId, copiedFrom: line)
+            title: settings.title.map { String($0.prefix(LinkPolicy.maxTitle)) }, modelId: made.settings.modelId, level: made.settings.effort, sourceId: old,
+            provider: provider, sessionId: new, mode: made.settings.mode, folder: folder, folders: folders, phase: MovePhase.commit.rawValue, moveId: moveId,
+            copiedFrom: line, settings: made.settings)
         let adopted = await connection.move(.chatAdoptCopy, commit)
         made.cost.linkBytes += connection.lastMoveBytes
         guard adopted.ok, let chatId = adopted.chatId else { return .failure(MoveFailure(adopted.message ?? "\(NodeNames.name(connection.alias)) didn't take it", adopted.code)) }
         made.chatId = chatId
+        if let note = adopted.message { made.notes.append(note) }
+        // What the box made of them (a box from before says nothing: they stand as sent).
+        if let landed = adopted.settings?.linkable { made.settings = landed }
         HostLog.event(connection.alias, "copy there", ["chat": chatId, "files": String(found.files.count), "bytes": String(made.cost.rsyncSent)])
         return .success(made)
     }
@@ -210,7 +253,7 @@ package struct ChatCopies {
     /// of its history. A copy that fails leaves the source as it was. `kept`: the copy is made
     /// but the source couldn't be put aside (it stays; the line says so).
     package func cut(_ source: CopySource, to target: CopyEnd, as new: String = SessionCopy.newId()) async -> (copy: Result<ChatCopy, MoveFailure>, kept: MoveFailure?) {
-        let made = await copy(source, to: target, as: new, stop: true, whole: true)
+        let made = await copy(source, to: target, as: new, stop: true, whole: true, draft: true)
         guard case .success = made else { return (made, nil) }
         if case .failure(let failure) = await removeSource(source) { return (made, failure) }
         return (made, nil)

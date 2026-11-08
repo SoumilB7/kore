@@ -132,7 +132,7 @@ extension HostDaemon {
             }
             return .init(id: id, ok: true)
         default:
-            return fail(.invalid, "Not taken here.")
+            return fail(.invalid, LinkPolicy.notTaken)
         }
     }
 

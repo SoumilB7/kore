@@ -227,6 +227,18 @@ final class LinkClient {
         for chatId in following.keys { host.txFollowersChanged(chatId) }
     }
 
+    /// A device's finished uploads not yet sent (a full grant's aren't counted): at most
+    /// `heldMax`, each kept `heldFor`, as a Mac keeps a phone's.
+    private var unsent: [String: Date] = [:]
+    static let heldMax = LinkPolicy.maxBlobs * 2
+    static let heldFor: TimeInterval = 600
+
+    private func sweepHeld() {
+        let now = host.now()
+        uploads.sweep(at: now)
+        unsent = unsent.filter { now.timeIntervalSince($0.value) < Self.heldFor }
+    }
+
     private func uploadFailed(_ uploadId: String, _ failure: LinkUploads.Failure) {
         send(.result(.init(id: "blob.put:" + uploadId, ok: false, code: failure.code, message: failure.message)))
     }
@@ -445,26 +457,55 @@ final class LinkClient {
         case .unknown(let type):
             stream(type, data)
         case .blobPutBegin(let uploadId, let name, let mime, let size, let sha256):
-            guard current() == .full else {
+            // A full grant, or a device that acts (a phone), within the Mac's limits for phones.
+            guard let control = current() else { return }
+            guard control != .watch else {
                 denied("blob.put")
-                return uploadFailed(uploadId, .init(.deniedControl, "Uploads need a grant with full control."))
+                return uploadFailed(uploadId, .init(.deniedControl, LinkPolicy.watchOnly))
             }
-            if let failure = uploads.begin(uploadId, name: name, mime: mime, size: size, sha256: sha256) { uploadFailed(uploadId, failure) }
+            sweepHeld()
+            if control != .full, unsent.count >= Self.heldMax {
+                return uploadFailed(uploadId, .init(.busy, "Too many files waiting to be sent."))
+            }
+            let limited = control != .full ? holder : nil
+            if let limited, !host.rateLimits[limited, default: HostLimits()].uploadFits(size, at: host.now()) {
+                return uploadFailed(uploadId, .init(.rateLimited, "That's 256 MB of files this hour, the most. Try again later."))
+            }
+            if let failure = uploads.begin(uploadId, name: name, mime: mime, size: size, sha256: sha256, at: host.now()) { return uploadFailed(uploadId, failure) }
+            if let limited { host.rateLimits[limited, default: HostLimits()].uploadBegan(size, at: host.now()) }
         case .blobPutChunk(let uploadId, let index, let data):
-            if let failure = uploads.chunk(uploadId, index: index, base64: data) { uploadFailed(uploadId, failure) }
+            if let failure = uploads.chunk(uploadId, index: index, base64: data, at: host.now()) { uploadFailed(uploadId, failure) }
         case .blobPutEnd(let uploadId):
-            switch uploads.end(uploadId) {
+            switch uploads.end(uploadId, at: host.now()) {
             case .failure(let failure): uploadFailed(uploadId, failure)
             case .success(let file):
                 guard let blob = host.keep(file) else { return uploadFailed(uploadId, .init(.busy, "The box couldn't keep the file.")) }
+                if control != .full { unsent[blob] = host.now() }
                 send(.result(.init(id: "blob.put:" + uploadId, ok: true, blobId: blob)))
             }
+        case .blobGet(let id, let chatId, let ref, let variant, let offset):
+            blobGet(id: id, chatId: chatId, ref: ref, variant: variant, offset: offset)
+        case .diffGet(let id, let chatId, let turnId, let path):
+            // A turn's change to a file, as a Mac answers it (act and full grants).
+            guard let control = current() else { return }
+            guard control != .watch else {
+                denied("diff.get")
+                return send(.result(.init(id: "diff.get:" + id, ok: false, code: .deniedControl, message: LinkPolicy.watchOnly)))
+            }
+            guard let hc = host.chat(chatId) else { return send(.result(.init(id: "diff.get:" + id, ok: false, code: .goneChat, message: "That chat isn't on the box any more."))) }
+            guard let change = hc.change(turn: turnId, path: path) else {
+                return send(.result(.init(id: "diff.get:" + id, ok: false, code: .invalid, message: "That turn didn't change that file.")))
+            }
+            let (hunks, more) = LinkProjection.hunks(change)
+            send(.diffHunks(id: id, path: path, hunks: hunks, more: more))
+        case .txEarlier(let chatId):
+            earlier(chatId)
         case .historyList(let id, let windowId, let query, let archived, let offset):
             // A folder's closed chats and its CLIs' past sessions (1.9: act and full grants).
             guard let control = current() else { return }
             guard control != .watch else {
                 denied("history.list")
-                return send(.result(.init(id: "history.list:" + id, ok: false, code: .deniedControl, message: "This grant only watches.")))
+                return send(.result(.init(id: "history.list:" + id, ok: false, code: .deniedControl, message: LinkPolicy.watchOnly)))
             }
             Task { [weak self] in
                 guard let self else { return }
@@ -483,12 +524,24 @@ final class LinkClient {
             files(kind, args, id: id)
         case .cmd(let id, let command):
             guard let control = current() else { return }
-            if signs, let digest = LinkAsk.proofNeeded(command, command.chatId.flatMap(host.chat).map { HostMeta.facts($0) }) {
-                guard approved(id: id, digest: digest, data) else { return }
+            // A device's files are its own uploads, not yet sent and not expired (as on a Mac).
+            if control != .full, case .send(_, _, let blobs) = command, !blobs.isEmpty {
+                sweepHeld()
+                guard blobs.allSatisfy({ unsent[$0] != nil }) else {
+                    return send(.result(.init(id: id, ok: false, code: .goneBlob, message: "A file wasn't uploaded, or expired. Attach it again.")))
+                }
             }
-            let result = host.apply(command, id: id, control: control) { [weak self] result in self?.send(.result(result)) }
+            let result = host.apply(command, id: id, control: control, phone: device?.kind == .phone) { [weak self] result in self?.send(.result(result)) }
             if let result {
+                if result.ok, case .send(_, _, let blobs) = command { for blob in blobs { unsent[blob] = nil } }
                 if result.code == .deniedControl { denied(command.type) }
+                // A folder served from now on, by whom (a phone's Open here, or the Mac's add).
+                if case .control(.folderAdd, let args) = command {
+                    HostJournal.audit("folder add", [
+                        "device": device?.id.uuidString.lowercased() ?? grant?.name, "control": control.rawValue, "path": args.path,
+                        "ok": result.ok ? "1" : "0",
+                    ])
+                }
                 send(.result(result))
             }
         default:
@@ -554,9 +607,6 @@ final class LinkClient {
 
     // MARK: Raises (phase 18)
 
-    /// A device that may ask but not run (a phone): its raises and risky Allows take its fingerprint.
-    var signs: Bool { device.map { !$0.abilities.effective.contains(.run) } ?? false }
-
     private func gate() -> LinkRaiseGate? {
         if let raises { return raises }
         guard let binding = (socket as? NetLinkWire)?.bindingDigest else { return nil }
@@ -595,22 +645,6 @@ final class LinkClient {
         }
     }
 
-    /// A risky card's Allow from a phone: its signature over `approve.<digest>`, or refused.
-    private func approved(id: String, digest: String, _ data: Data) -> Bool {
-        let who = deviceId.map { $0.uuidString.lowercased() }
-        guard let proof = LinkRaiseWire.answerProof(data), proof.modeId == LinkRaiseWire.approveMode(digest), let gate = gate() else {
-            send(.result(.init(id: id, ok: false, code: .raiseMode, message: "Allowing this takes your fingerprint.")))
-            return false
-        }
-        if case .refused(let code, let message) = gate.verify(proof, raiseKey: device?.raiseKey) {
-            HostJournal.audit("risky", ["device": who, "ok": "0"])
-            send(.result(.init(id: id, ok: false, code: code, message: message)))
-            return false
-        }
-        HostJournal.audit("risky", ["device": who, "ok": "1"])
-        return true
-    }
-
     // MARK: Presence (1.12)
 
     /// Whether this client takes deltas now: off screen it doesn't, and what it missed is sent
@@ -642,6 +676,7 @@ final class LinkClient {
     /// done off the main thread; the answer is a `FilesResult`.
     private func files(_ kind: ControlKind, _ args: ControlArgs, id: String) {
         guard let control = current() else { return }
+        if control == .act, kind == .fsList || kind == .fsMkdir { return homeFolders(kind, args, id: id) }
         if case .deny(let code, let message) = LinkPolicy.checkBox(kind, args, nil, control: control == .full ? .full : .standard) {
             if code == .deniedControl { denied(kind.rawValue) }
             return sendRaw(StreamWire.encode(FilesResult.refused(id, code, message)))
@@ -697,7 +732,7 @@ final class LinkClient {
                 case .fsCount: return files.count(id: id, path: args.path ?? "")
                 case .fsSearch:
                     return files.search(id: id, root: args.root ?? "", query: args.query ?? "", text: args.mode == "text", max: args.max, run: run)
-                default: return .refused(id, .invalid, "Not taken here.")
+                default: return .refused(id, .invalid, LinkPolicy.notTaken)
                 }
             }.value
             if kind == .fsCopy { self?.copies[id] = nil }
@@ -720,6 +755,24 @@ final class LinkClient {
                 default: break
                 }
             }
+        }
+    }
+
+    /// A phone's folder browser (an act grant): `fs.list` (subfolders only) and `fs.mkdir`, inside
+    /// the home only, no hidden names (`LinkPolicy.checkHomeFolders`); a folder made is audited.
+    private func homeFolders(_ kind: ControlKind, _ args: ControlArgs, id: String) {
+        let home = HostPaths.home(host.sessionEnv).path
+        if case .deny(let code, let message) = LinkPolicy.checkHomeFolders(kind, args, home: home) {
+            return sendRaw(StreamWire.encode(FilesResult.refused(id, code, message)))
+        }
+        let files = HostFiles(home: home, served: [])
+        let who = device?.id.uuidString.lowercased() ?? grant?.name
+        Task { [weak self] in
+            let result = await Task.detached(priority: .userInitiated) {
+                kind == .fsMkdir ? files.mkdir(id: id, path: args.path ?? "") : files.folders(id: id, path: args.path)
+            }.value
+            if kind == .fsMkdir { HostJournal.audit("mkdir", ["device": who, "path": result.path ?? args.path, "ok": result.ok ? "1" : "0"]) }
+            self?.sendRaw(StreamWire.encode(result))
         }
     }
 
@@ -822,7 +875,7 @@ final class LinkClient {
         guard let control = current() else { return .init(id: id, ok: false, code: .deniedControl, message: "This link has ended.") }
         guard control != .watch else {
             denied(kind.rawValue)
-            return .init(id: id, ok: false, code: .deniedControl, message: "This grant only watches.")
+            return .init(id: id, ok: false, code: .deniedControl, message: LinkPolicy.watchOnly)
         }
         if case .deny(let code, let message) = LinkPolicy.checkBox(kind, ControlArgs(folder: folder), nil, control: control == .full ? .full : .standard) {
             return .init(id: id, ok: false, code: code, message: message)
@@ -895,6 +948,51 @@ final class LinkClient {
         follow.txRev += 1
         following[hc.id] = follow
         send(.txDelta(.init(chatId: hc.id, txRev: follow.txRev, upserts: upserts, removed: removed, order: order, turns: turns.isEmpty ? nil : turns)))
+    }
+
+    // MARK: A phone's reads (as a Mac answers them)
+
+    /// `blob.get`: an attachment of a message in the chat, by its ref only, a piece at a time.
+    private func blobGet(id: String, chatId: String, ref: String, variant: LinkMessage.Variant, offset: Int) {
+        guard current() != nil else { return }
+        guard let hc = host.chat(chatId) else { return send(.result(.init(id: id, ok: false, code: .goneChat, message: "That chat isn't on the box any more."))) }
+        guard let file = hc.attachment(ref) else { return send(.result(.init(id: id, ok: false, code: .deniedRef, message: "That isn't an attachment in this chat."))) }
+        Task { [weak self] in
+            let read = await Task.detached(priority: .userInitiated) { HostBlobs.read(path: file.path, bytes: file.bytes, kind: file.kind, variant: variant) }.value
+            guard let self else { return }
+            switch read {
+            case .failure(let failure): send(.result(.init(id: id, ok: false, code: failure.code, message: failure.message)))
+            case .success(let got):
+                let start = min(max(offset, 0), got.data.count)
+                let piece = got.data[got.data.startIndex + start..<got.data.startIndex + min(start + HostBlobs.piece, got.data.count)]
+                send(.blobChunk(id: id, mime: got.mime, offset: start, total: got.data.count, data: Data(piece).base64EncodedString()))
+            }
+        }
+    }
+
+    /// `tx.earlier`: the CLI's history from before what the box's log holds, read in (its CLI
+    /// started for it) and put in at the start; the followed window grows to show it.
+    private func earlier(_ chatId: String) {
+        guard let control = current() else { return }
+        guard control != .watch else {
+            denied("tx.earlier")
+            return send(.result(.init(id: "tx.earlier:" + chatId, ok: false, code: .deniedControl, message: LinkPolicy.watchOnly)))
+        }
+        guard let hc = host.chat(chatId), following[chatId] != nil else {
+            return send(.result(.init(id: "tx.earlier:" + chatId, ok: false, code: .goneChat, message: "Follow that chat first.")))
+        }
+        guard let chat = host.live(hc) else { return send(.result(.init(id: "tx.earlier:" + chatId, ok: false, code: .busy, message: "Too many CLIs are running on this box."))) }
+        let backend = chat.connect()
+        Task { [weak self] in
+            try? await backend.start()
+            let read = await backend.earlier()
+            guard let self else { return }
+            host.armIdle(hc)
+            let added = hc.prependEarlier(read?.events ?? [])
+            guard added > 0, let follow = following[chatId] else { return }
+            following[chatId]?.last = min(follow.last + added, 2000)
+            page(hc, last: nil)
+        }
     }
 
     /// The rest of a long field, from the live chat's log (a chat asleep has only what was sent).

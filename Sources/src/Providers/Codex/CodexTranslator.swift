@@ -815,7 +815,6 @@ package final class CodexTranslator {
             let body = changes.map { ToolText.relative($0.path, in: folder) }.joined(separator: ", ")
             var ask = make("Apply file changes?", body: body.isEmpty ? nil : body, always: true, changes: changes)
             ask.tool = "fileChange"
-            ask.targets = changes.map(\.path)
             return ask
         case .permissions:
             var ask = make("Grant extra permissions?", body: a.params["permissions"]?.compact)

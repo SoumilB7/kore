@@ -24,7 +24,7 @@ struct ApprovalsView: View {
             } else {
                 QuestionCard(
                     approval: approval, maxHeight: maxHeight, composerEmpty: { [chat] in chat.draft.isEmpty },
-                    composerKeys: composerKeys
+                    composerKeys: composerKeys, skip: { chat.answer(approval, .deny) }
                 ) { chat.answer(approval, .answers($0)) }
             }
         }

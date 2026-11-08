@@ -5,7 +5,7 @@ enum Drive {
     typealias Object = AgentTools.Object
 
     static let usage = [
-        "new": "[--claude|--codex] [--model M] [--mode X] [--place box|mac] [\"message\"]", "send": "<chat> \"message\"", "stop": "<chat>", "tab": "<chat>",
+        "new": "[--claude|--codex] [--model M] [--mode X] [--place box|mac] [\"message\"]", "send": "<chat> \"message\" [--folder F]", "stop": "<chat>", "tab": "<chat>",
         "fork": "<chat> [--at -N|<message>] [--claude|--codex] [--model M] [\"message\"]", "wait": "<chat> | --ask <id> [--timeout s]",
         "ask": "<short id> \"question\"", "reply": "<ask id> \"answer\" [file]", "fetch": "<device:path | path>",
         "answer": "<chat> <card> <answer>... | <chat> <card> --deny | <chat> <card> --allow", "open": "<session> [--folder F]", "close": "<short id>",
@@ -63,7 +63,12 @@ enum Drive {
             Reads.say("· \(Reads.str(data["state"]))" + (timedOut ? " (still working at the timeout)" : ""))
             if let answer = data["answer"] as? String { Reads.say(answer) }
             return
-        case "send": data = try client.run("chat.send", ["chat": p[0], "text": p[1]])
+        case "send":
+            var args: Object = ["chat": p[0], "text": p[1]]
+            if let folder = o.folder { args["folder"] = folder }
+            // A chat that isn't open is woken first: its CLI starts before it has the message.
+            client.timeout(AgentTools.answerWait("chat.send"))
+            data = try client.run("chat.send", args)
         case "ask":
             data = try client.run("chat.ask", ["chat": p[0], "text": p[1]])
             if o.json { return Reads.printJSON(data) }

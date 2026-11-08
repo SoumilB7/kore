@@ -135,18 +135,18 @@ extension Theme {
 }
 
 extension Chrome {
-    static let bodySemibold = Font.system(size: 13, weight: .semibold)
-    static let bodyItalic = Font.system(size: 13).italic()
-    static let captionStrong = Font.system(size: 11, weight: .semibold)
-    static let captionDigits = Font.system(size: 11).monospacedDigit()
-    static let glyphTreeChevron = Font.system(size: 9, weight: .semibold)
-    static let glyphTreeIcon = Font.system(size: 13)
+    static var bodySemibold: Font { .kore(13, .semibold) }
+    static var bodyItalic: Font { .kore(13).italic() }
+    static var captionStrong: Font { .kore(11, .semibold) }
+    static var captionDigits: Font { .kore(11).monospacedDigit() }
+    static var glyphTreeChevron: Font { .kore(9, .semibold) }
+    static var glyphTreeIcon: Font { .kore(13) }
     /// A language's two letters in the icon box (TS, PY), where no symbol fits.
-    static let glyphFileMonogram = Font.system(size: 7.5, weight: .bold, design: .rounded)
-    static let glyphCrumb = Font.system(size: 8, weight: .semibold)
-    static let glyphState = Font.system(size: 28)
+    static var glyphFileMonogram: Font { .system(size: Zoom.pt(7.5), weight: .bold, design: .rounded) }
+    static var glyphCrumb: Font { .kore(8, .semibold) }
+    static var glyphState: Font { .kore(28) }
     /// The Explorer glyph's stroke.
-    static let explorerStroke: CGFloat = 1.3
+    nonisolated static let explorerStroke: CGFloat = 1.3
 }
 
 extension TextStyle {
@@ -169,7 +169,7 @@ extension Layout {
         static let overlayBelow: CGFloat = 700
         /// A floating sidebar leaves this much of the window.
         static let overlayMargin: CGFloat = 48
-        static let header: CGFloat = 34
+        @MainActor static var header: CGFloat { Zoom.pt(34) }
         static let headerInset: CGFloat = 10
         static let sashHit: CGFloat = 12
         static let stateTop: CGFloat = 24
@@ -178,17 +178,17 @@ extension Layout {
 
 extension Size {
     enum Tree {
-        static let row: CGFloat = 22
-        static let indent: CGFloat = 12
-        static let leading: CGFloat = 8
-        static let chevronBox: CGFloat = 16
-        static let icon: CGFloat = 14
-        static let iconGap: CGFloat = 6
-        static let trailing: CGFloat = 10
-        static let rowInset: CGFloat = 4
-        static let headerButton: CGFloat = 22
-        static let point: CGFloat = 6
-        static let letterBox: CGFloat = 14
+        @MainActor static var row: CGFloat { Zoom.pt(22) }
+        @MainActor static var indent: CGFloat { Zoom.pt(12) }
+        @MainActor static var leading: CGFloat { Zoom.pt(8) }
+        @MainActor static var chevronBox: CGFloat { Zoom.pt(16) }
+        @MainActor static var icon: CGFloat { Zoom.pt(14) }
+        @MainActor static var iconGap: CGFloat { Zoom.pt(6) }
+        @MainActor static var trailing: CGFloat { Zoom.pt(10) }
+        @MainActor static var rowInset: CGFloat { Zoom.pt(4) }
+        @MainActor static var headerButton: CGFloat { Zoom.pt(22) }
+        @MainActor static var point: CGFloat { Zoom.pt(6) }
+        @MainActor static var letterBox: CGFloat { Zoom.pt(14) }
     }
 
     enum Editor {
@@ -212,34 +212,34 @@ extension Size {
         static let textInsetTop: CGFloat = 6
         static let textInsetLeading: CGFloat = 4
         static let caret: CGFloat = 2
-        static let pathRow: CGFloat = 26
+        @MainActor static var pathRow: CGFloat { Zoom.pt(26) }
         static let pathInset: CGFloat = 12
-        static let statusRow: CGFloat = 22
+        @MainActor static var statusRow: CGFloat { Zoom.pt(22) }
         static let statusInset: CGFloat = 10
-        static let notice: CGFloat = 32
-        static let find: CGFloat = 360
-        static let findToggle: CGFloat = 20
+        @MainActor static var notice: CGFloat { Zoom.pt(32) }
+        @MainActor static var find: CGFloat { Zoom.pt(360) }
+        @MainActor static var findToggle: CGFloat { Zoom.pt(20) }
         /// The toggles sit `Space.xxs` apart: each takes clicks halfway to the next.
-        static let findToggleReach = HitTarget.reach(width: findToggle + Space.xxs, height: findToggle)
+        @MainActor static var findToggleReach: EdgeInsets { HitTarget.reach(width: findToggle + Space.xxs, height: findToggle) }
         static let findMargin: CGFloat = 12
         /// A find match's mark on the vertical scroller (look §5: VS Code's overview ruler).
         static let findTick = CGSize(width: 6, height: 2)
         static let findTickInset: CGFloat = 2
         /// A path row segment's menu (look §5).
-        static let crumbMenu: CGFloat = 260
+        @MainActor static var crumbMenu: CGFloat { Zoom.pt(260) }
         static let stateWidth: CGFloat = 320
-        static let tabDirty: CGFloat = 8
+        @MainActor static var tabDirty: CGFloat { Zoom.pt(8) }
     }
 
     enum QuickOpen {
-        static let width: CGFloat = 560
+        @MainActor static var width: CGFloat { Zoom.pt(560) }
         static let windowMargin: CGFloat = 32
-        static let field: CGFloat = 36
-        static let row: CGFloat = 26
+        @MainActor static var field: CGFloat { Zoom.pt(36) }
+        @MainActor static var row: CGFloat { Zoom.pt(26) }
         static let visibleRows = 12
     }
 
-    static let explorerGlyph: CGFloat = 16
+    @MainActor static var explorerGlyph: CGFloat { Zoom.pt(16) }
 }
 
 extension Motion {

@@ -42,7 +42,7 @@ extension HostDaemon {
         case .prepare:
             if let hc, !hc.idle {
                 // A cut stops it first; a copy takes it as far as it has got.
-                if args.stop == true { sleep(hc) }
+                if args.stop == true { sleep(hc, final: true) }
             }
             guard !found.files.isEmpty else { return refused(.goneSession, "Nothing to copy yet: the chat hasn't started.") }
             let provider = hc?.record.provider ?? past!.provider
@@ -55,10 +55,12 @@ extension HostDaemon {
                     root: found.root.path, files: found.files, gen: hc?.gen ?? 0, title: hc?.title ?? args.title,
                     modelId: settings?.controls?.modelId ?? settings?.modelId, effort: settings?.controls?.effort ?? settings?.effort, mode: settings?.mode))
             answer.move?.bytes = SessionFiles.bytes(found)
+            // A cut takes the draft with it; a copy leaves it with its original.
+            answer.move?.settings = args.stop == true ? hc?.settings : hc?.settings.withoutDraft
             return answer
         case .commit:
             // A cut's copy is placed elsewhere: the source leaves. Its CLI ends first.
-            if let hc { sleep(hc) }
+            if let hc { sleep(hc, final: true) }
             do {
                 if !found.files.isEmpty {
                     try HostPaths.privateFolder(chatTrash.deletingLastPathComponent())
@@ -121,7 +123,10 @@ extension HostDaemon {
                 return refused(.busy, "The copy didn't come out whole on this box.")
             }
             let main = SessionCopy.main(placed).map { root.appendingPathComponent($0).path }
-            guard let hc = newChat(folder: folder, provider: provider, modelId: args.modelId, title: args.title, mode: args.mode, effort: args.level, session: new)
+            guard
+                let hc = newChat(
+                    folder: folder, provider: provider, modelId: args.modelId, title: args.title, mode: args.mode, effort: args.level, session: new,
+                    settings: args.settings)
             else {
                 for path in placed { try? FileManager.default.removeItem(at: root.appendingPathComponent(path)) }
                 return refused(.invalid, "The box couldn't make the chat.")
@@ -129,7 +134,7 @@ extension HostDaemon {
             hc.adoptedCopy(transcript: main, line: args.copiedFrom)
             HostJournal.note("copy adopt", ["chat": hc.id, "move": moveId, "files": "\(placed.count)"])
             broadcast(chats: [hc])
-            return MoveResult(id: id, ok: true, chatId: hc.id)
+            return MoveResult(id: id, ok: true, message: hc.carriedNote, chatId: hc.id, settings: Self.said(hc))
         case .abort:
             moveClients[moveId] = nil
             try? FileManager.default.removeItem(at: dir)

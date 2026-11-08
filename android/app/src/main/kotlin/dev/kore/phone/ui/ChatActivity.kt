@@ -30,8 +30,11 @@ class ChatActivity : NodeActivity() {
     private lateinit var leadLogo: android.widget.ImageView
     private lateinit var leadSpin: Spinner
     private lateinit var leadPrompt: PromptMark
-    /** The transcript showed its end before a resize (the keyboard, the card): it shows it after. */
-    private var atEnd = true
+    /** Follows the transcript's end while the reader is there (FollowEnd); "↓ New" when they read above. */
+    private val ending by lazy { FollowEnd(dp(48)) }
+    private lateinit var jump: TextView
+    private var settleQueued = false
+    private var laidHeight = 0
     private lateinit var openingText: TextView
     private lateinit var retry: TextView
     private var openTimeout: Job? = null
@@ -74,7 +77,15 @@ class ChatActivity : NodeActivity() {
             addView(retry)
         }
         list = RecyclerView(this@ChatActivity).apply {
-            layoutManager = LinearLayoutManager(this@ChatActivity).apply { stackFromEnd = true }
+            // Each finished layout (rows came, a row grew, the keyboard, a rotation) settles the end once.
+            layoutManager = object : LinearLayoutManager(this@ChatActivity) {
+                override fun onLayoutCompleted(state: RecyclerView.State?) {
+                    super.onLayoutCompleted(state)
+                    if (!settleQueued) { settleQueued = true; list.post { settleQueued = false; settle() } }
+                }
+                // Text taking focus for a selection (`TextPick`) leaves the list where it is.
+                override fun onRequestChildFocus(parent: RecyclerView, state: RecyclerView.State, child: View, focused: View?) = true
+            }.apply { stackFromEnd = true }
             // Rows change in place as text streams in: no fade or slide on each update.
             itemAnimator = null
             adapter = this@ChatActivity.adapter
@@ -98,24 +109,49 @@ class ChatActivity : NodeActivity() {
             }
             setPadding(dp(16), dp(8), dp(16), dp(4))
             clipToPadding = false
-            // Following the end: a list that showed its last row keeps showing it when it shrinks or grows.
+            // Only the reader's own scroll stops following the end; back near the end, it follows again.
             addOnScrollListener(object : RecyclerView.OnScrollListener() {
-                override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) { atEnd = !rv.canScrollVertically(1) }
-            })
-            addOnLayoutChangeListener { v, _, top, _, bottom, _, oldTop, _, oldBottom ->
-                if (bottom - top != oldBottom - oldTop && atEnd && this@ChatActivity.adapter.itemCount > 0) {
-                    v.post { list.scrollToPosition(this@ChatActivity.adapter.itemCount - 1) }
+                override fun onScrollStateChanged(rv: RecyclerView, state: Int) {
+                    if (state == RecyclerView.SCROLL_STATE_DRAGGING) ending.touched()
+                    if (state == RecyclerView.SCROLL_STATE_IDLE && ending.holding) {
+                        if (ending.released(gapToEnd())) toEndNow(smooth = true)
+                        showFollow()
+                    }
                 }
-            }
+                override fun onScrolled(rv: RecyclerView, dx: Int, dy: Int) {
+                    // (0, 0) is a layout that changed the rows shown, not a scroll: settle() has it.
+                    if (dx == 0 && dy == 0) return
+                    val holding = ending.holding
+                    ending.scrolled(gapToEnd())
+                    if (holding) showFollow()
+                }
+            })
+        }
+        // What came below the rows the reader sees, while they read above: "↓ New".
+        this@ChatActivity.adapter.registerAdapterDataObserver(object : RecyclerView.AdapterDataObserver() {
+            override fun onItemRangeInserted(start: Int, count: Int) = cameAt(start + count - 1)
+            override fun onItemRangeChanged(start: Int, count: Int) = cameAt(start + count - 1)
+        })
+        jump = label("↓  New").apply {
+            type(Type.Label)
+            setTextColor(Tone.accent)
+            setPadding(dp(14), dp(7), dp(14), dp(7))
+            pressFill(Tone.l3, Tone.l3Pressed, 16, Tone.hair2)
+            elevation = dp(3).toFloat()
+            contentDescription = "New, to the end"
+            visibility = View.GONE
+            setOnClickListener { toEnd(smooth = true) }
         }
         // The transcript fills the space; while the chat opens, its state sits in the middle of it.
         addView(android.widget.FrameLayout(this@ChatActivity).apply {
             addView(list, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             addView(opening, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
+            addView(jump, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply { bottomMargin = dp(10) })
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         // No rule above the composer: its lift sets it apart (spec §3).
         clipChildren = false
         actions = ChatActions(this@ChatActivity, chatId) { link }
+        actions.sent = { toEnd(smooth = true) }
         addView(actions.view)
     }
 
@@ -129,13 +165,17 @@ class ChatActivity : NodeActivity() {
                 if (transcript.apply(m)) {
                     val entries = transcript.entries
                     runOnUiThread {
+                        val opened = !loaded
                         if (!loaded) { loaded = true; openTimeout?.cancel(); opening.visibility = View.GONE }
-                        val atBottom = !list.canScrollVertically(1)
                         val grewAtTop = entries.isNotEmpty() && adapter.firstId != null && entries.first().str("id") != adapter.firstId
                         if (grewAtTop) askedEarlier = false
+                        // The earlier conversation came above a reader up the page: what they read stays where it was.
+                        val keep = if (grewAtTop && !ending.following) shownTop() else null
                         adapter.earlier = transcript.hasEarlier || entries.firstOrNull()?.str("kind") == "divider"
                         adapter.submit(entries)
-                        if (atBottom) list.scrollToPosition(maxOf(0, entries.size - 1))
+                        keep?.let { (key, top) -> adapter.positionOf(key).takeIf { it >= 0 }?.let { lm.scrollToPositionWithOffset(it, top - list.paddingTop) } }
+                        // Opened: at the end.
+                        if (opened) toEnd(smooth = false)
                     }
                 }
             }
@@ -149,6 +189,78 @@ class ChatActivity : NodeActivity() {
             }
         }
         open()
+    }
+
+    private val lm get() = list.layoutManager as LinearLayoutManager
+
+    /** Px of the transcript below the view: 0 at the end; large when its last row isn't laid out. */
+    private fun gapToEnd(): Int {
+        val n = adapter.itemCount
+        if (n == 0) return 0
+        val last = lm.findViewByPosition(n - 1) ?: return Int.MAX_VALUE / 2
+        return maxOf(0, lm.getDecoratedBottom(last) - (list.height - list.paddingBottom))
+    }
+
+    /** After a layout: following, the end comes back into view (at once after a resize). */
+    private fun settle() {
+        val resized = list.height != laidHeight
+        laidHeight = list.height
+        if (ending.laidOut(gapToEnd(), resized)) toEndNow(smooth = !resized)
+        showFollow()
+    }
+
+    /** To the end and following it: opened, sent, or "↓ New". */
+    private fun toEnd(smooth: Boolean) {
+        ending.toEnd()
+        showFollow()
+        toEndNow(smooth)
+    }
+
+    /** Scrolls to the end: smoothly when it's close and laid out, else at once. */
+    private fun toEndNow(smooth: Boolean) {
+        val n = adapter.itemCount
+        if (n == 0) return
+        val gap = gapToEnd()
+        when {
+            gap <= 0 -> Unit
+            lm.findViewByPosition(n - 1) == null -> list.scrollToPosition(n - 1)
+            smooth && Motion.scale > 0f && gap <= 2 * list.height -> list.smoothScrollBy(0, gap)
+            else -> list.scrollBy(0, gap)
+        }
+    }
+
+    /**
+     * Following, the list grows from its end (a streaming row keeps its bottom); reading above,
+     * from its top, so a row growing at the bottom of the view doesn't move what's read. The
+     * button shows only while something came below.
+     */
+    private fun showFollow() {
+        // Not under the reader's finger: it changes once their scroll comes to rest.
+        if (lm.stackFromEnd != ending.following && !ending.holding && !list.isComputingLayout) {
+            // A flip drops the layout's anchor (it would lay out from the top, or the end): reading
+            // above, the row they see is pinned where it is. Following, the end is where it lands.
+            val pin = if (ending.following) null else lm.findFirstVisibleItemPosition().takeIf { it >= 0 }
+                ?.let { p -> lm.findViewByPosition(p)?.let { p to lm.getDecoratedTop(it) } }
+            lm.stackFromEnd = ending.following
+            pin?.let { (p, top) -> lm.scrollToPositionWithOffset(p, top - list.paddingTop) }
+        }
+        val v = if (ending.jump) View.VISIBLE else View.GONE
+        if (jump.visibility != v) jump.visibility = v
+    }
+
+    private fun cameAt(last: Int) {
+        if (ending.following || last <= lm.findLastVisibleItemPosition()) return
+        ending.cameBelow()
+        showFollow()
+    }
+
+    /** The first row the reader sees (not the Earlier row): its key and its top. */
+    private fun shownTop(): Pair<String, Int>? {
+        var p = lm.findFirstVisibleItemPosition()
+        if (p < 0) return null
+        if (adapter.keyAt(p) == "earlier") p++
+        val v = lm.findViewByPosition(p) ?: return null
+        return (adapter.keyAt(p) ?: return null) to lm.getDecoratedTop(v)
     }
 
     /** Asks the Mac for this chat; it may load it in the background first. */
@@ -247,7 +359,7 @@ class ChatActivity : NodeActivity() {
     }
 
     /**
-     * Long-press a message: Copy, Fork from here / Fork after this, and Revert to here (the Mac's
+     * Long-press a message: Copy, Fork from here / Fork after this, and Roll back to here (the Mac's
      * rollback); on a table, Copy table first, as the Mac's table Copy copies it ([TableCopy]).
      */
     private fun messageMenu(anchor: View, e: JsonObject, table: String? = null) {
@@ -259,7 +371,7 @@ class ChatActivity : NodeActivity() {
         if (table != null) items += PopMenu.Item("Copy table") { clip.setPrimaryClip(android.content.ClipData.newPlainText("Table", table)) }
         items += PopMenu.Item("Copy") { clip.setPrimaryClip(android.content.ClipData.newPlainText("Message", text)) }
         adapter.canFork?.let { can -> items += PopMenu.Item(if (after) "Fork after this" else "Fork from here", enabled = can) { actions.fork(id, after) } }
-        adapter.canFork?.let { can -> items += PopMenu.Item("Revert to here", danger = true, enabled = can && !actions.turnRunning) { actions.revert(id, after) } }
+        adapter.canFork?.let { can -> items += PopMenu.Item("Roll back to here", danger = true, enabled = can && !actions.turnRunning) { actions.revert(id, after) } }
         PopMenu(this).show(anchor, items)
     }
 
@@ -317,6 +429,8 @@ class ChatActivity : NodeActivity() {
         var rescue: List<ControlModel.RescueLine> = emptyList()
             set(value) { if (field != value) { field = value; rebuild() } }
         val firstId: String? get() = entries.firstOrNull()?.str("id")
+        fun keyAt(i: Int): String? = items.getOrNull(i)?.let(::keyOf)
+        fun positionOf(key: String): Int = items.indexOfFirst { keyOf(it) == key }
 
         fun submit(list: List<JsonObject>) {
             entries = list
@@ -375,7 +489,7 @@ class ChatActivity : NodeActivity() {
         override fun getItemCount() = items.size
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = object : RecyclerView.ViewHolder(
-            android.widget.FrameLayout(this@ChatActivity).apply {
+            Row(this@ChatActivity).apply {
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 addView(label("", 15f), android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                 // The rule a compaction divider sits on; hidden for every other row.
@@ -393,7 +507,7 @@ class ChatActivity : NodeActivity() {
         ) {}
 
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
-            val frame = holder.itemView as android.widget.FrameLayout
+            val frame = holder.itemView as Row
             val rule = frame.getChildAt(0)
             val v = frame.getChildAt(1) as TextView
             val docBox = frame.getChildAt(2) as LinearLayout
@@ -401,6 +515,8 @@ class ChatActivity : NodeActivity() {
             rule.visibility = View.GONE
             docBox.visibility = View.GONE
             spin.visibility = View.GONE
+            v.picks(false)
+            frame.menu = null
             v.visibility = View.VISIBLE
             v.maxWidth = Int.MAX_VALUE
             v.background = null
@@ -453,15 +569,13 @@ class ChatActivity : NodeActivity() {
                         if (docBox.tag != doc) { DocViews.build(this@ChatActivity, doc, docBox); docBox.tag = doc }
                     } else bind(v, item.e)
                     if (item.e.str("kind") == "divider") rule.visibility = View.VISIBLE
-                    if (item.e.str("kind") in setOf("user", "answer", "plan")) {
-                        val hold = View.OnLongClickListener { pressed ->
-                            val table = DocViews.tableText(pressed)
-                            messageMenu(if (table != null) pressed else if (v.visibility == View.VISIBLE) v else docBox, item.e, table)
-                            true
-                        }
+                    if (TextPick.selectable(item.e.str("kind"))) {
+                        // Its text picks (the toolbar's "Message…" opens the menu); beside it, a long-press does.
+                        val menu = { at: View -> DocViews.tableText(at).let { messageMenu(if (it != null) at else if (v.visibility == View.VISIBLE) v else docBox, item.e, it) } }
+                        frame.menu = menu
+                        val hold = View.OnLongClickListener { pressed -> menu(pressed); true }
                         frame.setOnLongClickListener(hold)
-                        v.setOnLongClickListener(hold)
-                        holdAll(docBox, hold)
+                        if (v.visibility == View.VISIBLE) v.picks() else holdAll(docBox, hold)
                     }
                 }
                 Item.Earlier -> {
@@ -512,10 +626,25 @@ class ChatActivity : NodeActivity() {
             spin.visibility = View.VISIBLE
         }
 
-        /** Every view of a rendered answer takes the long-press (its text views would swallow it). */
+        /**
+         * A rendered answer: its text views pick (`DocViews`), every other view that would take the
+         * touch (a code block's sideways scroll) opens the menu on a long-press.
+         */
         private fun holdAll(v: View, hold: View.OnLongClickListener) {
+            if (v is TextView && v.isTextSelectable) return
             v.setOnLongClickListener(hold)
             if (v is ViewGroup) for (i in 0 until v.childCount) holdAll(v.getChildAt(i), hold)
+        }
+
+        /**
+         * A recycled row's text picks again: a selectable view detached and attached again would
+         * refuse its next selection ("does not support text selection") until it's enabled anew.
+         */
+        override fun onViewAttachedToWindow(holder: RecyclerView.ViewHolder) = rearm(holder.itemView)
+
+        private fun rearm(v: View) {
+            if (v is TextView) { if (v.isTextSelectable) { v.isEnabled = false; v.isEnabled = true } }
+            else if (v is ViewGroup) for (i in 0 until v.childCount) rearm(v.getChildAt(i))
         }
 
         /** A rescue row: the Mac's words, then its actions as accent words. */
@@ -575,17 +704,28 @@ class ChatActivity : NodeActivity() {
             }
         }
 
-        /** A tap on a bubble's image (where the finger went down) opens it full screen. */
+        /**
+         * A tap on a bubble's image (where the finger went down) opens it full screen. Read from the
+         * touches, not a click: the bubble's text picks, and its first tap only takes focus.
+         */
         private fun tapImages(v: TextView) {
             val spanned = v.text as? android.text.Spanned ?: return
             if (spanned.getSpans(0, spanned.length, ImageRef::class.java).isEmpty()) return
             var x = 0f
             var y = 0f
-            v.setOnTouchListener { _, ev -> if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) { x = ev.x; y = ev.y }; false }
-            v.setOnClickListener {
-                val at = v.getOffsetForPosition(x, y)
-                val hit = spanned.getSpans(maxOf(0, at - 1), at + 1, ImageRef::class.java).firstOrNull() ?: return@setOnClickListener
-                ImageActivity.open(this@ChatActivity, chatId, hit.ref, hit.name)
+            var down = 0L
+            val slop = android.view.ViewConfiguration.get(this@ChatActivity).scaledTouchSlop
+            v.setOnTouchListener { _, ev ->
+                when (ev.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> { x = ev.x; y = ev.y; down = ev.eventTime }
+                    android.view.MotionEvent.ACTION_UP -> if (!v.hasSelection() &&
+                        TextPick.isTap(ev.x - x, ev.y - y, ev.eventTime - down, slop, android.view.ViewConfiguration.getLongPressTimeout().toLong())) {
+                        val text = v.text as? android.text.Spanned
+                        val at = v.getOffsetForPosition(x, y)
+                        text?.getSpans(maxOf(0, at - 1), at + 1, ImageRef::class.java)?.firstOrNull()?.let { ImageActivity.open(this@ChatActivity, chatId, it.ref, it.name) }
+                    }
+                }
+                false
             }
         }
 
@@ -738,3 +878,8 @@ class ChatActivity : NodeActivity() {
 
 /** Marks a sent image's place in a user bubble (its thumbnail or its name): what a tap there opens. */
 private class ImageRef(val ref: String, val name: String?)
+
+/** A chat row: its message menu, for the selection toolbar of the text it holds ([PickRow]). */
+private class Row(context: android.content.Context) : android.widget.FrameLayout(context), PickRow {
+    override var menu: ((View) -> Unit)? = null
+}

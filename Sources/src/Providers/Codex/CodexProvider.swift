@@ -24,7 +24,10 @@ extension ProviderDescriptor {
             // OpenAI's Codex speed page: plan limits at 2.5× the Standard rate, credits at 2×.
             fastCost: FastCost(times: "2.5×", detail: "Fast mode: 2.5× plan usage per token (2× on credits)")),
         account: .codex,
-        install: InstallWording(maker: "OpenAI", source: "chatgpt.com/codex · into ~/.local/bin · about a minute · no Node needed"))
+        install: InstallWording(maker: "OpenAI", source: "chatgpt.com/codex · into ~/.local/bin · about a minute · no Node needed"),
+        // `service_tier` on the models that list a fast one (`CodexBackend.setFastMode`).
+        fastMode: true,
+        commands: CodexBackend.builtinCommands)
 }
 
 /// Codex's permission presets as its VS Code extension shows them, and its separate Plan toggle.

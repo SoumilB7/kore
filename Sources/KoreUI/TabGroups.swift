@@ -280,13 +280,14 @@ enum TabGroupChipWidth {
     private static let font = NSFont.systemFont(ofSize: 12, weight: .semibold)
     private static let countFont = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
 
+    /// Measured at 100% once, then at the zoom (`Zoom.pt`).
     static func text(_ string: String, count: Bool = false) -> CGFloat {
         let key = (count ? "#" : "") + string
-        if let width = cache[key] { return width }
+        if let width = cache[key] { return ceil(Zoom.pt(width)) }
         let width = ceil((string as NSString).size(withAttributes: [.font: count ? countFont : font]).width)
         if cache.count > 500 { cache.removeAll() }
         cache[key] = width
-        return width
+        return ceil(Zoom.pt(width))
     }
 
     /// The chip's width: its name (and a folded one's count and point), or its dot alone.

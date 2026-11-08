@@ -18,7 +18,7 @@ enum HostMeta {
                 id: p.id, name: p.name,
                 modes: p.modes.map { ModeInfo(id: $0.id, label: $0.label, level: level($0), listed: $0.listed) },
                 planToggle: p.planToggle.map { PlanToggleInfo(id: $0.id, label: $0.label) },
-                features: ProviderFeatures(effort: true, fastMode: p.id == "claude"), calls: calls ? LinkPolicy.callable : nil)
+                features: ProviderFeatures(effort: true, fastMode: p.fastMode), calls: calls ? LinkPolicy.callable : nil)
             info.installed = installed[p.id]
             return info
         }
@@ -26,14 +26,17 @@ enum HostMeta {
 
     static func modeID(_ hc: HostChat) -> String { hc.chat?.controls.mode ?? hc.record.mode ?? hc.provider.modes[0].id }
 
+    /// Codex's Plan switch: the live chat's, else as kept for its next start.
+    static func planOn(_ hc: HostChat) -> Bool { hc.provider.planToggle != nil && (hc.chat?.controls.planMode ?? hc.record.planMode ?? false) }
+
     static func facts(_ hc: HostChat, raise: Bool = false) -> LinkPolicy.ChatFacts {
         let provider = hc.provider
         let modes = Dictionary(provider.modes.map { ($0.id, level($0)) }, uniquingKeysWith: { a, _ in a })
         let current = modes[modeID(hc)] ?? .danger
-        let cards = Dictionary(self.cards(hc, raise: raise).map { ($0.id, LinkPolicy.ChatFacts.Card(kind: $0.kind, digest: $0.digest, risk: $0.risk)) }, uniquingKeysWith: { a, _ in a })
-        let commands = hc.chat?.controls.commands ?? []
+        let cards = Dictionary(self.cards(hc, raise: raise).map { ($0.id, LinkPolicy.ChatFacts.Card(kind: $0.kind, digest: $0.digest)) }, uniquingKeysWith: { a, _ in a })
+        let commands = hc.commands
         return LinkPolicy.ChatFacts(
-            level: current, planOn: provider.planToggle != nil && (hc.chat?.controls.planMode ?? false), modes: modes, cards: cards,
+            level: current, planOn: planOn(hc), modes: modes, cards: cards,
             commands: Set(commands.filter { $0.kind != .kore }.map(\.name)), koreEntries: Set(commands.filter { $0.kind == .kore }.map(\.name)))
     }
 
@@ -48,6 +51,11 @@ enum HostMeta {
         let draft = hc.record.draft ?? ""
         made.draft = draft.utf8.count <= LinkPolicy.maxText ? draft : nil
         if hc.chat == nil, let point = hc.record.autoCompact { made.autoCompactAt = point == 0 ? nil : point }
+        // Fast and Plan's allow switch as its next start takes them (a copy's, a move's or a fork's).
+        if hc.chat == nil {
+            if let fast = hc.record.fast { made.fast = fast }
+            if let allow = hc.record.planAllow { made.planAllow = allow }
+        }
         // 1.14: a Claude chat's account, so a client shows that login's usage.
         made.login = hc.record.provider == "claude" ? hc.record.account ?? LinkAccount.main : nil
         return made
@@ -61,6 +69,9 @@ enum HostMeta {
                 modelId: hc.record.modelId, effort: hc.record.effort, fast: nil, fastOffered: false, planAllow: false, contextPct: nil,
                 autoCompactAt: nil, compacting: false, remote: .off)
         kept.compacting = false
+        // What a client set while the CLI slept, for its next start.
+        if let fast = hc.record.fast { kept.fast = fast }
+        kept.planAllow = hc.record.planAllow ?? false
         return kept
     }
 
@@ -74,7 +85,7 @@ enum HostMeta {
         let remote: LinkProtocol.ChatControls.Remote =
             if c.remoteChanging { .changing } else if c.remote != nil { .on } else if c.remoteUnavailable != nil { .unavailable } else { .off }
         return LinkProtocol.ChatControls(
-            modelId: c.modelId ?? chat.launchModel, effort: c.effort ?? chat.launchEffort, fast: c.fastKnown ? c.fastMode : nil,
+            modelId: c.modelId ?? chat.launchModel, effort: c.effort ?? chat.launchEffort, fast: c.fastKnown ? c.fastMode : chat.launchFastMode,
             fastOffered: c.fastModeShown, planAllow: c.planAllow, contextPct: pct, autoCompactAt: chat.context.autoCompactAt,
             compacting: chat.context.compacting, remote: remote, contextUsed: usage?.used, contextWindow: window)
     }
@@ -96,13 +107,13 @@ enum HostMeta {
             if let chat, !chat.approvals.pending.isEmpty || chat.approvals.offerImplementPlan { .needsYou }
             else if chat?.isWorking == true { .working }
             else { .idle }
-        let commands = (chat?.controls.commands ?? [])
+        let commands = hc.commands
             .filter { $0.kind != .kore && !LinkPolicy.koreOnly.contains($0.name) }
             .prefix(200)
             .map { LinkSlash(name: $0.name, description: String($0.description.prefix(100)), kind: $0.kind == .skill ? .skill : .command) }
         var made = ChatMeta(
             id: hc.id, provider: hc.provider.id, title: hc.title, state: state,
-            mode: .init(id: modeID(hc), level: facts.level, planOn: hc.provider.planToggle != nil ? (chat?.controls.planMode ?? false) : nil),
+            mode: .init(id: modeID(hc), level: facts.level, planOn: hc.provider.planToggle != nil ? planOn(hc) : nil),
             modeIds: (chat?.controls.availableModes ?? hc.provider.modes).map(\.id), allowedModeIds: allowed.sorted(),
             model: chat?.controls.currentModel?.name ?? hc.record.modelId, queued: chat?.queuedCount ?? 0, running: chat?.isBusy ?? false,
             cards: cards(hc, raise: raise), can: .init(send: !(chat?.accountRestartPending ?? false), stop: chat?.isWorking ?? false, close: true),
@@ -135,14 +146,17 @@ enum HostMeta {
         return .permission
     }
 
+    /// The "Implement this plan?" card's answers, in the Mac card's words.
+    static let implementActions: [CardAction] = [
+        .init(id: .implement, label: CardLabels.Implement.implement, style: .primary), .init(id: .stay, label: CardLabels.Implement.stay, style: .neutral),
+    ]
+
     static func cards(_ hc: HostChat, raise: Bool = false) -> [LinkCard] {
         guard let chat = hc.chat else { return [] }
         var out = chat.approvals.pending.map { card($0, in: chat, raise: raise) }
         if chat.approvals.offerImplementPlan {
-            let actions: [CardAction] = [
-                .init(id: .implement, label: "Yes, implement it", style: .primary), .init(id: .stay, label: "Stay in Plan", style: .neutral),
-            ]
-            let title = "Implement this plan?"
+            let actions = implementActions
+            let title = CardLabels.Implement.title
             let digest = LinkCardDigest(kind: .planReady, title: title, detail: nil, body: nil, plan: nil, questions: nil, actions: actions).digest
             out.append(LinkCard(id: planReadyID, kind: .planReady, title: title, actions: actions, digest: digest))
         }
@@ -167,9 +181,9 @@ enum HostMeta {
             actions = []
         case .plan:
             actions = [
-                .init(id: .approvePlan, label: "Yes, manually approve edits", style: .primary),
-                .init(id: .approvePlanAcceptEdits, label: "Yes, and auto-accept edits", style: .neutral, refused: raise ? nil : true),
-                .init(id: .keepPlanning, label: "No, keep planning", style: .neutral),
+                .init(id: .approvePlan, label: CardLabels.Plan.approve, style: .primary),
+                .init(id: .approvePlanAcceptEdits, label: CardLabels.Plan.autoAccept, style: .neutral, refused: raise ? nil : true),
+                .init(id: .keepPlanning, label: CardLabels.Plan.keepPlanning, style: .neutral),
             ]
         case .questions:
             questions = approval.questions.map { q in
@@ -178,21 +192,17 @@ enum HostMeta {
                     options: q.options.map { .init(label: $0.label, description: $0.description, preview: $0.preview) }, multiple: q.multiple,
                     secret: q.secret, other: q.other)
             }
-            actions = [.init(id: .submitAnswers, label: "Submit", style: .primary), .init(id: .deny, label: "Skip", style: .neutral)]
+            actions = [.init(id: .submitAnswers, label: CardLabels.Question.submit, style: .primary), .init(id: .deny, label: CardLabels.Question.skip, style: .neutral)]
         case .permission, .planReady:
-            actions =
-                [.init(id: .allow, label: "Allow", style: .primary)]
-                + (approval.canAlwaysAllow ? [.init(id: .allowAlways, label: "Always allow", style: .neutral, refused: true)] : [])
-                + [.init(id: .deny, label: "Deny", style: .destructive)]
+            // As the Mac's (`LinkSnapshot`): Auto's asks run once, its refusals take OK only.
+            actions = LinkProjection.permissionActions(approval)
         }
         let digest = LinkCardDigest(
             kind: kind, title: approval.title, detail: approval.detail, body: approval.body, plan: approval.plan, questions: questions,
             actions: actions
         ).digest
-        let risk = kind == .permission ? CardRisk.classify(tool: approval.tool, targets: approval.targets ?? [], folder: chat.folder.path) : nil
         return LinkCard(
             id: approval.id, kind: kind, title: approval.title, detail: approval.detail, body: body?.text,
-            bodyLen: body?.cut == true ? body?.length : nil, plan: nil, questions: questions, agent: agent, actions: actions, digest: digest,
-            risk: risk)
+            bodyLen: body?.cut == true ? body?.length : nil, plan: nil, questions: questions, agent: agent, actions: actions, digest: digest)
     }
 }

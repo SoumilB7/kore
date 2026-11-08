@@ -261,7 +261,7 @@ final class LinkArsenal: ChatStoryline {
             Press(.id(StoryID.Link.allowFull)),
             Do("connect") { _ in full.connect() },
             Expect("welcomed: the chat off, and the built tiers", found: { _ in "\(full.meta(chatId)?.arsenal ?? "-") \(full.mac?.arsenalTiers ?? [])" }) { _ in
-                full.welcomed && full.meta(chatId)?.arsenal == "off" && full.mac?.arsenalTiers == ["watch", "own", "drive"]
+                full.welcomed && full.meta(chatId)?.arsenal == "off" && full.mac?.arsenalTiers == ["watch", "own", "drive", "device"]
             },
         ] + (codex ? [
             // Codex's default sandbox: the reason is in the state, and a tier is refused with it.

@@ -199,9 +199,16 @@ final class ArsenalButton: ChatStoryline {
             Expect("the popup: Off, the tiers, Stop agent control") { _ in
                 // A rule is a row with no title: the names are what's left.
                 let rows = StoryID.Options.rows.map(\.title).filter { !$0.isEmpty }
-                return rows == ["Off", "Read", "Act limited", "Act unlimited", "Stop agent control"]
+                return rows == ["Off", "Read", "Act limited", "Act unlimited", "Act device", "Stop agent control"]
             },
-            Key(.escape),
+            // Act device, the top tier: picked, named, kept; then back to Read.
+            PressRow(title: "Act device"),
+            tier("a", .device, "Act device from the popup"),
+            Expect("kept as Act device") { story in try ArsenalMemory.tier(AgentCast.of(story).chat("a")) == .device },
+            KoreAs(["whoami"], a, "whoami says Act device", expect: ["{a}", "· Act device"]),
+            OpenArsenalTiers(role: "a"),
+            PressRow(title: "Read"),
+            tier("a", .watch, "back to Read"),
             OpenArsenalTiers(role: "a"),
             Press(.id(StoryID.Options.item(0))),
             tier("a", nil, "Off in the popup"),

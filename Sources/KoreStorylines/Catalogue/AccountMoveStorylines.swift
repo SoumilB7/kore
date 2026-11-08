@@ -171,6 +171,8 @@ final class AccountMoveToMac: ChatStoryline {
             seams.vault = { vault }
             seams.staging = root.appendingPathComponent("staging", isDirectory: true)
             seams.file = root.appendingPathComponent("login-moves-in.json")
+            // Its own name, not the Mac running the story's.
+            seams.name = { "MacBook Air" }
             seams.profiles = MacLoginMoves.Profiles(
                 prepare: { [unowned self] cli in
                     let id = "m\(added[cli]?.count ?? 0)"

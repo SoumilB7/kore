@@ -58,6 +58,14 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
   While a chat's CLI is stopped, its controls are as the live chat last had them (kept in its
   `meta.json`), with `compacting: false`; a chat that never ran has the `modelId` and `effort`
   it will start on. `act` and `watch` grants get no `controls`.
+- 0.3.5: the box keeps a chat's model, effort, mode, Codex's Plan switch, fast mode and Allow
+  commands in Plan with it, set from any client or while its CLI is stopped, and its next CLI
+  starts on them. The chat's meta goes out whenever one changes, so a Mac's tab and a phone show
+  what another client set (the claude CLI says no event for a model or an effort change). A model
+  change that leaves the effort one the model doesn't offer takes the nearest level below, on the
+  box too. A mode or Plan set while the CLI is stopped starts no CLI. A rename while it's stopped
+  reaches the CLI's session once it next starts. An account switch is said whether or not the
+  chat's CLI runs.
 - With a `full` grant, the `snapshot` carries `clis: [{provider, models: [{id, name, efforts,
   fast, auto}], effortScale}]` (no `account`): each CLI's models as the box's own CLI listed
   them, `effortScale` every effort its models offer, lowest first. Only CLIs that have listed
@@ -90,14 +98,15 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 
 | `type` | fields | |
 |---|---|---|
-| `chat.new` | `folder, provider, modelId?, mode?, level?, title?, sessionId?, entryId?` | `folder` (an absolute path the box serves) in place of `windowId`; `windowId` still works. Result: `chatId`, `windowId`. 1.5: `mode` and `level` (effort) to start on, and a fork's start (`sessionId` and the message `entryId`). A `mode` above Manual (`act`) or above Auto (`full`), or one the CLI doesn't list, is `denied.raiseMode`. |
+| `chat.new` | `folder, provider, modelId?, mode?, level?, title?, sessionId?, entryId?` | `folder` (an absolute path the box serves) in place of `windowId`; `windowId` still works. Result: `chatId`, `windowId`. 1.5: `mode` and `level` (effort) to start on, and a fork's start (`sessionId` and the message `entryId`). A `mode` above Manual (`act`) or above Auto (`full`), or one the CLI doesn't list, is `denied.raiseMode`. A fork may also say its original's `settings` (`ChatSettings`, below "How a paste goes"); an Arsenal tier, a login or `planAllow: true` in them needs a full grant (`denied.control`). |
 | `chat.close` | `chatId` | The tab closed: the chat leaves the box's windows (`delta` with `removed`) and its CLI ends. Its record and logs stay on disk, marked closed. 1.5 clients close through `chat.call close`. |
 | `chat.setModel` | `chatId, modelId` | Also for an `act` grant. A chat whose CLI isn't running starts on that model. The model must be one the box's CLI listed (or, before any list, a plain id of letters, digits and `._:[]-`, at most 128); `invalid` otherwise. |
 | `chat.setEffort` | `chatId, level` | Also for an `act` grant. A running CLI switches; a stopped one starts on it. `invalid` when the chat's models offer no such level. |
-| `chat.setFast` | `chatId, on` | Also for an `act` grant. Only while the chat's CLI runs and has said fast mode is there for its model; `invalid` otherwise. |
+| `chat.setFast` | `chatId, on` | Also for an `act` grant. A running CLI that has said fast mode switches it, `invalid` when its model has none; a stopped one keeps it and starts on it (`invalid` when the CLI listed its model without fast mode). |
+| `chat.setPlanAllow` | `chatId, on` | Allow commands in Plan, kept by the box with the chat: its chat answers each permission while planning, and `controls.planAllow` says it to every client. Off for an `act` grant; on for `full` only. |
 | `chat.setMode`, `chat.setPlan`, `chat.planReady`, `chat.answer approvePlanAcceptEdits` | as in link 1.0 | A `full` grant is full control, which may raise a chat's mode up to Auto (Auto, Approve for me, leaving plan, approving with auto-accept edits), the same rule as the Mac's link under full control (1.2). Bypass, Codex's Full access and unknown modes stay refused to every client; `watch` and `act` stay lower-only (`denied.raiseMode`). Under full control `ChatMeta.allowedModeIds` lists every mode up to Auto, and a plan card's `approvePlanAcceptEdits` isn't marked `refused`. Always allow and `!` lines stay refused. |
 | `folders.list` | | Result: `folders: [{windowId, path, missing?}]`; `missing: true` for a served folder that isn't there any more. |
-| `folder.add` | `path` | An existing folder, by absolute path or under `~` (the box's home); it's added to `config.json`. Result: `folders`. `gone.folder` otherwise. |
+| `folder.add` | `path` | An existing folder, by absolute path or under `~` (the box's home); it's added to `config.json`. Result: `folders`, and (0.3.5) `windowId`, its window. `gone.folder` otherwise. An act grant (a phone's Open here) adds only an absolute folder inside the home with no hidden name on the way, its links resolved inside the home (`denied.path` otherwise); each add is journalled `audit folder add device=… control=… path=… ok=…`. |
 | `account.refresh` | `provider, chatId?, login?` | Result `message`: "Signed in as …" / "… isn't signed in.". With `chatId` (or `login`), Claude's status in that chat's (or that) account's folder. |
 | `account.list` | `provider, chatId?, folder?` | Claude only. Result `accounts: [{id, email?, organization?, plan?, signedIn?}]`: the default (`id: "main"`, `~/.claude`) and each folder of the box's `~/.config/claude-accounts` by name, each read with `claude auth status` there when asked (a list read in the last 30 s is answered as it is); `signedIn` absent when it couldn't be read. `login`: the account `chatId` runs on; `folderLogin`: the one new chats in `folder` (or the chat's) start on. |
 | `account.switch` | `provider, login, chatId?, folder?` | Claude only. The chat runs on `login` from now on (its work stops, its CLI starts again on its session with `CLAUDE_CONFIG_DIR` at that account's folder), and its folder's new chats start on it; with `folder` alone, only the folder's default. `gone.login` for an account that isn't there. |
@@ -218,6 +227,14 @@ keep the `tx.*` projection above. Policy stays on the box, in `LinkPolicy`.
   past 16 MiB. A box that stopped mid-turn ends the turn in the log (`turnFinished`,
   `interrupted`) when it next reads it, and a CLI stopped mid-turn does the same; the commands
   still running in either end with it (`commandEnded`, `ended`).
+- 0.3.5: what the box's own chat says, not its CLI, goes in the log too: a queued message dropped
+  as the CLI starts again (an account switch), the turn it ends, a compaction it stops, a
+  permission it answers by Allow commands in Plan (`approvalWithdrawn`). A CLI that ends for more
+  than an idle rest (a close, a cut, a move, the box stopping) and a box that stopped without
+  ending it (read again as it starts) close the rest: each queued message `queuedMessage
+  dropped`, then `exited`, on which a client drops every card and a plan's offer. A message a
+  full grant's call sent comes back to that Mac's composer from the drop; any other (a phone's)
+  goes back in the chat's draft (`setDraft`), ahead of what's there.
 
 ### Calls
 
@@ -231,7 +248,8 @@ keep the `tx.*` projection above. Policy stays on the box, in `LinkPolicy`.
   `watchCommands {on}`, `agentHistory {id}`, `fork {message?, text}`, `forkAtEnd`, `rollback
   {message?, text}`, `earlier {turns?}`, `earlierMessages`, `unloadPoint {message?, text}`,
   `unloaded {earlier}`, `compact {instructions}`, `usage`, `useReset {credit?, attempt}`,
-  `setRemoteControl {on}`, `relaunch {reason}`, `listModels`, `close` (the tab closed, as
+  `setRemoteControl {on}`, `relaunch {reason}`, `listModels`, `setPlanAllow {on}` (0.3.5,
+  listed in `calls` when the box keeps it), `close` (the tab closed, as
   `chat.close`), and `keepRow {text, id}` (a typed /compact's row, which the CLI isn't sent: the
   box's chat and log keep it; only a /compact row is taken). A type the box doesn't know reads as unknown and is refused `invalid`.
 - The answer is a `result {id, ok, code?, message?, value?}`. `value` holds the call's one return:
@@ -292,8 +310,8 @@ and never sees the new messages.
 - `agent.call {id, chatId, tool, args}`, box to client, full grants only: kore-host passes the
   call to the full grant that follows the chat, else the last full grant to connect. With none,
   the answer is "Kore isn't connected to <box> right now"; a link that ends, or no answer in as
-  long as a chat on the Mac waits for that command (`AgentTools.answerWait`: 10 s, a fork 75 s,
-  an open 30 s, a fetch or a reply 120 s, a wait its `timeout` + 15 s) and 20 s for the link,
+  long as a chat on the Mac waits for that command (`AgentTools.answerWait`: 10 s, a send 60 s,
+  a fork 75 s, an open 30 s, a fetch or a reply 120 s, a wait its `timeout` + 15 s) and 20 s for the link,
   ends the call so too ("Kore didn't answer in time.", as `kore mcp` says it).
 - `agent.result {id, ok, code?, text}`, client to box: `text` is what the agent reads, the
   command's data as JSON or why not. `code` is the agent channel's (`denied`, `tier`, `limit`,
@@ -304,8 +322,22 @@ and never sees the new messages.
   chats an hour and 6 of them open, wherever they opened; 4 calls in flight at once, as a Mac
   chat's process holds 4 connections.
 - Chat to chat goes both ways alike: a box chat's `kore_ask` reaches a Mac chat as a Mac chat's
-  reaches a box chat's (both at Act unlimited, by id, one hop, 20 an hour). Only files stay behind
-  the owner's switch: `kore_fetch` from a box into the Mac's folders needs `arsenalBoxReachesMac`.
+  reaches a box chat's (both at Act unlimited, by id, one hop, 20 an hour). Only files across
+  devices need more: `kore_fetch` from another device (box to Mac, Mac to box, box to box) needs
+  Act device (`device`); below it, "Not fetched: a file on another device needs Arsenal's Act
+  device tier". A box whose welcome lacks the `arsenalDevice` cap is told `drive` for it.
+- `kore_send` (`kore send <chat> "message" [--folder F]`) reaches a chat that isn't open too. An
+  open chat is named as before (title, short id, or `.`), or by its CLI session id; one no open
+  chat matches is looked for in History (the caller's window's, or `folder`'s): its History id
+  (`kore history`), the start of it (6 or more), or its title. Found, it opens as `kore_open_chat`
+  opens it (in a box window on the box, through the Mac's box window), then takes the message:
+  the same tier (Act unlimited), the same limits (a new chat, and a message), its mode capped at
+  the caller's, its Arsenal off. A title several past chats share is refused with their ids, and
+  nothing opens. A past chat in another folder isn't opened: opened, its Arsenal is off, so the
+  caller couldn't reach it. The answer waits for the chat's CLI to take the message: one that
+  doesn't start says why, and the message is back in the chat's composer. Sends that come while
+  the chat opens go after the first, in order. With `folder`, a box answers for its own folder's
+  open chats; anything else (another folder, a chat to wake) goes to the Mac.
 - `kore` in a box chat's shell: kore-host keeps a link named `kore` to itself in
   `$XDG_RUNTIME_DIR/kore-host/bin/` and puts that folder at the front of each chat CLI's PATH
   (`kore-host kore …` is the same). It runs the Mac `kore`'s chat commands (`ls`, `show`, `log`,
@@ -337,6 +369,12 @@ Where a path may lead:
   `denied.path`: the browser starts at the home and goes outside it only through a served folder.
   A path typed in the browser still opens (`folder.add`) without being listed.
 - `fs.read`: inside a served folder only.
+- An act grant (0.3.5, a phone's folder browser in its ＋ sheet) may `fs.list` and `fs.mkdir`
+  too, inside the box user's home only (never a served folder outside it) and never through a
+  hidden name (`.ssh`, `.config`: `denied.path`; `hidden: true` likewise). Its `fs.list` carries
+  subfolders only (no files; a link only when it leads to a folder inside the home). Each folder
+  it makes is journalled `audit mkdir device=… path=… ok=…`. Anything else stays `denied.control`.
+  A Mac never answers these for a phone: a new folder on the Mac is opened on the Mac itself.
 - Links are listed as `link` and never followed out: the path's real place (its links
   resolved) has to stay inside the home or served folder it's under, else `denied.path`. A link
   that stays inside is read as what it leads to.
@@ -573,6 +611,7 @@ stay refused to every grant.
 | Draft | `setDraft {text}` | `chat.setDraft {chatId, text}` | act |
 | Arsenal tier on | `setArsenal {tier}` | `chat.setArsenal {chatId, tier}` | full |
 | Arsenal off | `setArsenal {}` | `chat.setArsenal {chatId, tier: "off"}` | act |
+| Allow commands in Plan on / off | `setPlanAllow {on}` | `chat.setPlanAllow {chatId, on}` | full on; act off |
 | Stop agent control (every chat) | `setArsenal {}` for each | `arsenal.stopAll` | act |
 | History: list | `history.list` | `history.list` | act |
 | History: open | `history.open` | `history.open {sessionId, windowId?, provider?, title?}` | act |
@@ -634,8 +673,8 @@ and control kind on it, and starts no CLI: code `elsewhere` ("On MacBook · read
 
 Each is a `cmd` checked by `LinkPolicy.checkBox`. The answer is a `result` with these fields
 besides `{id, ok, code?, message?}`: `chatId?, owner?, move?, settled?, pending?, watching?,
-mirrored?` (`MoveResult`). `move` is `MoveInfo {moveId, chatId?, provider, sessionId, folders,
-root, files, gen, title?, modelId?, effort?, mode?, fastForward?}`.
+mirrored?, settings?` (`MoveResult`). `move` is `MoveInfo {moveId, chatId?, provider, sessionId, folders,
+root, files, gen, title?, modelId?, effort?, mode?, fastForward?, settings?}`.
 
 | `type` | fields | |
 |---|---|---|
@@ -785,6 +824,26 @@ Each is a `cmd` checked by `LinkPolicy.checkBox`, answered with a `MoveResult` (
 | Mac → box | `chat.adoptCopy` | A chat the Mac holds from that box folder: 1.10's send back. Else 1.10's `chat.adopt` as a new chat, then the Mac's original into Kore's trash. One held from another box: refused (send it back, or copy it) |
 | Box → Mac | `chat.copy`, then `SessionCopy` on the Mac | An open box chat: 1.10's `chat.release` into the pasted folder (owner, gen). A closed one or a past session: copy, then `chat.copy` commit |
 | Box → box | `chat.copy`, then `chat.adoptCopy` on the other | Copy, then `chat.copy` commit on the source |
+
+#### A chat's settings
+
+Every copy, duplicate, cut, move, send back and fork carries the chat's own settings,
+`ChatSettings {modelId?, effort?, mode?, fast?, plan?, planAllow?, autoCompact?, login?, arsenal?,
+draft?, at?}`: `chat.release` and `chat.copy` prepare answer them as `move.settings`; `chat.adopt`
+and `chat.adoptCopy` commit and a fork's `chat.new` take them as `settings`. The four older fields
+still go beside them, so a box or a Mac from before `settings` reads those and ignores the rest.
+
+| Setting | Carried as |
+|---|---|
+| `fast`, `plan` (Codex's switch), `planAllow`, `autoCompact` (0 is off) | As they are; kept in the chat's `meta.json` until its next start takes them |
+| `login` | A box's Claude login (`main` for the default). Taken where the box has that login; else the folder's, and `message` says so in one line ("work isn't signed in here · on main"). A Mac's chats run on its one login: a box login landing there is said the same way |
+| `arsenal` | A tier the target takes, else the one below, said (`device` to a box without the `arsenalDevice` cap is `drive`). Absent is off. A Mac where chats can't use Arsenal, or a Codex chat outside Full access, has it off, said |
+| `draft` | A move's and a cut's only; a copy or a duplicate leaves it with its original. On a send back the Mac's draft always goes back |
+| `at` | When they last changed where they come from (ms). On a send back the box keeps its own only when one changed there after the Mac took the chat (`owner.since`, the box's clock) and not on the Mac after that; a Mac's carried settings aren't a change until one is made there |
+
+`chat.adopt` and `chat.adoptCopy` commit answer `settings` as the chat has them after (no draft),
+so the Mac's tab shows what stood; `message` says what gave way. A fork by a grant without full
+control (`chat.fork`) keeps Arsenal off.
 
 A cut of a working chat asks first ("Stop and move"). A paste shows on the window's transfer bar,
 as a carry does ("Copying chat to mybox · 1.2 MB of 3.4 MB", Cancel; at the top of the window

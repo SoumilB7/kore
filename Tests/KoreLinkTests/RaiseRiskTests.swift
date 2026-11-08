@@ -13,7 +13,7 @@ final class TurnedClock: Sendable {
 }
 
 /// Phase 18 step 5b, shared by Kore's link and kore-host: the raise verifier (`LinkRaiseGate`),
-/// its wire, the risky-card rule (`CardRisk`), ask's limits (`LinkAsk`) and resume cursors.
+/// its wire, a card's Allow as a plain tap, ask's limits (`LinkAsk`) and resume cursors.
 @Suite("raise and risk")
 struct RaiseRiskTests {
     let binding = Data(repeating: 7, count: 32)
@@ -71,56 +71,28 @@ struct RaiseRiskTests {
         #expect(LinkRaiseWire.incoming(Data(#"{"t":"raise.key","id":"k"}"#.utf8)) == .malformed(id: "k", type: "raise.key"))
         #expect(LinkRaiseWire.incoming(Data(#"{"t":"cmd","id":"x","cmd":{"type":"chat.stop","chatId":"c"}}"#.utf8)) == nil)
         #expect(LinkRaiseWire.incoming(Data(#"{"t":"presence","onScreen":true}"#.utf8)) == nil)
-        let answer = Data(#"{"t":"cmd","id":"y","cmd":{"type":"chat.answer","chatId":"c","cardId":"k","action":"allow","digest":"D","nonce":"\#(nonce)","sig":"AAEC"}}"#.utf8)
-        #expect(LinkRaiseWire.answerProof(answer) == .init(chatId: "c", modeId: "approve.D", nonce: Data(repeating: 1, count: 32), sig: Data([0, 1, 2])))
         #expect(LinkRaiseWire.arsenalPrefix + "own" == "arsenal.own" && LinkRaiseGate.arsenalTier("arsenal.drive") == "drive" && LinkRaiseGate.arsenalTier("auto") == nil)
     }
 
-    // MARK: Risky cards
+    // MARK: Cards
 
-    @Test(arguments: [
-        ("Bash", [String](), CardRisk?.some(.shell)),
-        ("WebFetch", [], .network),
-        ("WebSearch", [], .network),
-        ("Write", ["/work/app/a.swift"], nil),
-        ("Edit", ["a.swift"], nil),
-        ("Edit", ["../other/a.swift"], .write),
-        ("MultiEdit", ["/etc/hosts"], .write),
-        ("NotebookEdit", ["/work/app/../../x.ipynb"], .write),
-        ("Write", [], .write),
-        ("Read", ["/etc/passwd"], nil),
-        ("mcp__github__create_issue", [], nil),
-    ])
-    func claudeCards(tool: String, targets: [String], risk: CardRisk?) {
-        #expect(CardRisk.classify(tool: tool, targets: targets, folder: "/work/app") == risk, "\(tool) \(targets)")
-    }
-
-    @Test(arguments: [
-        ("commandExecution", [String](), CardRisk?.some(.shell)),
-        ("commandExecution.network", [], .network),
-        ("permissions", [], .network),
-        ("fileChange", ["/work/app/src/a.rs"], nil),
-        ("fileChange", ["/work/app/a.rs", "/work/elsewhere/b.rs"], .write),
-        ("fileChange", ["~/notes.md"], .write),
-    ])
-    func codexCards(tool: String, targets: [String], risk: CardRisk?) {
-        #expect(CardRisk.classify(tool: tool, targets: targets, folder: "/work/app") == risk, "\(tool) \(targets)")
-    }
-
-    @Test func aFolderPrefixIsntInside() {
-        #expect(CardRisk.outside("/work/apple/x", folder: "/work/app"))
-        #expect(!CardRisk.outside("/work/app", folder: "/work/app/"))
-        #expect(CardRisk.classify(tool: nil, targets: [], folder: "/work/app") == nil)
-    }
-
-    @Test func onlyARiskyAllowNeedsTheFingerprint() {
-        let facts = LinkPolicy.ChatFacts(
-            level: .manual, modes: [:],
-            cards: ["k": .init(kind: .permission, digest: "D", risk: .shell), "p": .init(kind: .permission, digest: "P")])
-        #expect(LinkAsk.proofNeeded(.answer(chatId: "c", cardId: "k", action: .allow, digest: "D", answers: nil), facts) == "D")
-        #expect(LinkAsk.proofNeeded(.answer(chatId: "c", cardId: "k", action: .deny, digest: "D", answers: nil), facts) == nil)
-        #expect(LinkAsk.proofNeeded(.answer(chatId: "c", cardId: "p", action: .allow, digest: "P", answers: nil), facts) == nil)
-        #expect(LinkAsk.proofNeeded(.stop(chatId: "c"), facts) == nil)
+    /// Owner, 2026-11-20: a phone allows any card with a tap, a shell command, a write outside the
+    /// folder or network access too; only raises take the fingerprint.
+    @Test func everyAllowFromAPhoneIsAPlainTap() throws {
+        let facts = LinkPolicy.ChatFacts(level: .manual, modes: [:], cards: ["k": .init(kind: .permission, digest: "D")])
+        // What a phone may do (ask): checked at standard, as `LinkPeer.perform` checks it.
+        #expect(LinkPolicy.check(.answer(chatId: "c", cardId: "k", action: .allow, digest: "D", answers: nil), facts, control: .standard) == .allow)
+        #expect(LinkPolicy.check(.answer(chatId: "c", cardId: "k", action: .deny, digest: "D", answers: nil), facts, control: .standard) == .allow)
+        // Always allow stays Kore's own.
+        #expect(LinkPolicy.check(.answer(chatId: "c", cardId: "k", action: .allowAlways, digest: "D", answers: nil), facts, control: .standard)
+            == .deny(.alwaysAllow, "Always allow can only be set in Kore."))
+        // A plain answer is the link's own message, never a raise; an older phone's signature on it is ignored.
+        let nonce = Data(repeating: 1, count: 32).base64EncodedString()
+        for extra in ["", #","nonce":"\#(nonce)","sig":"AAEC""#] {
+            let answer = Data(#"{"t":"cmd","id":"y","cmd":{"type":"chat.answer","chatId":"c","cardId":"k","action":"allow","digest":"D"\#(extra)}}"#.utf8)
+            #expect(LinkRaiseWire.incoming(answer) == nil)
+            guard case .cmd("y", .answer("c", "k", .allow, "D", nil)) = try LinkMessage.decode(answer) else { Issue.record("not a plain answer"); continue }
+        }
     }
 
     // MARK: Ask

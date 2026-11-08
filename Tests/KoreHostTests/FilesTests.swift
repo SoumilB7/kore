@@ -139,8 +139,12 @@ struct FilesTests {
     @Test func onlyAFullGrantGetsFilesOverTheLink() async throws {
         let rig = try HostRig()
         defer { rig.finish() }
+        // The box user's home is the rig's: an act grant (a phone) browses only its folders.
+        rig.host.sessionEnv["HOME"] = rig.root.path
         try rig.host.start()
         try Data("hi".utf8).write(to: rig.folder.appendingPathComponent("a.txt"))
+        try FileManager.default.createDirectory(at: rig.folder.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: rig.folder.appendingPathComponent(".git"), withIntermediateDirectories: true)
         let store = GrantStore(rig.paths.grants)
         for (control, name) in [(GrantControl.act, "act"), (.full, "full")] {
             let grant = try store.allow(name, control: control, socket: rig.paths.socket)
@@ -153,10 +157,11 @@ struct FilesTests {
             try await until { client.raws.compactMap(Self.result).count >= 2 }
             let results = Dictionary(client.raws.compactMap(Self.result).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             if control == .full {
-                #expect(results["l"]?.entries?.map(\.name) == ["a.txt"])
+                #expect(results["l"]?.entries?.map(\.name) == ["src", "a.txt"])
                 #expect(results["r"]?.text == "hi")
             } else {
-                #expect(results["l"]?.code == .deniedControl)
+                // A phone's folder browser: subfolders only, never a file's bytes.
+                #expect(results["l"]?.entries?.map(\.name) == ["src"])
                 #expect(results["r"]?.code == .deniedControl)
             }
             client.socket.close()

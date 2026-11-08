@@ -55,7 +55,7 @@ struct BoxChatOpsUITests {
         let chat = box.newChat(.codex)
         #expect(!chat.controls.availableModes.contains { $0.id == CodexModes.fullAccess })
         #expect(chat.controls.cappedModes.map(\.id) == [CodexModes.fullAccess])
-        #expect(chat.controls.levelCapNote == "Set on mybox itself")
+        #expect(chat.controls.levelCapNote == "Box chats go up to Auto")
         // A Mac chat offers it, with none dim. (Claude's Bypass isn't in its picker anywhere.)
         let mac = Chat(provider: .codex, folder: URL(fileURLWithPath: "/tmp"))
         #expect(mac.controls.availableModes.contains { $0.id == CodexModes.fullAccess } && mac.controls.cappedModes.isEmpty)

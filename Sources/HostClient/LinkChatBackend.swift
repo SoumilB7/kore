@@ -21,10 +21,14 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         package var title: String?
         package var mode: String?
         package var effort: String?
+        /// The rest of a fork's original's settings (fast, plan, its login, auto-compact point).
+        package var settings: ChatSettings?
 
         package init(
-            model: String? = nil, forkFrom: String? = nil, forkAt: String? = nil, title: String? = nil, mode: String? = nil, effort: String? = nil
+            model: String? = nil, forkFrom: String? = nil, forkAt: String? = nil, title: String? = nil, mode: String? = nil, effort: String? = nil,
+            settings: ChatSettings? = nil
         ) {
+            self.settings = settings
             self.model = model
             self.forkFrom = forkFrom
             self.forkAt = forkAt
@@ -76,9 +80,11 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     package var localPath: ((String) -> String)?
     /// A chat made from this Mac has its id on the box.
     package var onCreated: ((String) -> Void)?
-    /// The chat's Arsenal tier here (`watch`, `own`, `drive`; nil for off), told to the box with
-    /// each message so its CLI has the `kore_app` server while it's on (1.6).
+    /// The chat's Arsenal tier here (`watch`, `own`, `drive`, `device`; nil for off), told to the
+    /// box with each message so its CLI has the `kore_app` server while it's on (1.6).
     package var arsenal: () -> String? = { nil }
+    /// The tier as the box takes it: `device` is `drive` to a box that doesn't know it.
+    private func boxTier(_ tier: String?) -> String? { BoxTools.said(tier, caps: connection.caps) }
     /// A `KoreReach.note` for the next message (the tier changed since the agent was told).
     private var note: String?
     /// 1.9: what the box keeps with the chat changed from another client (its controls'
@@ -95,6 +101,11 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     private var ownDraftRevs = 0
     private var setting: (autoCompact: Int, draft: Int, arsenal: Int) = (0, 0, 0)
     private var draftSoon: Task<Void, Never>?
+    /// The chat's controls as the box's meta last said them (set there, on another client, or
+    /// while its CLI slept: Claude says no event for a model or an effort), and this Mac's calls
+    /// changing one still under way (the box's word on it waits for theirs).
+    private var boxSaid = BoxControls()
+    private var inFlight: [BoxControls.Field: Int] = [:]
     /// Where the box chat's model requests go: this Mac's usage, so Kore's share of the plan's
     /// limits counts them (tests set their own).
     package var usage: @Sendable (ForwardedRequest) -> Void = { request in Task { await KoreUsage.shared.forwarded(request) } }
@@ -148,7 +159,9 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             let m = making
             let (folder, provider) = (folder, provider.id)
             let result = await connection.command {
-                HostWire.newChat(id: $0, folder: folder, provider: provider, model: m.model, fork: m.fork, title: m.title, mode: m.mode, effort: m.effort)
+                HostWire.newChat(
+                    id: $0, folder: folder, provider: provider, model: m.model, fork: m.fork, title: m.title, mode: m.mode, effort: m.effort,
+                    settings: m.settings)
             }
             guard result.ok, let id = result.chatId else { throw HostRefusal(result, alias: connection.alias) }
             chatId = id
@@ -171,7 +184,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     // MARK: From the box
 
-    package var following: ChatFollow? { chatId.map { ChatFollow(chatId: $0, after: seq, log: log, arsenal: arsenal()) } }
+    package var following: ChatFollow? { chatId.map { ChatFollow(chatId: $0, after: seq, log: log, arsenal: boxTier(arsenal())) } }
 
     /// A mirror's copy took a batch: what it holds past what's shown, shown.
     package func reread() async {
@@ -327,7 +340,10 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         if !running, let turn = unfinished(from: openTurn, in: segment) {
             segment.append(.turnFinished(turn, .interrupted, duration: nil))
         }
+        // The controls a past CLI said at its start give way to what the box says now.
+        let said = list.contains { BoxControls.says($0) }
         flush()
+        if said { emit(boxSaid.events(BoxControls.Field.allCases.filter { inFlight[$0, default: 0] == 0 })) }
         show(Array(live))
     }
 
@@ -375,8 +391,8 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         case .remoteControlUnavailable where !offers("setRemoteControl"):
             return .remoteControlUnavailable(Self.remoteOnBox)
         case .approvalRequested(let approval):
-            // Always allow is set on the box itself: the card doesn't offer it.
-            let shown = approval.withoutAlwaysAllow(note: "Always allow is set on \(NodeNames.name(connection.alias)) itself")
+            // The box refuses Always allow from here (`LinkPolicy`): the card doesn't offer it.
+            let shown = approval.withoutAlwaysAllow(note: LinkPolicy.boxAlwaysAllowLine)
             asked[approval.id] = shown
             return .approvalRequested(shown)
         case .turnChanges(let turn, let changes) where localPath != nil:
@@ -407,6 +423,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     /// seen on a link is the box's record of the point and the draft; the tier stays this Mac's
     /// (a box started again forgets it) until another client changes it.
     private func kept(_ meta: ChatMeta) {
+        controlsSaid(meta)
         guard let controls = meta.controls else { return }
         let point = controls.autoCompactAt
         if setting.autoCompact == 0, seen.autoCompact != .some(point) {
@@ -433,9 +450,33 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             seen.arsenal = .some(tier)
             if !first {
                 onArsenal?(tier)
-            } else if tier != arsenal() {
+            } else if tier != boxTier(arsenal()) {
                 sayArsenal(arsenal())
             }
+        }
+    }
+
+    /// The box's model, effort, mode, plan, fast mode and "Allow commands in Plan" go to this chat
+    /// where they changed (the first meta seeds a chat opened here), but not one this Mac is
+    /// changing now.
+    private func controlsSaid(_ meta: ChatMeta) {
+        var now = BoxControls(meta)
+        if !keepsPlanAllow { now.planAllow = nil }
+        let fields = BoxControls.Field.allCases.filter { inFlight[$0, default: 0] == 0 && now.value($0) != nil && now.value($0) != boxSaid.value($0) }
+        for field in fields { boxSaid.take(field, from: now) }
+        emit(boxSaid.events(fields))
+    }
+
+    /// One of this Mac's own changes, said to the box: until it's answered the box's word on that
+    /// control waits; refused, the box's own value comes back here.
+    private func changing(_ field: BoxControls.Field, _ call: () async throws -> Void) async throws {
+        inFlight[field, default: 0] += 1
+        defer { inFlight[field, default: 1] -= 1 }
+        do {
+            try await call()
+        } catch {
+            if inFlight[field] == 1 { emit(boxSaid.events([field])) }
+            throw error
         }
     }
 
@@ -502,7 +543,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         }
         let note = self.note
         self.note = nil
-        return try await call(.send(text: words, files: sent, queued: queued, id: id), arsenal: arsenal(), note: note).bool ?? true
+        return try await call(.send(text: words, files: sent, queued: queued, id: id), arsenal: boxTier(arsenal()), note: note).bool ?? true
     }
 
     /// Goes to the box with the next message, which its CLI gets before the user's words.
@@ -566,19 +607,32 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         }
     }
 
-    package func setMode(_ id: String) async throws { try await call(.setMode(id)) }
-    package func setPlanMode(_ on: Bool) async { _ = try? await call(.setPlanMode(on)) }
-    package func setModel(_ id: String) async throws { try await call(.setModel(id)) }
+    package func setMode(_ id: String) async throws { try await changing(.mode) { try await call(.setMode(id)) } }
+    package func setPlanMode(_ on: Bool) async { try? await changing(.plan) { try await call(.setPlanMode(on)) } }
+    package func setModel(_ id: String) async throws { try await changing(.model) { try await call(.setModel(id)) } }
 
     package func setEffort(_ level: String) async {
         do {
-            try await call(.setEffort(level))
+            try await changing(.effort) { try await call(.setEffort(level)) }
         } catch {
             emit([.notice("Couldn't set the effort: \(error)", isError: true)])
         }
     }
 
-    package func setFastMode(_ on: Bool) async throws { try await call(.setFastMode(on)) }
+    package func setFastMode(_ on: Bool) async throws { try await changing(.fast) { try await call(.setFastMode(on)) } }
+
+    /// A box that keeps "Allow commands in Plan" with the chat (0.3.5) answers there.
+    package var keepsPlanAllow: Bool { offers("setPlanAllow") }
+
+    package func keepPlanAllow(_ on: Bool) {
+        Task {
+            do {
+                try await changing(.planAllow) { try await call(.setPlanAllow(on)) }
+            } catch {
+                emit([.notice("Couldn't set Allow commands in Plan: \(error)", isError: true)])
+            }
+        }
+    }
     package func rename(_ title: String) async throws { try await call(.rename(title)) }
     package func stopAgent(_ id: String) async { _ = try? await call(.stopAgent(id)) }
     package func stopCommand(_ id: String) async throws { try await call(.stopCommand(id)) }
@@ -657,6 +711,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     /// 1.9: the chat's Arsenal tier changed here: the box shows it, and says it to other clients.
     package func sayArsenal(_ tier: String?) {
         guard offers("setArsenal"), chatId != nil else { return }
+        let tier = boxTier(tier)
         seen.arsenal = .some(tier)
         setting.arsenal += 1
         Task {
@@ -747,14 +802,86 @@ package struct HostRefusal: LocalizedError, CustomStringConvertible {
         case .goneFolder: "that folder isn't on \(NodeNames.name(alias))"
         case .goneBlob: "the file didn't reach \(NodeNames.name(alias))"
         case .raiseMode: "\(NodeNames.name(alias)) doesn't allow that mode from here"
-        case .alwaysAllow: "Always allow is set on \(NodeNames.name(alias)) itself"
-        case .signIn: "sign-ins are answered on \(NodeNames.name(alias)) itself"
+        case .alwaysAllow: LinkPolicy.boxAlwaysAllowLine
+        case .signIn: LinkPolicy.boxSignInLine
         case .deniedControl: "\(NodeNames.name(alias)) lets this Mac only watch"
         case .rateLimited: "too many at once; try again in a moment"
         case .staleCard: "the card changed on \(NodeNames.name(alias))"
         case .command: "\(NodeNames.name(alias)) doesn't take that here"
         case .tooLarge: "too large for \(NodeNames.name(alias))"
         default: nil
+        }
+    }
+}
+
+/// A box chat's controls as its meta says them, one field each; nil where it says none.
+struct BoxControls: Equatable {
+    enum Field: CaseIterable { case model, effort, mode, plan, fast, planAllow }
+
+    var model: String?
+    var effort: String?
+    var mode: String?
+    var plan: Bool?
+    var fast: Bool?
+    var planAllow: Bool?
+
+    init() {}
+
+    init(_ meta: ChatMeta) {
+        model = meta.controls?.modelId
+        effort = meta.controls?.effort
+        mode = meta.mode.id
+        plan = meta.mode.planOn
+        fast = meta.controls?.fast
+        planAllow = meta.controls?.planAllow
+    }
+
+    func value(_ field: Field) -> String? {
+        switch field {
+        case .model: model
+        case .effort: effort
+        case .mode: mode
+        case .plan: plan.map { "\($0)" }
+        case .fast: fast.map { "\($0)" }
+        case .planAllow: planAllow.map { "\($0)" }
+        }
+    }
+
+    mutating func take(_ field: Field, from other: BoxControls) {
+        switch field {
+        case .model: model = other.model
+        case .effort: effort = other.effort
+        case .mode: mode = other.mode
+        case .plan: plan = other.plan
+        case .fast: fast = other.fast
+        case .planAllow: planAllow = other.planAllow
+        }
+    }
+
+    /// The events a chat takes them by: quiet ones (a mode as a session's, never a divider).
+    func events(_ fields: [Field]) -> [ChatEvent] {
+        var set = ControlsSet()
+        var out: [ChatEvent] = []
+        for field in fields {
+            switch field {
+            case .model: set.model = model
+            case .effort: set.effort = effort
+            case .planAllow: set.planAllow = planAllow
+            case .mode: if let mode { out.append(.modeChanged(ModeChange(mode: mode, previous: nil, source: .session, at: Date()))) }
+            case .plan: if let plan { out.append(.planModeChanged(PlanModeChange(on: plan, source: .session, at: Date()))) }
+            case .fast: if let fast { out.append(.fastModeChanged(FastModeReport(on: fast, offered: nil))) }
+            }
+        }
+        if set != ControlsSet() { out.insert(.controlsSet(set), at: 0) }
+        return out
+    }
+
+    /// An event that sets what these say (a CLI's start, its mode).
+    static func says(_ event: ChatEvent) -> Bool {
+        switch event {
+        case .controlsLoaded, .modeChanged, .planModeChanged, .fastModeChanged: true
+        case .replayed(let events): events.contains(where: says)
+        default: false
         }
     }
 }

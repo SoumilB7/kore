@@ -19,7 +19,7 @@ enum LinkControlActions {
         }
         if kind.onChat {
             guard let chat else { return .failed(.goneChat, "That chat isn't open in Kore any more.") }
-            return await onChat(kind, args, chat, files: files)
+            return await onChat(kind, args, chat, control: control, files: files)
         }
         if kind.onAccount { return await onAccount(kind, args) }
         if kind == .arsenalStopAll {
@@ -31,7 +31,7 @@ enum LinkControlActions {
 
     // MARK: Chats
 
-    private static func onChat(_ kind: ControlKind, _ args: ControlArgs, _ chat: Chat, files: [URL]) async -> Outcome {
+    private static func onChat(_ kind: ControlKind, _ args: ControlArgs, _ chat: Chat, control: LinkControlLevel, files: [URL]) async -> Outcome {
         let workspace = LinkSnapshot.workspace(of: chat)
         switch kind {
         case .chatRename:
@@ -60,7 +60,7 @@ enum LinkControlActions {
             chat.linkSetAutoCompact(args.at)
         case .chatFork:
             guard let workspace, chat.linkCanFork else { return .failed(.busy, "This chat can't be forked yet.") }
-            guard let fork = await workspace.linkFork(chat, entryId: args.entryId ?? "", after: args.after == true) else {
+            guard let fork = await workspace.linkFork(chat, entryId: args.entryId ?? "", after: args.after == true, arsenal: control == .full) else {
                 return .failed(.invalid, "No message to fork from there.")
             }
             return Outcome(ok: true, newChat: fork, newWindowId: LinkSnapshot.windowID(workspace))

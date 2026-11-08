@@ -20,11 +20,16 @@ final class BoxCLI: ChatBackend {
         ModelOption(id: "small", name: "Small", resolved: "small", efforts: ["low", "high"]),
         ModelOption(id: "other", name: "Other", resolved: "other", efforts: ["low", "high"]),
     ]
-    init() { (events, sink) = AsyncStream.makeStream() }
+    /// A resumed Claude session's CLI never says its id (Kore resumed it by that id).
+    let saysSession: Bool
+    init(saysSession: Bool = true) {
+        self.saysSession = saysSession
+        (events, sink) = AsyncStream.makeStream()
+    }
     func start() async throws {
         guard !calls.contains("start") else { return }
         calls.append("start")
-        sink.yield(.sessionIdentified("s1"))
+        if saysSession { sink.yield(.sessionIdentified("s1")) }
         sink.yield(.controlsLoaded(ChatControls(models: Self.models, model: "small", effort: "low", commands: [SlashCommand(name: "review", description: "", hint: "", kind: .command)])))
         sink.yield(.contextUsage(ContextUsage(used: 30_000, window: 200_000, autoCompacts: true, at: .now)))
     }
@@ -129,6 +134,8 @@ final class BoxRig {
     var made: [BoxCLI] = []
     /// The past sessions each CLI on the box lists for a folder (no real CLI is asked).
     var sessions: [String: [SessionSummary]] = [:]
+    /// The box's CLIs resume their sessions silently (a real Claude CLI's resume).
+    var silentResume = false
     /// Where the Mac's chats count the box's requests; nil keeps them out.
     var usage: KoreUsage?
     /// The box's latest CLI stand-in. Before the box has made one (it starts a chat's CLI only
@@ -155,7 +162,7 @@ final class BoxRig {
         grant = try GrantStore(paths.grants).allow("laptop", control: control, socket: paths.socket)
         host.pastSessions = { [weak self] provider, _ in await MainActor.run { self?.sessions[provider.id] } ?? [] }
         host.services.backend = { [unowned self] _, _ in
-            let cli = BoxCLI()
+            let cli = BoxCLI(saysSession: !self.silentResume)
             self.made.append(cli)
             return cli
         }
@@ -169,7 +176,7 @@ final class BoxRig {
     }
 
     /// This Mac's chat on the box's chat `id` (a new one when nil).
-    func chat(_ connection: HostConnection, id: String?) -> (Chat, () -> LinkChatBackend?) {
+    func chat(_ connection: HostConnection, id: String?, provider: ProviderDescriptor = .claude) -> (Chat, () -> LinkChatBackend?) {
         let services = HostServices()
         weak var made: LinkChatBackend?
         let folder = folder.path
@@ -185,7 +192,7 @@ final class BoxRig {
             return backend
         }
         let chat = Chat(
-            provider: .claude, folder: self.folder, modeMemory: ModeMemory(defaults: nil), compactMemory: AutoCompactMemory(defaults: nil),
+            provider: provider, folder: self.folder, modeMemory: ModeMemory(defaults: nil), compactMemory: AutoCompactMemory(defaults: nil),
             services: services)
         return (chat, { made })
     }
@@ -427,6 +434,100 @@ struct BoxParityTests {
         again.close()
     }
 
+    /// A box chat on a session its CLI resumed (one opened from History, woken, copied or moved:
+    /// a resumed Claude CLI never says its id) has its wheel here as a Mac chat does: the session
+    /// and the context's fill and window reach this chat, live, after a compaction, opened again
+    /// from what this Mac keeps, and after a rollback starts the box's log again.
+    @Test(arguments: ["claude", "codex"]) func aResumedBoxChatShowsItsWheel(_ cli: String) async throws {
+        let rig = try BoxRig()
+        defer { rig.finish() }
+        rig.silentResume = true
+        let provider = try #require(Registry.provider(cli))
+        rig.sessions[cli] = [SessionSummary(id: "past1", agent: provider.historyAgent, title: "Old work", updated: .now)]
+        let connection = rig.connection()
+        connection.retain()
+        defer { connection.release() }
+        #expect(await until { connection.isOnline && connection.marksLive })
+        let window = HostDaemon.windowID(rig.folder.path)
+        guard case .success(let opened) = await connection.history(.historyOpen, ControlArgs(windowId: window, provider: cli, sessionId: "past1")),
+            let chatId = opened.chatId
+        else { Issue.record("not opened"); return }
+
+        func wheel(_ chat: Chat, _ used: Int) -> Bool {
+            chat.sessionId == "past1" && chat.context.usage?.used == used && chat.context.usage?.window == 200_000 && chat.context.fraction != nil
+        }
+        let (chat, _) = rig.chat(connection, id: chatId, provider: provider)
+        await chat.startOnce()
+        #expect(await until { wheel(chat, 30_000) })
+        #expect(chat.canCompact)
+        // Compacted from the wheel: the new fill reads here.
+        chat.compact()
+        #expect(await until { rig.cli.calls.contains("compact") && wheel(chat, 4_000) && !chat.context.compacting })
+        #expect(chat.sendFromLink("hello"))
+        #expect(await until { rows(chat, .answer) == ["Hi: hello"] && !chat.isBusy })
+
+        // A rollback starts the box's log again: the session and the window go on in it.
+        let message = try #require(chat.transcriptView.entries.first { $0.kind == .user })
+        chat.rollBack(message)
+        #expect(await until { rows(chat, .user) == ["first"] && wheel(chat, 4_000) })
+        let hc = try #require(rig.host.chat(chatId))
+        let seq = hc.stream.seq
+        connection.cache.flush()
+        chat.close()
+
+        // Opened again (Kore again): what this Mac keeps, then the catch-up.
+        let second = rig.connection()
+        second.retain()
+        defer { second.release() }
+        let (again, _) = rig.chat(second, id: chatId, provider: provider)
+        await again.startOnce()
+        #expect(await until { wheel(again, 4_000) })
+        again.close()
+        // A Mac with nothing kept reads the new log whole.
+        let fresh = rig.connection()
+        fresh.retain()
+        defer { fresh.release() }
+        let (third, _) = rig.chat(fresh, id: chatId, provider: provider)
+        try? FileManager.default.removeItem(at: rig.root.appendingPathComponent("cache"))
+        await third.startOnce()
+        #expect(await until { wheel(third, 4_000) && rows(third, .user) == ["first"] })
+        #expect(hc.stream.seq >= seq)
+        third.close()
+    }
+
+    /// A box's log kept from before it said the session (an older kore-host's) says it when a
+    /// client follows, without a word from the CLI.
+    @Test func aLogWithoutTheSessionSaysItAtTheFollow() async throws {
+        let rig = try BoxRig()
+        defer { rig.finish() }
+        rig.silentResume = true
+        rig.sessions["claude"] = [SessionSummary(id: "past1", agent: .claude, title: "Old work", updated: .now)]
+        let connection = rig.connection()
+        connection.retain()
+        defer { connection.release() }
+        #expect(await until { connection.isOnline && connection.marksLive })
+        let window = HostDaemon.windowID(rig.folder.path)
+        guard case .success(let opened) = await connection.history(.historyOpen, ControlArgs(windowId: window, provider: "claude", sessionId: "past1")),
+            let hc = opened.chatId.flatMap(rig.host.chat)
+        else { Issue.record("not opened"); return }
+        #expect(hc.stream.isEmpty)
+        // Its log as an older box kept it: no session in it.
+        let session = hc.stream.session
+        hc.stream.session = { nil }
+        for event: ChatEvent in [
+            .userMessage(text: "hi", attachments: [], id: "m1"), .turnStarted("t1", origin: .user, at: .now), .text("b1", .answer, "hello"),
+            .turnFinished("t1", .completed, duration: nil),
+            .contextUsage(ContextUsage(used: 50_000, window: 200_000, autoCompacts: true, at: .now)),
+        ] { hc.stream.add(event, by: nil) }
+        hc.stream.session = session
+        let (chat, _) = rig.chat(connection, id: hc.id)
+        await chat.startOnce()
+        #expect(await until { chat.sessionId == "past1" && chat.context.fraction == 0.25 })
+        #expect(rig.made.isEmpty)
+        #expect(rows(chat, .answer) == ["hello"] && !chat.isBusy)
+        chat.close()
+    }
+
     @Test func thePolicyHoldsFromTheMac() async throws {
         let rig = try BoxRig()
         defer { rig.finish() }
@@ -466,7 +567,7 @@ struct BoxParityTests {
         rig.cli.sink.yield(.approvalRequested(Approval(id: "ap9", title: "Run ls", detail: nil, body: nil, canAlwaysAllow: true, questions: [])))
         #expect(await until { chat.approvals.pending.first?.id == "ap9" })
         #expect(chat.approvals.pending.first?.canAlwaysAllow == false)
-        #expect(chat.approvals.pending.first?.alwaysAllowNote == "Always allow is set on local itself")
+        #expect(chat.approvals.pending.first?.alwaysAllowNote == "Always allow isn't offered for box chats yet")
 
         // Rename: through `chat.call`, kept on the box (its list and other Macs read it there).
         chat.rename("Release plan")

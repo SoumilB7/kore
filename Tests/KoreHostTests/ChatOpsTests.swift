@@ -137,6 +137,12 @@ struct ChatOpsTests {
         #expect(try await apply(rig, .chatSetArsenal, ControlArgs(chatId: hc.id, tier: "drive"), .act).code == .deniedControl)
         #expect(try await apply(rig, .chatSetArsenal, ControlArgs(chatId: hc.id, tier: "drive"), .full).ok)
         #expect(hc.arsenal == "drive")
+        // Act device: this box takes it and says so; an older one is told Act unlimited.
+        #expect(try await apply(rig, .chatSetArsenal, ControlArgs(chatId: hc.id, tier: "device"), .full).ok)
+        #expect(hc.arsenal == "device" && HostMeta.meta(hc).arsenal == "device")
+        #expect(rig.host.welcome(control: .full).caps.contains(BoxTools.deviceCap))
+        #expect(BoxTools.said("device", caps: []) == "drive" && BoxTools.said("device", caps: [BoxTools.deviceCap]) == "device")
+        #expect(BoxTools.said("own", caps: []) == "own" && BoxTools.said(nil, caps: []) == nil)
         #expect(try await apply(rig, .chatSetArsenal, ControlArgs(chatId: hc.id, tier: "full"), .full).code == .invalid)
         #expect(try await apply(rig, .arsenalStopAll, ControlArgs(), .act).ok)
         #expect(hc.arsenal == nil)

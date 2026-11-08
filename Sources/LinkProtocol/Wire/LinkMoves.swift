@@ -63,6 +63,9 @@ package struct MoveInfo: Codable, Sendable, Equatable {
     package var fastForward: Bool?
     /// 1.11: the files' bytes together (`chat.copy`, `chat.release` prepare), for a transfer's bar.
     package var bytes: Int64?
+    /// The chat's own settings, all of them (`ChatSettings`): a peer from before them sends only
+    /// the four above.
+    package var settings: ChatSettings?
 
     package init(
         moveId: String, chatId: String? = nil, provider: String, sessionId: String, folders: [String], root: String, files: [String], gen: Int,
@@ -104,11 +107,16 @@ package struct MoveResult: Codable, Sendable, Equatable {
     package var watching: Bool?
     /// `chat.mirror`: the events the replica holds now.
     package var mirrored: Int?
+    /// A chat taken in (`chat.adopt`, `chat.adoptCopy` commit): its settings as they are now on the
+    /// box, its draft left out (on a send back the box's may have been newer). `message` says
+    /// what gave way. A box from before them says neither.
+    package var settings: ChatSettings?
 
     package init(
         id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, chatId: String? = nil, owner: ChatOwner? = nil, move: MoveInfo? = nil,
-        settled: Bool? = nil, pending: Int? = nil, watching: Bool? = nil, mirrored: Int? = nil
+        settled: Bool? = nil, pending: Int? = nil, watching: Bool? = nil, mirrored: Int? = nil, settings: ChatSettings? = nil
     ) {
+        self.settings = settings
         self.id = id
         self.ok = ok
         self.code = code
@@ -124,6 +132,105 @@ package struct MoveResult: Codable, Sendable, Equatable {
 
     package static func refused(_ id: String, _ code: ResultCode, _ message: String) -> MoveResult {
         MoveResult(id: id, ok: false, code: code, message: message)
+    }
+}
+
+/// A chat's own settings, as every copy, duplicate, cut, move, send back and fork carries them,
+/// Mac to Mac, Mac to box and box to box. Each is optional: absent, the place it lands keeps its own,
+/// but for the Arsenal tier (absent is off) and the draft (absent is none).
+package struct ChatSettings: Codable, Sendable, Equatable {
+    package var modelId: String?
+    package var effort: String?
+    package var mode: String?
+    package var fast: Bool?
+    /// Codex's Plan switch (Claude's plan is a mode).
+    package var plan: Bool?
+    /// "Allow commands in Plan".
+    package var planAllow: Bool?
+    /// The chat's own auto-compact point: 0 for off; absent, none of its own.
+    package var autoCompact: Int?
+    /// A box's Claude chat's login ("main" for the default). A Mac's chats run on its one login.
+    package var login: String?
+    /// Its Arsenal tier while on (`LinkPolicy.arsenalTiers`).
+    package var arsenal: String?
+    /// The composer's draft: a move's and a cut's (a copy leaves it with its original).
+    package var draft: String?
+    /// When they last changed where they come from, ms since 1970: on a send back the newer wins.
+    package var at: Int64?
+
+    package init(
+        modelId: String? = nil, effort: String? = nil, mode: String? = nil, fast: Bool? = nil, plan: Bool? = nil, planAllow: Bool? = nil,
+        autoCompact: Int? = nil, login: String? = nil, arsenal: String? = nil, draft: String? = nil, at: Int64? = nil
+    ) {
+        self.modelId = modelId
+        self.effort = effort
+        self.mode = mode
+        self.fast = fast
+        self.plan = plan
+        self.planAllow = planAllow
+        self.autoCompact = autoCompact
+        self.login = login
+        self.arsenal = arsenal
+        self.draft = draft
+        self.at = at
+    }
+
+    /// The same without the draft (a copy's: the original keeps it).
+    package var withoutDraft: ChatSettings {
+        var copy = self
+        copy.draft = nil
+        return copy
+    }
+
+    /// What a link carries of them: an id that isn't plain, a point off the ring, a tier not
+    /// built and a draft over the link's limit are left out.
+    package var linkable: ChatSettings {
+        var kept = self
+        for path in [\ChatSettings.modelId, \.effort, \.mode, \.login] where kept[keyPath: path].map(LinkPolicy.plainID) == false {
+            kept[keyPath: path] = nil
+        }
+        if let point = kept.autoCompact, point != 0, !ContextStore.snapPoints.contains(point) { kept.autoCompact = nil }
+        if let tier = kept.arsenal, !LinkPolicy.arsenalTiers.contains(tier) { kept.arsenal = nil }
+        if let draft = kept.draft, draft.utf8.count > LinkPolicy.maxText { kept.draft = nil }
+        return kept
+    }
+
+    /// Only what a link carries (`linkable`).
+    package var plain: Bool { linkable == self }
+
+    /// The point as a chat takes it: nil for off; `.none`, none of its own.
+    package var point: Int?? { autoCompact.map { $0 == 0 ? nil : $0 } }
+
+    /// `tier` at most the highest of `allowed` at or below it (`LinkPolicy.arsenalTiers`, lowest
+    /// first); nil when none is.
+    package static func cap(_ tier: String?, to allowed: Set<String>) -> String? {
+        let tiers = LinkPolicy.arsenalTiers
+        guard let tier, let at = tiers.firstIndex(of: tier) else { return nil }
+        return tiers[...at].last { allowed.contains($0) }
+    }
+
+    /// A tier's name as Kore shows it ("Act unlimited").
+    package static func tierName(_ tier: String) -> String { ArsenalTier(rawValue: tier)?.title ?? tier }
+
+    package static func ms(_ date: Date) -> Int64 { Int64((date.timeIntervalSince1970 * 1000).rounded()) }
+}
+
+extension ChatSettings {
+    /// A live chat's, as its composer has them. `draft`: a move's and a cut's carry it. `login`:
+    /// a box chat's, as the box says it.
+    @MainActor package init(of chat: Chat, draft: Bool, login: String? = nil) {
+        let c = chat.controls
+        self.init(
+            modelId: c.modelId ?? chat.launchModel, effort: c.effort ?? chat.launchEffort, mode: c.mode,
+            fast: chat.launchFastMode ?? (c.fastKnown ? c.fastMode : nil), plan: chat.provider.planToggle != nil ? c.planMode : nil,
+            planAllow: c.planAllow, autoCompact: chat.ownsAutoCompact ? chat.context.autoCompactAt ?? 0 : nil, login: login,
+            arsenal: chat.arsenal?.rawValue, draft: draft ? Self.composer(chat) : nil, at: chat.settingsChangedAt.map(Self.ms))
+    }
+
+    /// The composer as one line of text: its command, then the draft.
+    @MainActor package static func composer(_ chat: Chat) -> String {
+        guard let command = chat.command else { return chat.draft }
+        return "/" + command.name + (chat.draft.isEmpty ? "" : " " + chat.draft)
     }
 }
 

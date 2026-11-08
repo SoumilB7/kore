@@ -44,6 +44,16 @@ package final class StreamLog {
     private var messageIds: Set<String> = []
     /// New items to send, or a log started again (`reset`).
     package var flushed: ((_ items: [StreamItem], _ reset: Bool) -> Void)?
+    /// The chat's session as the box keeps it: every log says it, for a client's wheel and
+    /// compaction (a resumed Claude session's CLI never says its id again).
+    package var session: @MainActor () -> String? = { nil }
+    /// The context's latest reading: a log started again carries it, window and all.
+    package var context: @MainActor () -> ContextUsage? = { nil }
+    /// The session the log says (its last `sessionIdentified`).
+    private var said: String?
+    /// The messages still queued when the box last stopped (a crash), dropped as the log is read:
+    /// each one's text, and the grant that sent it (nil: not a full grant's call).
+    var droppedOnLoad: ((_ dropped: [(text: String, by: String?)]) -> Void)?
 
     /// Past this, the next resumed history starts the log again.
     package static let cap = 16 * 1024 * 1024
@@ -107,6 +117,7 @@ package final class StreamLog {
         var log: String?
         var open: String?
         var close: Bool?
+        var by: String?
         var e: Kind?
         struct Kind: Decodable {
             var type: String?
@@ -114,8 +125,10 @@ package final class StreamLog {
             /// A started command's id (`commandStarted`'s own object; other events' `command` may
             /// be text, and never stops the line being read).
             var command: String?
+            /// A queued message's text.
+            var text: String?
 
-            private enum Keys: String, CodingKey { case type, id, command }
+            private enum Keys: String, CodingKey { case type, id, command, text }
             private struct Ref: Decodable { var id: String? }
 
             init(from decoder: any Decoder) throws {
@@ -123,6 +136,7 @@ package final class StreamLog {
                 type = try? c.decodeIfPresent(String.self, forKey: .type)
                 id = try? c.decodeIfPresent(String.self, forKey: .id)
                 command = type == "commandStarted" ? (try? c.decodeIfPresent(Ref.self, forKey: .command))?.id : nil
+                text = type == "messageQueued" ? try? c.decodeIfPresent(String.self, forKey: .text) : nil
             }
         }
     }
@@ -139,6 +153,9 @@ package final class StreamLog {
         var inHistory = false
         var turnOpen = false
         var commands: [String] = []
+        var queued: [(id: String, text: String, by: String?)] = []
+        // Something since its CLI last exited: the CLI that said it died with the box.
+        var cliSaid = false
         let decoder = JSONDecoder()
         var offset = 0
         for line in data.split(separator: 0x0A, omittingEmptySubsequences: false) {
@@ -151,6 +168,7 @@ package final class StreamLog {
                 if s % Self.indexEvery == 0 { offsets.append((s, offset)) }
             }
             if let e = peek.e, e.type == "userMessage" || e.type == "messageQueued", let message = e.id { messageIds.insert(message) }
+            if let e = peek.e, e.type == "sessionIdentified", let session = e.id { said = session }
             if peek.open != nil { inHistory = true }
             if peek.close == true { inHistory = false }
             if !inHistory, let type = peek.e?.type {
@@ -158,6 +176,11 @@ package final class StreamLog {
                 if type == "turnFinished" { turnOpen = false }
                 if type == "commandStarted", let command = peek.e?.command, !commands.contains(command) { commands.append(command) }
                 if type == "commandEnded", let command = peek.e?.id { commands.removeAll { $0 == command } }
+                if type == "messageQueued", let message = peek.e?.id { queued.append((message, peek.e?.text ?? "", peek.by)) }
+                if type == "queuedMessage" || type == "userMessage", let message = peek.e?.id { queued.removeAll { $0.id == message } }
+                cliSaid = type != "exited"
+            } else if peek.open != nil || peek.e != nil {
+                cliSaid = true
             }
         }
         if id.isEmpty { return restart(with: [], announce: false) }
@@ -168,6 +191,11 @@ package final class StreamLog {
         // Its commands went with the CLI too.
         let at = Date()
         for command in commands { write(StreamItem.items(.commandEnded(id: command, .ended, at: at), seq: &seq)) }
+        // Messages it hadn't taken: dropped, each back to whoever sent it.
+        for message in queued.reversed() { write(StreamItem.items(.queuedMessage(id: message.id, .dropped), seq: &seq)) }
+        // And the CLI with it: no client keeps a card it asked.
+        if cliSaid { write(StreamItem.items(.exited(status: 0), seq: &seq)) }
+        if !queued.isEmpty { droppedOnLoad?(queued.map { ($0.text, $0.by) }) }
     }
 
     package var isEmpty: Bool {
@@ -304,9 +332,32 @@ package final class StreamLog {
         pending = []
         var items: [StreamItem] = []
         for one in waiting { items += StreamItem.items(one.gathered, seq: &seq, by: one.by) }
+        items += identified(items)
         write(items)
         flushed?(items, false)
         if bytes > rotateAt, case .turnFinished? = waiting.last?.event { rotate() }
+    }
+
+    /// A client follows: a log kept from before it said the session gets it now. (An empty log
+    /// waits for the chat's history, which goes first.)
+    package func identify() {
+        load()
+        flush()
+        guard !isEmpty else { return }
+        let items = identified([])
+        guard !items.isEmpty else { return }
+        write(items)
+        flushed?(items, false)
+    }
+
+    /// The session after `items` when the log doesn't say it yet (or says another). Items that
+    /// say one are the CLI's own word: the chat's record takes it after them.
+    private func identified(_ items: [StreamItem]) -> [StreamItem] {
+        var says = false
+        for item in items { if case .sessionIdentified(let id)? = item.e { (said, says) = (id, true) } }
+        guard !says, let session = session(), session != said else { return [] }
+        said = session
+        return StreamItem.items(.sessionIdentified(session), seq: &seq)
     }
 
     /// The log again from its history so far, streamed pieces merged: clients take it as a rebuild.
@@ -342,8 +393,14 @@ package final class StreamLog {
         handle = nil
         id = UUID().uuidString.lowercased()
         first = seq + 1
+        said = nil
         var items: [StreamItem] = []
         for event in events { items += StreamItem.items(event, seq: &seq) }
+        // What the old log said of the context and the session goes on in the new one.
+        if !events.isEmpty {
+            if let usage = context(), usage.window != nil { items += StreamItem.items(.contextUsage(usage), seq: &seq) }
+            items += identified(items)
+        }
         noteMessages(items)
         var data = StreamWire.encode(Header(log: id)) + Data([0x0A])
         for item in items { data += StreamWire.encode(item) + Data([0x0A]) }
@@ -445,6 +502,7 @@ extension HostDaemon {
         followersChanged(hc)
         // Its CLI starts with the tier the Mac has for it (1.6), not again at its first message.
         if fresh, !hc.cliRunning { arsenalSaid(request.arsenal, hc) }
+        hc.stream.identify()
         client.catchUpStarts(hc.id, log: hc.stream.id)
         hc.chat?.automatic = false
         Task { [weak self, weak client] in
@@ -481,7 +539,9 @@ extension HostDaemon {
     func streamRow(_ hc: HostChat, _ event: ChatEvent) {
         switch event {
         case .userMessage(_, _, let id?), .messageQueued(let id, _, _):
-            hc.stream.add(event, by: hc.sentBy.removeValue(forKey: id))
+            let by = hc.sentBy.removeValue(forKey: id)
+            hc.noteRow(id, by: by)
+            hc.stream.add(event, by: by)
         default:
             break
         }
@@ -607,6 +667,9 @@ extension HostDaemon {
         case .setArsenal(let tier):
             arsenalSaid(tier, hc)
             return ok()
+        case .setPlanAllow(let on):
+            hc.setPlanAllow(on)
+            return ok()
         default: break
         }
         switch command {
@@ -655,10 +718,13 @@ extension HostDaemon {
             case .setMode(let mode):
                 try await backend.setMode(mode)
                 chat.controls.mode = mode
+                hc.stamp()
                 hc.noted(chat)
             case .setPlanMode(let on):
                 chat.controls.planMode = on
+                hc.setPlanMode(on)
                 await backend.setPlanMode(on)
+                hc.noted(chat)
             case .setModel(let model):
                 try await backend.setModel(model)
                 chat.controls.modelId = model
@@ -671,7 +737,7 @@ extension HostDaemon {
                 hc.setEffort(level)
             case .setFastMode(let on):
                 try await backend.setFastMode(on)
-                chat.launchFastMode = on
+                hc.setFast(on)
             case .rename(let title):
                 // Kept first: the chat's list shows it even when its CLI can't take it now.
                 let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -744,7 +810,7 @@ extension HostDaemon {
                 return fail("Remote control of a box's chat is turned on on the box.", .command)
             case .relaunch(let reason):
                 await backend.relaunch(reason: reason)
-            case .close, .keepRow, .setAutoCompact, .setDraft, .draft, .setArsenal:
+            case .close, .keepRow, .setAutoCompact, .setDraft, .draft, .setArsenal, .setPlanAllow:
                 break
             case .listModels:
                 var value = CallValue()

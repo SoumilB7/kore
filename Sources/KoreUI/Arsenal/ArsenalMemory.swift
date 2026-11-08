@@ -4,7 +4,8 @@ import src
 /// Each chat's Arsenal tier, kept across closing its tab or window and across Kore's restarts
 /// (the owner, 2026-11-15): by its CLI and session id, so it comes back with the chat. Dropped when
 /// the user turns it off (the chat's Off, Stop agent control, the switch off); the oldest give way
-/// past `limit`, as Kore deletes no chats. Box chats' tiers are their box's.
+/// past `limit`, as Kore deletes no chats. A box's chat is kept by its box and its id there, so the
+/// Mac and the box (which keeps its own, for the calls it answers while the Mac is away) agree.
 @MainActor
 package enum ArsenalMemory {
     package static var defaults: UserDefaults = .standard
@@ -12,8 +13,16 @@ package enum ArsenalMemory {
     /// Chats kept, newest last.
     static let limit = 300
 
-    /// `<cli>:<session>`; nil before the CLI has named the session.
-    static func key(_ chat: Chat) -> String? { chat.sessionId.map { chat.provider.id + ":" + $0 } }
+    /// `<cli>:<session>`, or `box:<alias>:<chat>` for a box's chat; nil before the CLI has named the
+    /// session (before the box has made the chat).
+    static func key(_ chat: Chat) -> String? {
+        if let box = chat.boxPlace { return box.chatId.map { key(box: box.connection.alias, chat: $0) } }
+        return chat.sessionId.map { key(cli: chat.provider.id, session: $0) }
+    }
+
+    static func key(box alias: String, chat id: String) -> String { "box:" + alias + ":" + id }
+
+    static func key(cli: String, session: String) -> String { cli + ":" + session }
 
     /// `[key, tier]` pairs, oldest first.
     private static var entries: [[String]] {

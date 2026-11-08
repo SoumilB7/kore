@@ -219,6 +219,33 @@ final class QuestionCardSingle: ChatStoryline {
     }
 }
 
+/// Skip, beside Submit, as the link's Skip: the question turned down unanswered, the card gone.
+final class QuestionCardSkip: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .approvals] }
+    static let sync = "Which settings should sync across Macs?"
+    static let skipped = "Skipped; going on without it."
+    override class var script: CLIScript {
+        let approval = Approval(
+            id: "q1", title: "", detail: nil, body: nil, canAlwaysAllow: false,
+            questions: [Approval.Question(id: sync, text: sync, options: [.init(label: "Appearance", description: "Theme and zoom")])])
+        return CLIScript(turns: [[.startTurn, .approval(approval, allow: Beat.answer("Got it."), deny: Beat.answer(skipped)), .finishTurn(.completed)]])
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("Ask me"),
+            WaitForElement(.id(card.part(.deny))),
+            Expect("Skip beside Submit") { _ in shown(card.part(.submit)) },
+            Press(.id(card.part(.deny))),
+            TurnFinished(1),
+            Expect("turned down, nothing answered, the card gone") { story in
+                try answers(story) == nil && !shown(card.part(.deny)) && !shown(card.part(.submit))
+            },
+            Expect.rows("the CLI's line after a skip") { $0.last?.text == Self.skipped },
+        ]
+    }
+}
+
 /// One-of holds one pick, Other included: Other typed into, then an option, leaves the option
 /// alone picked and Other closed; Other again brings its words back and clears the option; the
 /// answer is only the last pick. Each CLI's shape: Claude's question is its id, Codex's has its own.

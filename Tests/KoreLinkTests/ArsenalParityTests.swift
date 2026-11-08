@@ -103,8 +103,9 @@ extension AgentChannelTests {
             }
 
             /// The channel opened afresh (its limits new), the callers at `tier`, the chats they act on
-            /// readable.
+            /// readable and idle (a tier's `kore_send` leaves them working: the stand-in never ends a turn).
             func open(_ tier: AgentTier) {
+                for chat in [macTarget, boxTarget] { chat.status.setRunning(false) }
                 AgentGrants.stopAll()
                 ArsenalAsks.shared.reset()
                 AgentGrants.setEnabled(true)
@@ -231,6 +232,126 @@ extension AgentChannelTests {
             return out
         }
 
+        /// kore-host on its own, no Mac connected: a box with a caller and a chat it acts on, in a
+        /// folder named as the Mac's are.
+        @MainActor
+        final class BoxAlone {
+            let root: URL
+            let folder: URL
+            let host: HostDaemon
+            let caller: HostChat
+            let target: HostChat
+
+            init(_ cli: String) throws {
+                root = URL(fileURLWithPath: "/tmp/kpa-\(UUID().uuidString.prefix(6))")
+                folder = root.appendingPathComponent("app")
+                try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                let paths = HostPaths(environment: [
+                    "HOME": root.path, "XDG_STATE_HOME": root.appendingPathComponent("state").path,
+                    "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
+                ])
+                try HostConfig(folders: [folder.path]).save(paths.config)
+                host = HostDaemon(paths: paths)
+                // Before anything reads the box's accounts: the scratch home.
+                host.sessionEnv["HOME"] = root.path
+                host.pastSessions = { _, _ in [] }
+                host.services.backend = { _, _ in ParityStandIn() }
+                caller = try #require(host.newChat(folder: folder.path, provider: cli, modelId: nil))
+                target = try #require(host.newChat(folder: folder.path, provider: "claude", modelId: nil))
+            }
+
+            /// Limits new, the caller at `tier` (off: never given one), the chat it acts on readable and idle.
+            func open(_ tier: AgentTier) {
+                for hc in host.chats where hc !== caller { host.sleep(hc) }
+                (host.boxArsenal.commands, host.boxArsenal.sends, host.boxArsenal.news, host.boxArsenal.made) = ([:], [:], [:], [:])
+                host.arsenalSaid(tier == .off ? nil : tier.rawValue, caller)
+                host.arsenalSaid("watch", target)
+            }
+
+            /// Each call as the box answers it with no Mac: here, or that the Mac isn't connected.
+            func calls(_ tier: AgentTier) async -> [(here: Bool, said: Said)] {
+                let names: [(String, String)] = [
+                    (caller.id, "{caller}"), (target.id, "{target}"), (AgentRefs.short(caller.id), "{caller}"), (AgentRefs.short(target.id), "{target}"),
+                    (HostDaemon.shownFolder(folder.path), "{folder}"), ("-box", "-{side}"),
+                ]
+                let tokens = [
+                    "{target}": AgentRefs.short(target.id), "{own}": folder.path, "{mode}": HostMeta.modeID(caller), "{tier}": tier.rawValue, "{side}": "box",
+                ]
+                var out: [(Bool, Said)] = []
+                for call in ArsenalParityTests.calls {
+                    let args = ArsenalParityTests.filled(call.args, tokens)
+                    guard host.answersHere(caller, call.tool, args, mac: false) else {
+                        out.append((false, Said(ok: false, text: HostDaemon.notConnected)))
+                        continue
+                    }
+                    let result = ArsenalRules.result(await host.arsenalCall(caller, call.tool, args), id: "")
+                    out.append((true, ArsenalParityTests.said(result.ok, result.text, names)))
+                }
+                return out
+            }
+
+            func finish() {
+                host.stop()
+                try? FileManager.default.removeItem(at: root)
+            }
+        }
+
+        /// The "box alone" column: every call kore-host answers itself reads as the Mac's answer for
+        /// a box chat, at every tier; the rest (forks, opens, asks, files, tabs, chats it hasn't)
+        /// say the Mac isn't connected. Its own calls are most of the table.
+        @Test(arguments: ["claude", "codex"])
+        func theBoxAloneAnswersAsTheMac(_ cli: String) async throws {
+            let rig = try Rig(cli)
+            defer { rig.finish() }
+            let alone = try BoxAlone(cli)
+            defer { alone.finish() }
+            for tier in [AgentTier.off, .watch, .own, .drive, .device] {
+                rig.open(tier)
+                alone.open(tier)
+                let onMac = await macCalls(rig, tier)
+                let boxAlone = await alone.calls(tier)
+                #expect(onMac.count == Self.calls.count && boxAlone.count == Self.calls.count, "\(cli) \(tier)")
+                for (n, call) in Self.calls.enumerated() where n < min(onMac.count, boxAlone.count) {
+                    if boxAlone[n].here {
+                        #expect(onMac[n] == boxAlone[n].said, "\(cli) \(tier.rawValue) \(call.tool) \(call.args)")
+                    } else {
+                        #expect(boxAlone[n].said.text == HostDaemon.notConnected)
+                    }
+                }
+                let here = boxAlone.filter(\.here).count
+                #expect(tier < .drive || here >= 21, "\(cli) \(tier.rawValue): \(here) answered on the box")
+            }
+        }
+
+        /// The Mac keeps a box chat's tier as it keeps its own chats', by its box and its id there, and
+        /// brings it back when the tab comes back (Kore restarted), to say to the box with its first look.
+        @Test func theMacKeepsABoxChatsTierByItsBoxAndId() throws {
+            let rig = try Rig("claude")
+            defer { rig.finish() }
+            let kept = ArsenalMemory.defaults
+            ArsenalMemory.defaults = UserDefaults(suiteName: "arsenal-parity-box-memory")!
+            ArsenalMemory.clear()
+            let allowed = Arsenal.shared.allowed
+            defer {
+                Arsenal.shared.turnOff(rig.boxCaller)
+                ArsenalMemory.clear()
+                ArsenalMemory.defaults = kept
+                Arsenal.shared.setAllowed(allowed)
+            }
+            let key = try #require(ArsenalMemory.key(rig.boxCaller))
+            #expect(key == "box:\(rig.connection.alias):bc1")
+            Arsenal.shared.setAllowed(true)
+            Arsenal.shared.choose(.drive, rig.boxCaller)
+            #expect(ArsenalMemory.tier(key: key) == .drive)
+            // As after a restart: the tab's chat has none until it's restored.
+            rig.boxCaller.arsenal = nil
+            Arsenal.shared.restore(rig.boxCaller)
+            #expect(rig.boxCaller.arsenal == .drive)
+            // Off is kept off.
+            Arsenal.shared.turnOff(rig.boxCaller)
+            #expect(ArsenalMemory.tier(key: key) == nil)
+        }
+
         @Test func everyToolIsInTheTable() {
             #expect(Set(Self.calls.map(\.tool)) == Set(AgentTools.tools(box: true).map(\.name)))
             #expect(Set(Self.calls.map(\.tool)) == Set(AgentTools.tools().map(\.name)))
@@ -240,7 +361,7 @@ extension AgentChannelTests {
         func everyToolAtEveryTierAnswersAlike(_ cli: String) async throws {
             let rig = try Rig(cli)
             defer { rig.finish() }
-            for tier in [AgentTier.off, .watch, .own, .drive] {
+            for tier in [AgentTier.off, .watch, .own, .drive, .device] {
                 rig.open(tier)
                 let onMac = await macCalls(rig, tier)
                 let onBox = await boxCalls(rig, tier)
@@ -298,9 +419,9 @@ extension AgentChannelTests {
             #expect(AgentTools.answer((try JSONSerialization.jsonObject(with: whoami)) as? [String: Any] ?? [:], box: true).ok)
         }
 
-        /// What differs on purpose: a box chat opens chats on its box or the Mac (`place`), and reaches
-        /// up into the Mac's files only when the owner turned that on. Asks go both ways alike
-        /// (the owner, 2026-11-19).
+        /// What differs on purpose: a box chat opens chats on its box or the Mac (`place`). Asks go
+        /// both ways alike (the owner, 2026-11-19); files from another device, both ways, at Act
+        /// device only (the owner, 2026-11-20).
         @Test func whatABoxChatDoesDifferently() async throws {
             let rig = try Rig("claude")
             defer { rig.finish() }
@@ -327,9 +448,29 @@ extension AgentChannelTests {
             AgentGrants.set(.watch, chat: rig.macTarget.id.uuidString)
             let notDrive = await call("kore_ask", ["chat": .string(AgentReads.short(rig.macTarget.id.uuidString)), "text": .string("q")])
             #expect(!notDrive.ok && notDrive.text.hasPrefix("Not asked:") && notDrive.text.hasSuffix("isn't Act unlimited"), "\(notDrive.text)")
-            // Files from the Mac stay behind the owner's switch.
-            let fetched = await call("kore_fetch", ["path": .string("mac:" + rig.mac.folder.appendingPathComponent("notes.md").path)])
-            #expect(!fetched.ok && fetched.text == "Not fetched: a box can't reach into the Mac")
+            // A file from another device: refused at Act unlimited, box to Mac and Mac to box.
+            let notes = rig.mac.folder.appendingPathComponent("notes.md")
+            try Data("notes".utf8).write(to: notes)
+            let needs = "Not fetched: " + ArsenalFetch.Refusal.otherDevice.line
+            func fromBox(_ path: String) async throws -> AgentTools.Object {
+                let line = await channel.boxCall(chat: rig.macCaller.id.uuidString, "file.fetch", ["path": rig.connection.alias + ":" + path])
+                return (try JSONSerialization.jsonObject(with: line)) as? [String: Any] ?? [:]
+            }
+            let fetched = await call("kore_fetch", ["path": .string("mac:" + notes.path)])
+            #expect(!fetched.ok && fetched.text == needs, "\(fetched.text)")
+            let down = AgentTools.answer(try await fromBox("/home/me/app/notes.md"), box: false)
+            #expect(!down.ok && down.text == needs, "\(down.text)")
+            // At Act device both pass the tier to fetch's own rules (each file here fails one before
+            // any copy: this box isn't online to carry it; ArsenalFetchTests carries them).
+            AgentGrants.set(.device, chat: rig.boxCaller.id.uuidString)
+            AgentGrants.set(.device, chat: rig.macCaller.id.uuidString)
+            let missing = rig.mac.folder.appendingPathComponent("none.md").path
+            let up = await call("kore_fetch", ["path": .string("mac:" + missing)])
+            #expect(!up.ok && up.text == "Not fetched: \(missing) isn't there", "\(up.text)")
+            let downAtDevice = AgentTools.answer(try await fromBox("/etc/hosts"), box: false)
+            #expect(!downAtDevice.ok && downAtDevice.text.hasPrefix("Not fetched: /etc/hosts is outside"), "\(downAtDevice.text)")
+            AgentGrants.set(.drive, chat: rig.boxCaller.id.uuidString)
+            AgentGrants.set(.drive, chat: rig.macCaller.id.uuidString)
             // Into the other CLI: Import carries a history file on this Mac, so a box's chat forks into its own.
             let across = await call("kore_fork", ["chat": .string("."), "provider": .string("codex")])
             #expect(!across.ok && across.text.contains("forks into its own CLI only"))

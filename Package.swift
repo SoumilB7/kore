@@ -44,7 +44,7 @@ let package = Package(
         // over `src`. No UI and no Mac-only parts, so a host without the app can serve it.
         .target(
             name: "LinkProtocol",
-            dependencies: ["src", "KoreCore", "KoreTrust", .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux]))],
+            dependencies: ["src", "KoreCore", "KoreTrust", "AgentTools", .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux]))],
             swiftSettings: releaseForSize),
         // A Mac window's chats on a box (`kore-host` over SSH): the transport, the link client, the
         // local copy per chat, and the chat backend that runs a `Chat` through the link. No UI;

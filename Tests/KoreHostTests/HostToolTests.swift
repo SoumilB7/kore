@@ -1,3 +1,4 @@
+import AgentTools
 import Foundation
 import KoreCore
 import Testing
@@ -43,9 +44,9 @@ final class ToolStandIn: ChatBackend {
     func close() async { sink.finish() }
 }
 
-/// Link 1.6 on the box: the tier each message carries decides whether the chat's CLI gets the
-/// `kore_app` server, and each tool call goes from the chat's own CLI, by its secret, to a
-/// connected full grant and back. The box passes calls on; it never answers one itself.
+/// Link 1.6 on the box: every chat's CLI gets the `kore_app` server, and each tool call comes from
+/// the chat's own CLI, by its secret. A call about the box's own chats the box answers itself, by
+/// the tier the Mac last said (`HostArsenalTests`); the rest goes to a connected full grant and back.
 @Suite("kore-host, Arsenal", .serialized)
 @MainActor
 struct HostToolTests {
@@ -55,6 +56,7 @@ struct HostToolTests {
 
     func rig(_ made: Made) throws -> (HostRig, Grant, HostChat) {
         let rig = try HostRig()
+        rig.host.sessionEnv["HOME"] = rig.root.path
         try rig.host.start()
         rig.host.services.backend = { _, options in
             let backend = ToolStandIn(options)
@@ -139,10 +141,10 @@ struct HostToolTests {
     }
 
     /// A tool call from `kore-host mcp`, as its CLI's environment names the chat.
-    nonisolated func ask(_ tool: String, chat: String, pass: String, socket: String) async -> (ok: Bool, text: String) {
+    nonisolated func ask(_ tool: String, chat: String, pass: String, socket: String, args: [String: String] = ["chat": "."]) async -> (ok: Bool, text: String) {
         await Task.detached {
             let env = ["KORE_AGENT_SOCKET": socket, KoreReach.chatVariable: chat, "KORE_AGENT_PASS": pass]
-            let result = HostToolServer.call(tool, ["chat": "."], env)
+            let result = HostToolServer.call(tool, args, env)
             let text = ((result["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
             return (result["isError"] as? Bool == false, text)
         }.value
@@ -171,11 +173,16 @@ struct HostToolTests {
         #expect(ok && text == "{\"chats\":[]}")
 
         // A refusal comes back as the tool's error, in the Mac's words.
-        async let refused = ask("kore_send", chat: hc.id, pass: pass, socket: socket)
+        async let refused = ask("kore_wait", chat: hc.id, pass: pass, socket: socket, args: ["ask": "abcd1234"])
         try await until { calls(client).count == 2 }
-        client.send(BoxToolResult(id: calls(client)[1].id, ok: false, code: "tier", text: "This needs Arsenal's Act unlimited tier."))
+        client.send(BoxToolResult(id: calls(client)[1].id, ok: false, code: "no_chat", text: "This chat made no ask with that id."))
         let (refusedOK, refusedText) = await refused
-        #expect(!refusedOK && refusedText == "This needs Arsenal's Act unlimited tier.")
+        #expect(!refusedOK && refusedText == "This chat made no ask with that id.")
+
+        // Above the chat's tier: refused here, in the same words, and the Mac isn't asked.
+        let tier = await ask("kore_send", chat: hc.id, pass: pass, socket: socket, args: ["chat": ".", "text": "hi"])
+        #expect(!tier.ok && tier.text == AgentTools.tierLine("chat.send", has: "watch"))
+        #expect(calls(client).count == 2)
     }
 
     @Test func onlyTheChatsOwnSecretReachesTheMac() async throws {
@@ -215,16 +222,18 @@ struct HostToolTests {
         let ended = await cut
         #expect(!ended.ok && ended.text == HostDaemon.notConnected)
 
-        // None at all.
+        // None at all: what needs the Mac says so; the box's own chats are listed here.
         try await until { rig.host.fullClients.isEmpty }
-        let none = await ask("kore_list_chats", chat: hc.id, pass: pass, socket: socket)
+        let none = await ask("kore_wait", chat: hc.id, pass: pass, socket: socket, args: ["ask": "abcd1234"])
         #expect(!none.ok && none.text == HostDaemon.notConnected)
+        let listed = await ask("kore_list_chats", chat: hc.id, pass: pass, socket: socket)
+        #expect(listed.ok && listed.text.contains(hc.id), "\(listed.text)")
 
         // A grant that isn't full never carries a call.
         let act = try GrantStore(rig.paths.grants).allow("other", control: .act, socket: rig.paths.socket)
         let watcher = try await StreamClient(rig, grant: act)
         defer { watcher.close() }
-        let watching = await ask("kore_list_chats", chat: hc.id, pass: pass, socket: socket)
+        let watching = await ask("kore_wait", chat: hc.id, pass: pass, socket: socket, args: ["ask": "abcd1234"])
         #expect(!watching.ok && watching.text == HostDaemon.notConnected)
         #expect(calls(watcher).isEmpty)
     }

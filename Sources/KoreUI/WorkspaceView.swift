@@ -40,7 +40,7 @@ struct TabBar: View {
     let explorerDock: CGFloat?
     @Binding var historyOpen: Bool
     @Binding var clockFrame: CGRect
-    private let tabHeight: CGFloat = 30
+    private var tabHeight: CGFloat { Size.tab }
     /// Width the tabs got, with the active tab's name before them and `»N` after (`TabStrip`).
     @StateObject private var stripWidth = Local<CGFloat>(0)
     /// Only the count, fade and open list observe scrolling; the tab bar itself stays still.
@@ -718,8 +718,12 @@ struct TabStrip: Equatable {
     /// Where each tab and each chip starts.
     private let tabX: [CGFloat]
     private let chipX: [CGFloat]
+    /// What the asking tab takes past the others, and the most the strip takes (`cap`): read at
+    /// the zoom when it's made, so the arithmetic after needs no actor.
+    private let extra: CGFloat
+    let cap: CGFloat
 
-    init(count: Int, width: CGFloat, asking: Int? = nil, chips: [Chip] = []) {
+    @MainActor init(count: Int, width: CGFloat, asking: Int? = nil, chips: [Chip] = []) {
         let gap = Size.tabGap
         let n = CGFloat(max(count, 1))
         let asking = asking.flatMap { (0..<count).contains($0) ? $0 : nil }
@@ -779,13 +783,16 @@ struct TabStrip: Equatable {
         }
         self.tabX = tabX
         self.chipX = chipX
+        self.extra = extra
+        // Every tab at full size, and the chips with their names.
+        cap = CGFloat(count) * (Size.tabMaxWidth + gap) + (asking == nil ? 0 : Size.tabAsking - Size.tabMaxWidth)
+            + chips.reduce(0) { $0 + $1.named + gap }
     }
 
     /// Wide enough for names.
     var named: Bool { label == .name }
 
     var slot: CGFloat { tab + Size.tabGap }
-    private var extra: CGFloat { asking == nil ? 0 : max(0, Size.tabAsking - tab) }
     func width(_ index: Int) -> CGFloat { index == asking ? tab + extra : tab }
     func minX(_ index: Int) -> CGFloat {
         if tabX.indices.contains(index) { return tabX[index] }
@@ -828,12 +835,6 @@ struct TabStrip: Equatable {
         return Drop(place: before > from ? before - 1 : before, onto: nil)
     }
 
-    /// The most the strip takes: every tab at full size, and the chips with their names.
-    var cap: CGFloat {
-        CGFloat(count) * slotMax + (asking == nil ? 0 : Size.tabAsking - Size.tabMaxWidth)
-            + chips.reduce(0) { $0 + $1.named + Size.tabGap }
-    }
-    private var slotMax: CGFloat { Size.tabMaxWidth + Size.tabGap }
 
     /// The tabs wholly in view, `first` to `last`, and whether there's more past either edge.
     struct Shown: Equatable {
@@ -884,6 +885,7 @@ struct TabStrip: Equatable {
 
 /// What a tab keeps around its title, so the strip's widths say how much of a name shows: its
 /// mark, the room before and after it, and on a named tab whose × always shows, the ×'s.
+@MainActor
 enum TabTitle {
     /// Before the mark.
     static func lead(_ label: TabStrip.Label) -> CGFloat {

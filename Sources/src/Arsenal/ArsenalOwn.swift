@@ -1,5 +1,5 @@
 import Foundation
-import src
+import KoreCore
 
 /// What Own lets a chat's agent change on its own chat, through `kore` (`z-docs/agent-protocol.md`):
 /// its name, model, effort and fast mode, its mode only downwards, and a compaction. Each takes only
@@ -7,7 +7,7 @@ import src
 /// transcript, so the change is seen where it happened. Nothing here raises a mode.
 package struct ArsenalRefusal: Error, Sendable {
     package let message: String
-    init(_ message: String) { self.message = message }
+    package init(_ message: String) { self.message = message }
 }
 
 /// The choices Own has on a chat now.
@@ -41,7 +41,7 @@ extension Chat {
     /// read outside the folder), the start Arsenal gives a Codex chat it opens; Codex's Ask for
     /// approval, which runs commands in the workspace without asking; approving by itself;
     /// everything. Codex's modes sit on rungs of their own, so none is a step down to a freer one.
-    static func modeLevel(_ id: String) -> Int {
+    package static func modeLevel(_ id: String) -> Int {
         switch id {
         case "plan": 0
         case "default", "dontAsk": 1
@@ -54,13 +54,13 @@ extension Chat {
     }
 
     /// Bypass permissions, Full access, and any mode Kore doesn't know.
-    static let top = 6
+    package static let top = 6
 
     /// The mode that says what the CLI may do on its own. Codex's Plan switch changes how it works
     /// but restricts nothing (its sandbox and approvals stay the permissions'), so a Codex chat
     /// ranks by its permissions; Claude's Plan is a mode of its own. `unreviewed`: planning with
     /// "Allow commands in Plan" on, where Kore allows each permission itself.
-    var arsenalRank: (id: String, unreviewed: Bool) {
+    package var arsenalRank: (id: String, unreviewed: Bool) {
         let id = provider.planToggle == nil ? controls.activeMode.id : controls.permissionsMode.id
         return (id, controls.planning && controls.planAllow)
     }
@@ -73,7 +73,7 @@ extension Chat {
     /// Moved by another chat's agent (`caller`, Act unlimited), up or down: to any mode that leaves
     /// it no freer than the caller (the owner, 2026-11-15: "only when the chat is on the same
     /// level"; a chat in Edit automatically can't put another in Auto). Its own chat only lowers.
-    func arsenalMayMove(to id: String, under caller: Chat? = nil) -> Bool {
+    package func arsenalMayMove(to id: String, under caller: Chat? = nil) -> Bool {
         if let caller, caller !== self {
             let planning = id == "plan" || provider.planToggle?.id == id
             // A Codex chat ranks by its permissions: its Plan switch leaves them as they are.
@@ -119,6 +119,17 @@ extension Chat {
     /// and paragraph separators, and not a name another open chat has (`taken`): chats are named by
     /// their titles to `kore`, so one can't take another's.
     package func arsenalRename(_ title: String, taken: [String]) -> Result<String, ArsenalRefusal> {
+        switch Self.arsenalName(title, taken: taken) {
+        case .failure(let refusal): return .failure(refusal)
+        case .success(let clean):
+            rename(clean)
+            return .success("Renamed.")
+        }
+    }
+
+    /// The name a rename takes, or why not: the same rule on the Mac and on a box (whose chat may
+    /// have no live `Chat` to rename).
+    package static func arsenalName(_ title: String, taken: [String]) -> Result<String, ArsenalRefusal> {
         let dropped: Set<Unicode.GeneralCategory> = [.control, .format, .lineSeparator, .paragraphSeparator]
         let clean = String(String.UnicodeScalarView(title.unicodeScalars.filter { !dropped.contains($0.properties.generalCategory) }))
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -127,8 +138,7 @@ extension Chat {
         guard !taken.contains(where: { $0.caseInsensitiveCompare(clean) == .orderedSame }) else {
             return .failure(.init("Another open chat is named that."))
         }
-        rename(clean)
-        return .success("Renamed.")
+        return .success(clean)
     }
 
     /// `name`: a model's id or name, as the picker lists it.

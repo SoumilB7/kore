@@ -10,8 +10,9 @@ import Observation
 /// here dimmed, "On mybox", never "Signed out". What a box couldn't be told at once (its link
 /// dropped) is kept in a file and sent again until it's taken.
 ///
-/// It also finds one account held on two devices: each place's logins against this Mac's own by
-/// who they are (email, account id), never by a token. Kore reads a Claude login's Keychain item
+/// It also finds a moved login's copy left on both devices: each place's logins against this
+/// Mac's own by who they are (email, account id), never by a token, and only for a login Kore
+/// moved there. The same account signed in on two devices by itself is fine. Kore reads a Claude login's Keychain item
 /// only for a move the owner asked for here (Move, Move back, Keep): then the Keychain may ask.
 @MainActor @Observable
 package final class LoginMoves {
@@ -25,8 +26,8 @@ package final class LoginMoves {
 
     /// By "cli/login".
     private(set) var lines: [String: Line] = [:]
-    /// Logins also held on a box (the same account): by "cli/login", the box's key, and its
-    /// name for it there.
+    /// Logins Kore moved to a box whose copy also shows here: by "cli/login", the box's key, and
+    /// its name for it there.
     private(set) var incompatible: [String: String] = [:]
     @ObservationIgnored private var incompatibleLogin: [String: String] = [:]
 
@@ -298,14 +299,17 @@ package final class LoginMoves {
     }
 
     /// This Mac's logins of a CLI that the check compares: those not read signed out and not on
-    /// another device. Storylines and tests give their own.
+    /// another device. Storylines and tests give their own. Only one with a move record is
+    /// flagged (`check`).
     @ObservationIgnored package var held: @MainActor (String) -> [Held] = { cli in
         AccountStore.shared.logins(cli).filter { !$0.signedOut && $0.onBox == nil }.map { Held(id: $0.id, email: $0.email, file: LoginMoves.identityFile(cli, $0.id)) }
     }
 
     /// Compares each reachable place's logins with this Mac's by who they are (email, account
-    /// id): one account on both is flagged on its row. Nothing secret is read on either side:
-    /// never a token, never the Keychain. The key is a throwaway an older peer asks for.
+    /// id): a login Kore moved to that place whose copy still shows here is flagged on its row.
+    /// The same account signed in on both by itself isn't: each sign-in has its own tokens, and
+    /// only a copied one clashes. Nothing secret is read on either side: never a token, never
+    /// the Keychain. The key is a throwaway an older peer asks for.
     @discardableResult package func check() -> Task<Void, Never>? {
         let ready = places().filter { $0.unready == nil }
         guard !ready.isEmpty else { return nil }
@@ -316,10 +320,12 @@ package final class LoginMoves {
             var found: [String: String] = [:]
             var names: [String: String] = [:]
             for (cli, logins) in held {
-                let mine = await Task.detached(priority: .utility) { logins.map { ($0.id, Self.identity(cli, $0)) } }.value
+                let read = await Task.detached(priority: .utility) { logins.map { ($0.id, Self.identity(cli, $0)) } }.value
+                let mine = read.compactMap { login in CLIProfiles.movedTo(cli, email: login.1.email).map { (login.0, login.1, $0) } }
+                guard !mine.isEmpty else { continue }
                 for box in ready {
                     for print in await box.prints(cli, key) ?? [] {
-                        guard let login = mine.first(where: { $0.1.same(as: print.identity) }) else { continue }
+                        guard let login = mine.first(where: { $0.2 == box.key && $0.1.same(as: print.identity) }) else { continue }
                         found[Self.key(cli, login.0)] = box.key
                         names[Self.key(cli, login.0)] = print.login
                     }

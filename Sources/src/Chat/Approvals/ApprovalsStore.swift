@@ -25,7 +25,9 @@ package final class ApprovalsStore {
             // agent's ask, which can come or stay after the turn that started it.
             pending.removeAll { $0.held == nil && !$0.autoStop && $0.agent == .main }
         case .exited:
+            // Its CLI is gone: nothing it asked waits any more, nor its plan's offer.
             pending.removeAll()
+            offerImplementPlan = false
         case .replayed(let events):
             events.forEach(apply)
             // A past session's plan isn't on offer any more.

@@ -37,7 +37,7 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate, TerminalS
         self.environment = environment
         title = URL(fileURLWithPath: self.executable).lastPathComponent
         view = LocalProcessTerminalView(frame: CGRect(x: 0, y: 0, width: 760, height: 220),
-                                        font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular),
+                                        font: Self.font,
                                         options: TerminalOptions(scrollback: 5_000))
         super.init()
         if let draft {
@@ -128,6 +128,19 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate, TerminalS
         failure = "Couldn't start the shell. Open a new terminal to try again."
         ended = true
         startup = nil
+    }
+
+    /// The terminal's font at the window's zoom (`Zoom`): the same steps as the rest of the window.
+    static var font: NSFont { font(Zoom.shared.scale) }
+    nonisolated static func font(_ scale: CGFloat) -> NSFont {
+        NSFont.monospacedSystemFont(ofSize: Zoom.pt(Zoom.terminalBase, scale: scale), weight: .regular)
+    }
+
+    /// Takes the zoom's font when it changed: one cell resize (the shell gets its new size), never per frame.
+    static func follow(_ view: TerminalView, scale: CGFloat) {
+        let size = Zoom.pt(Zoom.terminalBase, scale: scale)
+        guard abs(view.font.pointSize - size) > 0.001 else { return }
+        view.font = font(scale)
     }
 
     static func style(_ view: TerminalView) {

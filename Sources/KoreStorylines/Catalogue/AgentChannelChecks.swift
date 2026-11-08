@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import LinkProtocol
 import KoreCore
 import KoreLink
 import KoreUI

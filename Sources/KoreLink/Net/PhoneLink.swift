@@ -8,8 +8,8 @@ import src
 
 /// One phone linked to this Mac over KoreNet (phase 18 step 5b): link 2.0's bodies, as the local
 /// link's companion gets them, under ask (`LinkAsk`). Its snapshot and transcripts come from the
-/// shared `LinkFeed` (attention only while it's in the background); raises and risky Allows take
-/// its fingerprint (`LinkRaiseGate`); a resume picks up from its cursors.
+/// shared `LinkFeed` (attention only while it's in the background); a card's Allow is a plain tap,
+/// raises take its fingerprint (`LinkRaiseGate`); a resume picks up from its cursors.
 @MainActor
 package final class PhoneLink {
     package let id: UUID
@@ -50,7 +50,7 @@ package final class PhoneLink {
         LinkMessage.Welcome(
             proto: LinkProto.version, epoch: LinkRun.epoch, host: .init(name: Host.current().localizedName ?? "Mac", koreVersion: LinkHost.version),
             providers: LinkSnapshot.providers(), policy: .init(sendMaxLevel: LinkPolicy.sendMaxLevel, control: .standard),
-            caps: ["tx", "attn", "blob", "commands", "control", "raise", "history", "diff"])
+            caps: ["tx", "attn", "blob", "commands", "control", "raise", "history", "diff", "group", "board"])
     }
 
     package var client: LinkFeed.Client { peer.client }
@@ -95,7 +95,7 @@ package final class PhoneLink {
             // Parked: only its own leaving or going is heard.
             if parked {
                 switch item {
-                case .leave, .link(.bye, _): break
+                case .leave, .link(.bye): break
                 default: continue
                 }
             }
@@ -106,10 +106,10 @@ package final class PhoneLink {
                 self.raise(raise)
             case .leave(let id):
                 return leave(id)
-            case .link(.bye, _):
+            case .link(.bye):
                 return end(LinkMessage.ByeReason.quit.rawValue)
-            case .link(let message, let proof):
-                link(message, proof: proof)
+            case .link(let message):
+                link(message)
             }
         }
     }
@@ -142,7 +142,7 @@ package final class PhoneLink {
         return nil
     }
 
-    private func link(_ message: LinkMessage, proof: LinkRaiseWire.Signed?) {
+    private func link(_ message: LinkMessage) {
         if case .logsChunk(let id, let offset, let total, let text) = message {
             logWaits.removeValue(forKey: id)?.resume(returning: (offset, total, text))
             return
@@ -152,16 +152,8 @@ package final class PhoneLink {
             peer.client.sink.send(.result(.init(id: id, ok: false, code: .deniedControl, message: LinkLogins.ownerOnly)))
             return
         }
-        if case .cmd(let id, let command) = message {
-            let chat = command.chatId.flatMap { LinkSnapshot.chatsByID()[$0] }
-            if let digest = LinkAsk.proofNeeded(command, chat.map(LinkSnapshot.facts)) {
-                guard approved(id: id, digest: digest, proof: proof) else { return }
-                // Signed: as the doorbell's companion would allow it.
-                peer.client.sink.send(.result(peer.perform(id, command)))
-                net.feed.poke()
-                return
-            }
-            if Self.creates(command) { NetAudit.line("create", ["device": self.id.uuidString.lowercased(), "kind": command.type]) }
+        if case .cmd(_, let command) = message, Self.creates(command) {
+            NetAudit.line("create", ["device": self.id.uuidString.lowercased(), "kind": command.type])
         }
         peer.received(message)
     }
@@ -173,22 +165,6 @@ package final class PhoneLink {
         case .control(let kind, _): kind == .chatNew || kind == .windowOpen || kind == .windowReopen
         default: false
         }
-    }
-
-    /// A risky card's Allow: its signature over `approve.<digest>`, or refused.
-    private func approved(id: String, digest: String, proof: LinkRaiseWire.Signed?) -> Bool {
-        let who = self.id.uuidString.lowercased()
-        guard let proof, proof.modeId == LinkRaiseWire.approveMode(digest) else {
-            client.sink.send(.result(.init(id: id, ok: false, code: .raiseMode, message: "Allowing this takes your fingerprint.")))
-            return false
-        }
-        if case .refused(let code, let message) = gate.verify(proof, raiseKey: record.raiseKey) {
-            NetAudit.line("risky", ["device": who, "ok": "0"])
-            client.sink.send(.result(.init(id: id, ok: false, code: code, message: message)))
-            return false
-        }
-        NetAudit.line("risky", ["device": who, "ok": "1"])
-        return true
     }
 
     // MARK: Raises

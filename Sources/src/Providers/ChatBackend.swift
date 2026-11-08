@@ -122,6 +122,10 @@ package protocol ChatBackend: AnyObject {
     /// The chat's auto-compact point changed (nil: off): a backend that keeps the chat elsewhere
     /// (a box) keeps it there too.
     func keepAutoCompact(_ point: Int?)
+    /// "Allow commands in Plan" lives where the chat runs (a box's chat): the switch is kept
+    /// there, and the chat there answers each permission, never this one.
+    var keepsPlanAllow: Bool { get }
+    func keepPlanAllow(_ on: Bool)
     func close() async
 }
 
@@ -283,6 +287,8 @@ extension ChatBackend {
 
     /// For a backend whose chat's settings are this Mac's.
     package func keepAutoCompact(_ point: Int?) {}
+    package var keepsPlanAllow: Bool { false }
+    package func keepPlanAllow(_ on: Bool) {}
 
     /// For a backend with no account to read.
     package func usage() async throws -> PlanReading { throw UsageUnavailable() }

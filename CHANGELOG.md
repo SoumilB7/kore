@@ -2,6 +2,40 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
+## [0.3.5] - 2026-11-21
+
+### Added
+- Arsenal has an Act device tier: a chat can fetch files from another of your devices.
+- A box answers its own chats' Arsenal calls, without the Mac; the tier is kept on both sides.
+- Phone: create a folder on a box from New → Window, open History from +, upload files to box
+  chats, and see their images, diffs and earlier messages.
+- Phone: select part of a message, answer, code block or table cell; Message… opens the menu.
+- ⌘+ and ⌘− scale the whole window, file explorer included.
+- `kore send` reaches a closed chat in its folder: it reopens the chat, then sends.
+
+### Changed
+- Allowing a command on the phone is a plain tap; the fingerprint is only for raising a mode
+  or an Arsenal tier.
+- Older releases stay on GitHub when a new one is published.
+- The same action has the same words on the Mac, the box and the phone.
+- Copies, moves and forks keep the chat's settings: model, effort, mode, fast, plan, auto-compact
+  point, login and Arsenal tier; a move takes the draft too.
+
+### Fixed
+- Auto asks far less often. A script a chat only writes (heredoc text) no longer counts, and a
+  removal whose path the same command sets, or that sits under `$HOME` or `$TMPDIR`, is judged as
+  the path it is. Your home folder, system paths and unknown variables still ask.
+- Queued messages are sent in the order you queued them.
+- "On mybox" shows only for a login Kore actually moved there.
+- Box chats show the context meter, copied ones too.
+- Box chats keep model, effort, mode, plan and fast mode in step on every device, through
+  restarts; queued messages come back to you when a box chat closes or the box restarts, and
+  stale cards clear.
+- Slash commands work in a box chat whose CLI is asleep.
+- Box cards follow Auto's asks as the Mac's do.
+- The phone follows new output to the end, with ↓ New when you've scrolled up.
+- The phone shows the reason when something is refused, and no Group or Board in box windows.
+
 ## [0.3.4] - 2026-11-20
 
 ### Changed

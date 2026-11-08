@@ -10,6 +10,10 @@ import src
 package final class Arsenal {
     package static let shared = Arsenal()
 
+    private init() {
+        Chat.heldLetIn = { chat, by, messages in UILog.event("arsenal-held-let-in", ["chat": chat, "by": by, "messages": "\(messages)"]) }
+    }
+
     /// The switch "Let chats use Arsenal". Off: no chat can have it and no button shows.
     package private(set) var allowed = false
     /// Some chat has it on.
@@ -124,7 +128,7 @@ package final class Arsenal {
     /// switch is on and it can have it now. A Codex chat whose mode isn't Full access yet waits for it.
     package func restore(_ chat: Chat) {
         chat.arsenalWaiting = false
-        guard !chat.services.onBox, !chat.arsenalByAgent, chat.arsenal == nil, let tier = ArsenalMemory.tier(chat), tier.built, allowed else { return }
+        guard !chat.arsenalByAgent, chat.arsenal == nil, let tier = ArsenalMemory.tier(chat), tier.built, allowed else { return }
         chat.arsenalKept = ArsenalMemory.key(chat)
         guard Self.unavailable(chat) == nil else {
             chat.arsenalWaiting = true
@@ -139,10 +143,8 @@ package final class Arsenal {
         if chat.arsenal != nil { Self.keep(chat) } else { restore(chat) }
     }
 
-    /// Kept for the next time the chat comes back; a box's chat is its box's.
-    private static func keep(_ chat: Chat) {
-        if !chat.services.onBox { ArsenalMemory.save(chat) }
-    }
+    /// Kept for the next time the chat comes back (a box's chat by its box and id there).
+    private static func keep(_ chat: Chat) { ArsenalMemory.save(chat) }
 
     func closed(_ chat: Chat) {
         chats.remove(chat)

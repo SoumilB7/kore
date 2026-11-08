@@ -73,5 +73,15 @@ package enum BoxTools {
     }
 
     /// The tier ids the box takes in `ChatCall.arsenal`.
-    package static let tiers: Set<String> = ["watch", "own", "drive"]
+    package static let tiers: Set<String> = ["watch", "own", "drive", "device"]
+
+    /// In a box's welcome: it takes `device` (Act device, the owner, 2026-11-20). An older box
+    /// keeps only the tiers it knows, so it's told `drive`: the Mac decides every call, and a
+    /// fetch from another device is the Mac's to refuse.
+    package static let deviceCap = "arsenalDevice"
+
+    /// The tier as said to a box, by its welcome's caps.
+    package static func said(_ tier: String?, caps: [String]) -> String? {
+        tier == "device" && !caps.contains(deviceCap) ? "drive" : tier
+    }
 }

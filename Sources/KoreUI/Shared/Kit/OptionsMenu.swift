@@ -438,10 +438,10 @@ struct OptionMenuButton<Label: View>: View {
 
 extension Layout {
     enum Options {
-        static let width: CGFloat = 280
-        static let row: CGFloat = 28
+        @MainActor static var width: CGFloat { Zoom.pt(280) }
+        @MainActor static var row: CGFloat { Zoom.pt(28) }
         /// A right-click menu's row: compact, so a folder's whole menu fits without scrolling.
-        static let menuRow: CGFloat = 22
+        @MainActor static var menuRow: CGFloat { Zoom.pt(22) }
     }
 }
 extension StoryID {

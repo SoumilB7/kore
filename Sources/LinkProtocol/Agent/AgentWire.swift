@@ -14,7 +14,7 @@ package enum AgentProto {
 /// A chat's Kore access, lowest first. Each adds to the one before (`kore-access.html`); step 1
 /// serves Watch's reads, and the higher tiers hold the same reads until their commands exist.
 package enum AgentTier: String, Codable, Sendable, CaseIterable, Comparable {
-    case off, watch, own, drive, full
+    case off, watch, own, drive, device, full
 
     package static func < (a: Self, b: Self) -> Bool { a.rank < b.rank }
     private var rank: Int { Self.allCases.firstIndex(of: self) ?? 0 }
@@ -24,6 +24,11 @@ package enum AgentTier: String, Codable, Sendable, CaseIterable, Comparable {
 package struct AgentCommand: Sendable, Equatable {
     package let name: String
     package let tier: AgentTier
+
+    package init(name: String, tier: AgentTier) {
+        self.name = name
+        self.tier = tier
+    }
 
     package static let whoami = Self(name: "agent.whoami", tier: .watch)
     package static let caps = Self(name: "agent.caps", tier: .watch)
@@ -197,6 +202,12 @@ package struct AgentWelcome: Encodable, Sendable {
     package var caller: AgentCallerInfo
     package var tier: AgentTier
     package var commands: [String]
+
+    package init(caller: AgentCallerInfo, tier: AgentTier, commands: [String]) {
+        self.caller = caller
+        self.tier = tier
+        self.commands = commands
+    }
 }
 
 package struct AgentCallerInfo: Codable, Sendable, Equatable {
@@ -205,12 +216,24 @@ package struct AgentCallerInfo: Codable, Sendable, Equatable {
     package var chat: String?
     package var short: String?
     package var title: String?
+
+    package init(`class`: String, chat: String? = nil, short: String? = nil, title: String? = nil) {
+        self.`class` = `class`
+        self.chat = chat
+        self.short = short
+        self.title = title
+    }
 }
 
 package struct AgentBye: Encodable, Sendable {
     package var type = "bye"
     package var code: AgentCode
     package var message: String
+
+    package init(code: AgentCode, message: String) {
+        self.code = code
+        self.message = message
+    }
 }
 
 package struct AgentResult<Data: Encodable & Sendable>: Encodable, Sendable {
@@ -220,6 +243,14 @@ package struct AgentResult<Data: Encodable & Sendable>: Encodable, Sendable {
     package var data: Data?
     package var code: AgentCode?
     package var message: String?
+
+    package init(id: String, ok: Bool, data: Data? = nil, code: AgentCode? = nil, message: String? = nil) {
+        self.id = id
+        self.ok = ok
+        self.data = data
+        self.code = code
+        self.message = message
+    }
 }
 
 package struct AgentEvent: Encodable, Sendable {
@@ -231,10 +262,20 @@ package struct AgentEvent: Encodable, Sendable {
     package var event: String
     package var row: AgentRow?
     package var state: String?
+
+    package init(id: String, chat: String, event: String, row: AgentRow? = nil, state: String? = nil) {
+        self.id = id
+        self.chat = chat
+        self.event = event
+        self.row = row
+        self.state = state
+    }
 }
 
 /// Nothing to say beyond `ok`.
-package struct AgentEmpty: Encodable, Sendable {}
+package struct AgentEmpty: Encodable, Sendable {
+    package init() {}
+}
 
 // MARK: Values
 
@@ -242,11 +283,21 @@ package struct AgentWhoami: Encodable, Sendable {
     package var caller: AgentCallerInfo
     package var tier: AgentTier
     package var proto = AgentProto.version
+
+    package init(caller: AgentCallerInfo, tier: AgentTier) {
+        self.caller = caller
+        self.tier = tier
+    }
 }
 
 package struct AgentCaps: Encodable, Sendable {
     package var tier: AgentTier
     package var commands: [String]
+
+    package init(tier: AgentTier, commands: [String]) {
+        self.tier = tier
+        self.commands = commands
+    }
 }
 
 package struct AgentChat: Encodable, Sendable, Equatable {
@@ -267,6 +318,23 @@ package struct AgentChat: Encodable, Sendable, Equatable {
     package var cards: Int
     /// The caller's own chat.
     package var own: Bool?
+
+    package init(id: String, short: String, title: String, provider: String, folder: String, window: String, state: String, mode: String, modeLabel: String? = nil, planOn: Bool? = nil, model: String? = nil, queued: Int, cards: Int, own: Bool? = nil) {
+        self.id = id
+        self.short = short
+        self.title = title
+        self.provider = provider
+        self.folder = folder
+        self.window = window
+        self.state = state
+        self.mode = mode
+        self.modeLabel = modeLabel
+        self.planOn = planOn
+        self.model = model
+        self.queued = queued
+        self.cards = cards
+        self.own = own
+    }
 }
 
 package struct AgentChatDetail: Encodable, Sendable {
@@ -281,6 +349,21 @@ package struct AgentChatDetail: Encodable, Sendable {
         package var used: Int
         package var window: Int?
         package var pct: Int?
+
+        package init(used: Int, window: Int? = nil, pct: Int? = nil) {
+            self.used = used
+            self.window = window
+            self.pct = pct
+        }
+    }
+
+    package init(chat: AgentChat, session: String? = nil, effort: String? = nil, context: Context? = nil, rows: Int, pending: [AgentCard]) {
+        self.chat = chat
+        self.session = session
+        self.effort = effort
+        self.context = context
+        self.rows = rows
+        self.pending = pending
     }
 }
 
@@ -304,6 +387,27 @@ package struct AgentRow: Encodable, Sendable, Equatable {
         package var path: String?
         package var input: String?
         package var result: String?
+
+        package init(name: String, summary: String? = nil, path: String? = nil, input: String? = nil, result: String? = nil) {
+            self.name = name
+            self.summary = summary
+            self.path = path
+            self.input = input
+            self.result = result
+        }
+    }
+
+    package init(id: String, kind: String, turn: String? = nil, text: String? = nil, textLen: Int? = nil, tool: Tool? = nil, agent: String? = nil, done: Bool, error: Bool? = nil, stopped: Bool? = nil) {
+        self.id = id
+        self.kind = kind
+        self.turn = turn
+        self.text = text
+        self.textLen = textLen
+        self.tool = tool
+        self.agent = agent
+        self.done = done
+        self.error = error
+        self.stopped = stopped
     }
 }
 
@@ -312,6 +416,12 @@ package struct AgentRows: Encodable, Sendable {
     package var rows: [AgentRow]
     /// Rows before the first one here.
     package var more: Bool
+
+    package init(chat: String, rows: [AgentRow], more: Bool) {
+        self.chat = chat
+        self.rows = rows
+        self.more = more
+    }
 }
 
 package struct AgentCard: Encodable, Sendable, Equatable {
@@ -329,15 +439,40 @@ package struct AgentCard: Encodable, Sendable, Equatable {
     package struct Question: Encodable, Sendable, Equatable {
         package var text: String
         package var options: [String]
+
+        package init(text: String, options: [String]) {
+            self.text = text
+            self.options = options
+        }
+    }
+
+    package init(chat: String, chatShort: String, chatTitle: String, id: String, kind: String, title: String, detail: String? = nil, body: String? = nil, questions: [Question]? = nil) {
+        self.chat = chat
+        self.chatShort = chatShort
+        self.chatTitle = chatTitle
+        self.id = id
+        self.kind = kind
+        self.title = title
+        self.detail = detail
+        self.body = body
+        self.questions = questions
     }
 }
 
 package struct AgentCards: Encodable, Sendable {
     package var cards: [AgentCard]
+
+    package init(cards: [AgentCard]) {
+        self.cards = cards
+    }
 }
 
 package struct AgentChats: Encodable, Sendable {
     package var chats: [AgentChat]
+
+    package init(chats: [AgentChat]) {
+        self.chats = chats
+    }
 }
 
 package struct AgentSession: Encodable, Sendable {
@@ -349,12 +484,27 @@ package struct AgentSession: Encodable, Sendable {
     package var archived: Bool
     /// Open in a tab now.
     package var open: Bool
+
+    package init(id: String, provider: String, title: String, updated: String, archived: Bool, open: Bool) {
+        self.id = id
+        self.provider = provider
+        self.title = title
+        self.updated = updated
+        self.archived = archived
+        self.open = open
+    }
 }
 
 package struct AgentHistory: Encodable, Sendable {
     package var folder: String
     package var sessions: [AgentSession]
     package var more: Bool
+
+    package init(folder: String, sessions: [AgentSession], more: Bool) {
+        self.folder = folder
+        self.sessions = sessions
+        self.more = more
+    }
 }
 
 /// What Own may set on a chat now.
@@ -363,6 +513,12 @@ package struct AgentOptions: Encodable, Sendable {
         package var id: String
         package var name: String
         package var efforts: [String]
+
+        package init(id: String, name: String, efforts: [String]) {
+            self.id = id
+            self.name = name
+            self.efforts = efforts
+        }
     }
 
     package struct Mode: Encodable, Sendable {
@@ -370,6 +526,12 @@ package struct AgentOptions: Encodable, Sendable {
         package var label: String
         /// At or below the chat's mode now.
         package var allowed: Bool
+
+        package init(id: String, label: String, allowed: Bool) {
+            self.id = id
+            self.label = label
+            self.allowed = allowed
+        }
     }
 
     package var chat: String
@@ -379,6 +541,16 @@ package struct AgentOptions: Encodable, Sendable {
     package var modes: [Mode]
     package var mode: String
     package var fast: Bool?
+
+    package init(chat: String, models: [Model], model: String? = nil, effort: String? = nil, modes: [Mode], mode: String, fast: Bool? = nil) {
+        self.chat = chat
+        self.models = models
+        self.model = model
+        self.effort = effort
+        self.modes = modes
+        self.mode = mode
+        self.fast = fast
+    }
 }
 
 /// What a change did, in a line.
@@ -390,6 +562,14 @@ package struct AgentWaited: Encodable, Sendable {
     package var answer: String?
     package var cards: Int
     package var timedOut: Bool
+
+    package init(chat: String, state: String, answer: String? = nil, cards: Int, timedOut: Bool) {
+        self.chat = chat
+        self.state = state
+        self.answer = answer
+        self.cards = cards
+        self.timedOut = timedOut
+    }
 }
 
 /// `chat.ask`: the ask's id, for `chat.wait`, and the chat asked.
@@ -397,6 +577,12 @@ package struct AgentAskSent: Encodable, Sendable {
     package var chat: String
     package var ask: String
     package var message: String
+
+    package init(chat: String, ask: String, message: String) {
+        self.chat = chat
+        self.ask = ask
+        self.message = message
+    }
 }
 
 /// `chat.wait` on an ask: `answered`, `waiting` (timed out), or `expired`, with the answer and
@@ -407,12 +593,25 @@ package struct AgentAskWaited: Encodable, Sendable {
     package var answer: String?
     package var file: String?
     package var timedOut: Bool
+
+    package init(ask: String, state: String, answer: String? = nil, file: String? = nil, timedOut: Bool) {
+        self.ask = ask
+        self.state = state
+        self.answer = answer
+        self.file = file
+        self.timedOut = timedOut
+    }
 }
 
 /// `file.fetch`: where the copy landed.
 package struct AgentFetched: Encodable, Sendable {
     package var file: String
     package var message: String
+
+    package init(file: String, message: String) {
+        self.file = file
+        self.message = message
+    }
 }
 
 package struct AgentDone: Encodable, Sendable {
@@ -420,4 +619,10 @@ package struct AgentDone: Encodable, Sendable {
     package var message: String
     /// `chat.new`: the new chat's short id, for the next command.
     package var short: String? = nil
+
+    package init(chat: String, message: String, short: String? = nil) {
+        self.chat = chat
+        self.message = message
+        self.short = short
+    }
 }

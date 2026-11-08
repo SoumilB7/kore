@@ -243,13 +243,13 @@ enum ChatMoving {
 
     /// After a move here: the pair's Mac folder's window, opened or in front, the chat in it.
     static func land(_ brought: ChatMoves.Brought) {
-        land(brought.moved, title: brought.title, modelId: brought.modelId, effort: brought.effort, mode: brought.mode)
+        land(brought.moved, title: brought.title, settings: brought.settings, whole: brought.whole)
     }
 
-    static func land(_ moved: MovedChat, title: String?, modelId: String?, effort: String?, mode: String?) {
+    static func land(_ moved: MovedChat, title: String?, settings: ChatSettings, whole: Bool) {
         guard let provider = Registry.provider(moved.provider) else { return }
         let session = SessionSummary(id: moved.session, agent: provider.historyAgent, title: title ?? moved.title ?? "", updated: .now)
-        let landing = ChatLanding(session: session, alias: moved.alias, modelId: modelId, effort: effort, mode: mode)
+        let landing = ChatLanding(session: session, alias: moved.alias, settings: settings, whole: whole)
         let folder = AppModel.canonical(URL(fileURLWithPath: moved.macFolder))
         if let workspace = Workspace.local(folder) {
             workspace.land(landing)
@@ -304,7 +304,9 @@ enum ChatMoving {
                 // Its CLI here ends first: the tab closes (the session stays in the folder's history).
                 let shown = Workspace.localTab(session: moved.session)
                 let chat = shown?.1.chat
-                let settings = (title: chat?.title ?? moved.title, model: chat?.controls.modelId, effort: chat?.controls.effort, mode: chat?.controls.mode)
+                // All of its settings go with it, its draft too.
+                let title = chat?.title ?? moved.title
+                let carried = chat.map { ChatSettings(of: $0, draft: true) } ?? ChatPasting.kept(provider: moved.provider, session: moved.session, folder: moved.macFolder)
                 if let (window, tab) = shown {
                     chat?.stop()
                     window.close(tab, remember: false)
@@ -312,8 +314,7 @@ enum ChatMoving {
                     try? await Task.sleep(for: .milliseconds(300))
                 }
                 let mirrored = ChatMirrors.shared.count(moved)
-                let result = await moves.sendBack(
-                    moved, title: settings.title, modelId: settings.model, effort: settings.effort, mode: settings.mode, mirrored: mirrored)
+                let result = await moves.sendBack(moved, title: title, settings: carried, mirrored: mirrored)
                 switch result {
                 case .failure(var failure):
                     // The box holds that session for a chat of its own now: the copy stays here.
@@ -322,7 +323,7 @@ enum ChatMoving {
                     if let window = shown?.0 ?? Workspace.local(URL(fileURLWithPath: moved.macFolder)), shown != nil,
                         let provider = Registry.provider(moved.provider)
                     {
-                        window.open(SessionSummary(id: moved.session, agent: provider.historyAgent, title: settings.title ?? "", updated: .now))
+                        window.open(SessionSummary(id: moved.session, agent: provider.historyAgent, title: title ?? "", updated: .now))
                     }
                     sheet.fail(failure.line)
                 case .success(let back):
@@ -331,6 +332,8 @@ enum ChatMoving {
                         places.leaveNote(moved.alias, back.chatId, "Came back as a new chat · \(NodeNames.name(moved.alias))'s copy had changed")
                     }
                     sheet.onClose()
+                    // Kept for its tab before the box window shows it.
+                    places.carried(alias: moved.alias, chatId: back.chatId, tier: back.settings.arsenal, whole: true, notes: back.notes)
                     returned(alias: moved.alias, boxFolder: moved.boxFolder, chatId: back.chatId)
                 }
             }

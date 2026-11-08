@@ -377,7 +377,7 @@ extension HostConnection: BoxFileSource {
     /// The box's words, or what's wrong in Kore's: a box from before 1.7 doesn't know the command.
     private func refusal(_ result: FilesResult, copying: Bool = false) -> HostRefusal {
         if result.ok { return HostRefusal(message: copying ? "\(NodeNames.name(alias)) needs an update to copy files" : "\(NodeNames.name(alias)) sent nothing") }
-        if result.code == .invalid, ["Unknown command.", "Not taken here."].contains(result.message) {
+        if result.code == .invalid, [LinkPolicy.unknownCommand, LinkPolicy.unknownBefore, LinkPolicy.notTaken, LinkPolicy.notTakenBefore].contains(result.message) {
             return HostRefusal(message: "\(NodeNames.name(alias)) needs an update to \(copying ? "copy" : "show") files")
         }
         if result.code == .deniedControl { return HostRefusal(message: "Files need a grant with full control on \(NodeNames.name(alias))") }

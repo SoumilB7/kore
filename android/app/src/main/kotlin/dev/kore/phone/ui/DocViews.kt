@@ -18,7 +18,8 @@ import kotlinx.serialization.json.JsonObject
 /**
  * The Mac's render tree as real views: paragraphs read at 15sp with room between lines, code and
  * tables scroll sideways in their own box instead of wrapping into mush, and lists keep their
- * indent. No markdown parser on the phone; Kore sends the tree.
+ * indent. No markdown parser on the phone; Kore sends the tree. Its text, a table's cells too,
+ * picks (`TextPick`).
  */
 object DocViews {
     private const val BODY = 15f
@@ -66,7 +67,7 @@ object DocViews {
         textSize = BODY
         setTextColor(color)
         setLineSpacing(0f, LINE)
-        setTextIsSelectable(true)
+        picks()
     }
 
     /** A fenced block (spec §5): the well, radius 12, a hair edge, Mono, scrolling sideways so lines never wrap. */
@@ -82,7 +83,7 @@ object DocViews {
                 type(Type.Mono)
                 setTextColor(K.text)
                 setHorizontallyScrolling(true)
-                setTextIsSelectable(true)
+                picks()
             })
         })
     }
@@ -171,6 +172,7 @@ object DocViews {
             setTextColor(if (bold) K.text else K.dim)
             if (bold) setTypeface(typeface, Typeface.BOLD)
             setPadding(pad, context.dp(7), pad, context.dp(7))
+            picks()
         }
 
         private fun grid(widths: List<Int>) {
@@ -210,6 +212,7 @@ object DocViews {
                         text = row.firstOrNull() ?: ""
                         type(Type.BodyMedium)
                         setTextColor(Tone.text)
+                        picks()
                     })
                     for (c in 1 until columns()) {
                         val value = row.getOrNull(c)?.takeIf { it.isNotEmpty() } ?: continue
@@ -227,6 +230,7 @@ object DocViews {
                                 text = value
                                 textSize = CELL_SP
                                 setTextColor(Tone.text)
+                                picks()
                             }, if (above) LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
                             else LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
                         })

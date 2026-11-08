@@ -44,7 +44,7 @@ private struct TerminalPanelView: View {
             HStack(spacing: 0) {
                 if let active = panel.active {
                     VStack(alignment: .leading, spacing: 0) {
-                        TerminalHost(entry: active, panel: panel)
+                        TerminalHost(entry: active, panel: panel, zoom: Zoom.shared.scale)
                             .storyMark(StoryID.Terminal.output)
                         if let failure = active.session?.failure {
                             Text(failure).font(Chrome.label).foregroundStyle(Theme.warning).padding(Space.sm)
@@ -253,10 +253,13 @@ private struct TerminalSash: View {
 private struct TerminalHost: NSViewRepresentable {
     let entry: TerminalEntry
     let panel: TerminalPanel
+    /// The window's zoom: a change sets the shell's font once (`TerminalShell.follow`).
+    let zoom: CGFloat
 
     func makeNSView(context: Context) -> Container { Container() }
     func updateNSView(_ host: Container, context: Context) {
         let serial = panel.focusSerial
+        TerminalShell.follow(entry.view, scale: zoom)
         // Read when the focus is about to be taken, not as of this update: a rename started since
         // (its field holding the typing) keeps it.
         host.install(entry, focus: serial, allowsFocus: { [weak panel] in panel?.renaming == nil }) { panel.appliedFocus(serial) }
