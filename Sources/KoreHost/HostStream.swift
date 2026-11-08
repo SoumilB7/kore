@@ -358,8 +358,14 @@ extension HostDaemon {
         }
         hc.calling[key] = [client]
         let by = client.grant?.name
+        // 1.6: a message says the chat's Arsenal tier on the Mac, and any note the agent is owed.
+        var note: String?
+        if case .send = call.command {
+            arsenalSaid(call.arsenal, hc)
+            note = call.note.flatMap { KoreReach.isNote($0) && $0.count <= 400 ? $0 : nil }
+        }
         Task {
-            var result = await perform(call.command, hc, by: by)
+            var result = await perform(call.command, hc, by: by, note: note)
             result.id = call.id
             // An answer stays under one frame: its long text or its oldest events give way.
             let bytes = StreamWire.encode(Self.fitted(result))
@@ -402,7 +408,7 @@ extension HostDaemon {
 
     /// Runs a call on the chat's own backend, or on the chat where the box's chat keeps state of
     /// it too (a message, an answer, a mode, a rollback).
-    private func perform(_ command: ChatCommand, _ hc: HostChat, by grant: String?) async -> ChatCallResult {
+    private func perform(_ command: ChatCommand, _ hc: HostChat, by grant: String?, note: String? = nil) async -> ChatCallResult {
         func fail(_ message: String, _ code: ResultCode? = nil) -> ChatCallResult { ChatCallResult(id: "", ok: false, code: code, message: message) }
         func ok(_ value: CallValue? = nil) -> ChatCallResult { ChatCallResult(id: "", ok: true, value: value) }
         if case .close = command {
@@ -437,6 +443,7 @@ extension HostDaemon {
                     urls.append(url)
                 }
                 if let id { hc.sentBy[id] = grant }
+                if let note { backend.noteNextTurn(note) }
                 let sent = await withCheckedContinuation { done in
                     chat.sendForwarded(text, files: urls, queued: queued, id: id) { done.resume(returning: $0) }
                 }

@@ -10,9 +10,12 @@ package protocol ChatServices: AnyObject {
     func makeBackend(_ provider: ProviderDescriptor, _ options: BackendOptions) -> any ChatBackend
     /// The plan's windows a turn reported (`BackendOptions.planWindows`).
     func planWindows(_ cli: String, _ snapshot: PlanSnapshot?)
-    /// The chat's CLI gets Kore's own tools (`kore`, its MCP server, Arsenal's notes): the Mac's do;
-    /// a box has none.
+    /// The chat gets Kore's own tools (`kore`, its MCP server, Arsenal's notes): every chat on the
+    /// Mac, a box's included (its notes go to the box with its messages). A box's own chats have
+    /// none of the Mac's: kore-host gives them its server instead (`agentServer`).
     var agentTools: Bool { get }
+    /// On a box, a chat whose Arsenal is on: kore-host's MCP server for its CLI; nil for none.
+    func agentServer(_ chat: Chat) -> KoreReach.Server?
     /// Instructions every chat's CLI starts with when it has none of its own (a box says where it runs).
     var instructions: URL? { get }
     /// A transcript as the app shows it, over its own `TranscriptLog`.
@@ -79,6 +82,7 @@ extension ChatServices {
     package var watchesStall: Bool { true }
     package func transcriptReplaced(_ chat: Chat) {}
     package var onBox: Bool { false }
+    package func agentServer(_ chat: Chat) -> KoreReach.Server? { nil }
 }
 
 /// What a chat asks of its transcript beyond the log: the rows' side of sending, drawing,

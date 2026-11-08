@@ -54,7 +54,7 @@ let package = Package(
         // never links KoreUI or KoreLink, and the Mac app never links it.
         // `VERSION` links to the package's own: the version kore-host says (`--version`, the welcome).
         .target(
-            name: "KoreHost", dependencies: ["src", "LinkProtocol", "KoreCore", "KoreHostSys"], resources: [.embedInCode("VERSION")],
+            name: "KoreHost", dependencies: ["src", "LinkProtocol", "KoreCore", "KoreHostSys", "AgentTools"], resources: [.embedInCode("VERSION")],
             swiftSettings: releaseForSize),
         // kore-host's one Linux call Swift can't make (a variadic one): empty on macOS.
         .target(name: "KoreHostSys"),

@@ -287,6 +287,8 @@ struct HostTests {
         #expect(rig.host.apply(.setMode(chatId: hc.id, modeId: "nope"), id: "4", control: .full) { _ in }?.code == .invalid)
     }
 
+    /// With Arsenal off (an act grant's sends never say a tier), no server; the paragraph says
+    /// when Kore's tools come.
     @Test func boxChatsGetTheBoxsInstructionsAndNoKoreTools() async throws {
         let rig = try HostRig()
         defer { rig.finish() }
@@ -304,7 +306,8 @@ struct HostTests {
         let text = try String(contentsOf: file, encoding: .utf8)
         #expect(text.contains("through kore-host"))
         #expect(text.contains(ProcessInfo.processInfo.hostName))
-        #expect(!text.contains("Arsenal"))
+        #expect(launched?.agentServer == nil)
+        #expect(text.contains("Kore's tools are available when the user turns Arsenal on for this chat."))
     }
 
     @Test func planCardsOfferAutoAcceptToFullControlOnly() throws {

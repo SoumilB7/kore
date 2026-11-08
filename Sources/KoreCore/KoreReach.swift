@@ -40,19 +40,45 @@ public enum KoreReach {
         return linked.path
     }()
 
+    /// Where a chat's MCP server comes from: the Mac's `kore mcp` (`mac`), or a box's `kore-host mcp`,
+    /// which kore-host gives a box chat whose Arsenal is on.
+    public struct Server: Sendable, Equatable {
+        public var command: URL?
+        public var arguments: [String]
+        /// At the front of the CLI's PATH (a folder whose `kore` is the helper); nil for none.
+        public var pathFolder: String?
+        /// Told to the agent at launch.
+        public var instructions: String
+        /// The CLI's variables besides the pass (the socket; on a box, the chat's id).
+        public var variables: [String: String]
+
+        public init(command: URL?, arguments: [String], pathFolder: String?, instructions: String, variables: [String: String]) {
+            self.command = command
+            self.arguments = arguments
+            self.pathFolder = pathFolder
+            self.instructions = instructions
+            self.variables = variables
+        }
+    }
+
+    /// The Mac's: the helper's `kore mcp`, `kore` on PATH, and the socket when it isn't the default.
+    public static var mac: Server {
+        Server(command: helper, arguments: ["mcp"], pathFolder: pathFolder, instructions: instructions, variables: socket.map { ["KORE_AGENT_SOCKET": $0] } ?? [:])
+    }
+
     /// claude's: the server inline (its environment, the chat's pass with it, is the CLI's), and its
     /// tools allowed without a card: each call is checked against the chat's tier in Kore.
-    public static func claudeArguments() -> [String] {
-        guard let helper else { return [] }
-        let config: [String: Any] = ["mcpServers": [server: ["type": "stdio", "command": helper.path, "args": ["mcp"]]]]
+    public static func claudeArguments(_ server: Server = mac) -> [String] {
+        guard let command = server.command else { return [] }
+        let config: [String: Any] = ["mcpServers": [Self.server: ["type": "stdio", "command": command.path, "args": server.arguments]]]
         guard let data = try? JSONSerialization.data(withJSONObject: config, options: [.sortedKeys, .withoutEscapingSlashes]) else { return [] }
-        return ["--mcp-config", String(decoding: data, as: UTF8.self), "--allowedTools", "mcp__\(server)"]
+        return ["--mcp-config", String(decoding: data, as: UTF8.self), "--allowedTools", "mcp__\(Self.server)"]
     }
 
     /// Everything a claude chat launches with for Kore: the server, and the instructions with an
     /// imported chat's (`other`) in one appended prompt.
-    public static func claudeLaunchArguments(instructions other: String?) -> [String] {
-        claudeArguments() + ["--append-system-prompt", instructions(with: other)]
+    public static func claudeLaunchArguments(instructions other: String?, server: Server = mac) -> [String] {
+        claudeArguments(server) + ["--append-system-prompt", instructions(with: other, server)]
     }
 
     /// The agent socket when Kore uses one other than `kore`'s default (a storyline's): the CLI's
@@ -66,25 +92,34 @@ public enum KoreReach {
         return variables
     }
 
+    /// A chat's variables for `server`: its pass and the server's own.
+    public static func variables(pass: String, server: Server) -> [String: String] {
+        server.variables.merging(["KORE_AGENT_PASS": pass]) { $1 }
+    }
+
     /// The pass and a test's socket go by name (`env_vars`), never on a command line.
     public static let forwarded = ["KORE_AGENT_PASS", "KORE_AGENT_SOCKET"]
+    /// On a box, the chat's id goes with its pass.
+    public static let chatVariable = "KORE_AGENT_CHAT"
 
     /// A dev run has a `KORE_` hook in its environment. The agent channel's variables aren't
     /// hooks: every chat's shell has them, so a Kore started from one is still the owner's.
     public static func isDevRun(_ environment: [String: String]) -> Bool {
-        environment.keys.contains { $0.hasPrefix("KORE_") && !forwarded.contains($0) }
+        environment.keys.contains { $0.hasPrefix("KORE_") && !forwarded.contains($0) && $0 != chatVariable }
     }
 
     /// `codex app-server`'s: config overrides for this process only.
-    public static func codexArguments() -> [String] {
-        guard let helper, let path = tomlString(helper.path) else { return [] }
-        let names = forwarded.compactMap(tomlString).joined(separator: ",")
+    public static func codexArguments(_ server: Server = mac) -> [String] {
+        guard let command = server.command, let path = tomlString(command.path),
+            let args = try? JSONSerialization.data(withJSONObject: server.arguments, options: [.withoutEscapingSlashes])
+        else { return [] }
+        let names = (forwarded + server.variables.keys.filter { !forwarded.contains($0) }.sorted()).compactMap(tomlString).joined(separator: ",")
         return [
-            "-c", "mcp_servers.\(server).command=\(path)",
-            "-c", #"mcp_servers.\#(server).args=["mcp"]"#,
-            "-c", "mcp_servers.\(server).env_vars=[\(names)]",
+            "-c", "mcp_servers.\(Self.server).command=\(path)",
+            "-c", "mcp_servers.\(Self.server).args=\(String(decoding: args, as: UTF8.self))",
+            "-c", "mcp_servers.\(Self.server).env_vars=[\(names)]",
             // kore_wait holds a call up to 300 s.
-            "-c", "mcp_servers.\(server).tool_timeout_sec=330",
+            "-c", "mcp_servers.\(Self.server).tool_timeout_sec=330",
         ]
     }
 
@@ -108,9 +143,9 @@ public enum KoreReach {
         """
 
     /// Joined with any instructions the chat already has (an imported chat's).
-    public static func instructions(with other: String?) -> String {
-        guard let other, !other.isEmpty else { return instructions }
-        return other + "\n\n" + instructions
+    public static func instructions(with other: String?, _ server: Server = mac) -> String {
+        guard let other, !other.isEmpty else { return server.instructions }
+        return other + "\n\n" + server.instructions
     }
 
     /// The line the next turn carries after Arsenal changed for the chat: the tier's name and the chat's short id.

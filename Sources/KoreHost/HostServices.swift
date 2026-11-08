@@ -15,11 +15,14 @@ package final class HostServices: ChatServices {
     /// Makes the backend; tests set a stand-in.
     package var backend: (ProviderDescriptor, BackendOptions) -> any ChatBackend = { $0.makeBackend($1) }
 
-    /// The box's paragraph for every chat (`HostDaemon` writes it): where it runs, and that Kore's
-    /// own tools aren't there.
+    /// The box's paragraph for every chat (`HostDaemon` writes it): where it runs, and when
+    /// Kore's tools are there.
     package var instructions: URL?
-    /// No `kore`, no MCP server, no Arsenal notes on a box.
+    /// No `kore` on a box, and no Arsenal notes of its own: the Mac's come with its messages.
     package var agentTools: Bool { false }
+    /// kore-host's `kore_app` server for a chat whose Arsenal is on (`HostAgent`).
+    package var server: ((Chat) -> KoreReach.Server?)?
+    package func agentServer(_ chat: Chat) -> KoreReach.Server? { server?(chat) }
 
     package init() {}
 
@@ -34,8 +37,19 @@ package final class HostServices: ChatServices {
 
     nonisolated package static func instructions(host: String, machine: String = machine) -> String {
         "This chat runs on \(host), \(machine), through kore-host. The user sees it as a tab in Kore on their Mac. "
-            + "Kore's own tools (new tabs, other chats) aren't available here."
+            + "Kore's tools are available when the user turns Arsenal on for this chat."
     }
+
+    /// Told with the `kore_app` server, after the box's paragraph.
+    package static let toolInstructions = """
+        Kore gives you `kore_app` tools to act on Kore on the user's Mac: kore_new_chat opens a new tab with a claude \
+        or codex chat (on this machine, or with place mac on the Mac), kore_send sends a message to another chat, \
+        kore_list_chats and kore_read_chat read chats, kore_set_model changes this chat's model, and more. \
+        Ordinary coding needs none of them. Use them when the user asks for something in Kore, such as another tab \
+        or agent. They work only at a tier that covers the request (Read, Act limited, Act unlimited); otherwise a \
+        tool answers how the user changes it: tell the user that. Never run the claude or codex CLI yourself in place \
+        of a Kore chat.
+        """
 
     package func makeBackend(_ provider: ProviderDescriptor, _ options: BackendOptions) -> any ChatBackend { backend(provider, options) }
     package func planWindows(_ cli: String, _ snapshot: PlanSnapshot?) {}

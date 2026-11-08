@@ -173,6 +173,8 @@ final class LinkClient {
             host.unfollowed(request.chatId)
         case "chat.call":
             host.call(data, from: self)
+        case BoxToolResult.type:
+            host.toolAnswered(data, from: self)
         default:
             break
         }

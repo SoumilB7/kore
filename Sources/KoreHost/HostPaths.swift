@@ -91,6 +91,8 @@ package struct HostPaths: Sendable {
     /// any CLI runs.
     package var models: URL { state.appendingPathComponent("models.json") }
     package var socket: URL { runtime.appendingPathComponent("link.sock") }
+    /// Where a box chat's `kore-host mcp` asks the daemon (link 1.6, `HostAgent`).
+    package var agentSocket: URL { runtime.appendingPathComponent("agent.sock") }
     package var pid: URL { runtime.appendingPathComponent("kore-host.pid") }
     /// Held by the running daemon (`HostLock`): one per runtime folder.
     package var lock: URL { runtime.appendingPathComponent("run.lock") }

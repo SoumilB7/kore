@@ -141,6 +141,9 @@ package struct BackendOptions {
     package var instructions: URL?
     /// The chat's pass for Kore's agent channel, in its CLI's environment (`AgentPasses`).
     package var agentPass: String?
+    /// The MCP server that goes with the pass: nil for the Mac's own (`KoreReach.mac`); a box's
+    /// chat gets kore-host's (`ChatServices.agentServer`).
+    package var agentServer: KoreReach.Server?
     /// Where the plan's windows a turn reports go besides the log (the app's usage mark).
     package var planWindows: (@MainActor @Sendable (PlanSnapshot?) -> Void)?
 

@@ -160,11 +160,12 @@ package final class ClaudeBackend: ChatBackend {
         }
         if let pass = options.agentPass {
             // Kore's own tools for the agent, said in one prompt with an imported chat's instructions.
-            launch.environment.merge(KoreReach.variables(pass: pass)) { $1 }
-            launch.pathFirst = KoreReach.pathFolder
+            let server = options.agentServer ?? KoreReach.mac
+            launch.environment.merge(KoreReach.variables(pass: pass, server: server)) { $1 }
+            launch.pathFirst = server.pathFolder
             var imported: String?
             if let file = options.instructions { imported = await Task.detached { HandoffWriters.instructionText(file) }.value }
-            launch.extraArgs += KoreReach.claudeLaunchArguments(instructions: imported)
+            launch.extraArgs += KoreReach.claudeLaunchArguments(instructions: imported, server: server)
         } else if let instructions = options.instructions {
             launch.extraArgs += ["--append-system-prompt-file", instructions.path]
         }

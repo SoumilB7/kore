@@ -441,7 +441,12 @@ package final class Chat: Identifiable {
                 folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode,
                 model: launchModel, effort: launchEffort, fork: fork, forkTitle: fork == nil ? nil : status.name)
             options.fastMode = launchFastMode
-            options.agentPass = services.agentTools ? agentPass : nil
+            if services.agentTools {
+                options.agentPass = agentPass
+            } else if let server = services.agentServer(self) {
+                options.agentPass = agentPass
+                options.agentServer = server
+            }
             if let imported {
                 options.hiddenRows = Set(imported.record.written)
                 options.instructions = imported.record.instructions.map { URL(fileURLWithPath: $0) }

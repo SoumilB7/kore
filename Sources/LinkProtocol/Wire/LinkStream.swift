@@ -38,20 +38,29 @@ package struct ChatCall: Codable, Sendable {
     package var id: String
     package var chatId: String
     package var command: ChatCommand
+    /// 1.6, with a `send`: the chat's Arsenal tier on the Mac (`watch`, `own`, `drive`; absent
+    /// for off), so the box gives its CLI the `kore_app` server or not, and a `KoreReach.note`
+    /// the message carries when the tier changed since the agent was last told.
+    package var arsenal: String?
+    package var note: String?
 
-    package init(id: String, chatId: String, command: ChatCommand) {
+    package init(id: String, chatId: String, command: ChatCommand, arsenal: String? = nil, note: String? = nil) {
         self.id = id
         self.chatId = chatId
         self.command = command
+        self.arsenal = arsenal
+        self.note = note
     }
 
-    private enum Key: String, CodingKey { case t, id, chatId, command }
+    private enum Key: String, CodingKey { case t, id, chatId, command, arsenal, note }
 
     package init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: Key.self)
         id = try c.decode(String.self, forKey: .id)
         chatId = try c.decode(String.self, forKey: .chatId)
         command = ChatCommand.decode(try c.superDecoder(forKey: .command))
+        arsenal = try c.decodeIfPresent(String.self, forKey: .arsenal)
+        note = try c.decodeIfPresent(String.self, forKey: .note)
     }
 }
 

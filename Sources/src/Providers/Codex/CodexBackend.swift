@@ -115,12 +115,13 @@ package final class CodexBackend: ChatBackend {
                 cwd: options.folder, model: options.model, effort: options.effort,
                 permissions: CodexSession.Permissions(rawValue: options.mode) ?? .askForApproval,
                 plan: options.planMode, resume: resume, forkAt: forkAt, developerInstructions: instructions,
-                environment: options.agentPass.map { KoreReach.variables(pass: $0) } ?? [:])
+                environment: options.agentPass.map { KoreReach.variables(pass: $0, server: options.agentServer ?? KoreReach.mac) } ?? [:])
             if options.agentPass != nil {
                 // Kore's own tools for the agent (`KoreReach`).
-                launch.serverArguments = KoreReach.codexArguments()
-                launch.pathFirst = KoreReach.pathFolder
-                launch.developerInstructions = KoreReach.instructions(with: instructions)
+                let server = options.agentServer ?? KoreReach.mac
+                launch.serverArguments = KoreReach.codexArguments(server)
+                launch.pathFirst = server.pathFolder
+                launch.developerInstructions = KoreReach.instructions(with: instructions, server)
             }
             let task = Task { try await CodexSession.launch(launch) }
             opening = task

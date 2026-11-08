@@ -37,6 +37,14 @@ package final class HostDaemon {
     package private(set) var clis: [CLIState] = []
     /// Files full grants uploaded, by blob id (link 1.5's attachments).
     var blobs: [String: URL] = [:]
+    /// `agent.sock`, where box chats' `kore-host mcp` ask (link 1.6, `HostAgent`), its connections
+    /// (each answered once), and the calls waiting for the Mac.
+    var agentListener: HostListener?
+    var askers: [ObjectIdentifier: (socket: HostSocket, asked: Bool)] = [:]
+    var toolCalls: [String: HostToolCall] = [:]
+    var toolSerial = 0
+    /// `kore-host mcp`'s binary: this one (a test runs the built one).
+    package var mcpCommand = URL(fileURLWithPath: HostService.executable())
     package static let version = HostVersion.string
 
     package init(paths: HostPaths) {
@@ -44,6 +52,7 @@ package final class HostDaemon {
         config = HostConfig.load(paths.config)
         services.onEvent = { [weak self] chat, event in self?.noted(chat, event) }
         services.onModels = { [weak self] cli, models in self?.listed(cli, models) }
+        services.server = { [weak self] chat in self?.server(for: chat) }
         services.onTranscript = { [weak self] chat in self?.chats.first { $0.chat === chat }?.attach(chat, replaced: true) }
         if let data = try? Data(contentsOf: paths.models), let kept = try? JSONDecoder().decode([CLIState].self, from: data) { clis = kept }
         let note = paths.state.appendingPathComponent("instructions.md")
@@ -63,6 +72,7 @@ package final class HostDaemon {
         lock = try HostLock(paths.lock)
         try HostPaths.privateFolder(paths.state)
         listener = try HostListener(path: paths.socket) { [weak self] socket in self?.accepted(socket) }
+        openAgentSocket()
         sweepUploads()
         findCLIs()
         try? HostPaths.privateFile(Data("\(getpid())\n".utf8), to: paths.pid)
@@ -74,6 +84,7 @@ package final class HostDaemon {
         for chat in chats { chat.sleep() }
         guard let lock else { return }
         listener?.stop()
+        agentListener?.stop()
         try? FileManager.default.removeItem(at: paths.pid)
         lock.release()
         self.lock = nil
@@ -273,6 +284,7 @@ package final class HostDaemon {
     func ended(_ connection: LinkClient) {
         if connections.contains(where: { $0 === connection }), let grant = connection.grant { HostJournal.note("disconnect", ["grant": grant.name]) }
         connections.removeAll { $0 === connection }
+        toolCallsEnded(connection)
         HostMemory.releaseSoon()
     }
 

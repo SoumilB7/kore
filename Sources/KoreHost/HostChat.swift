@@ -79,6 +79,10 @@ package final class HostChat {
     /// the clients waiting on them: a repeat gets the first answer and runs nothing.
     var answered: [(id: String, data: Data)] = []
     var calling: [String: [LinkClient]] = [:]
+    /// Link 1.6: the chat's Arsenal tier as the Mac last said it with a message (nil: off), and
+    /// whether its running CLI was given the `kore_app` server (nil: no CLI yet).
+    var arsenal: String?
+    var serverGiven: Bool?
 
     /// `changed`: new or changed entries and turns to send, or a reset.
     package var changed: ((HostChat, _ upserts: [LinkEntry], _ removed: [String], _ order: [String]?, _ turns: [LinkTurn], _ reset: Bool) -> Void)?
@@ -274,6 +278,7 @@ package final class HostChat {
         stream.flush()
         chat.close(reason: "idle")
         self.chat = nil
+        serverGiven = nil
         // Nothing of it stays in memory while no one follows its transcript: read again when asked.
         if !txFollowed {
             (stored, index, storedTurns) = ([], [:], [:])

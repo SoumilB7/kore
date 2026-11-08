@@ -21,6 +21,7 @@ let usage = """
            kore-host grants
            kore-host status
            kore-host attach --as <name>
+           kore-host mcp
            kore-host install-service
            kore-host start
            kore-host uninstall [--purge]
@@ -119,6 +120,9 @@ case "attach":
         keep.append(attach)
     }
     dispatchMain()
+case "mcp":
+    // A box chat's `kore_app` server, which kore-host starts its CLI with while Arsenal is on.
+    exit(HostToolServer.run())
 case "install-service":
     do {
         let kind = HostService.kind()
