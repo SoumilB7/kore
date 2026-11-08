@@ -47,18 +47,24 @@ typeset -A began ended
 phase() { began[$1]=$EPOCHREALTIME }
 done_() { ended[$1]=$EPOCHREALTIME }
 
-# One check at a time uses the kept build folder.
+# One check at a time uses the kept build folder (its wait is its own phase: the time another
+# gate or an install held it).
+phase wait-cache
 until mkdir $cache.lock 2>/dev/null; do
   holder=$(cat $cache.lock/pid 2>/dev/null)
   if [[ -z $holder ]] || ! kill -0 $holder 2>/dev/null; then rm -rf $cache.lock; continue; fi
   sleep 5
 done
 print $$ > $cache.lock/pid
+done_ wait-cache
 trap "rm -rf '$cache.lock' 2>/dev/null; pkill -P $$ 2>/dev/null" EXIT
 phase sync
 mkdir -p $cache/src $out/ref
 git -C $clone archive $sha | tar x -C $out/ref
-rsync -rlc --delete --exclude /.build --exclude /.build-test --exclude /build $out/ref/ $cache/src/
+# What the kept folder last held (every gate writes its ref there), and how many files differ now: the release build's
+# line says how warm it is.
+built_from=$(cat $cache/ref 2>/dev/null); built_from=${built_from:-nothing}
+synced=$(rsync -rlci --delete --exclude /.build --exclude /.build-test --exclude /build $out/ref/ $cache/src/ | grep -c '^[>*]')
 rm -rf $out/ref
 ln -s $cache/src $out/src
 print $sha > $cache/ref
@@ -269,7 +275,11 @@ fi
 # ---- the release build, then the launch check and the storylines together
 phase build
 # Warm: the kept folder has a release build to go on from (only what changed compiles).
-[[ -x $src/.build/release/Kore ]] && warmth="warm, incremental" || warmth="cold"
+if [[ -x $src/.build/release/Kore ]]; then
+  warmth="warm: $synced files changed since the kept build of ${built_from[1,7]}"
+else
+  warmth="cold: no kept build"
+fi
 {
   print "== release build"
   (cd $src && swift build -c release 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E 'error:|warning: [^s]|Build complete' | grep -v 'search path' | tail -20)
@@ -416,14 +426,14 @@ r=$out/report.txt
   [[ -f $out/r-stories.txt ]] && cat $out/r-stories.txt
   [[ -f $out/r-tests.txt ]] && cat $out/r-tests.txt
   print "== times"
-  for p in sync head radius wait-slots android tests build launch storylines; do
+  for p in wait-cache sync head radius wait-slots android tests build launch storylines; do
     [[ -n ${began[$p]:-} && -n ${ended[$p]:-} ]] && printf "%-11s %6.1f s  (from %5.1f s)\n" $p $(( ended[$p] - began[$p] )) $(( began[$p] - start ))
   done
   [[ -f $out/t-tests-built ]] && printf "%-11s %6.1f s\n" tests-built $(( $(<$out/t-tests-built) - began[tests] ))
   printf "release build: %s, %.1f s\n" $warmth $(( ended[build] - began[build] ))
   [[ -f $out/shards.txt ]] && print "storyline shards $(wc -l < $out/shards.txt | tr -d ' '), stories $(wc -l < $out/stories-run.txt | tr -d ' ')"
-  total=$(( EPOCHREALTIME - start )); queued=$(( ended[wait-slots] - began[wait-slots] ))
-  printf "total       %6.1f s: %.1f s queued for the build slots, %.1f s the gate's own\n" $total $queued $(( total - queued ))
+  total=$(( EPOCHREALTIME - start )); queued=$(( ended[wait-slots] - began[wait-slots] + ended[wait-cache] - began[wait-cache] ))
+  printf "total       %6.1f s: %.1f s queued (kept build folder, build slots), %.1f s the gate's own\n" $total $queued $(( total - queued ))
   print "== done $out"
 } > $r 2>&1
 cat $r
