@@ -1,4 +1,5 @@
 import Foundation
+import AgentTools
 import KoreCore
 
 /// What Drive adds (`z-docs/agent-protocol.md`): new chats in the caller's window, sends, stops,
@@ -114,8 +115,9 @@ extension Chat {
     /// A question card's answers, an option's label (or typed text, where the card takes it) per
     /// question in order; `deny`, which any card takes; or `allow`, a permission card allowed once,
     /// by a caller at Auto or above (one whose own mode lets its CLI run commands without asking
-    /// first), in a chat it reaches (the owner, 2026-11-15). Never Always allow, a plan, a
-    /// sign-in or a secret question: those stay the user's.
+    /// first), in a chat it reaches (the owner, 2026-11-15); an Auto-asks card run once or Always
+    /// allowed with Act unlimited or above too (`arsenalRunAutoAsk`). Never another card's Always
+    /// allow, a plan, a sign-in or a secret question: those stay the user's.
     /// Held cross-session messages let in by another chat's agent at Act unlimited (the owner,
     /// 2026-11-18: ask here, answer there): never by a chat whose own message is held there, and
     /// never a hold a flag can't lift. The chat's line says who let them in.
@@ -145,7 +147,11 @@ extension Chat {
         }
     }
 
-    package func arsenalAnswer(_ cardId: String, _ choices: [String], deny: Bool, allow: Bool = false, by caller: Chat? = nil) -> Result<String, ArsenalRefusal> {
+    /// `always`: Always allow on an Auto-asks card. `tier`: the caller's Arsenal tier, for an
+    /// Auto-asks card (nil: off).
+    package func arsenalAnswer(
+        _ cardId: String, _ choices: [String], deny: Bool, allow: Bool = false, always: Bool = false, by caller: Chat? = nil, tier: ArsenalTier? = nil
+    ) -> Result<String, ArsenalRefusal> {
         guard let card = approvals.pending.first(where: { $0.id == cardId }) else { return .failure(.init("That card was answered or withdrawn.")) }
         guard !card.signIn else { return .failure(.init("Only you answer a sign-in.")) }
         if deny {
@@ -156,8 +162,8 @@ extension Chat {
         if allow, let senders = card.held {
             return arsenalLetIn(card, senders: senders, by: caller)
         }
-        // A call Auto stopped is a person's to run, at every tier.
-        if allow, card.autoStop { return .failure(.init("Only you can run a command Auto asks about.")) }
+        if allow || always, card.autoStop { return arsenalRunAutoAsk(card, always: always, by: caller, tier: tier) }
+        if always { return .failure(.init("Only you choose Always allow here; an agent may Always allow only a card Auto asks about.")) }
         if allow {
             guard card.isPermission else { return .failure(.init("Only a permission card is allowed this way; plans stay yours to approve.")) }
             guard let caller, Self.mayApprove(caller) else {
@@ -184,6 +190,45 @@ extension Chat {
         answer(card, .answers(answers))
         note("Arsenal · answered “\(card.title)”")
         return .success("Answered.")
+    }
+}
+
+extension Chat {
+    /// The lowest tier that runs a command Auto asks about for another chat (the owner, 2026-11-21).
+    package static let autoAskFloor = ArsenalTier.drive
+
+    /// An Auto-asks card run once, or Always allowed, by another chat's agent (the owner,
+    /// 2026-11-21): a caller at Auto or above (`mayApprove`) with Act unlimited or Act device,
+    /// never a forced removal of the working folder or above, a home folder or a system path
+    /// (`KoreAlwaysRule.critical`). The same answer as the person's Run once or Always allow.
+    func arsenalRunAutoAsk(_ card: Approval, always: Bool, by caller: Chat?, tier: ArsenalTier?) -> Result<String, ArsenalRefusal> {
+        if let note = card.allowNote { return .failure(.init(note)) }
+        guard let caller, Self.mayApprove(caller) else {
+            guard Self.approvalFloor != nil else { return .failure(.init("Only you allow a chat's commands.")) }
+            return .failure(.init("Only a chat at \(Self.approvalFloorLabel) or above runs a command Auto asks about: this one is \(caller?.controls.activeMode.label ?? "outside Kore")."))
+        }
+        guard let tier, ArsenalTier.allCases.firstIndex(of: tier)! >= ArsenalTier.allCases.firstIndex(of: Self.autoAskFloor)! else {
+            return .failure(.init("Running a command Auto asks about needs \(Self.autoAskFloor.title) or above: this chat has \(tier?.title ?? "Arsenal off")."))
+        }
+        if let command = card.command, KoreAlwaysRule.critical(command, cwd: card.cwd) {
+            return .failure(.init("Only you run this: it removes the working folder or one above it, a home folder or a system path."))
+        }
+        // A command the card doesn't carry (an older box's) can't be checked.
+        if card.command == nil, ["Bash", "commandExecution"].contains(card.tool ?? "") {
+            return .failure(.init("Only you run this: the card doesn't say its command, so Kore can't check it."))
+        }
+        let short = String(caller.id.uuidString.prefix(8)).lowercased()
+        if always {
+            guard card.canAlwaysAllow, let rule = card.alwaysRule else {
+                return .failure(.init(card.alwaysAllowNote ?? "This card has no Always allow: run it once."))
+            }
+            answer(card, .allowAlways)
+            note("Arsenal · always allowed “\(KoreAlwaysRule.shown(rule))” · by \(short)")
+            return .success("Always allowed `\(KoreAlwaysRule.shown(rule))`.")
+        }
+        answer(card, .allow)
+        note("Arsenal · ran once “\(card.command ?? card.title)” · by \(short)")
+        return .success("Ran once.")
     }
 }
 

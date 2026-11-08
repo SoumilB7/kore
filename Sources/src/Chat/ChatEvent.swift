@@ -643,7 +643,8 @@ package struct Approval: Identifiable, Sendable, Codable {
     /// Why Allow can't be picked here (a hold a flag can't lift): the card shows it dim, saying so.
     package var allowNote: String? = nil
     /// A call Auto asks a person about (Kore's ask list, a safety check, the classifier) or
-    /// refused (`ClaudeAutoStops`): Allow reads Run once, and only a person runs it.
+    /// refused (`ClaudeAutoStops`): Allow reads Run once; a person runs it, or another chat's agent
+    /// at Auto with Act unlimited or above (`arsenalRunAutoAsk`), never a critical removal.
     package var autoStop = false
     /// Run once's follow-up (a Codex review's one retry): sent once the answer's in, when the chat
     /// is idle, so the agent tries it again.
@@ -651,6 +652,10 @@ package struct Approval: Identifiable, Sendable, Codable {
     /// What its Always allow keeps: a Claude `Bash(…)` rule's content (`sudo apt install *`,
     /// `KoreAlwaysRule`) or Codex's proposed prefix (`sudo apt install *`), shown on the button.
     package var alwaysRule: String? = nil
+    /// An Auto-asks card's shell command and the folder it runs in, for Arsenal's check that it
+    /// isn't a critical removal (`KoreAlwaysRule.critical`). Nil where it isn't a command.
+    package var command: String? = nil
+    package var cwd: String? = nil
 
     package struct HeldSender: Equatable, Sendable, Codable {
         /// Its address (`uds:/tmp/cc-socks/<pid>.sock`) and name, as it gave them.
@@ -687,6 +692,8 @@ package struct Approval: Identifiable, Sendable, Codable {
         copy.autoStop = autoStop
         copy.alwaysRule = alwaysRule
         copy.retryMessage = retryMessage
+        copy.command = command
+        copy.cwd = cwd
         if canAlwaysAllow { copy.alwaysAllowNote = note }
         return copy
     }
@@ -752,7 +759,7 @@ extension AgentID {
 extension Approval {
     enum CodingKeys: String, CodingKey {
         case id, title, detail, body, canAlwaysAllow, questions, plan, changes, agent, signIn, alwaysAllowNote, tool, held,
-            allowNote, autoStop, retryMessage, alwaysRule
+            allowNote, autoStop, retryMessage, alwaysRule, command, cwd
     }
 
     // Written by hand only so `autoStop` (0.3.3) is optional on the wire: an older box or phone
@@ -776,6 +783,8 @@ extension Approval {
         autoStop = try c.decodeIfPresent(Bool.self, forKey: .autoStop) ?? false
         retryMessage = try c.decodeIfPresent(String.self, forKey: .retryMessage)
         alwaysRule = try c.decodeIfPresent(String.self, forKey: .alwaysRule)
+        command = try c.decodeIfPresent(String.self, forKey: .command)
+        cwd = try c.decodeIfPresent(String.self, forKey: .cwd)
     }
 
     package func encode(to encoder: any Encoder) throws {
@@ -797,5 +806,7 @@ extension Approval {
         if autoStop { try c.encode(autoStop, forKey: .autoStop) }
         try c.encodeIfPresent(retryMessage, forKey: .retryMessage)
         try c.encodeIfPresent(alwaysRule, forKey: .alwaysRule)
+        try c.encodeIfPresent(command, forKey: .command)
+        try c.encodeIfPresent(cwd, forKey: .cwd)
     }
 }

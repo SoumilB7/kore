@@ -6,7 +6,7 @@ import src
 /// Act unlimited on another chat's mode and commands, at the caller's level (the owner,
 /// 2026-11-15): it moves another chat up or down to any mode that leaves it no freer than itself
 /// (a chat in Edit automatically can't put another in Auto), and allows another's permission card
-/// once only from Auto or above. Plans, Always allow and sign-ins stay the user's.
+/// once only from Auto or above. Plans, Always allow (but an Auto-asks card's) and sign-ins stay the user's.
 final class ArsenalLevel: ChatStoryline {
     override class var tags: Set<Tag> { [.agentChannel, .gate] }
     /// A model that offers Claude's Auto.

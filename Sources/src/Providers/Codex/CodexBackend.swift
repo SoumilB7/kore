@@ -514,6 +514,8 @@ package final class CodexBackend: ChatBackend {
             approval.allowNote = card.refusal
             approval.retryMessage = card.refusal == nil ? CodexAutoStops.retry(card.command) : nil
             approval.tool = "commandExecution"
+            approval.command = card.command
+            approval.cwd = params["action"]?["cwd"]?.string ?? options.folder.path
             yield(.approvalRequested(approval))
         case .exited:
             for id in stops.exited() { yield(.approvalWithdrawn(id)) }

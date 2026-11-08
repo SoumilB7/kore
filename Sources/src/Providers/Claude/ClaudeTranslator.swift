@@ -881,6 +881,8 @@ package final class ClaudeTranslator {
                 questions: [], changes: Self.proposedChange(r.toolName, r.input).map { [$0] } ?? [], agent: agent)
             ask.autoStop = true
             ask.alwaysRule = rule
+            ask.command = r.input["command"]?.string
+            ask.cwd = folder.path
         }
         // An MCP server's sign-in (`mcp__<server>__authenticate`).
         ask.signIn = r.toolName.hasPrefix("mcp__") && r.toolName.hasSuffix("__authenticate")

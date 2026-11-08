@@ -93,7 +93,7 @@ enum Drive {
             data = try client.run("chat.open", args)
         default:
             var args: Object = ["chat": p[0], "card": p[1]]
-            if o.deny { args["deny"] = true } else if o.allow { args["allow"] = true } else { args["answers"] = Array(p.dropFirst(2)) }
+            if o.deny { args["deny"] = true } else if o.always { args["always"] = true } else if o.allow { args["allow"] = true } else { args["answers"] = Array(p.dropFirst(2)) }
             data = try client.run("cards.answer", args)
         }
         if o.json { return Reads.printJSON(data) }

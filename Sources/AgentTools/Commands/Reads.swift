@@ -89,7 +89,7 @@ package enum Reads {
                kore open <session> [--folder F]
                                      open a past chat (kore history lists them) in front
                kore close <short id> close a chat as its tab's close does; History keeps it
-               kore answer <chat> <card> <answer>... | --deny | --allow
+               kore answer <chat> <card> <answer>... | --deny | --allow | --always
                                      answer a question card, one answer per question
                kore whoami           who Kore sees calling, and its access
                kore caps             what that access allows
@@ -129,6 +129,8 @@ package enum Reads {
         var deny = false
         /// `answer --allow`: a permission card allowed once.
         var allow = false
+        /// `answer --always`: Always allow on an Auto-asks card.
+        var always = false
         /// `wait --ask`: an ask's id.
         var ask: String?
         /// `fork --at`, `wait --timeout`.
@@ -165,6 +167,7 @@ package enum Reads {
                     place = m
                 case "--deny": deny = true
                 case "--allow": allow = true
+                case "--always": always = true
                 case "--at":
                     guard let m = rest.popFirst() else { problem = "--at takes a message"; return }
                     at = m

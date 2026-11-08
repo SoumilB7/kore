@@ -170,7 +170,7 @@ extension HostDaemon {
                     return Self.failed(.invalid, "Name the card, and give an answer per question or deny.")
                 }
                 guard let chat = target.chat else { return Self.failed(.refused, "That card was answered or withdrawn.") }
-                let outcome = chat.arsenalAnswer(card, args.answers ?? [], deny: args.deny ?? false, allow: args.allow ?? false, by: hc.chat)
+                let outcome = chat.arsenalAnswer(card, args.answers ?? [], deny: args.deny ?? false, allow: args.allow ?? false, always: args.always ?? false, by: hc.chat, tier: ArsenalTier(rawValue: self.tier(hc).rawValue))
                 self.broadcast(chats: [target])
                 return Self.done(outcome, target)
             }
