@@ -1,6 +1,7 @@
 package dev.kore.link.update
 
 import com.google.crypto.tink.subtle.Ed25519Verify
+import java.security.MessageDigest
 import java.util.Base64
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -22,6 +23,27 @@ object KoreReleaseKey {
 }
 
 class ReleaseError(message: String) : Exception(message)
+
+/**
+ * The certificate every release `kore.apk` is signed with (the owner's keystore): its SHA-256, as
+ * `apksigner verify --print-certs` prints it and docs/android.md publishes it. release.sh refuses
+ * an APK signed otherwise.
+ */
+object ReleaseSigner {
+    const val RELEASE_SIGNER = "E9:18:81:D1:CA:84:81:1C:F5:34:3A:F6:B8:FD:51:2C:ED:66:0C:C8:76:C5:15:D4:E4:F6:E0:C5:C6:F1:89:6F"
+
+    /** A certificate's SHA-256, `AA:BB:…`. */
+    fun sha256(cert: ByteArray): String = MessageDigest.getInstance("SHA-256").digest(cert).joinToString(":") { "%02X".format(it) }
+
+    /**
+     * An update installs only when its signers ([update]: v2/v3, rotation lineage included) hold
+     * the running app's certificate ([installed]) and the release certificate.
+     */
+    fun accepts(installed: List<ByteArray>, update: List<ByteArray>, release: String = RELEASE_SIGNER): Boolean {
+        val theirs = update.map(::sha256).toSet()
+        return release in theirs && installed.any { sha256(it) in theirs }
+    }
+}
 
 /**
  * A release's signed `SHA256SUMS`: one header line, `# kore <version> <commit>`, then

@@ -12,6 +12,7 @@ import dev.kore.link.update.MacCopy
 import dev.kore.link.update.RangedDownload
 import dev.kore.link.update.ReleaseError
 import dev.kore.link.update.ReleaseManifest
+import dev.kore.link.update.ReleaseSigner
 import dev.kore.link.update.UpdateCheck
 import dev.kore.link.update.UpdateOffer
 import dev.kore.phone.KoreApp
@@ -121,16 +122,15 @@ object Updates {
         file.delete()
     }
 
-    /** The APK's signing certificates are this app's (v2/v3, the rotation lineage included). */
+    /** The APK is signed by this app's certificate and the release one (v2/v3, the rotation lineage included). */
     private fun sameSigner(context: Context, apk: File): Boolean {
         val pm = context.packageManager
         val archive = pm.getPackageArchiveInfo(apk.path, PackageManager.GET_SIGNING_CERTIFICATES) ?: return false
         if (archive.packageName != context.packageName) return false
         val theirs = archive.signingInfo ?: return false
         val mine = pm.getPackageInfo(context.packageName, PackageManager.GET_SIGNING_CERTIFICATES).signingInfo ?: return false
-        val now = mine.apkContentsSigners.map { it.toByteArray().contentHashCode() }.toSet()
         val signers = if (theirs.hasMultipleSigners()) theirs.apkContentsSigners else theirs.signingCertificateHistory
-        return signers.any { it.toByteArray().contentHashCode() in now }
+        return ReleaseSigner.accepts(mine.apkContentsSigners.map { it.toByteArray() }, signers.map { it.toByteArray() })
     }
 
     /** A small HTTPS GET (the release JSON, SHA256SUMS and its signature). */

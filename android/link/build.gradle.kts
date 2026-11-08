@@ -22,6 +22,9 @@ val repoRoot = rootProject.projectDir.resolve("..").canonicalFile
 tasks.test {
     systemProperty("kore.fixtures", repoRoot.resolve("Tests/Fixtures/link/v2").path)
     systemProperty("kore.releaseKey", repoRoot.resolve("Sources/KoreCore/ReleaseKey.swift").path)
+    systemProperty("kore.signerDoc", repoRoot.resolve("docs/android.md").path)
+    // scripts/tests/release-rehearsal.sh: a dry-run release served locally (UpdateRehearsalTest).
+    for (name in listOf("KORE_REHEARSAL", "KORE_REHEARSAL_KEY", "KORE_REHEARSAL_CERT")) System.getenv(name)?.let { inputs.property(name, it); environment(name, it) }
     testLogging { events("failed"); exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
 }
 

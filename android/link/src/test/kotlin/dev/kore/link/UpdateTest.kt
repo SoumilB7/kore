@@ -6,6 +6,7 @@ import dev.kore.link.update.RangeFetcher
 import dev.kore.link.update.RangedDownload
 import dev.kore.link.update.ReleaseError
 import dev.kore.link.update.ReleaseManifest
+import dev.kore.link.update.ReleaseSigner
 import dev.kore.link.update.UpdateCheck
 import java.io.File
 import java.security.MessageDigest
@@ -52,12 +53,29 @@ class UpdateTest {
             { ReleaseManifest.verified(sums.toByteArray(), sig, other) },
             { ReleaseManifest.verified((sums + "x").toByteArray(), sig, pair.publicKey) },
             { ReleaseManifest.verified(sums.toByteArray(), sig.copyOf(63), pair.publicKey) },
-            // The placeholder key verifies nothing.
+            // Kore's own key doesn't take a throwaway key's signature; a placeholder takes none.
             { ReleaseManifest.verified(sums.toByteArray(), sig) },
+            { ReleaseManifest.verified(sums.toByteArray(), sig, KoreReleaseKey.key("PLACEHOLDER-x")) },
         )) {
             assertTrue(runCatching(bad).exceptionOrNull() is ReleaseError)
         }
-        assertNull(KoreReleaseKey.key())
+    }
+
+    @Test fun onlyTheReleaseCertificatesApkInstalls() {
+        val release = "release certificate".toByteArray()
+        val debug = "debug certificate".toByteArray()
+        val pin = ReleaseSigner.sha256(release)
+        assertTrue(Regex("([0-9A-F]{2}:){31}[0-9A-F]{2}").matches(ReleaseSigner.RELEASE_SIGNER))
+        assertTrue(ReleaseSigner.accepts(listOf(release), listOf(release), pin))
+        // A rotated key's lineage still holds the old certificate.
+        assertTrue(ReleaseSigner.accepts(listOf(release), listOf(release, debug), pin))
+        // A debug-signed app takes no release APK (it's an uninstall and reinstall), nor the release app a debug APK.
+        assertTrue(!ReleaseSigner.accepts(listOf(debug), listOf(release), pin))
+        assertTrue(!ReleaseSigner.accepts(listOf(release), listOf(debug), pin))
+        assertTrue(!ReleaseSigner.accepts(listOf(debug), listOf(debug), pin))
+        assertTrue(!ReleaseSigner.accepts(emptyList(), listOf(release), pin))
+        // The pin is the one docs/android.md publishes.
+        assertTrue(File(System.getProperty("kore.signerDoc")).readText().contains(ReleaseSigner.RELEASE_SIGNER))
     }
 
     @Test fun malformedManifestsAreRefused() {

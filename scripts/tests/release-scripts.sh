@@ -80,8 +80,9 @@ fake_host 9.9.9 | sed 's/link/evil/' | xz -c > $rel/kore-host-linux-x86_64.xz
 out=$(box $tmp/linux); code=$?
 check "a binary that doesn't match SHA256SUMS installs nothing" '(( code != 0 )) && ! installed && [[ $out == *"doesn'"'"'t match"* ]]'
 cp $tmp/xz.good $rel/kore-host-linux-x86_64.xz
-out=$(env -i HOME=$tmp/home PATH="$tmp/linux:/usr/bin:/bin" dash scripts/kore-host.sh 2>&1); code=$?
-check "the real kore-host.sh refuses to run with the placeholder key" '(( code != 0 )) && [[ $out == *"no release key"* ]]'
+rm -rf $tmp/home; mkdir -p $tmp/home
+out=$(env -i HOME=$tmp/home PATH="$tmp/linux:/opt/homebrew/bin:/usr/bin:/bin" KORE_RELEASE_URL=file://$rel dash scripts/kore-host.sh 2>&1); code=$?
+check "the real kore-host.sh refuses a release another key signed" '(( code != 0 )) && ! installed && [[ $out == *"isn'"'"'t signed"* ]]'
 
 # release.sh --dry-run over a folder with fake kore-host builds.
 dry=$tmp/dry
@@ -90,13 +91,19 @@ for a in x86_64 aarch64; do print "fake $a" | xz -c > $dry/kore-host-linux-$a.xz
 # No Go (nothing built); kore-tailnet builds left in build/release are taken, as release.sh would.
 out=$(KORE_RELEASE_DIR=$dry KORE_GO=/var/empty/no-go scripts/release.sh --dry-run 2>&1); code=$?
 tailnets=$(ls $dry | grep -c '^kore-tailnet-')
-tailnet_skipped() { local n; for n in kore-tailnet-linux-x86_64.xz kore-tailnet-linux-aarch64.xz kore-tailnet-macos-arm64; do [[ -f $dry/$n || $out == *"skipped $n"* ]] || return 1; done }
+tailnet_skipped() { [[ -f $dry/kore-tailnet-macos-arm64 || $out == *"skipped kore-tailnet-macos-arm64"* ]] }
 check "release.sh --dry-run plans without publishing" '(( code == 0 )) && [[ $out == *"dry run: would publish v$(<VERSION)"* ]]'
 check "  SHA256SUMS: the version line, then every asset" '[[ $(head -1 $dry/SHA256SUMS) == "# kore $(<VERSION) $commit" ]] && (( $(wc -l < $dry/SHA256SUMS) == 5 + tailnets ))'
 check "  kore-host.sh is listed with its hash" 'grep -qx "$(sha scripts/kore-host.sh)  kore-host.sh" $dry/SHA256SUMS'
 check "  signed (64 bytes)" '[[ $(stat -f %z $dry/SHA256SUMS.sig) == 64 ]]'
 check "  absent kore-tailnet and kore.apk are skipped" '[[ $out == *"skipped kore.apk (not built)"* ]] && tailnet_skipped'
 check "  old releases go only after the new one is up" '[[ $out == *"only then delete every other release"* ]]'
+check "  nothing for boxes' tailnet: they don't run it yet" '! grep -q kore-tailnet-linux $dry/SHA256SUMS'
+notes=$dry/notes.md
+drykey=${${out##*throwaway key }%%;*}
+check "  notes: the title, three installs, what's new, the signer line" '[[ $(head -1 $notes) == "# Kore $(<VERSION)" ]] && grep -q "install.sh | bash" $notes && grep -q "kore-host.sh | sh" $notes && grep -q "kore.apk](" $notes && grep -q "^### What.s new" $notes && grep -qF "release key \`$drykey\`" $notes'
+bullets=$(awk '/^### What/ { on = 1; next } on && /^- / { n++ } on && /^$/ && n { exit } END { print n + 0 }' $notes)
+check "  3 to 6 one-line highlights" '(( bullets >= 3 && bullets <= 6 ))'
 check "  the source tarball holds this commit" '[[ $(tar -xzOf $dry/kore-src.tar.gz kore/VERSION) == $(<VERSION) ]]'
 
 # install.sh: a signed release v9.9.9 from a file:// "GitHub".

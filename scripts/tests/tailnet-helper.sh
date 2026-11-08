@@ -64,6 +64,7 @@ asked() { [[ -s $tmp/curl.log ]] }
 offline() { ! grep -qv '^file://' $tmp/curl.log }
 
 # Placeholder key: nothing downloaded, one note.
+setkey PLACEHOLDER-no-key
 out=$(helper); code=$?
 check "placeholder key: one note, no helper, the build goes on" '(( code == 0 )) && [[ ! -e $dest && $out == *"note: Kore.app ships without kore-tailnet (no Go, and no release key"* ]]'
 check "  and nothing is downloaded" '! asked'

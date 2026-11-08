@@ -44,7 +44,7 @@ read -r swift_major swift_minor <<<"${swift_version:-0 0}"
     || fail "Kore needs Swift 6.2 or later. Update the Command Line Tools in System Settings → Software Update, then run this again."
 
 free_kb="$(df -Pk "$HOME" | awk 'NR == 2 { print $4 }')"
-(( free_kb >= 4 * 1024 * 1024 )) || fail "Kore needs about 4 GB free to build; this Mac has $(( free_kb / 1024 / 1024 )) GB."
+[[ -n "${KORE_NO_BUILD:-}" ]] || (( free_kb >= 4 * 1024 * 1024 )) || fail "Kore needs about 4 GB free to build; this Mac has $(( free_kb / 1024 / 1024 )) GB."
 
 # "0.10.0" is newer than "0.9.3"; a missing part counts as 0.
 newer() {
