@@ -199,6 +199,15 @@ struct TranscriptSelectionTests {
         #expect(copy(from: at([4, 2, 0], 0), to: at([4, 2, 1], 3)) == "Name\tKind\nbeta\ttwo")
     }
 
+    /// A table's Copy takes what selecting all of it copies; ⌥ its Markdown.
+    @Test func aTablesCopyIsItsWholeSelection() throws {
+        let blocks = MarkdownParser.parse(Self.reply[...], base: 0, zoom: 1)
+        guard case .table(let table) = blocks[4].kind else { Issue.record("no table"); return }
+        #expect(table.copyText(markdown: false) == "Name\tKind\nalpha\tone\nbeta\ttwo")
+        #expect(table.copyText(markdown: false) == copy(from: at([4, 0, 0], 0), to: at([5], 0)))
+        #expect(table.copyText(markdown: true) == "| Name | Kind |\n|---|---|\n| alpha | one |\n| beta | two |")
+    }
+
     @Test func aCodeBlockIsItsLines() {
         #expect(copy(from: at([5], 4), to: nil) == "fence = \"```\"")
     }

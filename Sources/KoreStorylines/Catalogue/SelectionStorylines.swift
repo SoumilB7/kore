@@ -104,6 +104,56 @@ final class SelectWordsAndParagraphs: ChatStoryline {
     }
 }
 
+/// A table copies whole two ways: a drag across it, as tabbed rows under its header; and its
+/// Copy, shown below it at its right edge on hover as under a code block, the same text, or
+/// with ⌥ its Markdown.
+final class TableCopy: ChatStoryline {
+    static let reply = """
+        Totals so far:
+
+        | Name | Qty |
+        |---|--:|
+        | alpha | 3 |
+        | beta | 12 |
+
+        Done counting.
+        """
+    static let tabbed = "Name\tQty\nalpha\t3\nbeta\t12"
+    static let markdown = "| Name | Qty |\n|---|---|\n| alpha | 3 |\n| beta | 12 |"
+    static let table = StoryID.Transcript.table([1])
+
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(reply)]) }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("Count them"), TurnFinished(1), WaitIdle(),
+            DragSelect(from: .answer(1, [0], at: "Totals so far:", "so far"), to: .answer(1, [2], at: "Done counting.", " counting")),
+            CopySelection("so far:\n\n" + Self.tabbed + "\n\nDone"),
+            Key(.escape),
+            WaitForElement(.id(Self.table)),
+            Press(.id(Self.table.part(.hover))),
+            Expect("Copy below the table, at its right edge") { _ in
+                guard let table = StoryRegistry.entry(Self.table.raw)?.frame, let copy = StoryRegistry.entry(Self.table.part(.copy).raw)?.frame
+                else { return false }
+                // Frames are the window's, y up: the table's bottom is its minY.
+                return abs(copy.minY - table.minY) < 0.5 && copy.height <= 22.5 && abs(copy.maxX - table.maxX) < 1
+            },
+            Snapshot("table-copy"),
+            Do("clear the pasteboard") { _ in StoryTranscript.clearCopied() },
+            Click(.id(Self.table.part(.copy))),
+            Expect("Copy to take the whole table, as a selection of it copies", found: { _ in StoryTranscript.copied }) { _ in
+                StoryTranscript.copied == Self.tabbed
+            },
+            Do("clear the pasteboard") { _ in StoryTranscript.clearCopied() },
+            Click(.id(Self.table.part(.copy)), modifiers: .option),
+            Expect("⌥-Copy to take it as Markdown", found: { _ in StoryTranscript.copied }) { _ in
+                StoryTranscript.copied == Self.markdown
+            },
+        ]
+    }
+}
+
 /// A click puts the start down; a ⇧-click in the next turn selects everything between.
 final class ShiftClickExtends: ChatStoryline {
     static let first = "The first answer has a sentence to start in."

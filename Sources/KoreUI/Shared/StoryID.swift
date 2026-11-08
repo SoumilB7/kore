@@ -230,6 +230,8 @@ extension StoryID {
         package static func changes(_ turn: String) -> StoryID { StoryID(.transcript, "changes", key: turn) }
         /// A fenced code block, by its place in its markdown; `.part(.copy)` is its Copy.
         package static func code(_ path: [Int]) -> StoryID { StoryID(.transcript, "code", key: path.map(String.init).joined(separator: ".")) }
+        /// A table, by its place in its markdown; `.part(.copy)` is its Copy, as under a code block.
+        package static func table(_ path: [Int]) -> StoryID { StoryID(.transcript, "table", key: path.map(String.init).joined(separator: ".")) }
         package static let earlier = StoryID(.transcript, "earlier")
         /// The message scroller.
         package static let rail = StoryID(.transcript, "rail")

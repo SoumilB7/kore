@@ -246,15 +246,18 @@ class ChatActivity : NodeActivity() {
         list.postDelayed({ if (askedEarlier) { askedEarlier = false; adapter.earlier = transcript.hasEarlier; adapter.submit(transcript.entries) } }, 8_000)
     }
 
-    /** Long-press a message: Copy, Fork from here / Fork after this, and Revert to here (the Mac's rollback). */
-    private fun messageMenu(anchor: View, e: JsonObject) {
+    /**
+     * Long-press a message: Copy, Fork from here / Fork after this, and Revert to here (the Mac's
+     * rollback); on a table, Copy table first, as the Mac's table Copy copies it ([TableCopy]).
+     */
+    private fun messageMenu(anchor: View, e: JsonObject, table: String? = null) {
         val id = e.str("id") ?: return
         val after = e.str("kind") != "user"
         val text = e.str("text")?.takeIf { it.isNotEmpty() } ?: Doc.render(e.objs("doc")).toString()
-        val items = mutableListOf(PopMenu.Item("Copy") {
-            val clip = getSystemService(android.content.ClipboardManager::class.java)
-            clip.setPrimaryClip(android.content.ClipData.newPlainText("Message", text))
-        })
+        val clip = getSystemService(android.content.ClipboardManager::class.java)
+        val items = mutableListOf<PopMenu.Item>()
+        if (table != null) items += PopMenu.Item("Copy table") { clip.setPrimaryClip(android.content.ClipData.newPlainText("Table", table)) }
+        items += PopMenu.Item("Copy") { clip.setPrimaryClip(android.content.ClipData.newPlainText("Message", text)) }
         adapter.canFork?.let { can -> items += PopMenu.Item(if (after) "Fork after this" else "Fork from here", enabled = can) { actions.fork(id, after) } }
         adapter.canFork?.let { can -> items += PopMenu.Item("Revert to here", danger = true, enabled = can && !actions.turnRunning) { actions.revert(id, after) } }
         PopMenu(this).show(anchor, items)
@@ -451,7 +454,11 @@ class ChatActivity : NodeActivity() {
                     } else bind(v, item.e)
                     if (item.e.str("kind") == "divider") rule.visibility = View.VISIBLE
                     if (item.e.str("kind") in setOf("user", "answer", "plan")) {
-                        val hold = View.OnLongClickListener { messageMenu(if (v.visibility == View.VISIBLE) v else docBox, item.e); true }
+                        val hold = View.OnLongClickListener { pressed ->
+                            val table = DocViews.tableText(pressed)
+                            messageMenu(if (table != null) pressed else if (v.visibility == View.VISIBLE) v else docBox, item.e, table)
+                            true
+                        }
                         frame.setOnLongClickListener(hold)
                         v.setOnLongClickListener(hold)
                         holdAll(docBox, hold)

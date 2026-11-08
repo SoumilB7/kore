@@ -101,17 +101,15 @@ private struct MarkdownBlockView: View {
 }
 
 /// A fenced code block: a well that scrolls sideways (no wrap), with Copy just below it at its
-/// right edge on hover, in a row kept for it as under a message, so it covers none of the code.
-/// A fence that names its language is in the editor's colours (`SyntaxText`).
+/// right edge on hover (`CopyBelow`). A fence that names its language is in the editor's colours
+/// (`SyntaxText`).
 private struct MarkdownCodeBlock: View {
     let text: String
     let language: Language
     let path: [Int]
-    @StateObject private var hovered = Local(false)
-    @StateObject private var copied = Local(false)
 
     var body: some View {
-        VStack(alignment: .trailing, spacing: 0) {
+        CopyBelow(id: StoryID.Transcript.code(path), text: { [text] in text }) {
             SidewaysWhenWide(fade: true) {
                 code
                     .font(TextStyle.code)
@@ -122,34 +120,66 @@ private struct MarkdownCodeBlock: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Theme.codeBlock, in: RoundedRectangle(cornerRadius: Radius.chip))
+        }
+    }
+
+    private var code: Text {
+        language.family == .plain ? Text(text) : Text(SyntaxText.attributed(text, language))
+    }
+}
+
+/// Copy just below a block at its right edge, shown on hover, in a row kept for it as under a
+/// message, so it covers none of the block: a code block's and a table's. With `option`, an
+/// ⌥-click copies that text instead (a table's Markdown).
+private struct CopyBelow<Block: View>: View {
+    let id: StoryID
+    let text: () -> String
+    var option: (() -> String)?
+    @ViewBuilder let block: Block
+    @StateObject private var hovered = Local(false)
+    @StateObject private var copied = Local(false)
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 0) {
+            block
             HStack(spacing: 0) {
                 if hovered.value {
-                    IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy", action: copy)
-                        .storyID(StoryID.Transcript.code(path).part(.copy))
+                    IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy") {
+                        copy(NSApp.currentEvent?.modifierFlags.contains(.option) == true ? option ?? text : text)
+                    }
+                    .storyID(id.part(.copy))
                 }
             }
             .frame(height: Size.MessageActions.row)
         }
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
-        .storyID(StoryID.Transcript.code(path))
-        .storyAction(StoryID.Transcript.code(path).part(.hover)) { hovered.value = true }
+        .storyID(id)
+        .storyAction(id.part(.hover)) { hovered.value = true }
         // The copy button is built only on hover.
-        .accessibilityAction(named: "Copy") { copy() }
+        .accessibilityActions {
+            Button("Copy") { copy(text) }
+            if let option { Button("Copy as Markdown") { copy(option) } }
+        }
     }
 
-    private var code: Text {
-        language.family == .plain ? Text(text) : Text(SyntaxText.attributed(text, language))
-    }
-
-    private func copy() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+    private func copy(_ text: () -> String) {
+        let board = TranscriptSelection.pasteboard
+        board.clearContents()
+        board.setString(text(), forType: .string)
         copied.value = true
         Task {
             try? await Task.sleep(for: .seconds(Motion.copied))
             copied.value = false
         }
+    }
+}
+
+extension MarkdownTable {
+    /// The whole table as the transcript's selection copies it (cells split by tabs, a row a
+    /// line), or as Markdown.
+    func copyText(markdown: Bool) -> String {
+        Clip(lo: nil, hi: nil, plainText: !markdown).block(MarkdownBlock(id: 0, kind: .table(self), isOpen: false), [0]) ?? ""
     }
 }
 
@@ -231,7 +261,9 @@ private struct MarkdownListView: View {
 }
 
 /// A table: 1pt rules around every cell (the grid's spacing over a rule-coloured ground), bold
-/// centred header, and sideways scrolling when wider than the column.
+/// centred header, and sideways scrolling when wider than the column. Copy below it at its right
+/// edge on hover, as under a code block, takes the whole table as a selection of it copies
+/// (its cells split by tabs, a row a line); ⌥-click takes it as Markdown.
 private struct MarkdownTableView: View {
     let table: MarkdownTable
     let path: [Int]
@@ -239,6 +271,14 @@ private struct MarkdownTableView: View {
     private var columns: Int { max(table.header.count, table.rows.map(\.count).max() ?? 0) }
 
     var body: some View {
+        CopyBelow(id: StoryID.Transcript.table(path), text: { [table] in table.copyText(markdown: false) },
+            option: { [table] in table.copyText(markdown: true) }) { grid }
+            // Rows as tall as their text: cells fill their row, not the height on offer.
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var grid: some View {
         SidewaysWhenWide {
             Grid(horizontalSpacing: Stroke.hairline, verticalSpacing: Stroke.hairline) {
                 GridRow {
@@ -258,9 +298,6 @@ private struct MarkdownTableView: View {
             .padding(Stroke.hairline)
             .background(Theme.tableRule)
         }
-        // Rows as tall as their text: cells fill their row, not the height on offer.
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func cell(_ text: AttributedString, header: Bool, at cell: [Int]) -> some View {

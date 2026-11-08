@@ -115,6 +115,16 @@ object DocViews {
         return TableBox(ctx, header, rows)
     }
 
+    /** The table [v] is in (or is), as "Copy table" copies it ([TableCopy]); null outside one. */
+    fun tableText(v: View?): String? {
+        var at: View? = v
+        while (at != null) {
+            if (at is TableBox) return TableCopy.text(at.header.map { it.toString() }, at.rows.map { r -> r.map { it.toString() } })
+            at = at.parent as? View
+        }
+        return null
+    }
+
     private class TableBox(ctx: Context, val header: List<CharSequence>, val rows: List<List<CharSequence>>) : LinearLayout(ctx) {
         private var builtFor = -1
         private val pad = ctx.dp(10)

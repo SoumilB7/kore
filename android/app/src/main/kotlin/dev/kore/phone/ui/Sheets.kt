@@ -630,7 +630,7 @@ fun iconFor(glyphOrTitle: String): Int? = when (glyphOrTitle.trim()) {
     "□", "▦" -> dev.kore.phone.R.drawable.i_folder
     "⇢", "Show on the Mac" -> dev.kore.phone.R.drawable.i_mac_display
     "×", "Close window", "Close tab" -> dev.kore.phone.R.drawable.i_close_window
-    "Copy" -> dev.kore.phone.R.drawable.i_copy
+    "Copy", "Copy table" -> dev.kore.phone.R.drawable.i_copy
     "History", "From History" -> dev.kore.phone.R.drawable.i_archive
     "Fork from here", "Fork after this" -> dev.kore.phone.R.drawable.i_fork
     "Revert to here" -> dev.kore.phone.R.drawable.i_revert
