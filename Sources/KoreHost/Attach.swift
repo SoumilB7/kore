@@ -131,18 +131,23 @@ package final class NetAttach: @unchecked Sendable {
 
     package func start() {
         queue.async { [self] in
-            let fromHost = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+            // Each source watches and reads its own copy, closed as it's cancelled: the caller's
+            // `input` (a test's socket) may close as soon as this has ended.
+            guard let hostSide = Sockets.duplicate(fd), let clientSide = Sockets.duplicate(input) else { return end(AttachExit.ended.rawValue) }
+            let fromHost = DispatchSource.makeReadSource(fileDescriptor: hostSide, queue: queue)
+            fromHost.setCancelHandler { Sockets.closeFD(hostSide) }
             fromHost.setEventHandler { [weak self] in
                 guard let self, !self.ended else { return }
-                guard let bytes = try? Sockets.read(self.fd, max: 64 << 10), !bytes.isEmpty else { return self.end(AttachExit.ended.rawValue) }
+                guard let bytes = try? Sockets.read(hostSide, max: 64 << 10), !bytes.isEmpty else { return self.end(AttachExit.ended.rawValue) }
                 // A byte lost would leave the session's framing broken for good: the attach ends.
                 guard Self.write(self.output, Data(bytes)) else { return self.end(AttachExit.ended.rawValue) }
             }
-            let fromClient = DispatchSource.makeReadSource(fileDescriptor: input, queue: queue)
+            let fromClient = DispatchSource.makeReadSource(fileDescriptor: clientSide, queue: queue)
+            fromClient.setCancelHandler { Sockets.closeFD(clientSide) }
             fromClient.setEventHandler { [weak self] in
                 guard let self, !self.ended else { return }
                 var chunk = [UInt8](repeating: 0, count: 64 << 10)
-                let count = read(self.input, &chunk, chunk.count)
+                let count = read(clientSide, &chunk, chunk.count)
                 guard count > 0 else {
                     if count < 0, errno == EINTR || errno == EAGAIN { return }
                     Sockets.shutdownBoth(self.fd)
@@ -162,6 +167,8 @@ package final class NetAttach: @unchecked Sendable {
         ended = true
         for source in sources { source.cancel() }
         sources = []
+        // Its own connection to the daemon (the sources' copies close as they're cancelled).
+        Sockets.closeFD(fd)
         done(code)
     }
 

@@ -149,7 +149,11 @@ final class AgentConnection: @unchecked Sendable {
 
     private func waitWritable() {
         guard writer == nil else { return }
-        let writer = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: queue)
+        // Its own copy of the descriptor, closed as it's cancelled: the reader's cancel closes
+        // `fd`, and nothing says this one's cancel has finished by then.
+        guard let watched = Sockets.duplicate(fd) else { return shut() }
+        let writer = DispatchSource.makeWriteSource(fileDescriptor: watched, queue: queue)
+        writer.setCancelHandler { Sockets.closeFD(watched) }
         writer.setEventHandler { [weak self] in
             guard let self else { return }
             self.writer?.cancel()
