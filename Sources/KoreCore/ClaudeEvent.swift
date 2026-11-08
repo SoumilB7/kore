@@ -149,9 +149,9 @@ public enum PermissionDecision: Sendable {
     case allowSettingMode(String)
     /// Answers for AskUserQuestion, keyed by question text.
     case answers([String: String])
-    /// Allow, and keep allowing this exact Bash command: one rule in the project's local
-    /// settings (`.claude/settings.local.json`), the CLI's own writer, never its broader suggestion.
-    case allowExactly(command: String)
+    /// Allow, and keep allowing this kind of Bash command: one `Bash(<rule>)` allow rule in the
+    /// project's local settings (`.claude/settings.local.json`), written by the CLI itself.
+    case allowRule(String)
     case deny(message: String, interrupt: Bool = false)
 
     func payload(for request: PermissionRequest) -> JSONValue {
@@ -162,7 +162,7 @@ public enum PermissionDecision: Sendable {
             ["behavior": "allow", "updatedInput": request.input, "updatedPermissions": .array(request.suggestions)]
         case .allowWithInput(let input):
             ["behavior": "allow", "updatedInput": input]
-        case .allowExactly(let command):
+        case .allowRule(let command):
             [
                 "behavior": "allow", "updatedInput": request.input,
                 "updatedPermissions": [

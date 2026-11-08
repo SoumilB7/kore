@@ -1,3 +1,4 @@
+import AgentTools
 import Foundation
 import KoreCore
 
@@ -631,9 +632,9 @@ package struct Approval: Identifiable, Sendable, Codable {
     /// Run once's follow-up (a Codex review's one retry): sent once the answer's in, when the chat
     /// is idle, so the agent tries it again.
     package var retryMessage: String? = nil
-    /// Its Always allow writes one exact rule for this command (`Approval.exactRule`), not the CLI's
-    /// broader suggestion.
-    package var exactRule: String? = nil
+    /// What its Always allow keeps: a Claude `Bash(…)` rule's content (`sudo apt install *`,
+    /// `KoreAlwaysRule`) or Codex's proposed prefix (`sudo apt install *`), shown on the button.
+    package var alwaysRule: String? = nil
 
     package struct HeldSender: Equatable, Sendable, Codable {
         /// Its address (`uds:/tmp/cc-socks/<pid>.sock`) and name, as it gave them.
@@ -669,11 +670,14 @@ package struct Approval: Identifiable, Sendable, Codable {
         copy.held = held
         copy.allowNote = allowNote
         copy.autoStop = autoStop
-        copy.exactRule = exactRule
+        copy.alwaysRule = alwaysRule
         copy.retryMessage = retryMessage
         if canAlwaysAllow { copy.alwaysAllowNote = note }
         return copy
     }
+
+    /// Always allow's tooltip: the rule it keeps, as it reads (`Always allow `sudo apt install …``).
+    package var alwaysHelp: String { alwaysRule.map { "Always allow `\(KoreAlwaysRule.shown($0))`" } ?? "" }
 
     /// A plain permission (a command, tool, file or web access): not a plan, questions or a sign-in.
     package var isPermission: Bool { plan == nil && questions.isEmpty && !signIn }
@@ -733,7 +737,7 @@ extension AgentID {
 extension Approval {
     enum CodingKeys: String, CodingKey {
         case id, title, detail, body, canAlwaysAllow, questions, plan, changes, agent, signIn, alwaysAllowNote, tool, targets, held,
-            allowNote, autoStop, retryMessage, exactRule
+            allowNote, autoStop, retryMessage, alwaysRule
     }
 
     // Written by hand only so `autoStop` (0.3.3) is optional on the wire: an older box or phone
@@ -757,7 +761,7 @@ extension Approval {
         allowNote = try c.decodeIfPresent(String.self, forKey: .allowNote)
         autoStop = try c.decodeIfPresent(Bool.self, forKey: .autoStop) ?? false
         retryMessage = try c.decodeIfPresent(String.self, forKey: .retryMessage)
-        exactRule = try c.decodeIfPresent(String.self, forKey: .exactRule)
+        alwaysRule = try c.decodeIfPresent(String.self, forKey: .alwaysRule)
     }
 
     package func encode(to encoder: any Encoder) throws {
@@ -779,6 +783,6 @@ extension Approval {
         try c.encodeIfPresent(allowNote, forKey: .allowNote)
         if autoStop { try c.encode(autoStop, forKey: .autoStop) }
         try c.encodeIfPresent(retryMessage, forKey: .retryMessage)
-        try c.encodeIfPresent(exactRule, forKey: .exactRule)
+        try c.encodeIfPresent(alwaysRule, forKey: .alwaysRule)
     }
 }

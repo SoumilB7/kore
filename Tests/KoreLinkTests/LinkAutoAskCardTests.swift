@@ -16,7 +16,7 @@ struct LinkAutoAskCardTests {
         let chat = Chat(provider: .claude, folder: URL(fileURLWithPath: "/tmp/kore-auto-link"))
         var ask = Approval(id: "r-hook", title: "Auto asks: sudo reboot (Kore asks you first: sudo.)", detail: nil, body: "sudo reboot", canAlwaysAllow: true, questions: [])
         ask.autoStop = true
-        ask.exactRule = "sudo reboot"
+        ask.alwaysRule = "sudo reboot *"
         let card = LinkSnapshot.card(ask, in: chat)
         #expect(card.kind == .permission && card.title == ask.title)
         #expect(card.actions.map(\.id) == [.allow, .deny] && card.actions.first?.label == "Run once" && card.actions.allSatisfy { $0.refused == nil })

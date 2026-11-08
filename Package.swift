@@ -30,7 +30,7 @@ let package = Package(
         // The chat engine without UI: the CLIs' backends and translators, chat events, account
         // calls and the chat state that has no view code. No SwiftUI, AppKit or Combine, so a
         // headless host can build on it; nothing here imports KoreUI.
-        .target(name: "src", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
+        .target(name: "src", dependencies: ["KoreCore", "AgentTools"], swiftSettings: releaseForSize),
         // The app's views and the stores they show, over `src`; `Kore` is its launcher. Other
         // targets in this package reach its `package` declarations.
         .target(
@@ -84,7 +84,7 @@ let package = Package(
         .target(name: "AgentTools", swiftSettings: releaseForSize),
         // User storylines (phase 12): the engine, steps, scripted CLI and catalogue, and the app
         // with them inside. Neither is part of Kore.app.
-        .target(name: "KoreStorylines", dependencies: ["KoreUI", "src", "KoreCore", "KoreLink", "LinkProtocol", "HostClient"], swiftSettings: releaseForSize),
+        .target(name: "KoreStorylines", dependencies: ["KoreUI", "src", "KoreCore", "KoreLink", "LinkProtocol", "HostClient", "AgentTools"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-storylines", dependencies: ["KoreStorylines", "KoreUI"], swiftSettings: releaseForSize),
         // Plays recorded CLI sessions as `claude` / `codex` for storylines.
         .executableTarget(name: "kore-fake-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),

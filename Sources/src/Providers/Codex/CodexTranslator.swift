@@ -1,3 +1,4 @@
+import AgentTools
 import Foundation
 import KoreCore
 
@@ -800,7 +801,12 @@ package final class CodexTranslator {
         }
         switch a.kind {
         case .command:
-            var ask = make("Run command?", body: Self.command(a.params) ?? a.command, always: true)
+            // Always allow keeps Codex's proposed prefix (its exec policy) or, without one, the
+            // session's; never on a critical removal.
+            let line = Self.command(a.params) ?? a.command
+            let critical = line.map { KoreAlwaysRule.critical($0, cwd: a.cwd ?? folder.path) } ?? false
+            var ask = make("Run command?", body: line, always: !critical)
+            if !critical, let prefix = a.proposedAmendment { ask.alwaysRule = prefix.joined(separator: " ") + " *" }
             let network = a.params["networkApprovalContext"].map { $0 != .null } ?? false
             ask.tool = network ? "commandExecution.network" : "commandExecution"
             return ask

@@ -77,6 +77,11 @@ public struct CodexApproval: Sendable, Identifiable {
     /// userInput questions: `{id, header, question, options: [{label, description}] | null}`.
     public let questions: [JSONValue]
     public let params: JSONValue
+    /// The prefix rule Codex proposes for "always" on a command (`proposedExecpolicyAmendment`).
+    public var proposedAmendment: [String]? {
+        let words = params["proposedExecpolicyAmendment"]?.array?.compactMap(\.string) ?? []
+        return words.isEmpty ? nil : words
+    }
 
     init?(id: JSONValue, method: String, params: JSONValue) {
         switch method {
@@ -101,6 +106,9 @@ public enum CodexDecision: Sendable {
     case accept
     /// Accept, and don't ask again for the same thing this session.
     case acceptForSession
+    /// Accept, and keep Codex's proposed prefix rule (`proposedExecpolicyAmendment`) in its exec
+    /// policy, so matching commands run without asking from now on.
+    case acceptWithAmendment([String])
     case decline
     /// Decline and stop the turn.
     case cancel
@@ -110,6 +118,9 @@ public enum CodexDecision: Sendable {
     func result(for approval: CodexApproval) -> JSONValue {
         switch approval.kind {
         case .command, .fileChange:
+            if case .acceptWithAmendment(let prefix) = self, approval.kind == .command {
+                return ["decision": ["acceptWithExecpolicyAmendment": ["execpolicy_amendment": .array(prefix.map(JSONValue.string))]]]
+            }
             return ["decision": .string(decisionName)]
         case .permissions:
             // Grant what was asked (dropping nulls), or nothing.
@@ -126,7 +137,7 @@ public enum CodexDecision: Sendable {
 
     private var isAccept: Bool {
         switch self {
-        case .accept, .acceptForSession, .answers: true
+        case .accept, .acceptForSession, .acceptWithAmendment, .answers: true
         case .decline, .cancel: false
         }
     }
@@ -134,7 +145,7 @@ public enum CodexDecision: Sendable {
     private var decisionName: String {
         switch self {
         case .accept, .answers: "accept"
-        case .acceptForSession: "acceptForSession"
+        case .acceptForSession, .acceptWithAmendment: "acceptForSession"
         case .decline: "decline"
         case .cancel: "cancel"
         }
