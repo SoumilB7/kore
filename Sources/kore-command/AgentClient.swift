@@ -77,10 +77,14 @@ final class AgentClient {
 
     deinit { Darwin.close(fd) }
 
-    /// A `bye` left on a connection Kore closed at once.
+    /// A `bye` left on a connection closed at once. Only its code counts, and only a code Kore turns
+    /// callers away with: the peer may not have been checked, so its words aren't repeated.
     private func readTurnAway() throws(Failure) {
-        if let raw = try nextRaw(), let line = (try? JSONSerialization.jsonObject(with: raw)) as? Object, line["type"] as? String == "bye" {
-            throw Self.refusal(line)
+        guard let raw = try nextRaw(), let line = (try? JSONSerialization.jsonObject(with: raw)) as? Object, line["type"] as? String == "bye" else { return }
+        switch line["code"] as? String {
+        case "rate_limited": throw .refused(code: "rate_limited", message: "Too many connections to Kore from this process, or at once.")
+        case "mismatch": throw .refused(code: "mismatch", message: "Kore couldn't tell which process this is.")
+        default: return
         }
     }
 

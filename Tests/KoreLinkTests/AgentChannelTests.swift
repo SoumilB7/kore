@@ -183,21 +183,26 @@ struct AgentSecretsTests {
     }
 
     /// In a line, a key right after an escape has no word boundary before it.
-    @Test(arguments: ["\n", "\t", "\r", "\u{07}"])
+    @Test(arguments: ["\n", "\t", "\r", "\u{08}", "\u{0C}", "\u{07}"])
     func aKeyAfterAnEscapeIsMasked(_ escape: String) throws {
         for key in Self.shapes {
             #expect(try encoded("before\(escape)\(key)\(escape)after").a == "before\(escape)\(AgentSecrets.mask)\(escape)after")
         }
         #expect(try encoded("x\(escape)Bearer " + Self.tail).a == "x\(escape)Bearer \(AgentSecrets.mask)")
         #expect(try encoded("x\(escape)postgres://me:abcdefgh@db").a == "x\(escape)postgres://me:\(AgentSecrets.mask)@db")
-        #expect(try encoded("password:\(escape == "\u{07}" ? " " : escape)abcdefgh1234").a.hasSuffix(AgentSecrets.mask))
+        #expect(try encoded("password:\(["\u{07}", "\u{08}"].contains(escape) ? " " : escape)abcdefgh1234").a.hasSuffix(AgentSecrets.mask))
     }
 
-    @Test func maskingStaysQuickOnALongRun() {
-        let run = "echo " + String(repeating: "a", count: 200 * 1024)
+    static let longRuns: [String] = [
+        "echo " + String(repeating: "a", count: 200 * 1024),
+        "echo " + String(repeating: "-eyJ", count: 64 * 1024),
+    ]
+
+    @Test(arguments: longRuns)
+    func maskingStaysQuickOnALongRun(_ run: String) {
         let began = ContinuousClock.now
         #expect(AgentSecrets.mask(run) == run)
-        // Quadratic, this took minutes; a debug build on a busy machine has plenty of room.
+        // Quadratic, these took minutes; a debug build on a busy machine has plenty of room.
         #expect(ContinuousClock.now - began < .seconds(5))
     }
 

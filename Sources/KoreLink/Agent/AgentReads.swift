@@ -11,6 +11,9 @@ enum AgentReads {
     /// Rows `tx.read` gives by default, and at most.
     static let page = 20
     static let pageMax = 200
+    /// The most of a card's questions sent, and of each one's options.
+    static let questionsMax = 16
+    static let optionsMax = 32
     /// Rows a follow starts with, and how far back it looks for changes.
     static let followWindow = 40
 
@@ -40,6 +43,8 @@ enum AgentReads {
         }
     }
 
+    static func title(_ text: String) -> String { LinkSnapshot.capped(text, LinkSnapshot.inputCap).text }
+
     static func state(_ chat: Chat) -> String {
         switch chat.attention {
         case .waiting: "needs-you"
@@ -55,7 +60,7 @@ enum AgentReads {
         let mode = chat.provider.modes.first { $0.id == chat.controls.mode }
         let folder = workspace?.folder ?? chat.folder
         return AgentChat(
-            id: id, short: short(id), title: chat.title, provider: chat.provider.id, folder: LinkSnapshot.homeRelative(folder.path),
+            id: id, short: short(id), title: title(chat.title), provider: chat.provider.id, folder: LinkSnapshot.homeRelative(folder.path),
             window: folder.lastPathComponent, state: state(chat), mode: chat.controls.mode, modeLabel: mode?.label,
             planOn: chat.provider.planToggle != nil ? chat.controls.planMode : nil, model: chat.controls.currentModel?.name,
             queued: chat.queuedCount, cards: LinkSnapshot.cards(chat).count, own: id == own ? true : nil)
@@ -80,9 +85,13 @@ enum AgentReads {
         let id = chat.id.uuidString
         return LinkSnapshot.cards(chat).map { card in
             AgentCard(
-                chat: id, chatShort: short(id), chatTitle: chat.title, id: card.id, kind: card.kind.rawValue, title: LinkSnapshot.capped(card.title, LinkSnapshot.inputCap).text,
+                chat: id, chatShort: short(id), chatTitle: title(chat.title), id: card.id, kind: card.kind.rawValue, title: LinkSnapshot.capped(card.title, LinkSnapshot.inputCap).text,
                 detail: card.detail.map { LinkSnapshot.capped($0, LinkSnapshot.bodyCap).text }, body: card.body.map { LinkSnapshot.capped($0, LinkSnapshot.bodyCap).text },
-                questions: card.questions?.map { .init(text: $0.text, options: $0.options.map(\.label)) })
+                questions: card.questions?.prefix(questionsMax).map { question in
+                    .init(
+                        text: LinkSnapshot.capped(question.text, LinkSnapshot.bodyCap).text,
+                        options: question.options.prefix(optionsMax).map { LinkSnapshot.capped($0.label, LinkSnapshot.inputCap).text })
+                })
         }
     }
 
@@ -152,7 +161,7 @@ enum AgentReads {
             folder: LinkSnapshot.homeRelative(workspace.folder.path),
             sessions: sessions.map {
                 AgentSession(
-                    id: $0.id, provider: $0.provider, title: $0.title,
+                    id: $0.id, provider: $0.provider, title: title($0.title),
                     updated: format.string(from: Date(timeIntervalSince1970: Double($0.updatedAt) / 1000)), archived: $0.archived, open: $0.open)
             }, more: more)
     }

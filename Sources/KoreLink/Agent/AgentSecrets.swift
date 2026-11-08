@@ -10,10 +10,10 @@ package enum AgentSecrets {
     package static let mask = "[masked]"
 
     /// Where a key can begin: a word's start, or just after an escape in encoded JSON, where the
-    /// escape's last letter or digit would hide the boundary (`\n`, `\t`, `\r`, `\u0007`).
-    private static let start = #"(?:(?<=\\[nrt])|(?<=\\u[0-9a-fA-F]{4})|\b)"#
+    /// escape's last letter or digit would hide the boundary (`\n`, `\b`, `\u0007`).
+    private static let start = #"(?:(?<=\\[nrtbf])|(?<=\\u[0-9a-fA-F]{4})|\b)"#
     /// Space, or an escaped one in encoded JSON.
-    private static let gap = #"(?:\s|\\[nrt])"#
+    private static let gap = #"(?:\s|\\[nrtf])"#
 
     /// Whole matches are keys. `start` first, so "task-" isn't "sk-".
     private static let keys = regex(
@@ -26,7 +26,8 @@ package enum AgentSecrets {
             + #"|glpat-[A-Za-z0-9_-]{16,}"#
             + #"|npm_[A-Za-z0-9]{30,}"#
             + #"|hf_[A-Za-z0-9]{30,}"#
-            + #"|eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})"#)
+            // Bounded, unlike the rest: these can fail after their run, and `-` starts another try.
+            + #"|eyJ[A-Za-z0-9_-]{10,512}\.eyJ[A-Za-z0-9_-]{10,16384}\.[A-Za-z0-9_-]{10,2048})"#)
     /// To its end, or to the end of the string or text it's in.
     private static let privateKeys = regex(#"-----BEGIN [A-Z ]*PRIVATE KEY-----(?:[^"\\]|\\.)*?(?:-----END [A-Z ]*PRIVATE KEY-----|(?=")|\z)"#)
     /// What names itself: the name stays, the value goes. An all-digit value is a count. Quotes

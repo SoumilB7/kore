@@ -331,7 +331,7 @@ package final class AgentChannel {
     private func callerInfo(_ client: Client) -> AgentCallerInfo {
         let chat = client.chat.flatMap { AgentReads.chatsByID()[$0] }
         return AgentCallerInfo(
-            class: client.callerClass, chat: client.chat, short: client.chat.map(AgentReads.short), title: chat?.title)
+            class: client.callerClass, chat: client.chat, short: client.chat.map(AgentReads.short), title: chat.map { AgentReads.title($0.title) })
     }
 
     // MARK: Commands
