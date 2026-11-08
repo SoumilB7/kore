@@ -50,7 +50,9 @@ class UnloadStoryline: ChatStoryline {
             holds(max(turns.lowerBound, turns.upperBound - 14)...turns.upperBound),
             WaitIdle(),
             Do("Build every turn it holds") { try $0.activeChat().storyTranscript.showAll() },
-            WaitIdle(), Settle(),
+            // Built all at once (the message rail's way, before it jumps up), the rows above lay
+            // out anew and can take the view up with them: a reader at the end goes back there.
+            WaitIdle(), Settle(), ToEnd(),
             drawn(answer: turns.upperBound),
         ]
     }
@@ -80,7 +82,7 @@ class UnloadStoryline: ChatStoryline {
     }
 
     static func holds(_ range: ClosedRange<Int>) -> Expect {
-        Expect("messages \(range) in memory", found: { (try? users($0))?.description }) { story in
+        Expect("messages \(range) in memory", found: { story in "\((try? users(story))?.description ?? "-"); \(story.app.chat?.storyTranscript.endWhy ?? "-")" }) { story in
             try users(story) == range.map(text)
         }
     }
