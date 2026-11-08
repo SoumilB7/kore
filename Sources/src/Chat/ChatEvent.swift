@@ -9,8 +9,10 @@ package enum ChatEvent: Sendable {
 
     /// Claude session id / Codex thread id: what `--resume` / `thread/resume` takes.
     case sessionIdentified(String)
-    /// A title the CLI generated (Claude, after the first prompt).
-    case titleChanged(String)
+    /// A title from the CLI. `rename`: the session's name, set by a rename (Claude's
+    /// `system/session_title_changed`, Codex's `thread/name/updated`), which replaces any title;
+    /// otherwise a generated one (Claude, after the first prompt), taken only while there's none.
+    case titleChanged(String, rename: Bool = false)
     /// Models, current model and effort, and `/` commands, once the CLI has started.
     case controlsLoaded(ChatControls)
     /// The mode changed (Claude permission mode / Codex permissions preset), with who changed it.

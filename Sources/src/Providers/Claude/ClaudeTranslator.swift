@@ -536,6 +536,12 @@ package final class ClaudeTranslator {
                 {
                     out.append(.notice("\(Refusal.name(from)) flagged this · \(Refusal.name(to)) took it on"))
                 }
+            case "session_title_changed":
+                // The session's name (never an AI title): at start when it has one, and after
+                // each rename, `/rename` typed in the chat or Kore's own `rename_session`.
+                if let title = json["title"]?.string, !title.allSatisfy(\.isWhitespace) {
+                    out.append(.titleChanged(title, rename: true))
+                }
             case "api_retry":
                 // No network, or the API not answering: the CLI tries again, ten times over minutes.
                 retrying = true

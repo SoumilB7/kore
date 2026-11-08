@@ -9,7 +9,10 @@ package final class ChatStatus {
     /// Claude session id / Codex thread id, once known.
     package private(set) var sessionId: String?
     /// The CLI's name for the conversation (AI title or rename); nil until there is one.
-    package var name: String?
+    /// Never empty: a blank one is no name.
+    package var name: String? {
+        didSet { if let name, Self.blank(name) { self.name = nil } }
+    }
     /// The first thing the user said, for a title until there's a name.
     package private(set) var firstPrompt: String?
     /// Opened from a past session (history, or restored tabs).
@@ -18,7 +21,7 @@ package final class ChatStatus {
 
     package init(resume: SessionSummary?) {
         sessionId = resume?.id
-        name = resume?.title
+        name = resume.flatMap { Self.blank($0.title) ? nil : $0.title }
         resumed = resume != nil
     }
 
@@ -33,8 +36,8 @@ package final class ChatStatus {
         switch event {
         case .sessionIdentified(let id):
             sessionId = id
-        case .titleChanged(let title):
-            if name == nil { name = title }
+        case .titleChanged(let title, let rename):
+            if rename || name == nil { name = title }
         case .turnStarted:
             isRunning = true
         case .turnFinished, .exited:
@@ -50,6 +53,8 @@ package final class ChatStatus {
             break
         }
     }
+
+    private static func blank(_ text: String) -> Bool { text.allSatisfy(\.isWhitespace) }
 
     /// Set at send, before the CLI confirms a turn; cleared when it says nothing will run.
     package func setRunning(_ on: Bool) { isRunning = on }

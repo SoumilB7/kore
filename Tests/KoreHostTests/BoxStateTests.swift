@@ -245,6 +245,39 @@ struct BoxStateTests {
         #expect(!made.last.calls.contains { $0.hasPrefix("rename") })
     }
 
+    // MARK: 5b. A rename the CLI made
+
+    /// `/rename` typed in a box chat: the CLI's new name is the chat's for every client (its
+    /// meta and log), over the name it had.
+    @Test func aRenameTheCLIMadeIsTheBoxChatsTitle() async throws {
+        let (rig, hc, made) = try rig()
+        defer { rig.finish() }
+        #expect(try await apply(rig, .chatRename, ControlArgs(chatId: hc.id, title: "Claude")).ok)
+        let chat = try #require(rig.host.live(hc))
+        await chat.startOnce()
+        made.last.sink.yield(.titleChanged("Device", rename: true))
+        try await until { hc.record.title == "Device" }
+        #expect(hc.title == "Device" && chat.title == "Device")
+        #expect(await logged(hc).contains { if case .titleChanged("Device", true)? = $0.e { true } else { false } })
+    }
+
+    /// A box chat kept with a session and an empty title (as the phone's untitled row) wakes
+    /// with a title: its first words, or its CLI's name.
+    @Test func aBoxChatKeptWithAnEmptyTitleShowsOne() async throws {
+        let (rig, hc, _) = try rig()
+        defer { rig.finish() }
+        let first = try #require(rig.host.live(hc))
+        await first.startOnce()
+        try await until { hc.record.session == "s1" }
+        rig.host.sleep(hc)
+        hc.setTitle("")
+        let chat = try #require(rig.host.live(hc))
+        #expect(chat.status.name == nil && !hc.title.isEmpty)
+        #expect(chat.title == "Claude")
+        chat.status.apply(.userMessage(text: "fix the  login page", attachments: []))
+        #expect(hc.title == "fix the login page")
+    }
+
     // MARK: 6. A model change keeps the effort in step
 
     @Test func aPhonesModelChangeKeepsTheEffortInStep() async throws {
