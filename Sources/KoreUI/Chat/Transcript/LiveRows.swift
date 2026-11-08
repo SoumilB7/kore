@@ -7,7 +7,7 @@ import SwiftUI
 /// `· ✢ * ✶ ✻ ✽` and back, and a random verb that changes at 2s, 3s, 5s and then every 5s,
 /// decoding into place one character at a time. Everything follows from the time since the turn
 /// began. One-shot sleeps update its text only at the next glyph, decode or word boundary. A
-/// Codex chat wears its own quieter face: the timeline's plain dot and "Working…", still.
+/// Codex chat wears its own quieter face: the timeline's dot, breathing, and "Working…".
 struct SpinnerRow: View {
     let since: Date
     /// Claude's glyph and verbs; otherwise Codex's dot and one word.
@@ -74,7 +74,10 @@ struct SpinnerRow: View {
                         .font(TextStyle.spinnerGlyph)
                         .foregroundStyle(Theme.spinnerGlyph(tint))
                 } else {
-                    Circle().fill(Theme.dot).frame(width: Layout.Timeline.dot, height: Layout.Timeline.dot)
+                    // Codex's dot breathes while it works: a layer animation (no SwiftUI updates),
+                    // still under another tab, off screen or with reduced motion.
+                    let dot = Circle().fill(Theme.dot).frame(width: Layout.Timeline.dot, height: Layout.Timeline.dot)
+                    if configuration.paused { dot } else { dot.pulse(low: Motion.livePulseLow, period: Motion.livePulsePeriod, easing: .easeInEaseOut) }
                 }
             }
             .frame(width: Size.spinnerGlyphBox)
