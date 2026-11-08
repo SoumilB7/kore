@@ -151,7 +151,7 @@ struct ChatView: View {
         .animation(Motion.fade, value: changesTurn.value?.turn)
         .animation(Motion.fade, value: chat.usage.extended)
         // The composer gives up its focus to the usage card and takes it back after.
-        .onChange(of: chat.usage.extended) { _, open in composerFocused = !open && terminal?.focusPending != true }
+        .onChange(of: chat.usage.extended) { _, open in composerFocused = !open && terminal?.focusPending != true && workspace.quickOpen == nil }
         // A switch shows the other chat as it is: its mode's outline, its context, its overlays
         // appear at once, not animated from the last chat's.
         .transaction(value: chat.id) { transaction in
@@ -165,7 +165,9 @@ struct ChatView: View {
             if let last, last != active?.id { kept.chats.first { $0.id == last }?.usage.closeExtended() }
             shown.value = active
             guard let active else { return }
-            composerFocused = terminal?.focusPending != true
+            // Not over Quick Open: a chat shown just after ⌘P (a folder still opening) would take
+            // the typing meant for its field.
+            composerFocused = terminal?.focusPending != true && workspace.quickOpen == nil
             devHooks(active)
         }
         .task(id: chat.id) { await chat.startOnce() }
