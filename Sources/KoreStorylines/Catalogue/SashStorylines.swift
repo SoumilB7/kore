@@ -216,6 +216,9 @@ struct SashDrag: Step {
             for i in 1...steps {
                 await story.input.moved(to: CGPoint(x: start.x + by * CGFloat(i) / CGFloat(steps), y: start.y), in: window)
                 try? await Task.sleep(for: pause)
+                // Read once the move's passes have run (on a free Mac, within the pause): a busy one
+                // read it mid-way, a place no frame drew.
+                try? await story.idle(timeout: .seconds(2))
                 during.append(sample())
             }
             trace.released = ContinuousClock.now

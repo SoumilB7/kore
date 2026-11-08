@@ -64,7 +64,9 @@ final class Wire: @unchecked Sendable {
     private func pump() {
         guard !toldClosed else { return }
         let messages = session.pump()
-        if case .established(let peer) = session.state, !toldUp {
+        // Welcomed, even when the close came in the same read (a busy Mac's phone reads late):
+        // the app's NetConnection keeps its session's `established` too.
+        if let peer = session.established, !toldUp {
             toldUp = true
             told(.up(peer, session.directory))
         }

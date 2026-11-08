@@ -232,6 +232,8 @@ final class World {
         var idle = 0
         var dialing = 0
         var dialSince: ContinuousClock.Instant?
+        var unreadSince: ContinuousClock.Instant?
+        var busySince: ContinuousClock.Instant?
         while ContinuousClock.now < wallEnd {
             if await pulse.quiet(.milliseconds(10)) {
                 await drainMain()
@@ -245,7 +247,16 @@ final class World {
                 dialing = dials.isEmpty ? 0 : dialing + 1
                 if dials.isEmpty { dialSince = nil } else if dialSince == nil { dialSince = .now }
                 let waiting = toUp ? ContinuousClock.now - (dialSince ?? .now) < .seconds(5) : dialing < 30
-                if pulse.busy || (!dials.isEmpty && waiting) {
+                // Bytes on a link not read yet are work under way too: time waits for them, a few
+                // seconds at most (an end that never reads is a stuck node, which the scenario says).
+                let sent = net.inFlight
+                if sent { unreadSince = unreadSince ?? .now } else { unreadSince = nil }
+                let reading = sent && ContinuousClock.now - (unreadSince ?? .now) < .seconds(5)
+                // Work handed off and not back yet, likewise: 5 s of it at most in a row (a hand-off
+                // that never ends mustn't stop the world's time for good).
+                if pulse.busy { busySince = busySince ?? .now } else { busySince = nil }
+                let working = pulse.busy && ContinuousClock.now - (busySince ?? .now) < .seconds(5)
+                if working || reading || (!dials.isEmpty && waiting) {
                     idle = 0
                 } else if clock.advanceToNext(limit: end - clock.now) != nil {
                     idle = 0

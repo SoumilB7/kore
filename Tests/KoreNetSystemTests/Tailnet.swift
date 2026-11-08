@@ -199,6 +199,10 @@ final class SharedTailnet: Sendable {
         return (client, server)
     }
 
+    /// Something sent on a link that its other end hasn't read yet: work under way (a handshake's
+    /// welcome, a push), however long a busy Mac takes to get to it.
+    var inFlight: Bool { state.withLock { s in s.links.contains { $0.fds.contains { $0.unread > 0 } } } }
+
     func dial(from ip: String, to address: String) throws -> Int32 {
         let (me, target) = state.withLock { ($0.nodes[ip], $0.nodes[address]) }
         guard let me, me.state == .running else { throw TailnetError.notRunning(me?.state ?? .noState) }
@@ -306,6 +310,15 @@ struct FDRef: Sendable {
         var st = stat()
         guard fstat(fd, &st) == 0, st.st_dev == dev, st.st_ino == ino else { return }
         Sockets.shutdownBoth(fd)
+    }
+
+    /// Bytes that arrived at this end and aren't read yet (0 once it's gone).
+    var unread: Int32 {
+        var st = stat()
+        guard fstat(fd, &st) == 0, st.st_dev == dev, st.st_ino == ino else { return 0 }
+        var count: Int32 = 0
+        // FIONREAD, _IOR('f', 127, int): Swift doesn't import the macro.
+        return ioctl(fd, UInt(0x4004_667F), &count) == 0 ? count : 0
     }
 }
 

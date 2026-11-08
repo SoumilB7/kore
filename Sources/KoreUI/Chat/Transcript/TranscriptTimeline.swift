@@ -1063,8 +1063,18 @@ private final class WidthHold: ObservableObject {
     /// above the top of the visible area then, and the view's offset then.
     private var row: (id: String, place: CGRect, share: CGFloat, offset: CGFloat)?
 
+    /// The row kept hasn't been laid out at the width now yet: it's held until it has, however
+    /// late that comes (a busy Mac lays rows out more than `lasts` after the width changed, and a
+    /// hold gone by then let them move the reader), up to `waitsAtMost` more.
+    private var unplaced = false
+    static let waitsAtMost: TimeInterval = 10
+
     /// A row is kept: nothing else moves the view or reads where the reader left it meanwhile.
-    var holding: Bool { row != nil && Date() < until }
+    var holding: Bool {
+        guard row != nil else { return false }
+        let now = Date()
+        return now < until || (unplaced && now < until + Self.waitsAtMost)
+    }
     /// The row kept left the built rows: the view is taken to it until it's built again.
     private(set) var seeking: String?
     /// The other built rows' frames when the row was kept: laid out again with it, they say about
@@ -1094,6 +1104,7 @@ private final class WidthHold: ObservableObject {
         // A frame still at the width it was kept at is the lazy stack placing it by its guesses
         // for the rows around while they're laid out again: the next, at the new width, says.
         guard holding, let row, row.id == id, abs(frame.width - (width ?? frame.width)) <= 0.5 else { return put }
+        unplaced = false
         seeking = nil
         until = max(until, Date() + Self.lasts / 4)
         let moved = (frame.minY + row.share * frame.height) - (row.place.minY + row.share * row.place.height)
@@ -1112,6 +1123,7 @@ private final class WidthHold: ObservableObject {
         }
         if holding {
             until = Date() + Self.lasts
+            unplaced = true
             return nil
         }
         until = Date() + Self.lasts
@@ -1123,6 +1135,7 @@ private final class WidthHold: ObservableObject {
             .min { abs($0.value.minY - top) < abs($1.value.minY - top) }
             .map { kept in (kept.key, kept.value, kept.value.minY < top && kept.value.height > 0 ? (top - kept.value.minY) / kept.value.height : 0, offset) }
         witnesses = row.map { kept in built.filter { $0.key != kept.id } } ?? [:]
+        unplaced = row != nil
         return .hold(.offset(offset))
     }
 
@@ -1132,6 +1145,7 @@ private final class WidthHold: ObservableObject {
     /// The reader scrolled, or the view keeps its place another way: nothing is held.
     func drop() {
         row = nil
+        unplaced = false
         seeking = nil
         witnesses = [:]
     }
@@ -1139,6 +1153,7 @@ private final class WidthHold: ObservableObject {
     /// A scroll view built anew lays its rows out afresh: none of it is a new width.
     func reset() {
         row = nil
+        unplaced = false
         seeking = nil
         witnesses = [:]
         width = nil

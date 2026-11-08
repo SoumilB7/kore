@@ -35,8 +35,11 @@ class TailnetSwitch(private val tailnet: Tailnet, private val io: CoroutineDispa
     suspend fun settle() = lock.withLock { settleLocked() }
 
     private suspend fun settleLocked() {
-        while (up != wanted) {
+        while (true) {
+            // Read once: a [want] between the check and the run would start a tailnet that's
+            // already up (or stop one that's down).
             val target = wanted
+            if (up == target) break
             withContext(NonCancellable + io) {
                 if (target) tailnet.start() else tailnet.stop()
                 up = target

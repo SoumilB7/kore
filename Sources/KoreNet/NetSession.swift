@@ -157,7 +157,12 @@ package final class NetSession {
     /// How long a client waits for the welcome (as the SSH route's 20 s handshake).
     package static let clientWindow: TimeInterval = 20
 
-    package private(set) var state = State.handshaking
+    package private(set) var state = State.handshaking {
+        didSet { if case .established(let peer) = state { established = peer } }
+    }
+    /// The peer once the session was established; kept after it closes, so a welcome read with
+    /// the close in one go still says who it was (as the phone's `NetClientSession.established`).
+    package private(set) var established: NetPeer?
     /// Server side: the cursors the client sent in its first message after the welcome.
     package private(set) var cursors: [String: JSONValue]?
     /// Server side: the hello as it came (who asked, for the journal and the pending list).
