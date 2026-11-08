@@ -1,3 +1,4 @@
+import AgentTools
 import Darwin
 import Foundation
 
@@ -118,17 +119,7 @@ enum Reads {
         }
     }
 
-    /// A tier's name as the user sees it, from its wire id (`watch`, `own`, `drive`, `full`, `off`).
-    static func tierName(_ id: String) -> String {
-        switch id {
-        case "watch": "Read"
-        case "own": "Act limited"
-        case "drive": "Act unlimited"
-        case "full": "Full"
-        case "off", "": "Off"
-        default: id
-        }
-    }
+    static func tierName(_ id: String) -> String { AgentTools.tierName(id) }
 
     static func caps(_ client: AgentClient, _ o: Options) throws(AgentClient.Failure) {
         let data = try client.run("agent.caps")

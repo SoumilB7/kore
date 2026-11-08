@@ -64,7 +64,10 @@ let package = Package(
         // The `kore` command in Kore.app (Contents/Helpers/kore): the reads over Kore's agent
         // channel (`z-docs/agent-protocol.md`) and `kore mcp`; opening and `kore setup` stay the
         // zsh script's. Foundation only, so it stays small and starts fast.
-        .executableTarget(name: "kore-command", swiftSettings: releaseForSize),
+        .executableTarget(name: "kore-command", dependencies: ["AgentTools"], swiftSettings: releaseForSize),
+        // The `kore_app` tools as an MCP server lists them, and the stdio server: one list for
+        // `kore mcp` on the Mac and `kore-host mcp` on a box. Foundation only.
+        .target(name: "AgentTools", swiftSettings: releaseForSize),
         // User storylines (phase 12): the engine, steps, scripted CLI and catalogue, and the app
         // with them inside. Neither is part of Kore.app.
         .target(name: "KoreStorylines", dependencies: ["KoreUI", "src", "KoreCore", "KoreLink", "LinkProtocol"], swiftSettings: releaseForSize),
