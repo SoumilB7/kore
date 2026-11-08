@@ -9,6 +9,8 @@ final class Zoom {
     static let shared = Zoom()
     private static let key = "zoom"
     static let range: ClosedRange<CGFloat> = 0.7...1.8
+    /// One ⌘= or ⌘- (pages zoomed by keys take the same steps).
+    static let step: CGFloat = 0.1
 
     private(set) var scale: CGFloat
     @ObservationIgnored private let persist: (CGFloat) -> Void
@@ -20,8 +22,8 @@ final class Zoom {
         self.persist = persist
     }
 
-    func zoomIn() { set(scale + 0.1) }
-    func zoomOut() { set(scale - 0.1) }
+    func zoomIn() { set(scale + Self.step) }
+    func zoomOut() { set(scale - Self.step) }
     func reset() { set(1) }
 
     static func bounded(_ value: CGFloat) -> CGFloat? {

@@ -34,6 +34,7 @@ private struct MermaidFileView: View {
         }
         .background(Theme.background)
         .task(id: context.reloadToken) { await load(page) }
+        .rendererKeys { key, flags, _ in PageZoom.keys(key, flags, page.view) }
     }
 
     private func load(_ page: DiagramPage) async {

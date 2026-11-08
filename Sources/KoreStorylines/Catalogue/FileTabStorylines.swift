@@ -339,3 +339,68 @@ private struct ZoomedEditorSwitches: Step {
         }
     }
 }
+
+/// An HTML preview zooms with ⌘= and ⌘0 as other previews do (its page magnified, not the app's
+/// text), and a page that names no charset is read as UTF-8: "›" shows as "›", not "â€º". A page
+/// that names one keeps it.
+final class HTMLPreviewZoomCharset: FilesStoryline {
+    override class var tags: Set<Tag> { [.files, .gate] }
+    override class var files: [(path: String, text: String)] {
+        [
+            ("plain.html", "<!doctype html><title>Plain</title><script src=\"js/asset.js\"></script><p id=\"x\">next › page</p>"),
+            ("js/asset.js", "window.koreAsset = 1;"),
+            ("declared.html", "<!doctype html><meta charset=\"windows-1252\"><title>Declared</title><p id=\"x\">next › page</p>"),
+        ]
+    }
+
+    static let arrow = "(() => { const p = document.getElementById('x'); return document.readyState != 'complete' || !p ? -1 : (p.textContent == 'next \\u203A page' ? 1 : 0); })()"
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Command(.toggleExplorer),
+            Press(.treeRow("plain.html")),
+            Expect("the page in the web renderer") { $0.app.workspace?.storyActiveRenderer == "html" },
+            PageAnswer("“›” read as UTF-8", Self.arrow) { $0 == 1 },
+            PageAnswer("its script beside it loaded", "window.koreAsset === 1 ? 1 : 0") { $0 == 1 },
+            Expect("the page at its own size") { $0.app.workspace?.storyPageMagnification == 1 },
+            Key(KeyChord(.character("="), .command)),
+            Expect("the page zoomed in", found: { "\($0.app.workspace?.storyPageMagnification ?? 0)" }) {
+                abs(($0.app.workspace?.storyPageMagnification ?? 0) - 1.1) < 0.01
+            },
+            Snapshot("html-zoomed"),
+            Key(KeyChord(.character("-"), .command)),
+            Key(KeyChord(.character("-"), .command)),
+            Expect("and out", found: { "\($0.app.workspace?.storyPageMagnification ?? 0)" }) {
+                abs(($0.app.workspace?.storyPageMagnification ?? 0) - 0.9) < 0.01
+            },
+            Key(KeyChord(.character("0"), .command)),
+            Expect("back to its own size") { $0.app.workspace?.storyPageMagnification == 1 },
+
+            Press(.treeRow("declared.html")),
+            PageAnswer("the declared charset kept", "document.readyState == 'complete' && document.getElementById('x') ? (document.characterSet.toLowerCase() == 'windows-1252' ? 1 : 0) : -1") { $0 == 1 },
+        ]
+    }
+}
+
+/// Waits for the active page's answer to a script to pass `check`.
+private struct PageAnswer: Step {
+    let what: String
+    let script: String
+    let check: @Sendable (Double) -> Bool
+    var label: String { "Expect \(what)" }
+    init(_ what: String, _ script: String, _ check: @escaping @Sendable (Double) -> Bool) {
+        self.what = what
+        self.script = script
+        self.check = check
+    }
+
+    func run(_ story: StoryContext) async throws {
+        do {
+            _ = try await PageScroll.answer(story, what, script, check)
+        } catch {
+            let code = await story.app.workspace?.storyPageNumber("document.readyState == 'complete' ? (document.characterSet == 'UTF-8' ? 10 : 20) + (document.body && document.body.textContent.indexOf('\\u00E2') >= 0 ? 1 : 0) : (document.readyState == 'loading' ? -2 : -3)")
+            let url = await story.app.workspace?.storyPageNumber("location.href.length")
+            throw StoryFailure.expectation("\(what) (page code \(code.map { String($0) } ?? "nil"), href length \(url.map { String($0) } ?? "nil"))")
+        }
+    }
+}

@@ -59,6 +59,25 @@ private struct HTMLView: View {
             if rules.value == nil { rules.value = await OfflineRules.shared() }
             RenderTiming.ready(HTMLRenderer.id)
         }
+        .rendererKeys { key, flags, _ in PageZoom.keys(key, flags, page.view) }
+    }
+}
+
+/// ⌘= ⌘- ⌘0 zoom a web page (its magnification, as a pinch does) instead of the app's text, in
+/// the app zoom's steps and range. A pinch past the range isn't pulled back by the next step.
+@MainActor enum PageZoom {
+    static func keys(_ key: String, _ flags: NSEvent.ModifierFlags, _ view: WKWebView?) -> Bool {
+        guard let view, flags.contains(.command), flags.subtracting(.shift) == .command else { return false }
+        let now = view.magnification
+        let next: CGFloat
+        switch key {
+        case "=", "+": next = max(now, min(now + Zoom.step, Zoom.range.upperBound))
+        case "-": next = min(now, max(now - Zoom.step, Zoom.range.lowerBound))
+        case "0": next = 1
+        default: return false
+        }
+        if next != now { view.setMagnification(next, centeredAt: NSPoint(x: view.bounds.midX, y: view.bounds.midY)) }
+        return true
     }
 }
 
@@ -145,12 +164,12 @@ private struct HTMLView: View {
                 view.evaluateJavaScript(Self.whereScript) { [weak self, weak view] result, _ in
                     guard let self, let view, self.view === view else { return }
                     self.restore = Place(url: nil, scroll: Self.point(result), magnification: magnification)
-                    view.loadFileURL(page.url, allowingReadAccessTo: page.readable)
+                    Self.load(view, page.url, readable: page.readable)
                 }
             } else {
                 // The page's anchor too, when its web view was let go on it.
                 let url = restore?.url.flatMap { $0.path == page.url.path ? $0 : nil } ?? page.url
-                view.loadFileURL(url, allowingReadAccessTo: page.readable)
+                Self.load(view, url, readable: page.readable)
             }
         }
         return view
@@ -192,6 +211,31 @@ private struct HTMLView: View {
             view.stopLoading()
         }
     }
+
+    /// Loads the page from its file. A page that names no encoding is loaded as its bytes read
+    /// as UTF-8, at the same URL, as WebKit would read the file as Latin-1 ("›" as "â€º"); a
+    /// page that names one is loaded as the file. The file load goes first either way: it's what
+    /// lets the page read the folder (its scripts, styles and images), and the bytes replace it.
+    private static func load(_ view: WKWebView, _ url: URL, readable: URL) {
+        view.loadFileURL(url, allowingReadAccessTo: readable)
+        let file = URL(fileURLWithPath: url.path)
+        guard !namesEncoding(file), let data = try? Data(contentsOf: file) else { return }
+        view.load(data, mimeType: "text/html", characterEncodingName: "utf-8", baseURL: url)
+    }
+
+    /// The file's start declares its encoding: a byte order mark, a `charset` (meta tag) or an
+    /// XML declaration's `encoding`. The HTML spec's prescan reads the first 1024 bytes.
+    static func namesEncoding(_ url: URL) -> Bool {
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return true }
+        defer { try? handle.close() }
+        let head = (try? handle.read(upToCount: 1024)) ?? Data()
+        if head.starts(with: [0xEF, 0xBB, 0xBF]) || head.starts(with: [0xFE, 0xFF]) || head.starts(with: [0xFF, 0xFE]) { return true }
+        let text = String(decoding: head, as: UTF8.self).lowercased()
+        return text.contains("charset") || (text.hasPrefix("<?xml") && text.contains("encoding="))
+    }
+
+    /// The page's magnification, for storylines; nil while no web view shows it.
+    var storyMagnification: Double? { view.map { Double($0.magnification) } }
 
     private static let whereScript = "[window.scrollX, window.scrollY]"
 
