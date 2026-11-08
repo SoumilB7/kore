@@ -12,6 +12,14 @@ package enum AgentGrants {
 
     package static var enabled: Bool { defaults.bool(forKey: switchKey) }
 
+    /// Connects Arsenal to this, at launch. Only Watch has commands; external callers stay Off.
+    package static func install() {
+        AgentTaps.setAllowed = { setEnabled($0) }
+        AgentTaps.setTier = { chat, tier in set(tier == .watch ? .watch : .off, chat: chat) }
+        AgentTaps.stopAll = { stopAll() }
+        Arsenal.shared.adopt(allowed: enabled)
+    }
+
     /// Each chat's tier, by chat id; a chat not here is Off.
     package private(set) static var tiers: [String: AgentTier] = [:]
     /// What an external caller (a terminal, any tool outside Kore's chats) gets: Off in step 1,

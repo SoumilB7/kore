@@ -66,6 +66,7 @@ extension Chat {
 
     /// The mode menu.
     package func storySetMode(_ id: String) { setMode(id) }
+    package func storyOpenAccount() { openAccount() }
     /// Codex's plan switch.
     package var storyPlanMode: Bool { controls.planMode }
     /// Claude's Plan mode, or Codex's Plan switch on.

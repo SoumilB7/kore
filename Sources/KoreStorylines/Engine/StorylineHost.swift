@@ -1,4 +1,5 @@
 import AppKit
+import KoreLink
 import KoreUI
 
 /// Runs user storylines inside the app (phase 12): `kore-storylines` installs it, then starts
@@ -16,6 +17,7 @@ package enum StorylineHost {
 
     /// Called by `kore-storylines` before `KoreApp.main()`, with the process's arguments.
     package static func install(arguments: [String]) {
+        AgentGrants.install()
         let options = Options(arguments)
         if options.list {
             for story in Runner.discover() {

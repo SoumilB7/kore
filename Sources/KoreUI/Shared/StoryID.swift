@@ -84,6 +84,11 @@ extension StoryID {
         /// A chat or agent tab; `.part(.close)` is its close button.
         package static func tab(_ id: UUID) -> StoryID { StoryID(.tabs, "tab", key: id.uuidString) }
         package static func file(_ relativePath: String) -> StoryID { StoryID(.tabs, "file", key: relativePath) }
+        /// A chat tab's Arsenal K, and the chevron that opens its tiers.
+        package static func arsenal(_ id: UUID) -> StoryID { StoryID(.tabs, "arsenal", key: id.uuidString) }
+        package static func arsenalTiers(_ id: UUID) -> StoryID { StoryID(.tabs, "arsenal.tiers", key: id.uuidString) }
+        /// The dim K of a chat that can't have it.
+        package static func arsenalUnavailable(_ id: UUID) -> StoryID { StoryID(.tabs, "arsenal.unavailable", key: id.uuidString) }
         /// The strip the tabs scroll in.
         package static let strip = StoryID(.tabs, "strip")
     }
@@ -99,6 +104,9 @@ extension StoryID {
     }
 
     package enum Composer {
+        /// In the Account popup.
+        package static let arsenalSwitch = StoryID(.composer, "arsenal.switch")
+        package static let arsenalStop = StoryID(.composer, "arsenal.stop")
         package static let field = StoryID(.composer, "field")
         package static let send = StoryID(.composer, "send")
         /// The ring beside Send at a plan's limit: the draft goes when the limit resets.

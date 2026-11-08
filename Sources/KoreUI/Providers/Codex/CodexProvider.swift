@@ -29,10 +29,11 @@ extension ProviderDescriptor {
 
 /// Codex's permission presets as its VS Code extension shows them, and its separate Plan toggle.
 enum CodexModes {
+    static let fullAccess = "fullAccess"
     static let all: [ModeOption] = [
         ModeOption(id: "askForApproval", label: "Ask for approval", icon: ModeIcons.askForApproval, rung: nil, iconSize: 15),
         ModeOption(id: "approveForMe", label: "Approve for me", icon: ModeIcons.approveForMe, rung: .auto, iconSize: 15),
-        ModeOption(id: "fullAccess", label: "Full access", icon: ModeIcons.fullAccess, rung: .danger, iconSize: 15),
+        ModeOption(id: fullAccess, label: "Full access", icon: ModeIcons.fullAccess, rung: .danger, iconSize: 15),
     ]
 
     static let plan = ModeOption(id: "plan", label: "Plan", icon: ModeIcons.codexPlan, rung: .plan, iconSize: 14)

@@ -67,6 +67,8 @@ final class AgentCast: StoryFinishing {
         for run in followers.values { run.stop() }
         followers = [:]
         AgentGrants.stopAll()
+        Arsenal.shared.setAllowed(false)
+        Arsenal.shared.storyHover = false
         AgentGrants.setEnabled(false)
         if let directory { try? FileManager.default.removeItem(at: directory) }
         if let activity { ProcessInfo.processInfo.endActivity(activity) }

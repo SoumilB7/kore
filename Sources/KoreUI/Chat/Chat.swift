@@ -188,6 +188,9 @@ package final class Chat: Identifiable {
 
     /// What its CLI, and what runs under it, names this chat by on Kore's agent channel.
     package let agentPass = AgentPasses.make()
+    /// Its Arsenal tier while on, and the one turning it on goes back to. Set through `Arsenal`.
+    package internal(set) var arsenal: ArsenalTier?
+    package internal(set) var arsenalLast = ArsenalTier.watch
 
     package var sessionId: String? { status.sessionId }
     /// The id the folder's history lists it under: its session's, or a fork's own before its
@@ -246,6 +249,7 @@ package final class Chat: Identifiable {
             approvals.apply(event)
         }
         controls.apply(event)
+        arsenalFollowMode()
         noteAgentModeChange(event)
         dropUnofferedMode(event)
         restoreQueued(event)
@@ -827,6 +831,7 @@ package final class Chat: Identifiable {
         let backend = backend
         self.backend = nil
         Task { await backend?.close() }
+        Arsenal.shared.closed(self)
         AgentTaps.closed?(self)
     }
 
@@ -1651,6 +1656,7 @@ package final class Chat: Identifiable {
         controls.changedBy = nil
         let previous = controls.mode
         controls.mode = id
+        arsenalFollowMode()
         allowWaitingInPlan()
         let backend = backend
         Task {
@@ -1662,6 +1668,11 @@ package final class Chat: Identifiable {
                 fail("Couldn't switch mode: \(error)")
             }
         }
+    }
+
+    /// A mode that can't reach Kore ends its Arsenal.
+    private func arsenalFollowMode() {
+        if arsenal != nil, Arsenal.unavailable(self) != nil { Arsenal.shared.turnOff(self) }
     }
 
     package func setPlanMode(_ on: Bool) {

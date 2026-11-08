@@ -375,6 +375,7 @@ extension View {
 struct OptionMenuButton<Label: View>: View {
     let source: String
     let items: () -> [OptionItem]
+    var chevron = true
     @ViewBuilder let label: () -> Label
     @StateObject private var anchor = Held(WeakAnchor())
     var body: some View {
@@ -383,7 +384,7 @@ struct OptionMenuButton<Label: View>: View {
             let point = view.convert(CGPoint(x: view.bounds.minX, y: view.isFlipped ? view.bounds.maxY : view.bounds.minY), to: nil)
             OptionsMenu.shared.show(items(), at: point, in: window, source: source)
         } label: {
-            HStack(spacing: Space.xs) { label(); Image(systemName: "chevron.down").font(Chrome.glyphCrumb).foregroundStyle(Theme.secondary) }
+            HStack(spacing: Space.xs) { label(); if chevron { Image(systemName: "chevron.down").font(Chrome.glyphCrumb).foregroundStyle(Theme.secondary) } }
         }
         .buttonStyle(.plain)
         .background(AnchorView(anchor: anchor.value))

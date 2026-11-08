@@ -8,6 +8,10 @@ package enum AgentTaps {
     package static var event: ((Chat, ChatEvent) -> Void)?
     /// A chat closed, while the channel is open (nil otherwise).
     package static var closed: ((Chat) -> Void)?
+    /// What `Arsenal` asks of the channel; the app sets them at launch (`AgentGrants.install`).
+    package static var setAllowed: ((Bool) -> Void)?
+    package static var setTier: ((_ chat: String, ArsenalTier?) -> Void)?
+    package static var stopAll: (() -> Void)?
 }
 
 extension Chat {

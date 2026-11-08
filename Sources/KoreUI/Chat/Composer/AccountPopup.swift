@@ -406,6 +406,8 @@ struct AccountPopup: View {
                             .id(store.signInSerial(chat.provider.id))
                             .padding(.top, Space.sm)
                     }
+                    Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.sm)
+                    ArsenalSettings()
                 }
                 .transition(.opacity.animation(Motion.fade))
             }
