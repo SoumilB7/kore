@@ -257,7 +257,7 @@ final class World {
                 // A phone's handshake the Mac is still working through (not one waiting on the
                 // owner's card) counts too: moving time on would run its 2 s pre-auth window out
                 // before a busy Mac got to the hello, and the phone would knock again and again.
-                let busy = pulse.busy || (mac.macNet?.handshakesRunning ?? 0) > 0
+                let busy = pulse.busy || (mac.macNet?.handshakesRunning ?? 0) > 0 || RelayCLI.anyBusy
                 if busy { busySince = busySince ?? .now } else { busySince = nil }
                 let working = busy && ContinuousClock.now - (busySince ?? .now) < .seconds(5)
                 if working || reading || (!dials.isEmpty && waiting) {

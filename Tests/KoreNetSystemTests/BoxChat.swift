@@ -50,7 +50,18 @@ final class RelayCLI: ChatBackend {
             backend.usage = { _ in }
             return backend
         }
-        return Chat(provider: .claude, folder: folder, modeMemory: ModeMemory(defaults: nil), compactMemory: AutoCompactMemory(defaults: nil), services: services)
+        let chat = Chat(provider: .claude, folder: folder, modeMemory: ModeMemory(defaults: nil), compactMemory: AutoCompactMemory(defaults: nil), services: services)
+        made.append(Weak(chat))
+        return chat
+    }
+
+    private final class Weak { weak var chat: Chat?; init(_ chat: Chat) { self.chat = chat } }
+    private static var made: [Weak] = []
+    /// A box chat mid-turn: its box is working (a real kore-host and its CLI), so the world's time
+    /// waits for it as for any work under way.
+    static var anyBusy: Bool {
+        made.removeAll { $0.chat == nil }
+        return made.contains { $0.chat?.isBusy == true }
     }
 
     /// The chat's rows of a kind, as shown.
