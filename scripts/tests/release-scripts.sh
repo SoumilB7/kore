@@ -106,7 +106,15 @@ sed -i '' "1s/.*/# kore $(<VERSION) 0000000000000000000000000000000000000000/" $
 pub=$(KORE_RELEASE_DIR=$other scripts/release.sh 2>&1 </dev/null); code=$?
 check "  nor a folder prepared for another commit" '(( code != 0 )) && [[ $pub == *"another commit"* ]]'
 grep -q '/dev/tty' scripts/release.sh; check "  and the yes is read from the terminal" '(( $? == 0 ))'
-check "  nothing for boxes' tailnet: they don't run it yet" '! grep -q kore-tailnet-linux $dry/SHA256SUMS'
+# Boxes' own tailnet: listed when built (Go here, or left in build/release), else said skipped.
+box_tailnets() {
+    local a
+    for a in x86_64 aarch64; do
+        if [[ -f $dry/kore-tailnet-linux-$a.xz ]]; then grep -q "  kore-tailnet-linux-$a.xz\$" $dry/SHA256SUMS || return 1
+        else [[ $out == *"skipped kore-tailnet-linux-$a.xz (not built)"* ]] || return 1; fi
+    done
+}
+check "  boxes' tailnet: listed when built, else skipped" 'box_tailnets'
 notes=$dry/notes.md
 drykey=${${out##*throwaway key }%%)*}
 check "  notes: the title, three installs, what's new, the signer line" '[[ $(head -1 $notes) == "# Kore $(<VERSION)" ]] && grep -q "install.sh | bash" $notes && grep -q "kore-host.sh | sh" $notes && grep -q "kore.apk](" $notes && grep -q "^### What.s new" $notes && grep -qF "release key \`$drykey\`" $notes'
