@@ -308,7 +308,7 @@ final class MacNode {
         let tailscale: HostUpgrade.Tailscale = net.node(box.ip)?.state == .running ? .running(node: box.nodeKey) : .stopped(.stopped, login: nil)
         let report = HostUpgrade(
             paths: paths, update: { nil }, service: { .running }, installService: { [] }, startDaemon: { true }, linger: { true },
-            tailscale: { tailscale }, reload: { MainActor.assumeIsolated { host.reloadNet() } }, listen: { _ in nil }
+            tailscale: { _ in tailscale }, reload: { MainActor.assumeIsolated { host.reloadNet() } }, listen: { _ in nil }
         ).run(want: want, grant: grant)
         await host.net?.settled()
         pulse.beat()

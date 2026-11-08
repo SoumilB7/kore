@@ -56,7 +56,7 @@ func inProcessUpgrade(_ host: HostDaemon, paths: HostPaths, ran: Reports? = nil)
             let report = await MainActor.run {
                 HostUpgrade(
                     paths: paths, update: { nil }, service: { .running }, installService: { [] }, startDaemon: { true }, linger: { true },
-                    tailscale: { .running(node: "nodekey:box") }, reload: { MainActor.assumeIsolated { host.reloadNet() } }, listen: { _ in nil }
+                    tailscale: { _ in .running(node: "nodekey:box") }, reload: { MainActor.assumeIsolated { host.reloadNet() } }, listen: { _ in nil }
                 ).run(want: want, grant: grant)
             }
             let net = await MainActor.run { host.net }

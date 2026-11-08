@@ -188,6 +188,10 @@ struct DiscoveryTests {
         let linux = LocalAPIDiscovery(platform: .linux, root: root.path)
         #expect(linux.find() == .unavailable(.absent))
         try FileManager.default.createDirectory(atPath: root.path + "/var/run/tailscale", withIntermediateDirectories: true)
+        // tailscaled installed, not running (its socket gone): stopped, never absent.
+        try FileManager.default.createDirectory(atPath: root.path + "/usr/sbin", withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: root.path + "/usr/sbin/tailscaled", contents: nil, attributes: [.posixPermissions: 0o755])
+        #expect(linux.find() == .unavailable(.notRunning))
         FileManager.default.createFile(atPath: root.path + LocalAPIDiscovery.linuxSocket, contents: nil)
         #expect(linux.find() == .unix(root.path + LocalAPIDiscovery.linuxSocket))
     }

@@ -73,6 +73,14 @@ package enum HostStatus {
         return nil
     }
 
+    /// The tailnet the running daemon uses: Kore's own when its socket answers, else installed
+    /// Tailscale's.
+    package static func tailnet(_ paths: HostPaths) -> any Tailnet {
+        let kore = TailnetSidecar(path: paths.tailnetSocket.path, answerWait: 2000)
+        if FileManager.default.fileExists(atPath: paths.tailnetSocket.path), (try? kore.status()) != nil { return kore }
+        return TailnetLocal()
+    }
+
     /// KoreNet's rows: this box's device id, the tailnet, who holds the port, its devices and
     /// those waiting.
     static func net(paths: HostPaths, on: Bool, tailnet: () -> (any Tailnet)?, portHolder: () -> UInt32?) -> [String] {
@@ -88,7 +96,10 @@ package enum HostStatus {
             do {
                 let status = try tailnet.status()
                 let ips = status.selfNode?.tailscaleIPs ?? []
-                row("tailnet", status.backendState.rawValue + (ips.isEmpty ? "" : " · " + ips.joined(separator: ", ")))
+                let kore = tailnet is TailnetSidecar ? "kore-tailnet · " : ""
+                row("tailnet", kore + status.backendState.rawValue + (ips.isEmpty ? "" : " · " + ips.joined(separator: ", ")))
+                // Kore's own waiting for its owner: the page, for this box's owner only.
+                if !kore.isEmpty, status.backendState != .running, let page = status.authURL { row("sign in", page) }
                 if status.backendState == .running {
                     if let uid = portHolder(), uid != getuid() {
                         row("port", "\(HostNet.port) held by uid \(uid)")

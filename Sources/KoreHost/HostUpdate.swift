@@ -46,6 +46,38 @@ package struct HostUpdate {
         #endif
     }
 
+    /// Kore's own tailnet for this platform, as the release carries it (Linux's compressed).
+    package var tailnetAsset: String { "kore-tailnet-\(platform)" + (platform.hasPrefix("linux-") ? ".xz" : "") }
+    /// Where it goes: beside kore-host, where the daemon looks for it.
+    package var tailnetTarget: URL { target.deletingLastPathComponent().appendingPathComponent(BoxTailnet.helperName) }
+
+    /// The release's `kore-tailnet` beside kore-host, from `folder` (a given file's) or downloaded
+    /// from `base`, checked against the signed manifest and put in place in one rename. What it
+    /// did, in a few words; nil when the release has none. Never throws: kore-host's update
+    /// stands without it (the box then offers Tailscale's lines).
+    package func placeTailnet(_ manifest: ReleaseManifest, folder: URL, base: String?) -> String? {
+        guard manifest.files[tailnetAsset] != nil else { return nil }
+        let file = folder.appendingPathComponent(tailnetAsset)
+        if !FileManager.default.fileExists(atPath: file.path) {
+            guard let base else { return nil }
+            let ran = run(["curl", "-fsSL", "--retry", "2", "-o", file.path, base + "/" + tailnetAsset])
+            guard ran.ok else { return "kore-tailnet not downloaded (\(ran.status == 127 ? "needs curl" : ran.lastLine))" }
+        }
+        do { try manifest.check(file, as: tailnetAsset) } catch { return "kore-tailnet refused: it doesn't match its signed hash" }
+        let staged = target.deletingLastPathComponent().appendingPathComponent(".kore-tailnet.new-\(getpid())")
+        try? FileManager.default.removeItem(at: staged)
+        do {
+            if tailnetAsset.hasSuffix(".xz") { try unpack(file, staged) } else { try FileManager.default.copyItem(at: file, to: staged) }
+            guard chmod(staged.path, 0o755) == 0, rename(staged.path, tailnetTarget.path) == 0 else {
+                throw HostUpdateError.failed("kore-tailnet", String(cString: strerror(errno)))
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: staged)
+            return "kore-tailnet not put in place (\(error))"
+        }
+        return "kore-tailnet \(manifest.version)"
+    }
+
     /// `SHA256SUMS` beside `file` (or `file` itself), checked against `SHA256SUMS.sig` beside it.
     package func manifest(beside file: URL) throws -> ReleaseManifest {
         let folder = file.deletingLastPathComponent()

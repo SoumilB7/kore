@@ -23,15 +23,19 @@ import Musl
 /// `key: value` lines (`HostUpgrade.Report`) and exits 0 when the box is on KoreNet, 2 when a
 /// person is needed (the `error:` line says which, `action:` the line to run), 1 on a failure.
 package struct HostUpgrade {
-    /// Installed Tailscale as this box sees it.
+    /// This box's tailnet as it sees it: installed Tailscale, or Kore's own (`BoxTailnet`).
     package enum Tailscale: Equatable, Sendable {
-        case running(node: String?)
+        case running(node: String?, account: String? = nil)
         /// Installed, not running: stopped, or signed out (its sign-in page when one is open).
         case stopped(BackendState, login: String?)
-        /// Not installed, or its LocalAPI isn't there.
+        /// Installed, its daemon (or app) not running.
+        case notRunning
+        /// Not installed, or its LocalAPI isn't there, and Kore's own didn't start.
         case absent
         /// Its LocalAPI refused this user.
         case denied
+        /// Kore's own `kore-tailnet` (no installed Tailscale it can use).
+        case kore(BoxTailnet.Kore)
     }
 
     /// kore-host's service here.
@@ -52,7 +56,11 @@ package struct HostUpgrade {
     package var startDaemon: () -> Bool
     /// Whether the service outlives the last login (nil: no systemd to ask).
     package var linger: () -> Bool?
-    package var tailscale: () -> Tailscale
+    /// The box's tailnet, looked at once the daemon read `config.json` again (it starts Kore's
+    /// own then); `relogin`: Kore's own signs out first, for a sign-in with another account.
+    package var tailscale: (_ relogin: Bool) -> Tailscale
+    /// The system this box runs: the lines a person is given depend on it.
+    package var os = BoxOS.here
     /// The running daemon reads `config.json` again (SIGHUP).
     package var reload: () -> Void
     /// The daemon's own word on the port after a reload (`net.state`), waited on briefly.
@@ -63,7 +71,7 @@ package struct HostUpgrade {
 
     package init(
         paths: HostPaths, update: @escaping () throws -> String?, service: @escaping () -> Service, installService: @escaping () throws -> [String],
-        startDaemon: @escaping () -> Bool, linger: @escaping () -> Bool?, tailscale: @escaping () -> Tailscale, reload: @escaping () -> Void,
+        startDaemon: @escaping () -> Bool, linger: @escaping () -> Bool?, tailscale: @escaping (Bool) -> Tailscale, reload: @escaping () -> Void,
         listen: @escaping (Date?) -> String?, portHolder: @escaping () -> UInt32? = { nil }
     ) {
         self.paths = paths
@@ -102,9 +110,30 @@ package struct HostUpgrade {
     package static let sudoLine = "sudo tailscale up"
     /// The line that installs Tailscale.
     package static let installLine = "curl -fsSL https://tailscale.com/install.sh | sh"
+    /// The line that starts Linux's tailscaled when it's installed and not running.
+    package static let daemonLine = "sudo systemctl enable --now tailscaled"
+    /// The line that signs installed Tailscale in with another account (Linux).
+    package static let loginLine = "sudo tailscale login"
+
+    /// What a person does about the box's tailnet: the `error:` and, where there's a line to run
+    /// on this system, the `action:`. A Mac box never gets a Linux line (no curl, no sudo); a
+    /// Linux box keeps `sudo tailscale up` only for installed Tailscale stopped or signed out.
+    package static func person(_ seen: Tailscale, os: BoxOS) -> (error: String, action: String?)? {
+        let linux = os == .linux
+        switch seen {
+        case .running, .kore(.running): return nil
+        case .stopped(let state, _):
+            return ("tailscale " + (state == .needsLogin ? "signed out" : "stopped"), linux ? sudoLine : nil)
+        case .notRunning: return ("tailscale stopped", linux ? daemonLine : nil)
+        case .absent, .kore(.unavailable): return ("tailscale absent", linux ? installLine : nil)
+        case .denied: return ("no sudo", linux ? sudoLine : nil)
+        // Kore's own waits for its owner's sign-in: the page goes to the Mac, never a line.
+        case .kore(.signIn): return ("tailscale signed out", nil)
+        }
+    }
 
     /// Runs U1–U3 (and the grant), each only when it isn't done yet.
-    package func run(want: String?, grant: String?) -> Report {
+    package func run(want: String?, grant: String?, relogin: Bool = false) -> Report {
         var report = Report()
         var failure: String?
         var person: (error: String, action: String?)?
@@ -201,34 +230,61 @@ package struct HostUpgrade {
         // An unclaimed box takes its owner Mac's claim for the next 10 minutes (as `join`).
         if !DeviceStore(paths: paths).claimed { try? NetJoin.mark(paths, at: now()) }
         report.add("net", "on")
-        let seen = tailscale()
-        switch seen {
-        case .running(let node):
-            report.add("tailscale", "running")
-            if let node { report.add("node", node) }
-        case .stopped(let state, let login):
-            report.add("tailscale", state == .needsLogin ? "signed out" : "stopped")
-            if let login { report.add("login", login) }
-            person = ("tailscale " + (state == .needsLogin ? "signed out" : "stopped"), Self.sudoLine)
-        case .absent:
-            report.add("tailscale", "absent")
-            person = ("tailscale absent", Self.installLine)
-        case .denied:
-            report.add("tailscale", "no access")
-            person = ("no sudo", Self.sudoLine)
-        }
-        // The daemon looks again: a box turned on now binds; one on already but not bound (its
-        // Tailscale came up meanwhile) binds too. A bound one keeps its sockets.
+        report.add("os", os.rawValue)
+        // The daemon looks again: a box turned on now binds (and starts Kore's own tailnet when
+        // that's its choice); one on already but not bound (its Tailscale came up meanwhile)
+        // binds too. A bound one keeps its sockets.
         let since = stateTime()
-        let said: String?
+        var said: String?
         if !wasOn || !listening() {
             reload()
             said = listen(since)
         } else {
             said = currentState()
         }
+        let seen = tailscale(relogin)
+        switch seen {
+        case .running(let node, let account):
+            report.add("tailnet", "tailscale")
+            report.add("tailscale", "running")
+            if let node { report.add("node", node) }
+            if let account { report.add("account", account) }
+        case .stopped(let state, let login):
+            report.add("tailnet", "tailscale")
+            report.add("tailscale", state == .needsLogin ? "signed out" : "stopped")
+            if let login { report.add("login", login) }
+        case .notRunning:
+            report.add("tailnet", "tailscale")
+            report.add("tailscale", "stopped")
+        case .absent:
+            report.add("tailscale", "absent")
+        case .denied:
+            report.add("tailnet", "tailscale")
+            report.add("tailscale", "no access")
+        case .kore(let kore):
+            report.add("tailscale", "absent")
+            switch kore {
+            case .running(let node, let account):
+                report.add("tailnet", "kore")
+                if let node { report.add("node", node) }
+                if let account { report.add("account", account) }
+            case .signIn(let page):
+                report.add("tailnet", "kore")
+                if let page { report.add("login", page) }
+            case .unavailable(let why):
+                report.add("tailnet", "unavailable " + why)
+            }
+        }
+        person = Self.person(seen, os: os)
+        var running = false
+        if case .running = seen { running = true }
+        if case .kore(.running) = seen { running = true }
+        // Running now, the port maybe not yet (Kore's own just signed in): the daemon's next word.
+        if running, said?.hasPrefix("listening") != true {
+            said = listening() ? currentState() : (listen(stateTime()) ?? said)
+        }
         if let said { report.add("listen", said) }
-        if case .running = seen, let said, !said.hasPrefix("listening") {
+        if running, let said, !said.hasPrefix("listening") {
             if said.contains("in use") {
                 let uid = portHolder()
                 person = person ?? ("port held" + (uid.map { " by uid \($0)" } ?? ""), nil)
@@ -278,6 +334,7 @@ extension HostUpgrade {
                 switch try updater.apply(file, force: false) {
                 case .same: return nil
                 case .updated(let from, let to):
+                    if let manifest = try? updater.manifest(beside: file) { _ = updater.placeTailnet(manifest, folder: scratch, base: HostUpdate.latest) }
                     _ = HostUpdate.restart(paths: paths, home: home)
                     return "\(from) → \(to)"
                 }
@@ -302,27 +359,62 @@ extension HostUpgrade {
                 return nil
                 #endif
             },
-            tailscale: {
-                do {
-                    let status = try TailnetLocal().status()
-                    if status.backendState == .running { return .running(node: status.selfNode?.publicKey) }
-                    return .stopped(status.backendState, login: status.authURL.flatMap { $0.isEmpty ? nil : $0 })
-                } catch TailnetError.unauthorized {
-                    return .denied
-                } catch {
-                    return .absent
+            tailscale: { relogin in
+                let box = BoxTailnet.standard(paths)
+                // Kore's own is the choice and isn't here (set up before it was): the release's,
+                // checked against its signed sums, then the daemon looks again and starts it.
+                if box.choice().startsSidecar, box.helper() == nil, fetchTailnet() {
+                    let since = (try? FileManager.default.attributesOfItem(atPath: paths.netState.path))?[.modificationDate] as? Date
+                    signal(paths)
+                    _ = waitForState(paths, since: since, seconds: 5)
                 }
+                return look(paths: paths, box: box, relogin: relogin)
             },
-            reload: {
-                guard HostLock.held(paths.lock), let text = try? String(contentsOf: paths.pid, encoding: .utf8),
-                      let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1
-                else { return }
-                kill(pid, SIGHUP)
-            },
+            reload: { signal(paths) },
             listen: { since in waitForState(paths, since: since, seconds: 5) },
             portHolder: { PortHolder.uid(port: HostNet.port).flatMap { $0 == getuid() ? nil : $0 } })
         upgrade.home = home.path
         return upgrade
+    }
+
+    /// The running daemon reads `config.json` again (SIGHUP).
+    static func signal(_ paths: HostPaths) {
+        guard HostLock.held(paths.lock), let text = try? String(contentsOf: paths.pid, encoding: .utf8),
+              let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)), pid > 1
+        else { return }
+        kill(pid, SIGHUP)
+    }
+
+    /// The latest release's `kore-tailnet` beside this kore-host, checked against its signed
+    /// sums: whether it's there now.
+    static func fetchTailnet(base: String = ProcessInfo.processInfo.environment["KORE_RELEASE_URL"] ?? HostUpdate.latest) -> Bool {
+        let updater = HostUpdate(target: URL(fileURLWithPath: HostService.executable()))
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("kore-host-tailnet-\(getpid())")
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        guard (try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)) != nil,
+              (try? updater.fetchManifest(into: scratch, from: base)) != nil,
+              let manifest = try? updater.manifest(beside: scratch.appendingPathComponent("SHA256SUMS"))
+        else { return false }
+        _ = updater.placeTailnet(manifest, folder: scratch, base: base)
+        return FileManager.default.isExecutableFile(atPath: updater.tailnetTarget.path)
+    }
+
+    /// The box's tailnet as the daemon chose it: installed Tailscale's own word, or Kore's own as
+    /// its socket answers (a sign-in page, its node), or why it couldn't start.
+    static func look(paths: HostPaths, box: BoxTailnet, relogin: Bool, kore: (HostPaths, Bool) -> BoxTailnet.Kore = { BoxTailnet.read($0, relogin: $1) }) -> Tailscale {
+        let (found, local) = box.installed()
+        let choice = box.forced ? .sidecar : TailnetChooser.choose(found)
+        if choice.startsSidecar { return .kore(kore(paths, relogin)) }
+        guard let local else { return .notRunning }
+        do {
+            let status = try local.status()
+            if status.backendState == .running { return .running(node: status.selfNode?.publicKey, account: status.login) }
+            return .stopped(status.backendState, login: status.authURL.flatMap { $0.isEmpty ? nil : $0 })
+        } catch TailnetError.unauthorized {
+            return .denied
+        } catch {
+            return .notRunning
+        }
     }
 
     /// `net.state` once the daemon wrote it after `since` (it does once its look at Tailscale is

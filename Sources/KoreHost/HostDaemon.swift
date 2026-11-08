@@ -86,9 +86,20 @@ package final class HostDaemon {
     package let devices: DeviceStore
     /// The KoreNet listener (`HostNet`), while Tailscale is up; nil in tests that don't ask.
     package private(set) var net: HostNet?
-    /// The tailnet KoreNet listens on, made only while the box is on KoreNet (`config.net`):
-    /// installed Tailscale's; tests make a fake, or none.
-    package var makeTailnet: () -> (any Tailnet)? = { KoreLog.isTestProcess ? nil : TailnetLocal() }
+    /// The tailnet KoreNet listens on, made at once while the box is on KoreNet (`config.net`):
+    /// tests make a fake, or none. Nil: `boxTailnet` chooses.
+    package var makeTailnet: () -> (any Tailnet)? = { nil }
+    /// This box's tailnet as `BoxTailnet` chooses it, off the main thread, while the box is on
+    /// KoreNet: installed Tailscale, or Kore's own `kore-tailnet` (started then, stopped with
+    /// KoreNet off or the daemon). Tests set their own, or none.
+    package lazy var boxTailnet: BoxTailnet? = KoreLog.isTestProcess ? nil : BoxTailnet.standard(paths)
+    /// Kore's own tailnet while it runs: whether it still does, and how it stops.
+    private var koreTailnet: (alive: @Sendable () -> Bool, stop: @Sendable () -> Void)?
+    /// A choice under way, and each choice's number (an older one's result is dropped).
+    private var choosingTailnet = false
+    private var tailnetChoices = 0
+    /// Tests: each choice applied, and each Kore's own tailnet stopped.
+    nonisolated(unsafe) package static var tailnetChosen: ((String) -> Void)?
     /// KoreNet's port (tests take the kernel's pick, 0).
     package var netPort = NetListener.configured()
     /// Phase 18 §4: what this box's chats spent, a week of it (`usage/ledger.jsonl`).
@@ -150,6 +161,8 @@ package final class HostDaemon {
         for connection in connections { connection.end(restarting ? .restart : .quit) }
         net?.stop()
         net = nil
+        tailnetChoices += 1
+        stopKoreTailnet(wait: true)
         terminals.stopAll()
         for chat in chats { chat.sleep() }
         guard let lock else { return }
@@ -389,16 +402,85 @@ package final class HostDaemon {
             self.net = net
             net.start()
         }
-        guard config.netOn, let net, net.tailnet == nil, let tailnet = makeTailnet() else { return }
-        net.port = netPort
-        net.join(tailnet)
-        HostJournal.note("korenet on")
+        guard config.netOn, let net, net.tailnet == nil else { return }
+        if let tailnet = makeTailnet() {
+            net.port = netPort
+            net.join(tailnet)
+            HostJournal.note("korenet on")
+            return
+        }
+        guard let box = boxTailnet, !choosingTailnet else { return }
+        choosingTailnet = true
+        tailnetChoices += 1
+        let mine = tailnetChoices
+        net.choosing()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let pick = box.choose()
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else {
+                        if case .kore(_, _, let stop) = pick { stop() }
+                        return
+                    }
+                    self.choosingTailnet = false
+                    guard mine == self.tailnetChoices, self.config.netOn, let net = self.net, net.tailnet == nil else {
+                        if case .kore(_, _, let stop) = pick { DispatchQueue.global(qos: .utility).async { stop() } }
+                        // Turned off and on again while it chose: chosen afresh.
+                        if self.config.netOn, self.net?.tailnet == nil { self.startNet() }
+                        return
+                    }
+                    self.chose(pick, net)
+                }
+            }
+        }
     }
 
-    /// Off: the port, the watching and every tailnet link go (SSH, both links, stays).
+    /// The box's tailnet as chosen: KoreNet listens on it, or says why it can't.
+    private func chose(_ pick: BoxTailnet.Pick, _ net: HostNet) {
+        net.port = netPort
+        switch pick {
+        case .installed(let tailnet, let choice):
+            net.join(tailnet)
+            HostJournal.note("korenet on", ["tailnet": "tailscale", "choice": "\(choice)"])
+            Self.tailnetChosen?("installed")
+        case .kore(let tailnet, let alive, let stop):
+            koreTailnet = (alive, stop)
+            net.join(tailnet, userspace: true)
+            HostJournal.note("korenet on", ["tailnet": "kore"])
+            Self.tailnetChosen?("kore")
+        case .unavailable(let why):
+            net.unavailable(why)
+            HostJournal.note("korenet tailnet unavailable", ["reason": why])
+            Self.tailnetChosen?("unavailable")
+        }
+    }
+
+    /// Kore's own tailnet ends (off the main thread: its stop is a round trip on its socket).
+    private func stopKoreTailnet(wait: Bool = false) {
+        guard let kore = koreTailnet else { return }
+        koreTailnet = nil
+        if wait {
+            kore.stop()
+            Self.tailnetChosen?("stopped")
+        } else {
+            DispatchQueue.global(qos: .utility).async {
+                kore.stop()
+                Self.tailnetChosen?("stopped")
+            }
+        }
+    }
+
+    /// Off: the port, the watching and every tailnet link go (SSH, both links, stays), and Kore's
+    /// own tailnet stops.
     private func stopNet() {
-        guard let net, net.tailnet != nil else { return }
+        tailnetChoices += 1
+        guard let net, net.tailnet != nil else {
+            // Off while choosing, or after Kore's own couldn't start: nothing listens, nothing to say.
+            try? FileManager.default.removeItem(at: paths.netState)
+            return
+        }
         net.leave()
+        stopKoreTailnet()
         for connection in connections where connection.route == .tailnet && connection.peer != nil { connection.end(.quit) }
         HostJournal.note("korenet off")
     }
@@ -415,6 +497,8 @@ package final class HostDaemon {
     /// The CLI changed `config.json`'s `net` (it signals the daemon, SIGHUP): applied now.
     package func reloadNet() {
         config.net = HostConfig.load(paths.config).net
+        // Kore's own tailnet ended by itself (a crash): started again, as KoreNet is on.
+        if config.netOn, let kore = koreTailnet, !kore.alive() { stopNet() }
         config.netOn ? startNet() : stopNet()
         Self.reloaded?()
     }

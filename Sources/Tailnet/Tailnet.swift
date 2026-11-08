@@ -224,12 +224,24 @@ package struct TailnetStatus: Decodable, Sendable, Equatable {
 
     /// Tailscale's health warnings for this node.
     package var health: [String] = []
+    /// The tailnet's users this node knows, by id: their login names.
+    package var logins: [Int64: String] = [:]
+
+    /// The person this node is signed in as ("you@example.com"); nil for a tagged node or before
+    /// a sign-in.
+    package var login: String? { selfNode?.owner.flatMap { logins[$0] } }
 
     /// This node waits for a Tailnet Lock signature (its health says it's locked out).
     package var lockedOut: Bool { health.contains { $0.localizedCaseInsensitiveContains("locked out") } }
 
     enum CodingKeys: String, CodingKey {
-        case backendState = "BackendState", selfNode = "Self", peers = "Peer", authURL = "AuthURL", health = "Health"
+        case backendState = "BackendState", selfNode = "Self", peers = "Peer", authURL = "AuthURL", health = "Health", users = "User"
+    }
+
+    private struct User: Decodable {
+        var id: Int64
+        var loginName: String?
+        enum CodingKeys: String, CodingKey { case id = "ID", loginName = "LoginName" }
     }
 
     package init(backendState: BackendState, selfNode: SelfNode?, peers: [Peer] = [], authURL: String? = nil) {
@@ -247,6 +259,8 @@ package struct TailnetStatus: Decodable, Sendable, Equatable {
         peers = map.keys.sorted().compactMap { map[$0] }
         authURL = try c.decodeIfPresent(String.self, forKey: .authURL).flatMap { $0.isEmpty ? nil : $0 }
         health = try c.decodeIfPresent([String].self, forKey: .health) ?? []
+        let users = (try? c.decodeIfPresent([String: User].self, forKey: .users)) ?? [:]
+        for user in users.values { if let name = user.loginName, !name.isEmpty { logins[user.id] = name } }
     }
 }
 

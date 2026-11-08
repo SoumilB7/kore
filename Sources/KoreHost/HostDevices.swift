@@ -138,6 +138,7 @@ extension HostDaemon {
         // The node key only while the port takes connections: a Mac dials as soon as it hears it.
         let nodeKey = net?.tailnet != nil && net?.listening == true ? net?.selfNode?.publicKey : nil
         return NetNodeWire.Node(
-            device: identity.device, identityKey: identity.signer.publicKey, name: name, on: config.netOn, nodeKey: nodeKey, enrolled: enrolled)
+            device: identity.device, identityKey: identity.signer.publicKey, name: name, on: config.netOn, nodeKey: nodeKey, enrolled: enrolled,
+            os: BoxOS.here.rawValue, tailnet: net?.tailnet == nil ? nil : (net?.userspace == true ? "kore" : "tailscale"))
     }
 }

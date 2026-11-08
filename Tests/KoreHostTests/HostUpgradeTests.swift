@@ -69,7 +69,7 @@ struct BoxUpgradeCommandTests {
                     return true
                 },
                 linger: { true },
-                tailscale: { [self] in now.tailscale },
+                tailscale: { [self] _ in now.tailscale },
                 reload: { [self] in
                     set { $0.reloads += 1 }
                     writeListen()
@@ -77,6 +77,7 @@ struct BoxUpgradeCommandTests {
                 listen: { [paths] _ in (try? String(contentsOf: paths.netState, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) },
                 portHolder: { 1001 })
             upgrade.version = version
+            upgrade.os = .linux
             upgrade.link = "1.12"
             upgrade.home = paths.state.path
             return upgrade

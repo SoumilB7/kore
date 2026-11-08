@@ -19,7 +19,7 @@ HostMemory.smallPages()
 let usage = """
     usage: kore-host run
            kore-host join
-           kore-host upgrade [--want <version>] [--grant <name>]
+           kore-host upgrade [--want <version>] [--grant <name>] [--relogin]
            kore-host net on|off
            kore-host devices [allow <id|code> | remove <id|code|name>]   (a code: "0009 a0e9", or "0009")
            kore-host status
@@ -150,18 +150,27 @@ case "revoke":
 case "grants":
     for grant in grants.all() { print("\(grant.name)\t\(grant.control.rawValue)") }
 case "status":
-    for line in HostStatus.lines(paths: paths, home: home.path) { print(line) }
+    for line in HostStatus.lines(paths: paths, home: home.path, tailnet: { HostStatus.tailnet(paths) }) { print(line) }
 case "join":
-    // System Tailscale only for now: Kore's own tailnet (`kore-tailnet`) comes in a later release.
-    do {
-        let status = try TailnetLocal().status()
-        guard status.backendState == .running else {
-            fail("Tailscale is \(status.backendState.rawValue) on this box: run `sudo tailscale up`, then `kore-host join` again.")
+    // The box's tailnet as the daemon chooses it: installed Tailscale, or Kore's own beside
+    // kore-host where there's none it can use (BoxTailnet).
+    let box = BoxTailnet.standard(paths)
+    switch box.choice() {
+    case .installed:
+        let status = try? TailnetLocal().status()
+        print("Using Tailscale on this box" + (status?.selfNode.map { " (" + $0.tailscaleIPs.joined(separator: ", ") + ")" } ?? ""))
+    case .stopped, .signedOut:
+        fail(BoxOS.here == .macos
+            ? "Tailscale on this Mac is stopped or signed out: open Tailscale and sign in, then `kore-host join` again."
+            : "Tailscale is stopped or signed out on this box: run `sudo tailscale up`, then `kore-host join` again.")
+    case .sidecar:
+        if box.helper() == nil {
+            print(BoxOS.here == .macos
+                ? "No Tailscale here and no kore-tailnet beside kore-host: install the Tailscale app and sign in, or set this box up again from Kore."
+                : "No Tailscale here and no kore-tailnet beside kore-host: run `kore-host update`, or install Tailscale and run `sudo tailscale up`.")
+        } else {
+            print("Using Kore's own tailnet (kore-tailnet): kore-host starts it; Kore on your Mac shows its sign-in.")
         }
-        print("Using Tailscale on this box" + (status.selfNode.map { " (" + $0.tailscaleIPs.joined(separator: ", ") + ")" } ?? ""))
-    } catch {
-        print("Tailscale isn't reachable here (\(error)).")
-        print("Kore's own tailnet (kore-tailnet) comes in a later release; for now install Tailscale and run `sudo tailscale up`.")
     }
     do {
         let me = try BoxIdentity.loadOrCreate(paths)
@@ -182,12 +191,14 @@ case "upgrade":
     }
     let want = option("--want"), grant = option("--grant")
     if let grant, !Grant.valid(grant) { fail("kore-host: \(GrantError.badName)") }
-    let report = HostUpgrade.standard(paths: paths, home: home).run(want: want, grant: grant)
+    // `--relogin`: Kore's own tailnet here signs out first, for a sign-in with the Mac's account.
+    let relogin = arguments.contains("--relogin")
+    let report = HostUpgrade.standard(paths: paths, home: home).run(want: want, grant: grant, relogin: relogin)
     for line in report.text { print(line) }
     if report.updated {
         // The new binary runs the rest: it is the version wanted now.
         fflush(stdout)
-        let next = ["kore-host", "upgrade"] + (grant.map { ["--grant", $0] } ?? [])
+        let next = ["kore-host", "upgrade"] + (grant.map { ["--grant", $0] } ?? []) + (relogin ? ["--relogin"] : [])
         let argv = next.map { strdup($0) } + [nil]
         execv(HostService.executable(), argv)
         fail("kore-host: the new kore-host didn't start (\(String(cString: strerror(errno))))", code: 1)

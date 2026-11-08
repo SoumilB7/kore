@@ -250,9 +250,15 @@ package struct UpdateFlow {
         let (manifest, released) = found
         if given == nil { remember(manifest, released: released) }
         let latest = manifest.version
+        let folder = sumsAt.deletingLastPathComponent()
         if !force {
             if latest == current {
                 line("kore-host \(current) is the latest", "update", "latest (\(current))")
+                // Kore's own tailnet missing beside it (an older Set up): the release's.
+                if !FileManager.default.isExecutableFile(atPath: updater.tailnetTarget.path),
+                   let said = updater.placeTailnet(manifest, folder: folder, base: given == nil ? base : nil) {
+                    step(said, "tailnet", said)
+                }
                 return 0
             }
             if ReleaseManifest.newer(current, than: latest) {
@@ -297,6 +303,9 @@ package struct UpdateFlow {
             case .updated: break
             }
         } catch { return refused(error) }
+        // Kore's own tailnet from the same release, beside the new kore-host (before the restart:
+        // the daemon starts it when it's the box's choice).
+        if let said = updater.placeTailnet(manifest, folder: folder, base: given == nil ? base : nil) { step(said, "tailnet", said) }
         if let by {
             var state = UpdateState.load(paths)
             state.pushed = .init(from: current, to: latest, by: by, at: now())

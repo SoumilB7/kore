@@ -48,6 +48,9 @@ package final class HostNet {
     /// The tailnet while the box is on KoreNet (`join`); nil while off: no port, no LocalAPI, no
     /// netlink or bus.
     package private(set) var tailnet: (any Tailnet)?
+    /// The tailnet is Kore's own (`kore-tailnet`, tsnet in userspace): its port is its listen,
+    /// each connection handed over on its socket, and its bus says when it signs in.
+    package private(set) var userspace = false
     package let identity: BoxIdentity
     private let limiter: PreAuthLimiter
     private let tickets = ResumeTickets()
@@ -57,8 +60,26 @@ package final class HostNet {
     /// The sockets bound now, and the addresses they're on.
     package private(set) var bound: [String] = []
     private var listeners: [(fd: Int32, source: DispatchSourceRead)] = []
+    /// Kore's own tailnet's listens: each a socket its connections come over, read on a thread.
+    private var handoffs: [Handoff] = []
     /// The first listening socket (tests read the port the kernel picked).
     package var firstListener: Int32? { listeners.first?.fd }
+
+    /// One handed-off listen: open until `close`, which wakes its thread (it closes the socket).
+    private final class Handoff: @unchecked Sendable {
+        let socket: TailnetListenSocket
+        private let lock = NSLock()
+        private var shut = false
+        init(_ socket: TailnetListenSocket) { self.socket = socket }
+        var open: Bool { lock.withLock { !shut } }
+        func close() {
+            let first = lock.withLock {
+                defer { shut = true }
+                return !shut
+            }
+            if first { _ = shutdown(socket.fd, Int32(SHUT_RDWR)) }
+        }
+    }
     private var boundIndex: Int32 = 0
     /// `tailscale0`'s index now (0 off Linux; tests set their own).
     package var interfaceIndex: () -> Int32 = {
@@ -140,11 +161,13 @@ package final class HostNet {
     /// `net.sock`, for `attach --proto 2` (SSH works with KoreNet on or off).
     package func start() { openSSH() }
 
-    /// On KoreNet: watch the interface, bind the port.
-    package func join(_ tailnet: any Tailnet) {
+    /// On KoreNet: watch the interface, bind the port (`userspace`: Kore's own tailnet, whose
+    /// listen and bus are its socket's).
+    package func join(_ tailnet: any Tailnet, userspace: Bool = false) {
         guard self.tailnet == nil else { return }
         joins += 1
         self.tailnet = tailnet
+        self.userspace = userspace
         watchInterfaces()
         rebind()
     }
@@ -160,6 +183,7 @@ package final class HostNet {
         busWatch?.cancel()
         busWatch = nil
         tailnet = nil
+        userspace = false
         selfNode = nil
         for (key, shake) in handshakes where shake.route == .tailnet {
             shake.cancel()
@@ -169,7 +193,16 @@ package final class HostNet {
     }
 
     /// Whether a port is bound now.
-    package var listening: Bool { !listeners.isEmpty }
+    package var listening: Bool { !listeners.isEmpty || !handoffs.isEmpty }
+
+    /// Kore's own tailnet was chosen and couldn't start: said for `status` and `upgrade`.
+    package func unavailable(_ why: String) {
+        bindProblem = why
+        writeState(BoxTailnet.unavailablePrefix + why)
+    }
+
+    /// A tailnet is being chosen (Kore's own may take a few seconds to start).
+    package func choosing() { writeState("not listening: choosing a tailnet") }
     /// Whether anything watches the network now (netlink, the IPN bus).
     package var watching: Bool { netlink != nil || busWatch != nil }
 
@@ -211,13 +244,27 @@ package final class HostNet {
         guard !reading else { return readAgain = true }
         reading = true
         let mine = joins
+        let (userspace, had, listening, port) = (self.userspace, bound, !handoffs.isEmpty, self.port)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let read = Result { try tailnet.status() }
+            // Kore's own: its listen is a request on its socket, made here off the main thread.
+            var made: Result<[TailnetListenSocket], any Error>?
+            if userspace, case .success(let status) = read, let want = try? Self.addresses(status), !want.isEmpty, !(listening && want == had) {
+                made = Result { try tailnet.listen(port: port) }
+            }
+            let listened = made
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
-                    guard let self else { return }
+                    guard let self else {
+                        if case .success(let sockets)? = listened { for socket in sockets { Sockets.closeFD(socket.fd) } }
+                        return
+                    }
                     self.reading = false
-                    if mine == self.joins, self.tailnet != nil { self.apply(read) }
+                    if mine == self.joins, self.tailnet != nil {
+                        self.apply(read, listened: listened)
+                    } else if case .success(let sockets)? = listened {
+                        for socket in sockets { Sockets.closeFD(socket.fd) }
+                    }
                     if self.readAgain {
                         self.readAgain = false
                         if self.tailnet != nil { return self.rebind() }
@@ -237,12 +284,14 @@ package final class HostNet {
         await withCheckedContinuation { readWaiters.append($0) }
     }
 
-    private func apply(_ read: Result<TailnetStatus, any Error>) {
+    private func apply(_ read: Result<TailnetStatus, any Error>, listened: Result<[TailnetListenSocket], any Error>? = nil) {
+        func drop() { if case .success(let sockets)? = listened { for socket in sockets { Sockets.closeFD(socket.fd) } } }
         let status: TailnetStatus
         switch read {
         case .success(let got):
             status = got
         case .failure(let error):
+            drop()
             if !bound.isEmpty { HostJournal.note("korenet closed", ["reason": "\(error)"]) }
             closeListeners()
             selfNode = nil
@@ -259,11 +308,13 @@ package final class HostNet {
         do {
             want = try Self.addresses(status)
         } catch {
+            drop()
             HostJournal.note("korenet refused", ["reason": "\(error)"])
             closeListeners()
             noteProblem("\(error)")
             return
         }
+        if userspace { return applyUserspace(status, want: want, keyChanged: keyChanged, listened: listened) }
         let index = interfaceIndex()
         if Self.keeps(want: want, bound: bound, listening: !listeners.isEmpty, boundIndex: boundIndex, index: index) {
             if keyChanged { host.netNodeChanged() }
@@ -315,6 +366,58 @@ package final class HostNet {
         HostJournal.note("korenet listening", ["addresses": want.joined(separator: ","), "port": "\(port)"])
     }
 
+    /// Kore's own tailnet: its listen (made off the main thread) taken, each connection it hands
+    /// over read on a thread of its own and greeted here. Its bus stays watched: a sign-in, a
+    /// sign-out or new addresses come that way.
+    private func applyUserspace(_ status: TailnetStatus, want: [String], keyChanged: Bool, listened: Result<[TailnetListenSocket], any Error>?) {
+        if !handoffs.isEmpty, want == bound, listened == nil {
+            if keyChanged { host.netNodeChanged() }
+            return
+        }
+        closeListeners()
+        guard !want.isEmpty else {
+            if case .success(let sockets)? = listened { for socket in sockets { Sockets.closeFD(socket.fd) } }
+            return noteProblem("kore-tailnet is \(status.backendState.rawValue)")
+        }
+        let sockets: [TailnetListenSocket]
+        switch listened {
+        case .success(let made)?:
+            sockets = made
+        case .failure(let error)?:
+            HostJournal.note("korenet listen failed", ["reason": "\(error)", "tailnet": "kore"])
+            return noteProblem("\(error)")
+        case nil:
+            // Read while a listen was still held: the next look listens.
+            return rebind()
+        }
+        bindProblem = nil
+        writeState("listening " + want.joined(separator: ",") + " port \(port) (kore-tailnet)")
+        bound = want
+        binds += 1
+        for socket in sockets { serve(socket) }
+        host.netNodeChanged()
+        HostJournal.note("korenet listening", ["addresses": want.joined(separator: ","), "port": "\(port)", "tailnet": "kore"])
+    }
+
+    /// One handed-off listen: its thread takes each connection and greets it on the main queue,
+    /// until the listen closes.
+    private func serve(_ socket: TailnetListenSocket) {
+        let handoff = Handoff(socket)
+        handoffs.append(handoff)
+        Thread.detachNewThread { [weak self] in
+            defer { Sockets.closeFD(socket.fd) }
+            while handoff.open {
+                guard let (fd, remote) = try? socket.accept() else { return }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let self, handoff.open, self.handoffs.contains(where: { $0 === handoff }) else { return Sockets.closeFD(fd) }
+                        self.admit(fd, remote: remote)
+                    }
+                }
+            }
+        }
+    }
+
     /// Why the port isn't bound, kept for `status` (another process: a file in the runtime folder).
     private func noteProblem(_ why: String) {
         bindProblem = why
@@ -331,12 +434,15 @@ package final class HostNet {
             listener.source.cancel()
         }
         listeners = []
+        for handoff in handoffs { handoff.close() }
+        handoffs = []
         bound = []
     }
 
     /// Linux: netlink says when `tailscale0` or its addresses come or go. A Mac dev build: the
     /// IPN bus, held only until the port is bound.
     private func watchInterfaces() {
+        if userspace { return watchBus() }
         #if os(Linux)
         let fd = kore_netlink_open()
         guard fd >= 0 else { return }
@@ -351,17 +457,28 @@ package final class HostNet {
         source.resume()
         netlink = (fd, source)
         #else
+        watchBus()
+        #endif
+    }
+
+    /// The tailnet's bus: each state it says makes a look (installed Tailscale on a Mac: held
+    /// until bound; Kore's own: held while on, its sign-ins come this way).
+    private func watchBus() {
         guard let tailnet else { return }
         let events = tailnet.events()
         busWatch = Task { [weak self] in
             for await event in events {
-                guard case .state = event else { continue }
                 guard let self else { return }
+                switch event {
+                case .state: break
+                // Kore's own: its addresses can come after its state says Running.
+                case .status where self.userspace && !self.listening: break
+                default: continue
+                }
                 // Bound, the read drops the bus (and ends this loop's stream).
                 self.rebind()
             }
         }
-        #endif
     }
 
     // MARK: Accepting
@@ -371,14 +488,15 @@ package final class HostNet {
             // Close-on-exec at once: never inherited by the `gh`, `git` or CLI children it starts.
             let fd = Sockets.accept(listener)
             guard fd >= 0 else { return }
-            // Room first (handshakes and WhoIs lookups under way): a connection turned away for
-            // capacity doesn't spend its source's limit.
-            guard handshaking(.tailnet) + whoising < Self.maxHandshakes, let remote = Sockets.peerAddress(fd)?.description, limiter.admit(remote) else {
-                close(fd)
-                continue
-            }
-            whoisThenGreet(fd, remote: remote)
+            admit(fd, remote: Sockets.peerAddress(fd)?.description)
         }
+    }
+
+    /// A tailnet connection in: room first (handshakes and WhoIs lookups under way: one turned
+    /// away for capacity doesn't spend its source's limit), then its source's limit, then WhoIs.
+    private func admit(_ fd: Int32, remote: String?) {
+        guard handshaking(.tailnet) + whoising < Self.maxHandshakes, let remote, limiter.admit(remote) else { return Sockets.closeFD(fd) }
+        whoisThenGreet(fd, remote: remote)
     }
 
     /// WhoIs off the main thread (a local socket round trip), then the session. A WhoIs failure

@@ -20,8 +20,17 @@ package enum NetNodeWire {
         package var nodeKey: String?
         /// The Mac's own device id here, once it enrolled (the grant names it).
         package var enrolled: UUID?
+        /// The box's system (`linux`, `macos`): the lines its owner is shown depend on it. Nil
+        /// from a box before it said.
+        package var os: String?
+        /// Its tailnet while it's on: `tailscale` (installed) or `kore` (Kore's own).
+        package var tailnet: String?
 
-        package init(device: UUID, identityKey: Data, name: String, on: Bool, nodeKey: String? = nil, enrolled: UUID? = nil) {
+        package init(
+            device: UUID, identityKey: Data, name: String, on: Bool, nodeKey: String? = nil, enrolled: UUID? = nil, os: String? = nil, tailnet: String? = nil
+        ) {
+            self.os = os
+            self.tailnet = tailnet
             self.device = device
             self.identityKey = identityKey
             self.name = name

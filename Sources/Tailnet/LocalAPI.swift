@@ -51,6 +51,9 @@ package struct LocalAPIDiscovery: Sendable {
     #endif
 
     package static let linuxSocket = "/var/run/tailscale/tailscaled.sock"
+    /// Where Linux packages put tailscaled: installed, its socket gone, is stopped (never a
+    /// second node of Kore's own beside it).
+    package static let linuxDaemons = ["/usr/sbin/tailscaled", "/usr/bin/tailscaled", "/usr/local/sbin/tailscaled", "/usr/local/bin/tailscaled"]
     package static let macSocket = "/var/run/tailscaled.socket"
     package static let macPortLink = "/Library/Tailscale/ipnport"
     package static let macTokenPrefix = "/Library/Tailscale/sameuserproof-"
@@ -84,7 +87,8 @@ package struct LocalAPIDiscovery: Sendable {
         let fm = FileManager.default
         switch platform {
         case .linux:
-            return fm.fileExists(atPath: root + Self.linuxSocket) ? .unix(root + Self.linuxSocket) : .unavailable(.absent)
+            if fm.fileExists(atPath: root + Self.linuxSocket) { return .unix(root + Self.linuxSocket) }
+            return Self.linuxDaemons.contains { fm.isExecutableFile(atPath: root + $0) } ? .unavailable(.notRunning) : .unavailable(.absent)
         case .mac:
             switch app() {
             case .appStore:
