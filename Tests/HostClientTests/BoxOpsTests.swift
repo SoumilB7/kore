@@ -16,18 +16,20 @@ struct BoxOpsTests {
         func status(_ reason: String?, _ phase: HostConnection.Phase = .offline) -> BoxList.Status {
             BoxList.status("mybox", phase: phase, reason: reason)
         }
-        #expect(status(SSHTransport.ended(status: 255, line: "ssh: connect to host mybox port 22: Connection refused")) == .unreachable("Can't reach mybox"))
+        #expect(status(SSHTransport.ended(status: 255, line: "ssh: connect to host mybox port 22: Connection refused")) == .unreachable("mybox refused SSH", .tryAgain))
+        #expect(status(SSHTransport.ended(status: 255, line: "me@mybox: Permission denied (publickey,password).")) == .unreachable("mybox needs a key · ssh-copy-id mybox", .copy("ssh-copy-id mybox")))
+        #expect(status(SSHTransport.ended(status: 255, line: "Host key verification failed.")) == .unreachable("mybox's host key is new · ssh mybox once in Terminal", .copy("ssh mybox")))
         #expect(status(SSHTransport.ended(status: 127, line: "bash: line 1: /home/u/.local/bin/kore-host: No such file or directory")) == .notSetUp)
         #expect(status(SSHTransport.ended(status: 126, line: "cannot execute binary file: Exec format error")) == .notSetUp)
         #expect(status(SSHTransport.ended(status: AttachExit.notRunning.rawValue, line: "kore-host isn't running")) == .stopped)
         #expect(status(SSHTransport.ended(status: AttachExit.noGrant.rawValue, line: "kore-host: no grant named mac")) == .noGrant)
-        #expect(status(SSHTransport.ended(status: 0, line: nil)) == .unreachable("Can't reach mybox"))
+        #expect(status(SSHTransport.ended(status: 0, line: nil)) == .unreachable("Can't reach mybox", .tryAgain))
         #expect(status(nil, .refused(.auth)) == .noGrant)
         #expect(status(nil, .refused(.version)) == .stale)
-        #expect(status(nil, .refused(.replaced)) == .unreachable("Another Kore here holds mybox"))
+        #expect(status(nil, .refused(.replaced)) == .unreachable("Another Kore here holds mybox", nil))
         // Without ssh's status (a transport that doesn't say), its words.
         #expect(status("zsh: command not found: kore-host") == .notSetUp)
-        #expect(status(nil) == .unreachable("Can't reach mybox"))
+        #expect(status(nil) == .unreachable("Can't reach mybox", .tryAgain))
         #expect(SSHTransport.exit(of: "exit 3: kore-host isn't running")?.status == 3)
         #expect(SSHTransport.exit(of: "exit 3: kore-host isn't running")?.line == "kore-host isn't running")
         #expect(SSHTransport.exit(of: "the box said quit") == nil)
@@ -46,8 +48,8 @@ struct BoxOpsTests {
         #expect(box.note == nil)
         box.older = true
         #expect(box.note == .init(line: "mybox needs an update", action: .update))
-        box.status = .working("Copying Kore to mybox…")
-        #expect(box.note == .init(line: "Copying Kore to mybox…", action: nil))
+        box.status = .working("Copying kore-host to mybox…")
+        #expect(box.note == .init(line: "Copying kore-host to mybox…", action: nil))
     }
 
     @Test func anOlderBoxIsOneWithALowerLinkOrVersion() {
@@ -68,89 +70,91 @@ struct BoxOpsTests {
 
     // MARK: Setting a box up
 
-    /// A folder standing in for the box's home, and ssh/scp stand-ins that log each call and act
-    /// on it: `uname` says Linux x86_64, scp copies into the home, and `ssh` exits `status`.
-    private struct FakeSSH {
-        let root: URL
-        var box: URL { root.appendingPathComponent("box") }
-        var log: URL { root.appendingPathComponent("calls") }
-        var shell: BoxShell { BoxShell(ssh: root.appendingPathComponent("ssh").path, scp: root.appendingPathComponent("scp").path) }
-
-        init(status: Int32 = 0, said: String = "", uname: String = "Linux x86_64") throws {
-            root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("boxops-\(UUID().uuidString.prefix(8))")
-            try FileManager.default.createDirectory(at: root.appendingPathComponent("box"), withIntermediateDirectories: true)
-            let ssh = """
-                #!/bin/sh
-                [ "$1 $2 $3 $4" = "-T -o BatchMode=yes --" ] || exit 99
-                echo "ssh $5 $6" >> '\(root.path)/calls'
-                [ \(status) = 0 ] || { echo '\(said)' >&2; exit \(status); }
-                case "$6" in
-                  "uname -sm") echo '\(uname)' ;;
-                  *install-service) echo installed ;;
-                esac
-                exit 0
-                """
-            let scp = """
-                #!/bin/sh
-                [ "$1 $2 $3 $4" = "-q -o BatchMode=yes --" ] || exit 99
-                echo "scp $6" >> '\(root.path)/calls'
-                cp "$5" '\(root.path)/box/copied'
-                """
-            for (name, text) in [("ssh", ssh), ("scp", scp)] {
-                FileManager.default.createFile(atPath: root.appendingPathComponent(name).path, contents: Data(text.utf8), attributes: [.posixPermissions: 0o755])
-            }
-        }
-
-        var calls: [String] { ((try? String(contentsOf: log, encoding: .utf8)) ?? "").split(separator: "\n").map(String.init) }
-        func finish() { try? FileManager.default.removeItem(at: root) }
-    }
-
-    private static func binary(_ root: URL) -> @Sendable (String) throws -> (url: URL, temporary: Bool) {
-        { arch in
-            let file = root.appendingPathComponent("kore-host-\(arch)")
-            try Data("binary for \(arch)".utf8).write(to: file)
-            return (file, true)
-        }
-    }
-
-    @Test func setUpCopiesInstallsAndGrantsOverSSH() async throws {
+    @Test func setUpChecksCopiesProvesInstallsAndGrantsOverSSH() async throws {
         let fake = try FakeSSH()
         defer { fake.finish() }
-        let setup = BoxSetup(alias: "mybox", grant: "Soumils-Mac", shell: fake.shell, binary: Self.binary(fake.root))
+        let setup = BoxSetup(alias: "mybox", grant: "Soumils-Mac", shell: fake.shell, binary: fake.binary())
         let steps = Steps()
-        try await setup.run(allow: true) { steps.add($0) }
+        let done = try await setup.run(allow: true) { steps.add($0) }
         #expect(fake.calls == [
-            "ssh mybox uname -sm", "ssh mybox mkdir -p .local/bin", "scp mybox:.local/bin/kore-host.new",
-            "ssh mybox chmod 755 .local/bin/kore-host.new && mv -f .local/bin/kore-host.new .local/bin/kore-host",
+            "ssh mybox sh -s: # kore: detect", "ssh mybox mkdir -p .local/bin", "scp mybox:.local/bin/kore-host.new",
+            "ssh mybox chmod 755 .local/bin/kore-host.new && .local/bin/kore-host.new --version",
+            "ssh mybox mv -f .local/bin/kore-host.new .local/bin/kore-host",
             "ssh mybox .local/bin/kore-host install-service", "ssh mybox .local/bin/kore-host allow 'Soumils-Mac' --control full",
         ])
-        #expect(try String(contentsOf: fake.box.appendingPathComponent("copied"), encoding: .utf8) == "binary for x86_64")
-        #expect(steps.all == ["Checking mybox…", "Copying Kore to mybox…", "Starting…"])
+        #expect(try String(contentsOf: fake.box.appendingPathComponent("copied"), encoding: .utf8) == "binary for linux-x86_64")
+        #expect(steps.all == [
+            "Checking mybox…", "Getting kore-host for Linux · x86_64 · Debian GNU/Linux 13 (trixie)…", "Copying kore-host to mybox…",
+            "Starting kore-host (systemd)…", "Letting this Mac in…",
+        ])
+        #expect(done.machine.koreHost == "kore-host 0.2.3 (link 1.4)")
+        #expect(done.warning == nil)
         // The unpacked binary was a temp file: gone.
-        #expect(!FileManager.default.fileExists(atPath: fake.root.appendingPathComponent("kore-host-x86_64").path))
+        #expect(!FileManager.default.fileExists(atPath: fake.root.appendingPathComponent("kore-host-linux-x86_64").path))
     }
 
-    @Test func updateGrantsNothingAndAnArmBoxGetsItsOwnBinary() async throws {
-        let fake = try FakeSSH(uname: "Linux aarch64")
+    @Test func eachKindOfMachineGetsItsOwnBinaryAndService() async throws {
+        for (kind, platform, service) in [
+            (FakeSSH.Kind.aarch64, "linux-aarch64", "systemd"), (.linuxNoSystemd, "linux-x86_64", "on demand"), (.macOS, "macos-arm64", "launchd"),
+        ] {
+            let fake = try FakeSSH(kind)
+            defer { fake.finish() }
+            let steps = Steps()
+            try await BoxSetup(alias: "b", grant: "mac", shell: fake.shell, binary: fake.binary()).run(allow: false) { steps.add($0) }
+            #expect(try String(contentsOf: fake.box.appendingPathComponent("copied"), encoding: .utf8) == "binary for \(platform)")
+            #expect(steps.all.contains("Starting kore-host (\(service))…"))
+            // Update grants nothing.
+            #expect(!fake.calls.contains { $0.contains(" allow ") })
+        }
+    }
+
+    @Test func aMachineKoreCantRunOnOrWithoutRoomStopsAtTheCheck() async throws {
+        let old = try FakeSSH(.oldMac)
+        defer { old.finish() }
+        await #expect(throws: BoxSetup.Failure(message: "mini runs macOS 13.6 · Kore needs macOS 15 or later")) {
+            try await BoxSetup(alias: "mini", grant: "mac", shell: old.shell, binary: old.binary()).run(allow: true) { _ in }
+        }
+        #expect(old.calls == ["ssh mini sh -s: # kore: detect"])
+    }
+
+    @Test func aBinaryThatDoesntRunThereIsRemovedAndTheOldOneKept() async throws {
+        let fake = try FakeSSH()
         defer { fake.finish() }
-        let setup = BoxSetup(alias: "pi", grant: "mac", shell: fake.shell, binary: Self.binary(fake.root))
-        try await setup.run(allow: false) { _ in }
-        #expect(!fake.calls.contains { $0.contains(" allow ") })
-        #expect(try String(contentsOf: fake.box.appendingPathComponent("copied"), encoding: .utf8) == "binary for aarch64")
+        // The copied binary's check prints nothing (an exec format error says so on stderr).
+        try Data("#!/bin/sh\nexit 0\n".utf8).write(to: fake.root.appendingPathComponent("noop"))
+        let shell = BoxShell(ssh: fake.shell.ssh, scp: fake.shell.scp)
+        let setup = BoxSetup(alias: "mybox", grant: "mac", shell: shell) { _ in
+            let file = fake.root.appendingPathComponent("bin")
+            try Data("x".utf8).write(to: file)
+            return (file, false)
+        }
+        // A check that answers but isn't kore-host.
+        let script = try String(contentsOf: fake.root.appendingPathComponent("ssh"), encoding: .utf8)
+            .replacingOccurrences(of: "echo 'kore-host 0.2.3 (link 1.4)'", with: "echo 'cannot execute binary file: Exec format error'")
+        try Data(script.utf8).write(to: fake.root.appendingPathComponent("ssh"))
+        await #expect(throws: BoxSetup.Failure(message: "That kore-host doesn't run on mybox: cannot execute binary file: Exec format error")) {
+            try await setup.run(allow: true) { _ in }
+        }
+        #expect(fake.calls.last == "ssh mybox rm -f .local/bin/kore-host.new")
+        #expect(!fake.calls.contains { $0.contains("mv -f") })
     }
 
-    @Test func aFailedStepSaysWhyAndStops() async throws {
-        let down = try FakeSSH(status: 255, said: "ssh: Could not resolve hostname nobox")
+    @Test func sshFailuresSayWhatFixesThem() async throws {
+        let down = try FakeSSH(status: 255, said: "ssh: connect to host nobox port 22: Operation timed out")
         defer { down.finish() }
-        await #expect(throws: BoxSetup.Failure(message: "Can't reach nobox")) {
-            try await BoxSetup(alias: "nobox", grant: "mac", shell: down.shell, binary: Self.binary(down.root)).run(allow: true) { _ in }
+        await #expect(throws: BoxSetup.Failure(message: "Can't reach nobox", fix: .tryAgain)) {
+            try await BoxSetup(alias: "nobox", grant: "mac", shell: down.shell, binary: down.binary()).run(allow: true) { _ in }
         }
-        let mac = try FakeSSH(uname: "Darwin arm64")
-        defer { mac.finish() }
-        await #expect(throws: BoxSetup.Failure.self) {
-            try await BoxSetup(alias: "mac2", grant: "mac", shell: mac.shell, binary: Self.binary(mac.root)).run(allow: true) { _ in }
+        let key = try FakeSSH(status: 255, said: "me@10.0.0.5: Permission denied (publickey,password).")
+        defer { key.finish() }
+        await #expect(throws: BoxSetup.Failure(message: "me@10.0.0.5:2222 needs a key · ssh-copy-id -p 2222 me@10.0.0.5", fix: .copy("ssh-copy-id -p 2222 me@10.0.0.5"))) {
+            try await BoxSetup(alias: "me@10.0.0.5:2222", grant: "mac", shell: key.shell, binary: key.binary()).detect()
         }
-        #expect(mac.calls == ["ssh mac2 uname -sm"])
+        // A typed destination: the user and port as options, the host one word after `--`.
+        #expect(key.calls == ["ssh -o User=me -o Port=2222 10.0.0.5 sh -s: # kore: detect"])
+        let changed = BoxSetup.sshFailure("mybox", "@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nHost key verification failed.")
+        #expect(changed == BoxSetup.Failure(message: "mybox's host key changed · check it, then ssh-keygen -R mybox", fix: .copy("ssh-keygen -R mybox")))
+        #expect(BoxSetup.sshFailure("x", "ssh: Could not resolve hostname x: nodename nor servname provided").message == "Can't find x · check the name")
     }
 
     @Test func setUpFromTheListReachesTheBoxWithThisMacsGrant() async throws {
@@ -170,15 +174,20 @@ struct BoxOpsTests {
                 return client
             }
             return connection
-        }) { alias, grant in BoxSetup(alias: alias, grant: grant, shell: fake.shell, binary: Self.binary(fake.root)) }
+        }) { alias, grant in BoxSetup(alias: alias, grant: grant, shell: fake.shell, binary: fake.binary()) }
+        list.findMac = { nil }
         list.add("mybox")
         await list.act(.setUp, on: "mybox")
         #expect(list.box("mybox")?.status == .ready)
         #expect(list.box("mybox")?.note?.line == "Ready")
+        #expect(list.box("mybox")?.kind == "Linux · x86_64 · Debian GNU/Linux 13 (trixie)")
         #expect(BoxSetup.grant(for: "mybox", defaults: defaults) == BoxSetup.macGrantName())
         #expect(grants.last == BoxSetup.macGrantName())
         #expect(BoxSetup.macGrantName() != "laptop")
         #expect(fake.calls.contains("ssh mybox .local/bin/kore-host allow '\(BoxSetup.macGrantName())' --control full"))
+        // The machine is kept for the next run.
+        #expect(BoxMachine.cached("mybox", root: fake.root.appendingPathComponent("cache"))?.platform == "linux-x86_64")
+        #expect(BoxList(defaults: defaults, hosts: { [] }, cacheRoot: fake.root.appendingPathComponent("cache")).box("mybox")?.machine?.system == .linux)
     }
 
     @Test func theBinaryComesUnpackedForTheBoxsCPU() async throws {
@@ -186,6 +195,7 @@ struct BoxOpsTests {
         #expect(BoxBinary.arch(uname: "Linux aarch64") == "aarch64")
         #expect(BoxBinary.arch(uname: "Darwin arm64") == nil)
         #expect(BoxBinary.arch(uname: "Linux riscv64") == nil)
+        #expect(BoxBinary.here.hasPrefix("macos-"))
         // `xz` made this; Kore reads it without the xz command.
         let packed = try #require(Data(base64Encoded: "/Td6WFoAAATm1rRGBMATDyEBFgAAAAAAAAAAAG75/+kBAA5rb3JlLWhvc3QgdGVzdAoAAD0k29I+59IvAAEvD9eQJaIftvN9AQAAAAAEWVo="))
         #expect(String(decoding: try BoxBinary.unxz(packed), as: UTF8.self) == "kore-host test\n")
@@ -223,7 +233,7 @@ struct BoxOpsTests {
         }
         #expect(try await probe(box, "~/.local/bin/kore-host-not-here") == .notSetUp)
         #expect(try await probe(box, command) == .noGrant)
-        #expect(try await probe("kore-ops-no-such-host.invalid", command) == .unreachable("Can't reach kore-ops-no-such-host.invalid"))
+        #expect(try await probe("kore-ops-no-such-host.invalid", command) == .unreachable("Can't find kore-ops-no-such-host.invalid · check the name", .tryAgain))
     }
 
     // MARK: The list

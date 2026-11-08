@@ -207,11 +207,14 @@ struct HostClientTests {
         down.refuse = true
         let root = Fixture.scratch()
         let defaults = try #require(UserDefaults(suiteName: "hostclient-\(UUID().uuidString)"))
-        let list = BoxList(defaults: defaults, hosts: { ["other", "mybox", "spare"] }, cacheRoot: root.appendingPathComponent("cache")) { alias in
-            let connection = makeConnection(root: root.appendingPathComponent(alias), dials: alias == "mybox" ? up : down)
-            connection.backoff = [.seconds(30)]
-            return connection
-        }
+        // No real ssh: the machine's check finds nothing.
+        let list = BoxList(
+            defaults: defaults, hosts: { ["other", "mybox", "spare"] }, cacheRoot: root.appendingPathComponent("cache"),
+            connection: { alias in
+                let connection = makeConnection(root: root.appendingPathComponent(alias), dials: alias == "mybox" ? up : down)
+                connection.backoff = [.seconds(30)]
+                return connection
+            }, setup: { BoxSetup(alias: $0, grant: $1, shell: BoxShell(ssh: "/usr/bin/false", scp: "/usr/bin/false")) })
         // A new Mac lists no box; added, mybox stays listed, and the other hosts are suggestions.
         #expect(list.boxes.isEmpty)
         list.add("mybox")
@@ -236,7 +239,7 @@ struct HostClientTests {
         // Added by hand: listed from now on, answered or not.
         list.add("other")
         await list.probe("other")
-        #expect(list.box("other")?.status == .unreachable("Can't reach other"))
+        #expect(list.box("other")?.status == .unreachable("Can't reach other", .tryAgain))
         #expect(BoxList(defaults: defaults, hosts: { [] }, cacheRoot: root).boxes.map(\.alias) == ["mybox", "other"])
     }
 

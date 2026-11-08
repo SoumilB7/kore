@@ -56,7 +56,7 @@ struct OutboxTests {
     }
 
     @Test func refusalsAreTyped() async throws {
-        for (bye, expected) in [(LinkMessage.ByeReason.version, BoxList.Status.stale), (.auth, .noGrant), (.replaced, .unreachable("Another Kore here holds mybox"))] {
+        for (bye, expected) in [(LinkMessage.ByeReason.version, BoxList.Status.stale), (.auth, .noGrant), (.replaced, .unreachable("Another Kore here holds mybox", nil))] {
             let dials = HostClientTests.Dials()
             let connection = connection(Fixture.scratch(), dials)
             connection.retain()
@@ -78,7 +78,7 @@ struct OutboxTests {
         _ = await dials.hosts[0].next("hello")
         dials.hosts[0].send(.bye(.slow))
         #expect(await until { connection.lateHello })
-        #expect(BoxList.status("mybox", phase: connection.phase, reason: nil, lateHello: true) == .unreachable("mybox waited too long for this Mac · trying again"))
+        #expect(BoxList.status("mybox", phase: connection.phase, reason: nil, lateHello: true) == .unreachable("mybox waited too long for this Mac", .tryAgain))
         connection.release()
     }
 }

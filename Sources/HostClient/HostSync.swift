@@ -119,24 +119,25 @@ package struct SyncBox: Sendable {
 
     /// `ssh <alias>`, the user's own config and agent. Nil for an alias that isn't one.
     package static func ssh(_ alias: String) -> SyncBox? {
-        guard validAlias(alias) else { return nil }
-        return SyncBox(alias: alias, base: nil, ssh: ["/usr/bin/ssh"] + sshOptions)
+        guard validAlias(alias), let address = BoxAddress(alias) else { return nil }
+        return SyncBox(alias: alias, base: nil, ssh: ["/usr/bin/ssh"] + sshOptions + address.options)
     }
+
+    /// The host ssh and rsync are given: the alias, or a typed destination's host (its user and
+    /// port are options in `ssh`).
+    var host: String { BoxAddress(alias)?.host ?? alias }
 
     /// Through another ssh program (tests: one that runs the command here, as sshd's shell would).
     package static func via(_ program: String, alias: String, base: String?) -> SyncBox {
         SyncBox(alias: alias, base: base, ssh: [program])
     }
 
-    /// An SSH alias: letters, digits, `.`, `_`, `-`, not starting with `-`.
-    package static func validAlias(_ alias: String) -> Bool {
-        !alias.isEmpty && !alias.hasPrefix("-") && alias.unicodeScalars.allSatisfy {
-            ("a"..."z").contains($0) || ("A"..."Z").contains($0) || ("0"..."9").contains($0) || "._-".unicodeScalars.contains($0)
-        }
-    }
+    /// An SSH alias (letters, digits, `.`, `_`, `-`, not starting with `-`), or `user@host[:port]`
+    /// made of the same (`BoxAddress`).
+    package static func validAlias(_ alias: String) -> Bool { BoxAddress.valid(alias) }
 
     /// rsync's name for a path on the box: the alias, then the path quoted for the box's shell.
-    func spec(_ path: String) -> String { alias + ":" + ShellQuote.single(path) }
+    func spec(_ path: String) -> String { host + ":" + ShellQuote.single(path) }
 
     func rsyncOptions(_ low: Bool) -> [String] {
         ["-e", (ssh + ["--"]).joined(separator: " ")] + (low ? ["--rsync-path=nice -n 10 rsync"] : [])
@@ -145,7 +146,7 @@ package struct SyncBox: Sendable {
     /// Runs `script` under sh on the box, `args` as `$1`…, `input` on its stdin.
     package func shell(_ script: String, _ args: [String] = [], input: Data? = nil, low: Bool = false) async -> SyncProcess.Output {
         let command = (low ? "nice -n 10 " : "") + "sh -c " + ShellQuote.single(script) + " sh" + args.map { " " + ShellQuote.single($0) }.joined()
-        return await SyncProcess.run(ssh[0], Array(ssh.dropFirst()) + ["--", alias, command], input: input, low: low)
+        return await SyncProcess.run(ssh[0], Array(ssh.dropFirst()) + ["--", host, command], input: input, low: low)
     }
 }
 
