@@ -167,15 +167,15 @@ extension Chat {
                 ? "“Allow commands in Plan” is on here, so Plan would approve commands by itself: only you can switch to it."
                 : "Edit automatically accepts edits Auto would review: only you can switch to it."))
         }
-        // After the answer has gone: leaving Codex's Full access ends this chat's access, and with
-        // it the connection the answer goes on. Not remembered as the CLI's default.
+        // After the answer has gone: leaving Codex's Full access ends this chat's access (but on a
+        // box), and with it the connection the answer goes on. Not remembered as the CLI's default.
         let plan = provider.planToggle?.id == mode.id
         Task { @MainActor [self] in
             // A Codex chat's plan is a switch over its permissions.
             if plan { setPlanMode(true) } else { setMode(mode.id, remember: false) }
             note("Arsenal · mode \(mode.label)")
         }
-        let ends = provider == .codex && !plan && mode.id != CodexModes.fullAccess && arsenal != nil
+        let ends = provider == .codex && !plan && mode.id != CodexModes.fullAccess && arsenal != nil && !services.onBox
         return .success(ends ? "Mode \(mode.label). Kore access ends with it: Codex's sandbox blocks it there." : "Mode \(mode.label).")
     }
 

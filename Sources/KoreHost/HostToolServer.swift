@@ -34,7 +34,7 @@ package enum HostToolServer {
 
     /// One frame out and one back on a Unix socket, blocking, `wait` seconds at most for the answer.
     static func exchange(_ payload: Data, at path: String, wait: TimeInterval) -> Data? {
-        #if canImport(Glibc) || canImport(Musl)
+        #if canImport(Glibc)
         let fd = socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
         #else
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
