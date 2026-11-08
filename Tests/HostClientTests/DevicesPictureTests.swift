@@ -423,9 +423,12 @@ struct BoxLinkDevicesTests {
         return connection
     }
 
-    @Test func pendingDevicesAndNetSwitch() async throws {
+    @Test(.timeLimit(.minutes(1))) func pendingDevicesAndNetSwitch() async throws {
         let dialed = Dialed()
         let connection = link(dialed)
+        // The test's own clock: no probe or handshake wait runs out on a busy Mac and drops the
+        // link between its two asks.
+        connection.sleep = VirtualClock().sleep
         connection.retain()
         defer { connection.release() }
         let host = await dialed.next()

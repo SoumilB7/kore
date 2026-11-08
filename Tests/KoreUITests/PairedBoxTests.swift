@@ -31,8 +31,10 @@ struct PairedBoxTests {
         func send(_ message: LinkMessage) { transport.send((try? message.encoded()) ?? Data()) }
         func send(json: [String: Any]) { transport.send((try? JSONSerialization.data(withJSONObject: json)) ?? Data()) }
 
+        /// The next frame that matches, as soon as it comes; the bound only ends a test whose frame
+        /// never comes (3 s ran out on a busy Mac with the frame on its way).
         func take(_ match: @escaping ([String: Any]) -> Bool) async -> [String: Any]? {
-            let end = Date().addingTimeInterval(3)
+            let end = Date().addingTimeInterval(30)
             while Date() < end {
                 if let i = got.firstIndex(where: match) { return got.remove(at: i) }
                 try? await Task.sleep(for: .milliseconds(10))

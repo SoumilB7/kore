@@ -157,11 +157,14 @@ struct AccountProcessStopTests {
                 _ = try await CodexAppServer.start(cwd: folder, executable: fake, environment: ["START_PID": marker.path])
             }
         }
-        let deadline = ContinuousClock.now + .seconds(3)
-        while !FileManager.default.fileExists(atPath: marker.path), ContinuousClock.now < deadline {
+        // Until the child has written its pid (a busy Mac can take seconds to start Python): the
+        // bound only ends a run that never starts.
+        let deadline = ContinuousClock.now + .seconds(30)
+        func written() -> Int32? { (try? String(contentsOf: marker, encoding: .utf8)).flatMap { Int32($0) } }
+        while written() == nil, ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
-        let pid = try #require(Int32(String(contentsOf: marker, encoding: .utf8)))
+        let pid = try #require(written())
         let child = try #require(ProcessChild(pid))
         defer { child.signal(SIGKILL) }
         startup.cancel()

@@ -204,10 +204,16 @@ struct AgentSecretsTests {
 
     @Test(arguments: longRuns)
     func maskingStaysQuickOnALongRun(_ run: String) {
-        let began = ContinuousClock.now
+        // This thread's CPU time, not the clock: what masking cost, however busy the Mac is.
+        func cpu() -> Duration {
+            var now = timespec()
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now)
+            return .seconds(Int64(now.tv_sec)) + .nanoseconds(Int64(now.tv_nsec))
+        }
+        let began = cpu()
         #expect(AgentSecrets.mask(run) == run)
-        // Quadratic, these took minutes; a debug build on a busy machine has plenty of room.
-        #expect(ContinuousClock.now - began < .seconds(5))
+        // Quadratic, these took minutes; a debug build has plenty of room.
+        #expect(cpu() - began < .seconds(5))
     }
 
     @Test func maskingKeepsALineValid() throws {

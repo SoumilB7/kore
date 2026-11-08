@@ -46,7 +46,9 @@ final class FakeHost {
     }
 
     /// The next message of that type the client sent, waiting for it.
-    func next(_ type: String, within seconds: Double = 3) async -> [String: Any]? {
+    /// The next message of that type, polled: as soon as it comes, or nil after `seconds` (a test
+    /// that checks nothing came passes its own short bound).
+    func next(_ type: String, within seconds: Double = 30) async -> [String: Any]? {
         let end = Date().addingTimeInterval(seconds)
         while Date() < end {
             if let i = inbox.firstIndex(where: { $0["t"] as? String == type }) { return inbox.remove(at: i) }
@@ -92,7 +94,9 @@ final class FakeHost {
 
 /// Waits for a condition on the main actor.
 @MainActor
-func until(_ seconds: Double = 3, _ condition: () -> Bool) async -> Bool {
+/// Polls until `condition` holds: as soon as it does. The bound only ends a wait that never would;
+/// 3 s ran out on a busy Mac (a gate's parallel run) with the condition on its way.
+func until(_ seconds: Double = 30, _ condition: () -> Bool) async -> Bool {
     let end = Date().addingTimeInterval(seconds)
     while Date() < end {
         if condition() { return true }

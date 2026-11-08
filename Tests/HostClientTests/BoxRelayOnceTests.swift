@@ -10,7 +10,7 @@ import Testing
 /// a resume mid-turn, an SSH → tailnet move, a Kore restart's catch-up, a rekey of its stores. The
 /// box's end is scripted (`FakeHost`); dials are answered at once, and the link's waits are virtual.
 @MainActor
-@Suite(.serialized)
+@Suite(.serialized, .timeLimit(.minutes(1)))
 struct BoxRelayOnceTests {
     final class Dials { var hosts: [FakeHost] = [] }
 
