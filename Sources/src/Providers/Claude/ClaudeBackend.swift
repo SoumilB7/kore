@@ -151,7 +151,9 @@ package final class ClaudeBackend: ChatBackend {
             permissionMode: ClaudeSession.PermissionMode(rawValue: options.mode) ?? .default,
             fastMode: options.fastMode ?? false, resume: fork?.from ?? sessionId)
         launch.switchModelsOnFlag = RefusalFallback.saved
-        launch.askHook = Self.askHook
+        // Kore's ask list rides only an Auto launch; a mode change adds or takes it (`syncAskHook`).
+        launch.askHook = Self.askHook(for: options.mode)
+        askHookOn = launch.askHook != nil
         if let environment = options.environment { launch.environment.merge(try environment()) { $1 } }
         if let fork {
             launch.extraArgs += ["--fork-session", "--resume-session-at", fork.at]
@@ -263,6 +265,7 @@ package final class ClaudeBackend: ChatBackend {
             do {
                 try await session.setPermissionMode(permission)
                 options.mode = mode
+                await syncAskHook(mode)
             } catch {}
         }
         // Ends when the process does; `close()` cancels it.
@@ -542,6 +545,8 @@ package final class ClaudeBackend: ChatBackend {
             stderrTail.append(text)
         case .bridgeState(let state, let detail):
             bridge(state, detail)
+        case .permissionModeChanged(let mode):
+            Task { await syncAskHook(mode) }
         case .peerHold(let hold):
             holds.bypass = options.mode == "bypassPermissions"
             held(holds.frame(hold))
@@ -1157,6 +1162,22 @@ package final class ClaudeBackend: ChatBackend {
             flush()
             throw error
         }
+        await syncAskHook(id)
+    }
+
+    /// The hook a chat in `mode` runs: Kore's in Auto, none otherwise.
+    package static func askHook(for mode: String) -> String? { mode == "auto" ? askHook : nil }
+
+    /// The ask-list hook is in this process's flag settings.
+    private var askHookOn = false
+
+    /// The ask-list hook on in Auto and off in any other mode, as the mode changes (the user's
+    /// pick, or the CLI's own switch): a hook process runs for each Bash call, so only Auto has one.
+    private func syncAskHook(_ mode: String) async {
+        let want = Self.askHook(for: mode) != nil
+        guard want != askHookOn, let session else { return }
+        askHookOn = want
+        do { try await session.setAskHook(want ? Self.askHook : nil) } catch { askHookOn = !want }
     }
 
     package func setPlanMode(_ on: Bool) async {}

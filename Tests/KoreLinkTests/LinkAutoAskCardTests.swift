@@ -8,7 +8,7 @@ import LinkProtocol
 
 /// An Auto ask on the phone (approvals.pending, as every card, so it notifies as they do): a
 /// permission card whose Allow reads Run once, with no Always allow (that's the Mac's, once a
-/// person sees what it keeps); a call Auto refused outright has Run once refused.
+/// person sees what it keeps); a call Auto refused outright has OK only.
 @MainActor
 @Suite("Auto asks over the link")
 struct LinkAutoAskCardTests {
@@ -23,7 +23,8 @@ struct LinkAutoAskCardTests {
         var stop = Approval(id: "autostop-t1", title: "Auto stopped: rm -rf ~ (a removal Auto never runs)", detail: ClaudeAutoStops.safetyLine, body: nil, canAlwaysAllow: false, questions: [])
         stop.autoStop = true
         stop.allowNote = ClaudeAutoStops.safetyLine
+        // Refused outright: OK only, no Run once at all.
         let refused = LinkSnapshot.card(stop, in: chat)
-        #expect(refused.actions.first { $0.id == .allow }?.refused == true && refused.actions.first { $0.id == .allow }?.label == "Run once")
+        #expect(refused.actions.map(\.id) == [.deny] && refused.actions.first?.label == "OK")
     }
 }

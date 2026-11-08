@@ -51,7 +51,7 @@ struct PermissionCard: View {
             }
             AdaptiveButtons {
                 // A call Auto already refused has nothing to deny: its card is dismissed.
-                Button(approval.id.hasPrefix(ClaudeAutoStops.idPrefix) || approval.id.hasPrefix(CodexAutoStops.idPrefix) ? "OK" : "Deny") { decide(.deny) }
+                Button(approval.autoStop && approval.allowNote != nil ? "OK" : "Deny") { decide(.deny) }
                     .buttonStyle(SubtleButtonStyle())
                     .storyID(StoryID.Approval.card(approval.id).part(.deny))
                 if approval.canAlwaysAllow, approval.autoStop {
@@ -72,12 +72,15 @@ struct PermissionCard: View {
                         .help(note)
                         .storyID(StoryID.Approval.card(approval.id).part(.always))
                 }
-                Button(approval.autoStop ? "Run once" : "Allow") { decide(.allow) }
-                    .buttonStyle(SubtleButtonStyle(prominent: true))
-                    // Held by a setting Kore can't change: dim, saying so.
-                    .disabled(approval.allowNote != nil)
-                    .help(approval.allowNote ?? "")
-                    .storyID(StoryID.Approval.card(approval.id).part(.allow))
+                // A call Auto refused outright has no Run once: its line says why, and OK.
+                if !(approval.autoStop && approval.allowNote != nil) {
+                    Button(approval.autoStop ? "Run once" : "Allow") { decide(.allow) }
+                        .buttonStyle(SubtleButtonStyle(prominent: true))
+                        // Held by a setting Kore can't change: dim, saying so.
+                        .disabled(approval.allowNote != nil)
+                        .help(approval.allowNote ?? "")
+                        .storyID(StoryID.Approval.card(approval.id).part(.allow))
+                }
             }
             if let settings {
                 Button(settings.label, action: settings.run)

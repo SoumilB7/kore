@@ -114,4 +114,13 @@ struct AutoAsksTests {
         #expect(refusal.message == "Only you can run a command Auto asks about.")
         #expect((try? chat.arsenalAnswer("r-hook", [], deny: true, by: agent).get()) == "Denied.")
     }
+
+    /// The hook runs a process per Bash call (about 11 ms, release): only an Auto chat has it.
+    @Test func onlyAnAutoChatRunsTheHook() {
+        let saved = ClaudeBackend.askHook
+        defer { ClaudeBackend.askHook = saved }
+        ClaudeBackend.askHook = "'/k/kore' hook pretool"
+        #expect(ClaudeBackend.askHook(for: "auto") == "'/k/kore' hook pretool")
+        for mode in ["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk"] { #expect(ClaudeBackend.askHook(for: mode) == nil, "\(mode)") }
+    }
 }

@@ -202,6 +202,13 @@ public actor ClaudeSession {
         try await control("apply_flag_settings", ["settings": ["effortLevel": .string(level)]])
     }
 
+    /// Kore's ask-list hook in the flag settings, for this process only: on (`command`) while the
+    /// chat is in Auto, off (nil) otherwise, so other modes run no hook at all.
+    public func setAskHook(_ command: String?) async throws {
+        let hooks: JSONValue = command.map { ["PreToolUse": [["matcher": "Bash", "hooks": [["type": "command", "command": .string($0)]]]]] } ?? .null
+        try await control("apply_flag_settings", ["settings": ["hooks": hooks]])
+    }
+
     /// `crossSessionInbound` as a flag setting, for this process only: `accept`, `refuse`, or nil
     /// to clear it (the user's own settings and the mode decide again).
     public func setCrossSessionInbound(_ value: String?) async throws {

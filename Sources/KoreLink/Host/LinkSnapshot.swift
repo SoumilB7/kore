@@ -348,7 +348,8 @@ enum LinkSnapshot {
             }
             actions = [.init(id: .submitAnswers, label: "Submit", style: .primary), .init(id: .deny, label: "Skip", style: .neutral)]
         case .permission, .planReady:
-            actions =
+            // A call Auto refused outright: OK only, its line says why.
+            actions = approval.autoStop && approval.allowNote != nil ? [.init(id: .deny, label: "OK", style: .neutral)] :
                 [.init(id: .allow, label: approval.autoStop ? "Run once" : "Allow", style: .primary, refused: approval.allowNote != nil ? true : nil)]
                 + (approval.canAlwaysAllow && !approval.autoStop ? [.init(id: .allowAlways, label: "Always allow", style: .neutral, refused: true)] : [])
                 + [.init(id: .deny, label: "Deny", style: .destructive)]

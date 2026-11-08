@@ -5,7 +5,7 @@ import src
 
 /// Auto asks (the owner via Kore-main, 2026-11-19): an Auto chat's ask (Kore's ask list, a safety
 /// check) is a card with Run once and Deny that only a person runs; another chat's agent may only
-/// Deny it. A call Auto refused outright is a card that says why and runs nothing. On Codex, Run
+/// Deny it. A call Auto refused outright is a card that says why, with OK only. On Codex, Run
 /// once is Codex's one retry of a reviewer's denial, and the idle chat is asked to try again. The
 /// cards here are the ones `ClaudeTranslator`, `ClaudeAutoStops` and `CodexAutoStops` make: the
 /// CLIs' frames are their unit tests'.
@@ -32,6 +32,7 @@ final class ArsenalAutoAsk: ChatStoryline {
         let codex = variant == .codex
         let a = KoreCaller.chat("a")
         let ask = codex ? CodexAutoStops.idPrefix + "rv1" : "r-hook"
+        let stop = codex ? CodexAutoStops.idPrefix + "rv9" : ClaudeAutoStops.idPrefix + "t9"
         let title = codex ? "Auto stopped: curl -sI https://example.com (No authorization for network access.)" : "Auto asks: sudo reboot (Kore asks you first: sudo.)"
         return super.steps() + [
             Do("a's chat, at a socket of this run's, Arsenal allowed") { story in
@@ -67,16 +68,13 @@ final class ArsenalAutoAsk: ChatStoryline {
             TurnsDone("b", 2),
             Expect.rows("b asked to run it once") { rows in rows.contains { $0.kind == "user" && $0.text == "Run once: `curl -sI https://example.com`" } },
         ] : []) + [
-            // Refused outright: the card says why, and Run once runs nothing.
-            raise(
-                codex ? CodexAutoStops.idPrefix + "rv9" : ClaudeAutoStops.idPrefix + "t9",
-                codex ? "Auto stopped: rm -rf ~ (critical)" : "Auto stopped: rm -rf ~ (a removal Auto never runs)",
+            // Refused outright: the card says why, with OK only (no Run once).
+            raise(stop, codex ? "Auto stopped: rm -rf ~ (critical)" : "Auto stopped: rm -rf ~ (a removal Auto never runs)",
                 refusal: codex ? CodexAutoStops.criticalLine : ClaudeAutoStops.safetyLine),
-            WaitForElement(.id(StoryID.Approval.card(codex ? CodexAutoStops.idPrefix + "rv9" : ClaudeAutoStops.idPrefix + "t9").part(.allow))),
-            Press(.id(StoryID.Approval.card(codex ? CodexAutoStops.idPrefix + "rv9" : ClaudeAutoStops.idPrefix + "t9").part(.allow))),
-            card(codex ? CodexAutoStops.idPrefix + "rv9" : ClaudeAutoStops.idPrefix + "t9", true, "Run once does nothing: it stays"),
-            Press(.id(StoryID.Approval.card(codex ? CodexAutoStops.idPrefix + "rv9" : ClaudeAutoStops.idPrefix + "t9").part(.deny))),
-            card(codex ? CodexAutoStops.idPrefix + "rv9" : ClaudeAutoStops.idPrefix + "t9", false, "OK: gone"),
+            WaitForElement(.id(StoryID.Approval.card(stop).part(.deny))),
+            Expect("no Run once on it") { _ in StoryElement(StoryID.Approval.card(stop).part(.allow)) == nil },
+            Press(.id(StoryID.Approval.card(stop).part(.deny))),
+            card(stop, false, "OK: gone"),
         ]
     }
 }
