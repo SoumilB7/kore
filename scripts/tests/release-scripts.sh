@@ -123,6 +123,8 @@ sed -i '' "1s/.*/# kore $(<VERSION) 0000000000000000000000000000000000000000/" $
 pub=$(KORE_RELEASE_DIR=$other scripts/release.sh 2>&1 </dev/null); code=$?
 check "  nor a folder prepared for another commit" '(( code != 0 )) && [[ $pub == *"another commit"* ]]'
 grep -q '/dev/tty' scripts/release.sh; check "  and the yes is read from the terminal" '(( $? == 0 ))'
+grep -q 'release-maps' scripts/release.sh && ! grep -q 'mapping' $dry/SHA256SUMS
+check "  the APK's R8 mapping is kept on the Mac, never published" '(( $? == 0 ))'
 # Boxes' own tailnet: listed when built (Go here, or left in build/release), else said skipped.
 box_tailnets() {
     local a

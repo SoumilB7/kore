@@ -20,6 +20,7 @@
 #   kore-host-linux-*.xz        kore-host for boxes (kore-host.sh, `kore-host update`, host.update)
 #   kore-host.sh                the box install line
 #   kore.apk                    the phone app, signed with the owner's keystore
+#                               (its R8 mapping stays on this Mac: KoreDev/release-maps/v<version>-mapping.txt)
 #   SHA256SUMS, SHA256SUMS.sig  `# kore <version> <commit>`, every file's hash; Ed25519-signed.
 #                               The header is the release's manifest: no other file is needed.
 # They come from build/release/ (KORE_RELEASE_DIR for another folder) and are built when missing.
@@ -108,7 +109,16 @@ for arch in ${=${KORE_HOST_ARCHS:-x86_64 aarch64}}; do
     [[ -f "$OUT/kore-tailnet-linux-$arch.xz" ]] || { scripts/build-tailnet.sh linux-$arch; built kore-tailnet-linux-$arch.xz; }
 done
 # The phone app, signed with the owner's keystore (a dry run leaves it out: no Keychain).
-[[ -f "$OUT/kore.apk" || -n $DRY ]] || android/scripts/sign-release.sh "$OUT"
+if [[ ! -f "$OUT/kore.apk" && -z $DRY ]]; then
+    android/scripts/sign-release.sh "$OUT"
+    # R8's mapping for this APK, kept on this Mac (never published): a crash from the field is
+    # retraced with it. A later --prepare of the same version replaces it, as it does the APK.
+    map=android/app/build/outputs/mapping/release/mapping.txt
+    maps="${KORE_RELEASE_MAPS:-$HOME/Library/Application Support/KoreDev/release-maps}"
+    [[ -s $map ]] || { print -u2 "no R8 mapping at $map: nothing prepared"; exit 1; }
+    mkdir -p "$maps" && cp "$map" "$maps/$TAG-mapping.txt"
+    print "kept R8 mapping in $maps/$TAG-mapping.txt"
+fi
 if [[ -f "$OUT/kore.apk" ]]; then
     apksigner=(${ANDROID_HOME:-$HOME/Library/Android/sdk}/build-tools/*/apksigner(N[-1]))
     got=$("${apksigner[1]:-apksigner}" verify --print-certs "$OUT/kore.apk" | sed -n 's/.*SHA-256 digest: //p' | head -1 | tr a-f A-F | sed 's/../&:/g; s/:$//')
