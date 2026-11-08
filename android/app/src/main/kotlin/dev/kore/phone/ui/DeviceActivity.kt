@@ -311,43 +311,67 @@ class DeviceActivity : NodeActivity() {
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) = bind(holder.itemView as LinearLayout, getItem(position))
     }
 
-    /** Two lines: the CLI's mark, the title (bold while unread) and the age; then the cue or the last word. */
+    /**
+     * A chat row card (spec §5): `l1`, radius 14, a hair edge, 8 apart. The lead is the CLI's logo,
+     * or the working spinner in its colour while the chat works (a window's row: a folder). Line 1:
+     * the title (Body medium when unread, working or needing you) and the age; line 2 (Callout):
+     * the window and the state or last word, warn when it needs you, err when it failed.
+     */
     private fun rowView(): LinearLayout = LinearLayout(this).apply {
-        orientation = LinearLayout.VERTICAL
-        setPadding(dp(14), dp(11), dp(14), dp(11))
-        background = rounded(K.surface)
-        pressable()
-        layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) }
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        setPadding(dp(14), dp(12), dp(14), dp(12))
+        pressFill(Tone.l1, Tone.l2, Radius.row, Tone.hair)
+        layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(8) }
+        addView(android.widget.FrameLayout(context).apply {
+            addView(android.widget.ImageView(context), android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
+            addView(Spinner(context, Tone.spinClaude).apply { visibility = View.GONE }, android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
+        }, LinearLayout.LayoutParams(dp(17), dp(17)).apply { marginEnd = dp(12) })
         addView(LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            addView(label("", 15f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-            addView(View(context).apply { background = rounded(K.accent, 4) }, LinearLayout.LayoutParams(dp(7), dp(7)).apply { marginStart = dp(8) })
-            addView(label("", 12f, K.faint).apply { setPadding(dp(8), 0, 0, 0) })
-        })
-        addView(label("", 13f, K.dim).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(dp(22), dp(3), 0, 0) })
+            orientation = LinearLayout.VERTICAL
+            addView(LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                addView(label("").apply { type(Type.Body); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                addView(label("").apply { type(Type.Caption); setTextColor(Tone.faint); setPadding(dp(8), 0, 0, 0) })
+            })
+            addView(label("").apply { type(Type.Callout); setTextColor(Tone.dim); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, dp(2), 0, 0) })
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
     }
 
     private fun bind(v: LinearLayout, row: DeviceList.Row) {
-        val top = v.getChildAt(0) as LinearLayout
+        val lead = v.getChildAt(0) as android.widget.FrameLayout
+        val logo = lead.getChildAt(0) as android.widget.ImageView
+        val spinner = lead.getChildAt(1) as Spinner
+        val text = v.getChildAt(1) as LinearLayout
+        val top = text.getChildAt(0) as LinearLayout
         val title = top.getChildAt(0) as TextView
-        val dot = top.getChildAt(1)
-        val age = top.getChildAt(2) as TextView
-        val line = v.getChildAt(1) as TextView
-        val mark = if (row.chatId != null) providerMark(row.provider) else ""
-        title.text = android.text.SpannableStringBuilder(mark).append(if (mark.isNotEmpty()) "  " else "").append(row.title)
-        title.typeface = if (row.unread) android.graphics.Typeface.DEFAULT_BOLD else android.graphics.Typeface.DEFAULT
-        dot.visibility = if (row.unread) View.VISIBLE else View.GONE
+        val age = top.getChildAt(1) as TextView
+        val line = text.getChildAt(1) as TextView
+        val working = row.cue == DeviceList.Cue.WORKING
+        if (row.chatId == null) {
+            logo.setImageResource(dev.kore.phone.R.drawable.i_folder)
+            logo.imageTintList = android.content.res.ColorStateList.valueOf(Tone.dim)
+        } else {
+            logo.setImageResource(providerLogo(row.provider))
+            logo.imageTintList = null
+        }
+        logo.visibility = if (working) View.INVISIBLE else View.VISIBLE
+        spinner.visibility = if (working) View.VISIBLE else View.GONE
+        spinner.tint = if (row.provider == "codex") Tone.spinCodex else Tone.spinClaude
+        title.text = row.title
+        val strong = row.unread || working || row.cue == DeviceList.Cue.NEEDS
+        title.type(if (strong) Type.BodyMedium else Type.Body)
+        title.setTextColor(Tone.text)
         age.text = row.age
         line.text = row.line
         line.visibility = if (row.line.isEmpty()) View.GONE else View.VISIBLE
         line.setTextColor(when (row.cue) {
-            DeviceList.Cue.NEEDS -> K.warn
-            DeviceList.Cue.WORKING -> K.accent
-            DeviceList.Cue.FAILED -> K.err
-            DeviceList.Cue.NONE -> K.dim
+            DeviceList.Cue.NEEDS -> Tone.warn
+            DeviceList.Cue.FAILED -> Tone.err
+            else -> Tone.dim
         })
-        v.contentDescription = listOf(row.title, row.age, if (row.unread) "unread" else "", row.line).filter { it.isNotEmpty() }.joinToString(", ")
+        v.contentDescription = listOf(row.title, row.age, if (row.unread) "unread" else "", if (working) "working" else "", row.line).filter { it.isNotEmpty() }.joinToString(", ")
         v.setOnClickListener {
             if (row.chatId != null) startActivity(Intent(this, ChatActivity::class.java).putExtra("chat", row.chatId))
             else startActivity(Intent(this, WindowActivity::class.java).putExtra("window", row.windowId))

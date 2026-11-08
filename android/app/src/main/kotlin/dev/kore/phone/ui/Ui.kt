@@ -129,11 +129,16 @@ fun stateLook(state: String?): Pair<Int, String> = when (state) {
 fun rowLook(state: String?): Pair<Int, String> =
     if (state == null || state == "idle") android.graphics.Color.TRANSPARENT to "" else stateLook(state)
 
-/** A CLI's mark: Claude's spark in its orange, Codex's ring in the dim text colour. */
-fun providerMark(provider: String?): CharSequence {
-    val (glyph, color) = if (provider == "codex") "◎" to K.dim else "✳\uFE0E" to K.claude
-    return android.text.SpannableString(glyph).apply {
-        setSpan(android.text.style.ForegroundColorSpan(color), 0, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+/** A CLI's logo (spec §4: the Mac's real marks, 17 dp): Claude's in its orange, Codex's in #C9CFD4. */
+fun Context.providerLogo(provider: String?): Int =
+    if (provider == "codex") dev.kore.phone.R.drawable.ic_codex else dev.kore.phone.R.drawable.ic_claude
+
+/** A CLI's logo inline with text (a title, a menu row), [size] dp, centred on the line. */
+fun Context.providerMark(provider: String?, size: Int = 17): CharSequence {
+    val d = getDrawable(providerLogo(provider))?.mutate() ?: return ""
+    d.setBounds(0, 0, dp(size), dp(size))
+    return android.text.SpannableString("\uFFFC").apply {
+        setSpan(android.text.style.ImageSpan(d, android.text.style.DynamicDrawableSpan.ALIGN_CENTER), 0, 1, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
     }
 }
 
