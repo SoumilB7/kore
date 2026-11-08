@@ -70,8 +70,13 @@ cat > "$APP/Contents/Info.plist" <<EOF
 EOF
 
 # Ad-hoc signature: enough to run locally. Not sandboxed, since it must spawn `claude`.
-codesign --force --options runtime --sign - "$APP/Contents/Helpers/kore"
-codesign --force --options runtime --sign - "$APP"
+# KORE_SIGN_IDENTITY (an install on this Mac: a signing certificate of its own, "Kore Dev"):
+# the same signer every build, so what macOS keyed to Kore (the Keychain's Always Allow for
+# KoreNet's identity, privacy permissions) holds across builds. An ad-hoc build is a new app
+# to macOS each time and asks again.
+sign=${KORE_SIGN_IDENTITY:--}
+codesign --force --options runtime --sign "$sign" "$APP/Contents/Helpers/kore"
+codesign --force --options runtime --sign "$sign" "$APP"
 echo "built $APP ($BUILD_SHA)"
 
 if [[ "${1:-}" == "--install" ]]; then
