@@ -130,7 +130,7 @@ class HomeActivity : Activity() {
         gravity = Gravity.CENTER_VERTICAL
         minimumHeight = dp(48)
         setPadding(dp(14), 0, dp(14), 0)
-        background = rounded(Color.parseColor("#2A2618"), 12)
+        background = rounded(Tone.warnFill, 14, Tone.warnEdge)
         addView(label((if (cue.count == 1) "1 needs you" else "${cue.count} need you"), 14f, K.warn).apply { typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL) })
         addView(label("${cue.title} · ${cue.nodeName}", 12.5f, K.dim).apply {
             gravity = Gravity.END

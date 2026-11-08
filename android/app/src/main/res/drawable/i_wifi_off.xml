@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- "wifi_off": Kore's phone icon set (design spec section 4: 24 grid, 1.75 stroke, round ends), drawn white and tinted by state. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.75"
+        android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M3 3l18 18M8.5 16.5a5 5 0 0 1 7 0M5 12.8a10 10 0 0 1 4.4-2.4M19 12.8a10 10 0 0 0-2.6-1.8M2 9a15 15 0 0 1 4.5-3M22 9a15 15 0 0 0-9-3.9M12 20h.01" />
+</vector>

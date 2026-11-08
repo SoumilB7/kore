@@ -928,8 +928,8 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         }
 
     companion object {
-        private val STOP_GROUND = android.graphics.Color.parseColor("#2A2D31")
-        private val STOP_INK = android.graphics.Color.parseColor("#E9E9EA")
+        private val STOP_GROUND = Tone.l2
+        private val STOP_INK = Tone.text
         /** The highest mode level a raise from the phone asks for (Auto); Bypass and Full access never. */
         const val RAISE_CAP = 3
         const val PICK = 41
@@ -953,10 +953,10 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
  * #3C97DD, Act unlimited (drive) #6AB1E7, Full #E1C08D. ARGB, for the mark's tint.
  */
 fun arsenalTint(tier: String?): Int = when (tier) {
-    "watch" -> 0xFFA3C3DC.toInt()
-    "own" -> 0xFF3C97DD.toInt()
-    "full" -> 0xFFE1C08D.toInt()
-    else -> 0xFF6AB1E7.toInt()
+    "watch" -> Tone.b200
+    "own" -> Tone.b400
+    "full" -> Tone.warn
+    else -> Tone.accent
 }
 
 /**

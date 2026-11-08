@@ -31,17 +31,17 @@ import kotlinx.serialization.json.JsonObject
 
 /** The sheet and menu colours of the full-control design (Phone/docs/design/full-control.html). */
 object KS {
-    val pop = Color.parseColor("#171D21")
-    val menu = Color.parseColor("#263036")
-    val divider = Color.parseColor("#212326")
-    val segOn = Color.parseColor("#22303F")
-    val chipOn = Color.parseColor("#17202B")
-    val field = Color.parseColor("#111113")
-    val held = Color.parseColor("#1D252A")
-    val heldLine = Color.parseColor("#3A4148")
-    val grab = Color.parseColor("#3A3E43")
-    val plan = Color.parseColor("#5FB3A8")
-    val danger = Color.parseColor("#F0736B")
+    val pop = Tone.l1
+    val menu = Tone.l2
+    val divider = Tone.hair2
+    val segOn = Tone.l3
+    val chipOn = Tone.accentFill
+    val field = Tone.bg
+    val held = Tone.l2
+    val heldLine = Tone.hair2
+    val grab = Tone.grab
+    val plan = Tone.plan
+    val danger = Tone.err
 }
 
 /** A mode's colour by its level: plan, manual, accept edits, auto, full access. */
@@ -55,24 +55,24 @@ fun modeColor(level: Int?): Int = when (level) {
 
 /** A tab group's colour, as Kore's eight (TabGroupTheme); a hex value is taken as it is. */
 fun groupColor(name: String?): Int = when (name) {
-    "grey" -> Color.parseColor("#9AA4AD")
-    "blue" -> Color.parseColor("#6FA8DC")
-    "teal" -> Color.parseColor("#5FB5AE")
-    "green" -> Color.parseColor("#7DBE8B")
-    "sand" -> Color.parseColor("#CDB173")
-    "orange" -> Color.parseColor("#DE9467")
-    "rose" -> Color.parseColor("#DC7F92")
-    "violet" -> Color.parseColor("#A390D8")
+    "grey" -> Tone.groupGrey
+    "blue" -> Tone.groupBlue
+    "teal" -> Tone.groupTeal
+    "green" -> Tone.groupGreen
+    "sand" -> Tone.groupSand
+    "orange" -> Tone.groupOrange
+    "rose" -> Tone.groupRose
+    "violet" -> Tone.groupViolet
     else -> runCatching { Color.parseColor(name) }.getOrDefault(K.dim)
 }
 val GROUP_COLORS = listOf("blue", "teal", "green", "sand", "orange", "rose", "violet", "grey")
 
 /** A board section's swatch: Kore's blue shades, or a neutral grey. */
 fun swatchColor(name: String?): Int? = when (name) {
-    "b200" -> Color.parseColor("#A3C3DC")
-    "b300" -> Color.parseColor("#6AB1E7")
-    "b400" -> Color.parseColor("#3C97DD")
-    "b600" -> Color.parseColor("#1B6298")
+    "b200" -> Tone.b200
+    "b300" -> Tone.accent
+    "b400" -> Tone.b400
+    "b600" -> Tone.b600
     "neutral" -> K.dim
     else -> null
 }
@@ -386,7 +386,7 @@ class Sheet(private val a: Activity, corner: Int = K.accent) {
             pressable(12)
         }
         row.addView(button(cancel, Color.TRANSPARENT, K.dim, K.line) { dismiss() }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { marginEnd = a.dp(8) })
-        row.addView(if (danger) button(primary, Color.TRANSPARENT, K.err, K.err) { onPrimary() } else button(primary, K.accent, Color.parseColor("#0B1220"), null) { onPrimary() },
+        row.addView(if (danger) button(primary, Color.TRANSPARENT, K.err, K.err) { onPrimary() } else button(primary, Tone.accent, Tone.onAccent, null) { onPrimary() },
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         add(row, lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             setMargins(a.dp(4), a.dp(12), a.dp(4), 0)
@@ -433,10 +433,10 @@ class PopMenu(private val a: Activity) {
         list.removeAllViews()
         if (back != null) {
             list.addView(entry("‹  ${back.first}", null, K.dim, true) { fill(back.second, null) })
-            list.addView(View(a).apply { setBackgroundColor(Color.parseColor("#33373C")) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1).apply { setMargins(0, a.dp(4), 0, a.dp(4)) })
+            list.addView(View(a).apply { setBackgroundColor(Tone.hair2) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1).apply { setMargins(0, a.dp(4), 0, a.dp(4)) })
         }
         for (it in items) {
-            if (it.rule) list.addView(View(a).apply { setBackgroundColor(Color.parseColor("#33373C")) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1).apply { setMargins(0, a.dp(4), 0, a.dp(4)) })
+            if (it.rule) list.addView(View(a).apply { setBackgroundColor(Tone.hair2) }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 1).apply { setMargins(0, a.dp(4), 0, a.dp(4)) })
             val right = when { it.checked -> "✓"; it.sub != null -> (it.detail?.let { d -> "$d ›" } ?: "›"); else -> it.detail }
             list.addView(entry(it.title, right, if (it.danger) K.err else K.text, it.enabled, it.dot) {
                 val sub = it.sub

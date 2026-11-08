@@ -18,25 +18,25 @@ import android.widget.TextView
  * red is the one exception.
  */
 object K {
-    val bg = Color.parseColor("#111113")
-    val surface = Color.parseColor("#171D21")
-    val hover = Color.parseColor("#1D252A")
-    val raised = Color.parseColor("#263036")
-    /** `#BED7EB` at 9 % over the ground. */
-    val line = Color.parseColor("#212326")
-    val text = Color.parseColor("#EDEDED")
-    val dim = Color.parseColor("#89959F")
-    val faint = Color.parseColor("#77828B")
-    val accent = Color.parseColor("#6AB1E7")
+    val bg = Tone.bg
+    val surface = Tone.l1
+    val hover = Tone.l2
+    val raised = Tone.l3
+    /** Edges and separators: the spec's hair (#BED7EB at 8 %). */
+    val line = Tone.hair
+    val text = Tone.text
+    val dim = Tone.dim
+    val faint = Tone.faint
+    val accent = Tone.accent
     /** Text on an accent fill. */
-    val onAccent = Color.parseColor("#0F1418")
-    val ok = Color.parseColor("#74C991")
-    val warn = Color.parseColor("#E1C08D")
-    val err = Color.parseColor("#F0736B")
-    val claude = Color.parseColor("#F59A55")
+    val onAccent = Tone.onAccent
+    val ok = Tone.ok
+    val warn = Tone.warn
+    val err = Tone.err
+    val claude = Tone.spinClaude
     /** The hue's saturated steps. */
-    val b200 = Color.parseColor("#A3C3DC")
-    val b400 = Color.parseColor("#3C97DD")
+    val b200 = Tone.b200
+    val b400 = Tone.b400
 }
 
 fun Context.dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -64,14 +64,14 @@ fun Context.rounded(color: Int, radius: Int = 10, stroke: Int? = null) = Gradien
 /** The press: a soft light over the view's own ground, clipped to its corners, drawn only while held. */
 fun View.pressable(radius: Int = 10): View {
     val mask = context.rounded(Color.WHITE, radius)
-    background = RippleDrawable(ColorStateList.valueOf(0x22FFFFFF), background, mask)
+    background = RippleDrawable(ColorStateList.valueOf(0x1A6AB1E7), background, mask)
     return this
 }
 
 /** Kore's switch (38×22, the full-control mockup's pill): the one toggle style on the phone. */
 fun Context.switchTrack(on: Boolean): View = android.widget.FrameLayout(this).apply {
-    background = rounded(if (on) K.accent else Color.parseColor("#3A3F45"), 11)
-    addView(View(context).apply { background = rounded(Color.parseColor("#DDDDDD"), 8) },
+    background = rounded(if (on) Tone.accent else Tone.l3, 11)
+    addView(View(context).apply { background = rounded(if (on) Tone.knobOn else Tone.knobOff, 8) },
         android.widget.FrameLayout.LayoutParams(dp(16), dp(16), Gravity.CENTER_VERTICAL or if (on) Gravity.END else Gravity.START).apply { setMargins(dp(2), 0, dp(2), 0) })
     importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
 }

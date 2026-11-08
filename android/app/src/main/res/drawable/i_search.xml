@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- "search": Kore's phone icon set (design spec section 4: 24 grid, 1.75 stroke, round ends), drawn white and tinted by state. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp" android:viewportWidth="24" android:viewportHeight="24">
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.75"
+        android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M4.5,11.0 a6.5,6.5 0 1,0 13.0,0 a6.5,6.5 0 1,0 -13.0,0" />
+    <path android:fillColor="#00000000" android:strokeColor="#FFFFFFFF" android:strokeWidth="1.75"
+        android:strokeLineCap="round" android:strokeLineJoin="round" android:pathData="M20 20l-4.2-4.2" />
+</vector>

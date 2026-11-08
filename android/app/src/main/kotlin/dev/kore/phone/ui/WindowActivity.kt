@@ -315,7 +315,7 @@ fun android.app.Activity.quietRow(title: String, detail: String? = null, go: () 
     orientation = LinearLayout.HORIZONTAL
     gravity = Gravity.CENTER_VERTICAL
     setPadding(dp(14), dp(13), dp(14), dp(13))
-    background = rounded(android.graphics.Color.TRANSPARENT, 12, android.graphics.Color.parseColor("#2A2E33"))
+    background = rounded(android.graphics.Color.TRANSPARENT, 12, Tone.hair2)
     addView(label(title, 15f, K.dim), LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
     addView(label(listOfNotNull(detail, "›").joinToString(" "), 12f, K.faint))
     contentDescription = title

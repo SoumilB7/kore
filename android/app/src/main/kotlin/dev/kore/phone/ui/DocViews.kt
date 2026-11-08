@@ -28,7 +28,7 @@ object DocViews {
     private const val STACK_HEADER = 52
     private const val CELL_SP = 14f
     private const val LINE = 1.4f
-    private val CODE = android.graphics.Color.parseColor("#E8C08A")
+    private val CODE = Tone.code
 
     fun build(ctx: Context, blocks: List<JsonObject>, into: LinearLayout, color: Int = K.text) {
         into.removeAllViews()

@@ -18,7 +18,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
 /** Kore's accent, for the status-bar mark. */
-internal val ACCENT = 0xFF6AB1E7.toInt()
+internal val ACCENT = dev.kore.phone.ui.Tone.accent
 
 /**
  * Alerts from one device's attention stream: one notification per chat, gone when the card is
