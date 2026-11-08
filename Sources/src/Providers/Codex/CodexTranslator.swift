@@ -800,13 +800,21 @@ package final class CodexTranslator {
         }
         switch a.kind {
         case .command:
-            return make("Run command?", body: Self.command(a.params) ?? a.command, always: true)
+            var ask = make("Run command?", body: Self.command(a.params) ?? a.command, always: true)
+            let network = a.params["networkApprovalContext"].map { $0 != .null } ?? false
+            ask.tool = network ? "commandExecution.network" : "commandExecution"
+            return ask
         case .fileChange:
             let changes = a.itemId.flatMap { itemChanges[$0] } ?? []
             let body = changes.map { ToolText.relative($0.path, in: folder) }.joined(separator: ", ")
-            return make("Apply file changes?", body: body.isEmpty ? nil : body, always: true, changes: changes)
+            var ask = make("Apply file changes?", body: body.isEmpty ? nil : body, always: true, changes: changes)
+            ask.tool = "fileChange"
+            ask.targets = changes.map(\.path)
+            return ask
         case .permissions:
-            return make("Grant extra permissions?", body: a.params["permissions"]?.compact)
+            var ask = make("Grant extra permissions?", body: a.params["permissions"]?.compact)
+            ask.tool = "permissions"
+            return ask
         case .mcpElicitation:
             var ask = make("Allow MCP request?")
             ask.signIn = true

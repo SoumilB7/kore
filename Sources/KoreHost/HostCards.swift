@@ -30,7 +30,7 @@ enum HostMeta {
         let provider = hc.provider
         let modes = Dictionary(provider.modes.map { ($0.id, level($0)) }, uniquingKeysWith: { a, _ in a })
         let current = modes[modeID(hc)] ?? .danger
-        let cards = Dictionary(self.cards(hc, raise: raise).map { ($0.id, LinkPolicy.ChatFacts.Card(kind: $0.kind, digest: $0.digest)) }, uniquingKeysWith: { a, _ in a })
+        let cards = Dictionary(self.cards(hc, raise: raise).map { ($0.id, LinkPolicy.ChatFacts.Card(kind: $0.kind, digest: $0.digest, risk: $0.risk)) }, uniquingKeysWith: { a, _ in a })
         let commands = hc.chat?.controls.commands ?? []
         return LinkPolicy.ChatFacts(
             level: current, planOn: provider.planToggle != nil && (hc.chat?.controls.planMode ?? false), modes: modes, cards: cards,
@@ -179,8 +179,10 @@ enum HostMeta {
             kind: kind, title: approval.title, detail: approval.detail, body: approval.body, plan: approval.plan, questions: questions,
             actions: actions
         ).digest
+        let risk = kind == .permission ? CardRisk.classify(tool: approval.tool, targets: approval.targets ?? [], folder: chat.folder.path) : nil
         return LinkCard(
             id: approval.id, kind: kind, title: approval.title, detail: approval.detail, body: body?.text,
-            bodyLen: body?.cut == true ? body?.length : nil, plan: nil, questions: questions, agent: agent, actions: actions, digest: digest)
+            bodyLen: body?.cut == true ? body?.length : nil, plan: nil, questions: questions, agent: agent, actions: actions, digest: digest,
+            risk: risk)
     }
 }

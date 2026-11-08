@@ -26,9 +26,12 @@ package enum LinkPolicy {
         package struct Card: Sendable, Equatable {
             package var kind: LinkCard.Kind
             package var digest: String
-            package init(kind: LinkCard.Kind, digest: String) {
+            /// A permission a phone approves only with its fingerprint (`CardRisk`).
+            package var risk: CardRisk?
+            package init(kind: LinkCard.Kind, digest: String, risk: CardRisk? = nil) {
                 self.kind = kind
                 self.digest = digest
+                self.risk = risk
             }
         }
 

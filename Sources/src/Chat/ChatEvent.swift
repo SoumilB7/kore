@@ -615,6 +615,11 @@ package struct Approval: Identifiable, Sendable, Codable {
     /// Why Always allow is offered but can't be picked here (a box's chat sets it on the box
     /// itself): the card shows it dim, saying so. Nil where it can, or isn't offered.
     package var alwaysAllowNote: String? = nil
+    /// What asks, for the link's risk rule (`CardRisk`): Claude's tool name, or Codex's approval
+    /// kind (`commandExecution`, `commandExecution.network`, `fileChange`, `permissions`).
+    package var tool: String? = nil
+    /// The paths the ask would write, as the CLI gave them.
+    package var targets: [String]? = nil
 
     package init(id: String, title: String, detail: String?, body: String?, canAlwaysAllow: Bool, questions: [Question], plan: String? = nil, changes: [FileChange] = [], agent: AgentID = .main) {
         self.id = id
@@ -635,6 +640,8 @@ package struct Approval: Identifiable, Sendable, Codable {
             id: id, title: title, detail: detail, body: body, canAlwaysAllow: false, questions: questions, plan: plan, changes: changes,
             agent: agent)
         copy.signIn = signIn
+        copy.tool = tool
+        copy.targets = targets
         if canAlwaysAllow { copy.alwaysAllowNote = note }
         return copy
     }

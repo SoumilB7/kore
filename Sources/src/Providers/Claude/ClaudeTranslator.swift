@@ -862,6 +862,9 @@ package final class ClaudeTranslator {
             questions: [], changes: Self.proposedChange(r.toolName, r.input).map { [$0] } ?? [], agent: agent)
         // An MCP server's sign-in (`mcp__<server>__authenticate`).
         ask.signIn = r.toolName.hasPrefix("mcp__") && r.toolName.hasSuffix("__authenticate")
+        ask.tool = r.toolName
+        let written = [r.input["file_path"]?.string, r.input["notebook_path"]?.string].compactMap { $0 }
+        if !written.isEmpty { ask.targets = written }
         return ask
     }
 

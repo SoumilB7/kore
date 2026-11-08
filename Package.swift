@@ -43,7 +43,7 @@ let package = Package(
         // over `src`. No UI and no Mac-only parts, so a host without the app can serve it.
         .target(
             name: "LinkProtocol",
-            dependencies: ["src", "KoreCore", .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux]))],
+            dependencies: ["src", "KoreCore", "KoreTrust", .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux]))],
             swiftSettings: releaseForSize),
         // A Mac window's chats on a box (`kore-host` over SSH): the transport, the link client, the
         // local copy per chat, and the chat backend that runs a `Chat` through the link. No UI;
@@ -60,7 +60,8 @@ let package = Package(
         // KoreNet: link 2.0 framing, the session handshake and scheduler, paths, the listener.
         // Payloads are opaque here: it never imports LinkProtocol.
         .target(name: "KoreNet", dependencies: ["KoreTrust", "Tailnet", "KoreHostSys"], swiftSettings: releaseForSize),
-        .target(name: "KoreLink", dependencies: ["KoreUI", "LinkProtocol", "HostClient", "AgentTools", "src", "KoreCore"], swiftSettings: releaseForSize),
+        .target(
+            name: "KoreLink", dependencies: ["KoreUI", "LinkProtocol", "HostClient", "AgentTools", "src", "KoreCore", "KoreTrust", "Tailnet", "KoreNet", "KoreHostSys"], swiftSettings: releaseForSize),
         // kore-host: Kore's chats on a headless machine (phase 17), served over the link. It
         // never links KoreUI or KoreLink, and the Mac app never links it.
         // `VERSION` links to the package's own: the version kore-host says (`--version`, the welcome).
@@ -91,7 +92,12 @@ let package = Package(
         // `swift test`: Swift Testing, in the Command Line Tools (phase 12's core layer).
         .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore", "kore-fake-cli"]),
         .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "src", "KoreCore", "kore-fake-cli"]),
-        .testTarget(name: "KoreLinkTests", dependencies: ["KoreLink", "LinkProtocol", "HostClient", "KoreHost", "AgentTools", "KoreUI", "src", "KoreCore", "kore-host"]),
+        .testTarget(
+            name: "KoreLinkTests",
+            dependencies: [
+                "KoreLink", "LinkProtocol", "HostClient", "KoreHost", "AgentTools", "KoreUI", "src", "KoreCore", "kore-host", "KoreTrust", "Tailnet", "KoreNet",
+                "KoreHostSys",
+            ]),
         .testTarget(name: "KoreHostTests", dependencies: ["KoreHost", "HostClient", "LinkProtocol", "src", "KoreCore", "kore-host", "KoreTrust", "Tailnet", "KoreNet"]),
         .testTarget(name: "HostClientTests", dependencies: ["HostClient", "KoreHost", "LinkProtocol", "src", "KoreCore", "KoreTrust", "Tailnet", "KoreNet"]),
         .testTarget(name: "NetTrustTests", dependencies: ["KoreNet", "Tailnet", "KoreTrust", "KoreHostSys"]),
