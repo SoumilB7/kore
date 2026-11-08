@@ -364,6 +364,8 @@ package final class MacNet {
     /// KoreNet went off: the port, every phone and every handshake go.
     package func stop() {
         generation += 1
+        for release in reaching.values { release() }
+        reaching = [:]
         host.hold(Self.busKey, false)
         close()
         closeAddWindow()
@@ -677,10 +679,39 @@ package final class MacNet {
             pushDevices(issued()?.records ?? [])
         } else {
             catchUpBoxes()
+            reachOwed()
         }
         refresh()
         Devices.shared.changed()
     }
+
+    /// Boxes held open for a push no window's link could carry, by box: released once the box
+    /// answered it, or after `reachFor`.
+    private var reaching: [UUID: () -> Void] = [:]
+    package static var reachFor: TimeInterval = 30
+    /// Holds a box's link until released (Kore: its connection, retained; its link-up catches it up).
+    package var reachBox: @MainActor (String) -> (() -> Void)? = { key in
+        let connection = HostConnection.named(key)
+        connection.retain()
+        return { connection.release() }
+    }
+
+    /// The phones changed: every enrolled box that hasn't taken the change is held until it
+    /// answers (dialled now when its link is down; kept up when its last holder is letting go),
+    /// so the box holds it before a phone tries it (S1: a box set up first, then a phone, no window).
+    private func reachOwed() {
+        guard let (_, rev, me) = issued() else { return }
+        for entry in host.directory.all.values where entry.enrolled && entry.on && reaching[entry.device] == nil {
+            if let last = entry.pushed, last.by == me, last.bookRev == rev { continue }
+            let key = entry.rekeyed ? entry.id.raw : (entry.ssh ?? entry.id.raw)
+            guard !NetPauses.shared.contains(key), let release = reachBox(key) else { continue }
+            let box = entry.device
+            reaching[box] = release
+            _ = schedule(Self.reachFor) { [weak self] in self?.reached(box) }
+        }
+    }
+
+    private func reached(_ box: UUID) { reaching.removeValue(forKey: box)?() }
 
     private func phoneUp(_ peer: NetPeer, connection: PhoneConnection, binding: Data) {
         // One link per phone: a newer one takes over.
@@ -810,6 +841,7 @@ package final class MacNet {
     /// that box dials again at once.
     package func took(_ result: DevicesWire.Result) {
         guard let entry = sent.removeValue(forKey: result.id) else { return }
+        defer { reached(entry.box) }
         guard result.ok else {
             HostLog.note("korenet", "push refused", result.message)
             host.directory.notePushed(nil, device: entry.box)
