@@ -39,7 +39,7 @@ struct BoxEditTests {
         store.pickOnly("/w/src")
         store.startNew(folder: false)
         #expect(store.edit == .newFile(parent: "/w/src"))
-        #expect(store.rows.contains { $0.kind == .newFile && $0.depth == 1 })
+        try await until { store.rows.contains { $0.kind == .newFile && $0.depth == 1 } && store.rows.contains { $0.id == "/w/src/b.swift" } }
         store.edit = nil
         #expect(try await store.create("c.swift", in: "/w/src", folder: false).get() == "/w/src/c.swift")
         #expect(store.selection == "/w/src/c.swift")
@@ -81,7 +81,7 @@ struct BoxEditTests {
         let box = Self.fake()
         let store = BoxExplorerStore(root: "/w", source: box)
         var changed: Set<String> = []
-        store.onChanged = { changed.formUnion($0) }
+        store.onChanged = { changed.formUnion($0.folders) }
         await store.start()
         try await until { box.watched.values.contains(["/w"]) }
         store.expand("/w/src")
@@ -136,5 +136,41 @@ struct BoxEditTests {
         document.reloadFromBox()
         try await until { document.storage.string == "t2" }
         #expect(!document.isDirty)
+    }
+
+    @Test func changesShowAtOnceAndGoBackWhenTheBoxRefuses() async throws {
+        let box = Self.fake()
+        let store = BoxExplorerStore(root: "/w", source: box)
+        await store.start()
+        box.refuseEdits = "Can't move it there on this box."
+        box.lag = .milliseconds(100)
+        let renaming = Task { await store.rename("/w/a.txt", to: "z.txt") }
+        // Shown before the box answers.
+        try await until { store.rows.map(\.name).contains("z.txt") }
+        _ = await renaming.value
+        #expect(store.rows.map(\.name).contains("a.txt"))
+        #expect(!store.rows.map(\.name).contains("z.txt"))
+        #expect(store.problem == "Can't move it there on this box.")
+        let trashing = Task { await store.trash(["/w/a.txt"]) }
+        try await until { !store.rows.map(\.name).contains("a.txt") }
+        _ = await trashing.value
+        #expect(store.rows.map(\.name).contains("a.txt"))
+    }
+
+    @Test func aFileReadAgainUnchangedCostsNoText() async throws {
+        let box = Self.fake()
+        let document = FileDocument(box: "/w/a.txt", source: box, standIn: URL(fileURLWithPath: "/fakebox/w/a.txt"))
+        document.load()
+        try await until { document.loaded }
+        let revision = document.revision
+        document.reloadFromBox()
+        try await until { box.reads == 2 }
+        try await Task.sleep(for: .milliseconds(20))
+        #expect(document.revision == revision)
+        #expect(document.preview != nil)
+        // A change named in its folder: only that file reads again.
+        let store = BoxExplorerStore(root: "/w", source: box)
+        await store.start()
+        #expect(BoxChange(folders: ["/w"], names: ["/w": ["a.txt"]]).paths == ["/w/a.txt"])
     }
 }

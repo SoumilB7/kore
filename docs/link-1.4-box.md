@@ -323,7 +323,9 @@ CLI there is signed in as, never a token), so a box chat's Account popup reads a
 
 The Mac's box window edits the box folder's files as its Files explorer edits a Mac folder's.
 Full grants only, each checked by `LinkPolicy.checkBox`, done off the daemon's main thread, and
-answered with a `result` like 1.7's. `fs.read`'s result also carries `mtime` (whole ms) from 1.8.
+answered with a `result` like 1.7's. All of it goes over the one link (no other ssh). `fs.read`'s
+result also carries `mtime` (whole ms) from 1.8, and `fs.read` takes `base {size, mtime}`: when
+the file is still that, the result is `unchanged: true` with nothing else.
 
 | `type` | fields | |
 |---|---|---|
@@ -331,14 +333,17 @@ answered with a `result` like 1.7's. `fs.read`'s result also carries `mtime` (wh
 | `fs.create` | `path, dir?` | A new empty file, or a folder. `invalid` when the name is taken. |
 | `fs.rename` | `from, to` | Renames or moves within the served folders; nothing is replaced, a folder never goes inside itself, and a served folder itself stays. |
 | `fs.delete` | `path` | Moves the entry to the box's trash: `~/.local/share/Trash/files` with its `info/<name>.trashinfo` (freedesktop; `$XDG_DATA_HOME` moves it), or `~/.Trash` on a Mac box. A taken name gets `.2`, `.3`…. It's never removed: when it can't be moved there (another disk), `denied.path` and nothing changes. |
-| `fs.search` | `root, query, mode?, max?` | `mode: "name"` (the default): files whose path holds the query's letters in order, the name holding it whole first. `"text"`: lines holding it, any case, fixed string, at most 20 a file, files up to 1 MB. Uses `rg` when the box has it, else a walk that skips `.git/`, `.build/`, `node_modules/` and what `.gitignore` names. At most `max` hits (200 by default, 1000 at most) and 3 seconds; `more: true` when it stopped. Result: `hits [{path, line?, text?}]`. |
-| `fs.watch` | `folders` | Watches exactly these folders (at most 64, each by itself, not its tree) for this connection; an empty list ends it. Result: `watching` (false when the box can't watch them all). Then `fs.changed {folders}` comes unasked, gathered for 200 ms, while the connection lasts. |
+| `fs.search` | `root, query, mode?, max?` | `mode: "name"` (the default): files whose path holds the query's letters in order, the name holding it whole first. `"text"`: lines holding it, any case, fixed string, at most 20 a file, files up to 1 MB. Uses `rg` when the box has it, else a walk that skips `.git/`, `.build/`, `node_modules/` and what `.gitignore` names. At most `max` hits (200 by default, 1000 at most) and 3 seconds; `more: true` when it stopped. Text hits go as they're found, 100 at a time, in `fs.hits {id, hits}` (`id` the command's); the result carries the rest. A client's next `fs.search` stops the one before (and `rg` with it), as does the link ending. Result: `hits [{path, line?, text?}]`. |
+| `fs.watch` | `folders` | Watches exactly these folders (at most 64, each by itself, not its tree) for this connection; an empty list ends it. Result: `watching` (false when the box can't watch them all). Then `fs.changed {folders, names?}` comes unasked, gathered for 300 ms, while the connection lasts: the folders, and in each the changed entries' names (a folder said without names, past 200 in a burst, is read whole). Never a listing. |
 
 Where they may lead: inside a served folder only (the home alone isn't enough). The entry's
 folder is resolved and has to stay inside its served folder; the entry itself is never
 followed: a link is renamed or trashed as itself, and written through only when it leads to a
 file inside. A served folder can't be renamed or trashed.
 
-Linux watches with inotify, a Mac box with FSEvents; nothing polls. The Mac sends the folders
-open in a box window's explorer, and sends them again as folders open and close; without a
-watch it lists them again when a turn ends.
+Linux watches with inotify, a Mac box with FSEvents; nothing polls and nothing runs between
+changes. The Mac sends the folders open in a box window's explorer, and sends them again as
+folders open and close (and an empty list when the window closes); without a watch it lists them
+again when a turn ends. It lists a folder when it's opened, keeps each listing, and lists it
+again only on its `fs.changed`; it reads an open file again only when a change names it, with
+the stamp it holds. It writes a file only when it's saved (by hand or Auto Save), whole.

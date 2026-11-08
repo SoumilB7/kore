@@ -149,7 +149,9 @@ extension HostFiles {
     /// Finds files by name (each part of the query in order, best first), or lines holding the
     /// query (any case), under a served folder: `rg` when the box has it, else a walk that skips
     /// what `.gitignore` names. Stops at `max` hits or `searchSeconds`, and never follows a link.
-    package func search(id: String, root: String, query: String, text: Bool, max: Int?, rg: String? = HostFiles.ripgrep()) -> FilesResult {
+    package func search(
+        id: String, root: String, query: String, text: Bool, max: Int?, rg: String? = HostFiles.ripgrep(), run: SearchRun = SearchRun()
+    ) -> FilesResult {
         let place: (path: String, real: String)
         switch self.place(root, .served) {
         case .failure(let refusal): return .refused(id, refusal.code, refusal.message)
@@ -160,15 +162,26 @@ extension HostFiles {
         let deadline = Date().addingTimeInterval(LinkFiles.searchSeconds)
         func absolute(_ relative: String) -> String { place.path + "/" + relative }
         if text {
-            if let rg, let found = Self.ripgrep(rg, query: query, in: place.real, cap: cap, deadline: deadline) {
-                return FilesResult(id: id, ok: true, path: place.path, more: found.more ? true : nil,
-                    hits: found.hits.map { FileHit(path: absolute($0.path), line: $0.line, text: $0.text) })
+            // Hits go in pages as they're found; the result carries the rest.
+            var pending: [FileHit] = []
+            var count = 0
+            func found(_ hit: FileHit) {
+                pending.append(hit)
+                count += 1
+                if pending.count >= SearchRun.page {
+                    run.emit(pending)
+                    pending = []
+                }
             }
-            var hits: [FileHit] = []
+            if let rg, let more = Self.ripgrep(rg, query: query, in: place.real, cap: cap, deadline: deadline, run: run, found: { path, line, text in
+                found(FileHit(path: absolute(path), line: line, text: text))
+            }) {
+                return FilesResult(id: id, ok: true, path: place.path, more: more ? true : nil, hits: pending)
+            }
             var more = false
             let lowered = query.lowercased()
             SyncTree(root: URL(fileURLWithPath: place.real)).until { relative, stat in
-                guard Date() < deadline else {
+                guard Date() < deadline, !run.cancelled else {
                     more = true
                     return false
                 }
@@ -177,21 +190,21 @@ extension HostFiles {
                 else { return true }
                 for (index, line) in String(decoding: data, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false).enumerated()
                 where line.lowercased().contains(lowered) {
-                    guard hits.count < cap else {
+                    guard count < cap else {
                         more = true
                         return false
                     }
-                    hits.append(FileHit(path: absolute(relative), line: index + 1, text: String(line.prefix(300))))
+                    found(FileHit(path: absolute(relative), line: index + 1, text: String(line.prefix(300))))
                 }
                 return true
             }
-            return FilesResult(id: id, ok: true, path: place.path, more: more ? true : nil, hits: hits)
+            return FilesResult(id: id, ok: true, path: place.path, more: more ? true : nil, hits: pending)
         }
         // Names: gather a few times the cap, rank, keep the best.
         var found: [(path: String, score: Int)] = []
         var more = false
         SyncTree(root: URL(fileURLWithPath: place.real)).until { relative, _ in
-            guard Date() < deadline, found.count < cap * 5 else {
+            guard Date() < deadline, !run.cancelled, found.count < cap * 5 else {
                 more = true
                 return false
             }
@@ -273,9 +286,11 @@ extension HostFiles {
     }
 
     /// `rg` over the folder, fixed strings in any case, a few hits a file. Nil when it couldn't run.
-    static func ripgrep(_ rg: String, query: String, in folder: String, cap: Int, deadline: Date)
-        -> (hits: [(path: String, line: Int, text: String)], more: Bool)?
-    {
+    /// Each hit to `found`; whether it stopped at a cap. Nil when it couldn't run.
+    static func ripgrep(
+        _ rg: String, query: String, in folder: String, cap: Int, deadline: Date, run: SearchRun,
+        found: (String, Int, String) -> Void
+    ) -> Bool? {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: rg)
         process.currentDirectoryURL = URL(fileURLWithPath: folder)
@@ -288,12 +303,13 @@ extension HostFiles {
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
         do { try process.run() } catch { return nil }
-        var hits: [(String, Int, String)] = []
+        run.process = process
+        var count = 0
         var more = false
         var pending = Data()
         let handle = out.fileHandleForReading
         reading: while true {
-            if Date() >= deadline {
+            if Date() >= deadline || run.cancelled {
                 more = true
                 break
             }
@@ -308,16 +324,18 @@ extension HostFiles {
                 var path = String(parts[0])
                 if path.hasPrefix("./") { path.removeFirst(2) }
                 guard SyncPath.valid(path) else { continue }
-                if hits.count >= cap {
+                if count >= cap {
                     more = true
                     break reading
                 }
-                hits.append((path, number, String(parts[2])))
+                count += 1
+                found(path, number, String(parts[2]))
             }
         }
         if process.isRunning { process.terminate() }
         process.waitUntilExit()
-        return (hits, more)
+        run.process = nil
+        return more
     }
 }
 
@@ -376,5 +394,35 @@ enum FileCalls {
         #else
         Musl.write(fd, buffer, count)
         #endif
+    }
+}
+
+/// One running `fs.search`: its pages out, and a stop (a newer search from the same client, or
+/// the link ending) that ends the walk or `rg` at once.
+package final class SearchRun: @unchecked Sendable {
+    /// Hits a page carries.
+    static let page = 100
+    private let lock = NSLock()
+    private var stopped = false
+    private var running: Process?
+    private let pages: (@Sendable ([FileHit]) -> Void)?
+
+    package init(pages: (@Sendable ([FileHit]) -> Void)? = nil) { self.pages = pages }
+
+    var cancelled: Bool { lock.withLock { stopped } }
+
+    var process: Process? {
+        get { lock.withLock { running } }
+        set { lock.withLock { running = newValue } }
+    }
+
+    func emit(_ hits: [FileHit]) { if !cancelled { pages?(hits) } }
+
+    package func cancel() {
+        let process: Process? = lock.withLock {
+            stopped = true
+            return running
+        }
+        if let process, process.isRunning { process.terminate() }
     }
 }

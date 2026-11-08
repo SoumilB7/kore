@@ -47,12 +47,29 @@ package struct FileHit: Codable, Sendable, Equatable, Hashable {
     }
 }
 
-/// `fs.changed`, box to client: folders it watches whose entries changed.
+/// `fs.changed`, box to client: folders it watches whose entries changed, and the entries' names
+/// (by folder; absent past 200 in a burst, when the folder is to be read whole). Never a listing.
 package struct FilesChanged: Codable, Sendable, Equatable {
     package static let type = "fs.changed"
     package var t = FilesChanged.type
     package var folders: [String]
-    package init(folders: [String]) { self.folders = folders }
+    package var names: [String: [String]]?
+    package init(folders: [String], names: [String: [String]]? = nil) {
+        self.folders = folders
+        self.names = names
+    }
+}
+
+/// `fs.hits`, box to client: a page of a running `fs.search`'s hits, before its `result`.
+package struct FilesHits: Codable, Sendable, Equatable {
+    package static let type = "fs.hits"
+    package var t = FilesHits.type
+    package var id: String
+    package var hits: [FileHit]
+    package init(id: String, hits: [FileHit]) {
+        self.id = id
+        self.hits = hits
+    }
 }
 
 /// What `fs.read` found: text, an image (its bytes), or neither.
@@ -84,12 +101,15 @@ package struct FilesResult: Codable, Sendable, Equatable {
     package var hits: [FileHit]?
     /// 1.8: `fs.watch`: false when the box can't watch them (the client lists them at a turn's end).
     package var watching: Bool?
+    /// 1.8: `fs.read` with `base`: the file is still that, and nothing else is sent.
+    package var unchanged: Bool?
 
     package init(
         id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, path: String? = nil, entries: [FileEntry]? = nil,
         more: Bool? = nil, kind: FileReadKind? = nil, size: Int64? = nil, text: String? = nil, data: String? = nil, truncated: Bool? = nil,
-        mtime: Int64? = nil, hits: [FileHit]? = nil, watching: Bool? = nil
+        mtime: Int64? = nil, hits: [FileHit]? = nil, watching: Bool? = nil, unchanged: Bool? = nil
     ) {
+        self.unchanged = unchanged
         self.mtime = mtime
         self.hits = hits
         self.watching = watching

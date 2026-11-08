@@ -26,9 +26,10 @@ struct BoxExplorerTests {
             return .success(BoxListing(path: path, entries: entries, more: false))
         }
 
-        func read(_ path: String, max: Int?) async -> Result<BoxFileRead, HostRefusal> {
+        func read(_ path: String, max: Int?, base: FileStamp?) async -> Result<BoxFileRead, HostRefusal> {
             reads += 1
-            guard let file = files[path] else { return .failure(HostRefusal(message: "Not there on this box.")) }
+            guard var file = files[path] else { return .failure(HostRefusal(message: "Not there on this box.")) }
+            if let base, base == file.stamp { file.unchanged = true }
             return .success(file)
         }
 
@@ -37,9 +38,11 @@ struct BoxExplorerTests {
         // 1.8: an in-memory box folder.
         var trashed: [String] = []
         var watched: [String: Set<String>] = [:]
-        var changedHandlers: [String: (@MainActor (Set<String>) -> Void)] = [:]
+        var changedHandlers: [String: (@MainActor (BoxChange) -> Void)] = [:]
         var watching = true
         var refuseEdits: String?
+        /// Edits take this long to answer, as over a link.
+        var lag: Duration = .zero
 
         private func parent(_ path: String) -> String { (path as NSString).deletingLastPathComponent }
         private func name(_ path: String) -> String { (path as NSString).lastPathComponent }
@@ -55,6 +58,7 @@ struct BoxExplorerTests {
         }
 
         func create(_ path: String, folder: Bool) async -> Result<String, HostRefusal> {
+            if lag > .zero { try? await Task.sleep(for: lag) }
             if let why = refuseEdits { return .failure(HostRefusal(message: why)) }
             folders[parent(path), default: []].append(FileEntry(name: name(path), kind: folder ? .dir : .file))
             if folder { folders[path] = [] } else { files[path] = BoxFileRead(path: path, kind: .text, size: 0, text: "", image: nil, truncated: false, stamp: FileStamp(size: 0, mtime: 1)) }
@@ -62,6 +66,7 @@ struct BoxExplorerTests {
         }
 
         func rename(_ from: String, to: String) async -> Result<String, HostRefusal> {
+            if lag > .zero { try? await Task.sleep(for: lag) }
             if let why = refuseEdits { return .failure(HostRefusal(message: why)) }
             guard var entry = folders[parent(from)]?.first(where: { $0.name == name(from) }) else { return .failure(HostRefusal(message: "Not there.")) }
             folders[parent(from)]?.removeAll { $0.name == name(from) }
@@ -73,13 +78,16 @@ struct BoxExplorerTests {
         }
 
         func trash(_ path: String) async -> Result<Void, HostRefusal> {
+            if lag > .zero { try? await Task.sleep(for: lag) }
             if let why = refuseEdits { return .failure(HostRefusal(message: why)) }
             folders[parent(path)]?.removeAll { $0.name == name(path) }
             trashed.append(path)
             return .success(())
         }
 
-        func search(_ root: String, _ query: String, text: Bool, max: Int) async -> Result<(hits: [FileHit], more: Bool), HostRefusal> {
+        func search(_ root: String, _ query: String, text: Bool, max: Int, pages: (@MainActor ([FileHit]) -> Void)?)
+            async -> Result<(hits: [FileHit], more: Bool), HostRefusal>
+        {
             let hits = files.keys.sorted().filter { $0.hasPrefix(root + "/") }.flatMap { path -> [FileHit] in
                 if !text { return name(path).lowercased().contains(query.lowercased()) ? [FileHit(path: path)] : [] }
                 let lines = (files[path]?.text ?? "").split(separator: "\n", omittingEmptySubsequences: false)
@@ -88,14 +96,16 @@ struct BoxExplorerTests {
             return .success((Array(hits.prefix(max)), hits.count > max))
         }
 
-        func watch(_ key: String, _ folders: Set<String>, changed: (@MainActor (Set<String>) -> Void)?) async -> Bool {
+        func watch(_ key: String, _ folders: Set<String>, changed: (@MainActor (BoxChange) -> Void)?) async -> Bool {
             watched[key] = folders.isEmpty ? nil : folders
             changedHandlers[key] = changed
             return watching
         }
 
         /// The box says these folders changed.
-        func say(_ folders: Set<String>) { for handler in changedHandlers.values { handler(folders) } }
+        func say(_ folders: Set<String>, names: [String: [String]] = [:]) {
+            for handler in changedHandlers.values { handler(BoxChange(folders: folders, names: names)) }
+        }
     }
 
     private static func fake() -> FakeBox {
@@ -117,7 +127,7 @@ struct BoxExplorerTests {
         #expect(store.rows[1].isLink && store.rows[1].isFolder)
         #expect(box.listed == ["/w"])
         store.expand("/w/src")
-        try await until { store.rows.count == 5 }
+        try await until { store.rows.count == 5 && store.rows[1].kind == .node }
         #expect(store.rows[1] == .init(id: "/w/src/a.swift", name: "a.swift", depth: 1, isFolder: false, isOpen: false))
         // A link the box won't follow: one dim line under it, asked again when opened again.
         store.expand("/w/out")
@@ -136,7 +146,7 @@ struct BoxExplorerTests {
         let store = BoxExplorerStore(root: "/w", source: box)
         await store.start()
         store.expand("/w/src")
-        try await until { store.rows.count == 5 }
+        try await until { store.rows.count == 5 && store.rows[1].kind == .node }
         box.folders["/w/src"]?.append(FileEntry(name: "b.swift", kind: .file))
         box.listed = []
         await store.refresh()

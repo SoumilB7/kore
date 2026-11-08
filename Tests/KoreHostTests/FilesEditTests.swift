@@ -147,6 +147,49 @@ struct FilesEditTests {
         }
     }
 
+    @Test func aReadWithTheStampHeldSendsNothingAgain() throws {
+        let rig = try Rig()
+        defer { rig.finish() }
+        let first = rig.files.read(id: "1", path: rig.work + "/a.txt", max: nil)
+        let again = rig.files.read(id: "2", path: rig.work + "/a.txt", max: nil, base: FileStamp(size: first.size ?? 0, mtime: first.mtime ?? 0))
+        #expect(again.unchanged == true)
+        #expect(again.text == nil)
+        let stale = rig.files.read(id: "3", path: rig.work + "/a.txt", max: nil, base: FileStamp(size: 1, mtime: 1))
+        #expect(stale.text == "hello\n")
+    }
+
+    @Test func textSearchSendsPagesAndAStoppedOneEndsAtOnce() throws {
+        let rig = try Rig()
+        defer { rig.finish() }
+        for i in 0..<250 { try Data("needle \(i)\n".utf8).write(to: URL(fileURLWithPath: rig.work + "/n\(i).txt")) }
+        let pages = Box<[[FileHit]]>([])
+        let run = SearchRun { page in pages.value.append(page) }
+        let result = rig.files.search(id: "1", root: rig.work, query: "needle", text: true, max: 1000, rg: nil, run: run)
+        #expect(pages.value.count == 2)
+        #expect(pages.value.allSatisfy { $0.count == SearchRun.page })
+        #expect((result.hits?.count ?? 0) + pages.value.reduce(0) { $0 + $1.count } == 250)
+        let stopped = SearchRun()
+        stopped.cancel()
+        let none = rig.files.search(id: "2", root: rig.work, query: "needle", text: true, max: 1000, rg: nil, run: stopped)
+        #expect(none.hits == [])
+        #expect(none.more == true)
+    }
+
+    @Test func aChangeSaysItsFolderAndNames() async throws {
+        let rig = try Rig()
+        defer { rig.finish() }
+        let got = Box<[FilesChanged]>([])
+        let watches = FolderWatches { got.value.append($0) }
+        defer { watches.stop() }
+        let real = HostFiles.real(rig.work) ?? rig.work
+        #expect(watches.set([(rig.work, real)]))
+        try await Task.sleep(for: .milliseconds(200))
+        try Data("x".utf8).write(to: URL(fileURLWithPath: rig.work + "/fresh.txt"))
+        try await until { !got.value.isEmpty }
+        #expect(got.value.first?.folders == [rig.work])
+        #expect(got.value.first?.names?[rig.work]?.contains("fresh.txt") == true)
+    }
+
     @Test func onlyAFullGrantEditsAndTheOpenFoldersAreWatched() async throws {
         let rig = try HostRig()
         defer { rig.finish() }
@@ -187,4 +230,10 @@ struct FilesEditTests {
         guard StreamWire.type(raw) == "result" else { return nil }
         return try? JSONDecoder().decode(FilesResult.self, from: raw)
     }
+}
+
+/// A value a closure can change.
+final class Box<T>: @unchecked Sendable {
+    var value: T
+    init(_ value: T) { self.value = value }
 }

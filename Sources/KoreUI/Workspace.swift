@@ -240,6 +240,10 @@ package final class Workspace {
         if let file = tab.file, explorerOpen, let files, !files.shows(file.path) {
             Task { await files.reveal(file.path) }
         }
+        // A box file: shown in the box's tree too.
+        if let path = tab.file?.box?.path, explorerOpen, let box, box.filesMade, box.files.selection != path {
+            Task { await box.files.reveal(path) }
+        }
     }
 
     func newTab() {

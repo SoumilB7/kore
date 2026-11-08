@@ -57,12 +57,16 @@ final class BoxExplorerStore {
     var dropTarget: String?
     /// The box watches the open folders; false: a turn's end lists them again.
     private(set) var watching = false
+    /// One plain line when the box refused something shown already (it's put back): it goes by
+    /// itself after a while.
+    private(set) var problem: String?
+    @ObservationIgnored private var problemClear: Task<Void, Never>?
 
     /// The folder's entries moved or went (a rename, a move, Move to Trash): open tabs follow.
     @ObservationIgnored var onMoved: ((String, String) -> Void)?
     @ObservationIgnored var onTrashed: (([String]) -> Void)?
     /// Files in these folders changed on the box: open tabs read them again.
-    @ObservationIgnored var onChanged: ((Set<String>) -> Void)?
+    @ObservationIgnored var onChanged: ((BoxChange) -> Void)?
 
     @ObservationIgnored let source: any BoxFileSource
     @ObservationIgnored private var children: [String: [FileEntry]] = [:]
@@ -110,14 +114,18 @@ final class BoxExplorerStore {
         if expanded.contains(path) { collapse(path) } else { expand(path) }
     }
 
+    /// Opens a folder: what was listed before shows at once and is asked again behind it; a
+    /// folder never listed says Loading… in place.
     func expand(_ path: String) {
         expanded.insert(path)
-        rebuild()
-        // Opened again after it couldn't be listed: asked again.
-        if children[path] == nil, !loading.contains(path) {
-            failed[path] = nil
+        let cached = children[path] != nil
+        if !cached { failed[path] = nil }
+        if !loading.contains(path) {
+            loading.insert(path)
             Task { await load(path) }
         }
+        _ = cached
+        rebuild()
     }
 
     func collapse(_ path: String) {
@@ -161,19 +169,18 @@ final class BoxExplorerStore {
             for folder in open where folder == root || isShown(folder) {
                 await load(folder, rebuilding: false)
             }
-            // Listings of folders no longer open are dropped: opened again, they're asked fresh.
-            for folder in children.keys where folder != root && !expanded.contains(folder) { children[folder] = nil }
             rebuild()
         } while again
         reloading = false
     }
 
-    /// The box said these folders changed: listed again, and their open files read again.
-    func changed(_ folders: Set<String>) {
+    /// The box said these folders changed: listed again (only those), and the open files it
+    /// names read again.
+    func changed(_ change: BoxChange) {
         Task {
-            for folder in folders.sorted() where children[folder] != nil { await load(folder, rebuilding: false) }
+            for folder in change.folders.sorted() where children[folder] != nil { await load(folder, rebuilding: false) }
             rebuild()
-            onChanged?(folders)
+            onChanged?(change)
         }
     }
 
@@ -274,22 +281,31 @@ final class BoxExplorerStore {
         children[folder]?.contains { $0.name.lowercased() == name.lowercased() && folder + "/" + $0.name != except } == true
     }
 
-    /// A new empty file or a folder in `parent`, selected.
+    /// A new empty file or a folder in `parent`: it shows at once, selected; the box makes it,
+    /// and when it refuses, it goes again and the line says why.
     func create(_ name: String, in parent: String, folder: Bool) async -> Result<String, HostRefusal> {
         if let why = Self.refusal(name) { return .failure(HostRefusal(message: why)) }
         let name = name.trimmingCharacters(in: .whitespaces)
         if taken(name, in: parent) { return .failure(HostRefusal(message: "A file or folder named \(name) already exists here.")) }
-        let result = await source.create(parent + "/" + name, folder: folder)
-        if case .success(let path) = result {
-            await load(parent, rebuilding: false)
-            pickOnly(path)
+        let path = parent + "/" + name
+        place(FileEntry(name: name, kind: folder ? .dir : .file, size: folder ? nil : 0), in: parent)
+        pickOnly(path)
+        rebuild()
+        let result = await source.create(path, folder: folder)
+        switch result {
+        case .success:
             if folder { expanded.insert(path) }
+            await settle([parent], selecting: nil)
+        case .failure(let why):
+            unplace(name, in: parent)
+            if selection == path { pickOnly(nil) }
+            say(why.message)
             rebuild()
         }
         return result
     }
 
-    /// Renames in place; open tabs follow.
+    /// Renames in place at once; open tabs follow. Put back when the box refuses.
     func rename(_ path: String, to name: String) async -> Result<String, HostRefusal> {
         if let why = Self.refusal(name) { return .failure(HostRefusal(message: why)) }
         let name = name.trimmingCharacters(in: .whitespaces)
@@ -299,44 +315,107 @@ final class BoxExplorerStore {
         if target.lowercased() != path.lowercased(), taken(name, in: folder) {
             return .failure(HostRefusal(message: "A file or folder named \(name) already exists here."))
         }
+        let old = (path as NSString).lastPathComponent
+        guard let entry = children[folder]?.first(where: { $0.name == old }) else { return .failure(HostRefusal(message: "\(old) isn't there any more.")) }
+        unplace(old, in: folder)
+        var renamed = entry
+        renamed.name = name
+        place(renamed, in: folder)
+        landed([(path, target)])
+        pickOnly(target)
+        rebuild()
         let result = await source.rename(path, to: target)
-        if case .success(let moved) = result {
-            landed([(path, moved)])
-            await settle([folder], selecting: moved)
+        switch result {
+        case .success:
+            await settle([folder], selecting: nil)
+        case .failure(let why):
+            unplace(name, in: folder)
+            place(entry, in: folder)
+            landed([(target, path)])
+            pickOnly(path)
+            say(why.message)
+            rebuild()
         }
         return result
     }
 
-    /// Moves entries into a folder (a drop, ⌘V after ⌘X): each that can go, the first failure
-    /// said. Open tabs follow.
+    /// Moves entries into a folder (a drop, ⌘V after ⌘X): they show there at once; any the box
+    /// refuses go back, and the line says why. Open tabs follow.
     func move(_ paths: [String], into folder: String) async -> String? {
-        var done: [(String, String)] = []
+        let moving = paths.filter { parent(of: $0) != folder && !LinkFiles.inside(folder, $0) }
+        var shown: [(from: String, entry: FileEntry)] = []
+        for path in moving {
+            let name = (path as NSString).lastPathComponent
+            guard !taken(name, in: folder), let entry = children[parent(of: path)]?.first(where: { $0.name == name }) else { continue }
+            unplace(name, in: parent(of: path))
+            place(entry, in: folder)
+            shown.append((path, entry))
+        }
+        landed(shown.map { ($0.from, folder + "/" + $0.entry.name) })
+        rebuild()
         var failure: String?
-        for path in paths where parent(of: path) != folder && !LinkFiles.inside(folder, path) {
-            switch await source.rename(path, to: folder + "/" + (path as NSString).lastPathComponent) {
-            case .success(let moved): done.append((path, moved))
-            case .failure(let why): failure = failure ?? why.message
+        for (from, entry) in shown {
+            let target = folder + "/" + entry.name
+            if case .failure(let why) = await source.rename(from, to: target) {
+                failure = failure ?? why.message
+                unplace(entry.name, in: folder)
+                place(entry, in: parent(of: from))
+                landed([(target, from)])
             }
         }
-        landed(done)
-        await settle(Set(done.map { parent(of: $0.0) } + [folder]), selecting: done.last?.1)
+        if shown.count < moving.count { failure = failure ?? "A file or folder with that name already exists there." }
+        if let failure { say(failure) }
+        await settle(Set(moving.map { parent(of: $0) } + [folder]), selecting: shown.last.map { folder + "/" + $0.entry.name })
         return failure
     }
 
-    /// Move to Trash: the box's trash. The first failure said.
+    /// Move to Trash: gone from the tree at once, into the box's trash; any the box refuses come
+    /// back, and the line says why.
     func trash(_ paths: [String]) async -> String? {
+        var hidden: [(path: String, entry: FileEntry)] = []
+        for path in paths {
+            let name = (path as NSString).lastPathComponent
+            guard let entry = children[parent(of: path)]?.first(where: { $0.name == name }) else { continue }
+            unplace(name, in: parent(of: path))
+            hidden.append((path, entry))
+        }
+        if let selection, paths.contains(where: { selection == $0 || selection.hasPrefix($0 + "/") }) { pickOnly(nil) }
+        rebuild()
         var gone: [String] = []
         var failure: String?
-        for path in paths {
+        for (path, entry) in hidden {
             switch await source.trash(path) {
             case .success: gone.append(path)
-            case .failure(let why): failure = failure ?? why.message
+            case .failure(let why):
+                failure = failure ?? why.message
+                place(entry, in: parent(of: path))
             }
         }
         if !gone.isEmpty { onTrashed?(gone) }
-        if let selection, gone.contains(where: { selection == $0 || selection.hasPrefix($0 + "/") }) { pickOnly(nil) }
-        await settle(Set(gone.map { parent(of: $0) }), selecting: nil)
+        if let failure { say(failure) }
+        await settle(Set(paths.map { parent(of: $0) }), selecting: nil)
         return failure
+    }
+
+    /// An entry shown in a folder's listing now, in the tree's order (folders first, then names).
+    private func place(_ entry: FileEntry, in folder: String) {
+        guard var list = children[folder], !list.contains(where: { $0.name == entry.name }) else { return }
+        list.append(entry)
+        list.sort { a, b in a.isFolder != b.isFolder ? a.isFolder : a.name.localizedStandardCompare(b.name) == .orderedAscending }
+        children[folder] = list
+    }
+
+    private func unplace(_ name: String, in folder: String) { children[folder]?.removeAll { $0.name == name } }
+
+    /// The line under the tree, for a while.
+    func say(_ line: String) {
+        problem = line
+        problemClear?.cancel()
+        problemClear = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(6))
+            guard !Task.isCancelled else { return }
+            self?.problem = nil
+        }
     }
 
     /// Writes files dropped from this Mac into `folder` (each as one upload): a taken name is
@@ -364,6 +443,7 @@ final class BoxExplorerStore {
             }
         }
         await settle([folder], selecting: last)
+        if let failure { say(failure) }
         return failure
     }
 
@@ -391,7 +471,9 @@ final class BoxExplorerStore {
 
     /// The folders listed again, and the rows once.
     private func settle(_ folders: Set<String>, selecting: String?) async {
-        for folder in folders.sorted() where folder == root || children[folder] != nil { await load(folder, rebuilding: false) }
+        for folder in folders.sorted() where folder == root || children[folder] != nil || expanded.contains(folder) {
+            await load(folder, rebuilding: false)
+        }
         if let selecting { pickOnly(selecting) }
         rebuild()
     }
@@ -410,12 +492,17 @@ final class BoxExplorerStore {
             rows.append(Row(id: folder + "/\u{0}note", name: why, depth: depth, isFolder: false, isOpen: false, kind: .note(why)))
             return
         }
+        let waiting = children[folder] == nil && loading.contains(folder) && folder != root
         switch edit {
         case .newFolder(let parent) where parent == folder:
             rows.append(Row(id: folder + "/\u{0}new", name: "", depth: depth, isFolder: true, isOpen: false, kind: .newFolder))
         case .newFile(let parent) where parent == folder:
             rows.append(Row(id: folder + "/\u{0}new", name: "", depth: depth, isFolder: false, isOpen: false, kind: .newFile))
         default: break
+        }
+        if waiting {
+            rows.append(Row(id: folder + "/\u{0}loading", name: "Loading…", depth: depth, isFolder: false, isOpen: false, kind: .note("Loading…")))
+            return
         }
         for entry in children[folder] ?? [] {
             let path = folder == "/" ? "/" + entry.name : folder + "/" + entry.name

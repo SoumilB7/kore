@@ -31,6 +31,8 @@ final class LinkClient {
     }
     /// The explorer's open folders, watched for this client (`fs.watch`).
     private var watches: FolderWatches?
+    /// The search running for this client, stopped by the next or by the link ending.
+    private var searching: SearchRun?
     /// `sync.watch`es, by folder; they end with the link.
     private var syncs: [String: SyncWatch] = [:]
 
@@ -73,6 +75,8 @@ final class LinkClient {
         syncs = [:]
         watches?.stop()
         watches = nil
+        searching?.cancel()
+        searching = nil
         syncPieces = []
         host.ended(self)
         for chatId in streaming { host.unfollowed(chatId) }
@@ -293,11 +297,20 @@ final class LinkClient {
             return sendRaw(StreamWire.encode(FilesResult.refused(id, .goneBlob, "That upload isn't on the box any more.")))
         }
         let trash = HostFiles.Trash.standard(home: home)
+        // A new search stops the one before it; its pages go as they're found.
+        let run = SearchRun { [weak self] hits in
+            let page = StreamWire.encode(FilesHits(id: id, hits: hits))
+            Task { @MainActor in self?.sendRaw(page) }
+        }
+        if kind == .fsSearch {
+            searching?.cancel()
+            searching = run
+        }
         Task { [weak self] in
             let result = await Task.detached(priority: .userInitiated) { () -> FilesResult in
                 switch kind {
                 case .fsList: return files.list(id: id, path: args.path, hidden: args.hidden == true)
-                case .fsRead: return files.read(id: id, path: args.path ?? "", max: args.max)
+                case .fsRead: return files.read(id: id, path: args.path ?? "", max: args.max, base: args.base)
                 case .fsMkdir: return files.mkdir(id: id, path: args.path ?? "")
                 case .fsWrite:
                     let bytes: Data? =
@@ -307,7 +320,8 @@ final class LinkClient {
                 case .fsCreate: return files.create(id: id, path: args.path ?? "", dir: args.dir == true)
                 case .fsRename: return files.rename(id: id, from: args.from ?? "", to: args.to ?? "")
                 case .fsDelete: return files.delete(id: id, path: args.path ?? "", trash: trash)
-                case .fsSearch: return files.search(id: id, root: args.root ?? "", query: args.query ?? "", text: args.mode == "text", max: args.max)
+                case .fsSearch:
+                    return files.search(id: id, root: args.root ?? "", query: args.query ?? "", text: args.mode == "text", max: args.max, run: run)
                 default: return .refused(id, .invalid, "Not taken here.")
                 }
             }.value

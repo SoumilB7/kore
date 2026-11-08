@@ -30,6 +30,8 @@ package struct BoxFileRead: Sendable, Equatable {
     package var truncated: Bool
     /// The file as it was read: what a save checks it against (1.8; nil from an older box).
     package var stamp: FileStamp?
+    /// Read with the stamp the client holds, and still that: nothing else came.
+    package var unchanged = false
 
     package init(path: String, kind: FileReadKind, size: Int64, text: String?, image: Data?, truncated: Bool, stamp: FileStamp? = nil) {
         self.stamp = stamp
@@ -47,17 +49,38 @@ package struct BoxFileRead: Sendable, Equatable {
 package protocol BoxFileSource: AnyObject {
     var alias: String { get }
     func list(_ path: String?, hidden: Bool) async -> Result<BoxListing, HostRefusal>
-    func read(_ path: String, max: Int?) async -> Result<BoxFileRead, HostRefusal>
+    /// `base`: the stamp held; the box answers `unchanged` when the file is still that.
+    func read(_ path: String, max: Int?, base: FileStamp?) async -> Result<BoxFileRead, HostRefusal>
     func makeFolder(_ path: String) async -> Result<String, HostRefusal>
     // 1.8: a served folder's files edited, found and watched.
     func write(_ path: String, _ bytes: Data, base: FileStamp?) async -> Result<FileStamp, BoxWriteFailure>
     func create(_ path: String, folder: Bool) async -> Result<String, HostRefusal>
     func rename(_ from: String, to: String) async -> Result<String, HostRefusal>
     func trash(_ path: String) async -> Result<Void, HostRefusal>
-    func search(_ root: String, _ query: String, text: Bool, max: Int) async -> Result<(hits: [FileHit], more: Bool), HostRefusal>
+    /// Text hits come in `pages` as the box finds them; the result holds the rest. A new search
+    /// on the box stops the one before.
+    func search(_ root: String, _ query: String, text: Bool, max: Int, pages: (@MainActor ([FileHit]) -> Void)?)
+        async -> Result<(hits: [FileHit], more: Bool), HostRefusal>
     /// Watches `folders` for `key` (a window), with the other keys' on this box; `changed` gets
     /// the folders that changed. False when the box can't watch them.
-    func watch(_ key: String, _ folders: Set<String>, changed: (@MainActor (Set<String>) -> Void)?) async -> Bool
+    func watch(_ key: String, _ folders: Set<String>, changed: (@MainActor (BoxChange) -> Void)?) async -> Bool
+}
+
+/// What the box said changed: folders, and in each the entries' names when it said them.
+package struct BoxChange: Sendable, Equatable {
+    package var folders: Set<String>
+    package var names: [String: [String]]
+    package init(folders: Set<String>, names: [String: [String]] = [:]) {
+        self.folders = folders
+        self.names = names
+    }
+
+    /// The files it names (a folder said without names: none; read those whole).
+    package var paths: Set<String> { Set(names.flatMap { folder, names in names.map { folder + "/" + $0 } }) }
+}
+
+extension BoxFileSource {
+    package func read(_ path: String, max: Int?) async -> Result<BoxFileRead, HostRefusal> { await read(path, max: max, base: nil) }
 }
 
 /// Why a save didn't go: the file changed on the box since it was read (its stamp now, if it's
@@ -74,8 +97,13 @@ extension HostConnection: BoxFileSource {
         return .success(BoxListing(path: result.path ?? path ?? "", entries: entries, more: result.more == true))
     }
 
-    package func read(_ path: String, max: Int? = nil) async -> Result<BoxFileRead, HostRefusal> {
-        let result = await files(.fsRead, ControlArgs(path: path, max: max))
+    package func read(_ path: String, max: Int?, base: FileStamp?) async -> Result<BoxFileRead, HostRefusal> {
+        let result = await files(.fsRead, ControlArgs(path: path, max: max, base: base))
+        if result.ok, result.unchanged == true, let base {
+            var same = BoxFileRead(path: path, kind: .text, size: base.size, text: nil, image: nil, truncated: false, stamp: base)
+            same.unchanged = true
+            return .success(same)
+        }
         guard result.ok, let kind = result.kind else { return .failure(refusal(result)) }
         return .success(BoxFileRead(
             path: result.path ?? path, kind: kind, size: result.size ?? 0, text: result.text,
@@ -117,13 +145,15 @@ extension HostConnection: BoxFileSource {
         return result.ok ? .success(()) : .failure(refusal(result))
     }
 
-    package func search(_ root: String, _ query: String, text: Bool, max: Int) async -> Result<(hits: [FileHit], more: Bool), HostRefusal> {
-        let result = await files(.fsSearch, ControlArgs(mode: text ? "text" : "name", max: max, root: root, query: query))
+    package func search(_ root: String, _ query: String, text: Bool, max: Int, pages: (@MainActor ([FileHit]) -> Void)?)
+        async -> Result<(hits: [FileHit], more: Bool), HostRefusal>
+    {
+        let result = await files(.fsSearch, ControlArgs(mode: text ? "text" : "name", max: max, root: root, query: query), pages: pages)
         guard result.ok else { return .failure(refusal(result)) }
         return .success((result.hits ?? [], result.more == true))
     }
 
-    package func watch(_ key: String, _ folders: Set<String>, changed: (@MainActor (Set<String>) -> Void)?) async -> Bool {
+    package func watch(_ key: String, _ folders: Set<String>, changed: (@MainActor (BoxChange) -> Void)?) async -> Bool {
         if folders.isEmpty { fileWatchers[key] = nil } else { fileWatchers[key] = (folders, changed) }
         return await sendWatches()
     }
@@ -143,8 +173,14 @@ extension HostConnection: BoxFileSource {
         let folders = Set(changed.folders)
         for watcher in fileWatchers.values {
             let mine = folders.intersection(watcher.folders)
-            if !mine.isEmpty { watcher.changed?(mine) }
+            if !mine.isEmpty { watcher.changed?(BoxChange(folders: mine, names: (changed.names ?? [:]).filter { mine.contains($0.key) })) }
         }
+    }
+
+    /// `fs.hits`: a page of a running search, to its asker.
+    func filesHits(_ raw: Data) {
+        guard let page = try? JSONDecoder().decode(FilesHits.self, from: raw) else { return }
+        fileHits[page.id]?(page.hits)
     }
 
     package func makeFolder(_ path: String) async -> Result<String, HostRefusal> {
@@ -155,13 +191,19 @@ extension HostConnection: BoxFileSource {
 
     /// One `fs.*` command: at once while linked, after the dial while it's connecting; a link that
     /// can't be reached says so at once rather than waiting.
-    private func files(_ kind: ControlKind, _ args: ControlArgs) async -> FilesResult {
+    private func files(_ kind: ControlKind, _ args: ControlArgs, pages: (@MainActor ([FileHit]) -> Void)? = nil) async -> FilesResult {
         switch phase {
         case .refused(let why): return .refused("", .unknown, why.line(alias))
         case .offline, .idle: return .refused("", .unknown, "\(alias) can't be reached")
         case .connecting, .online: break
         }
-        let (result, raw) = await commandRaw { HostWire.command(id: $0, .control(kind, args)) }
+        var asked = ""
+        let (result, raw) = await commandRaw { id in
+            asked = id
+            if let pages { fileHits[id] = pages }
+            return HostWire.command(id: id, .control(kind, args))
+        }
+        fileHits[asked] = nil
         if let raw, let decoded = try? JSONDecoder().decode(FilesResult.self, from: raw) { return decoded }
         return FilesResult(id: result.id, ok: result.ok, code: result.code, message: result.message)
     }

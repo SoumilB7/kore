@@ -32,16 +32,21 @@ struct WelcomeView: View {
                 if showsBoxes { WelcomeSwitcher(state: $switcher.value).padding(.bottom, Space.md) }
                 BrandMark(height: Layout.Welcome.markHeight)
                     .padding(.bottom, Space.lg)
-                Text(place ?? "Kore")
-                    .font(Chrome.display)
-                    .foregroundStyle(Theme.text)
-                if let place {
-                    BoxWelcomeLine(alias: place)
-                } else {
-                    Text("Open a folder to start")
-                        .font(Chrome.body)
-                        .foregroundStyle(Theme.secondary)
+                // This Mac ⇄ a box: the name, its line and its list cross-fade.
+                Group {
+                    Text(place ?? "Kore")
+                        .font(Chrome.display)
+                        .foregroundStyle(Theme.text)
+                    if let place {
+                        BoxWelcomeLine(alias: place)
+                    } else {
+                        Text("Open a folder to start")
+                            .font(Chrome.body)
+                            .foregroundStyle(Theme.secondary)
+                    }
                 }
+                .id(place ?? "")
+                .transition(.opacity)
             }
 
             Button {
@@ -75,6 +80,8 @@ struct WelcomeView: View {
                     }
                 }
                 .frame(width: Layout.Welcome.contentWidth)
+                .id(place ?? "")
+                .transition(.opacity)
             }
 
             if place == nil, let problem = app.cliProblem {
@@ -93,6 +100,7 @@ struct WelcomeView: View {
                     .frame(width: Layout.Welcome.contentWidth)
             }
         }
+        .animation(Motion.fade, value: place)
         .padding(.vertical, Layout.Welcome.paddingV)
         .padding(.horizontal, Layout.Welcome.paddingH)
         .frame(width: Layout.Welcome.width)
@@ -102,9 +110,10 @@ struct WelcomeView: View {
         .overlay {
             if let model = browser.value {
                 ZStack {
-                    Theme.background.opacity(0.5).contentShape(Rectangle()).onTapGesture { browser.value = nil }
-                    BoxFolderBrowser(model: model, close: { browser.value = nil }) { path in add(path, on: model.alias) }
+                    Theme.background.opacity(0.5).contentShape(Rectangle()).onTapGesture { closeBrowser() }
+                    BoxFolderBrowser(model: model, close: closeBrowser) { path in add(path, on: model.alias) }
                 }
+                .transition(.opacity)
             }
         }
         // The box button, where a folder window's title row has it: after the traffic lights. A
@@ -178,8 +187,10 @@ struct WelcomeView: View {
             if let folder = app.chooseFolder() { open(folder) }
             return
         }
-        browser.value = BoxFolderBrowserModel(source: BoxList.shared.link(place))
+        withAnimation(Motion.fade) { browser.value = BoxFolderBrowserModel(source: BoxList.shared.link(place)) }
     }
+
+    private func closeBrowser() { withAnimation(Motion.fade) { browser.value = nil } }
 
     private func open(_ folder: URL) {
         app.open(folder, openWindow: openWindow, dismissWindow: dismissWindow)
@@ -205,7 +216,7 @@ struct WelcomeView: View {
         guard let window = window.value, event.window === window else { return event }
         let typing = window.firstResponder is NSTextView
         if let model = browser.value {
-            return BoxFolderBrowser.key(event, model: model, typing: typing) { browser.value = nil } ? nil : event
+            return BoxFolderBrowser.key(event, model: model, typing: typing) { closeBrowser() } ? nil : event
         }
         let items = items
         guard !items.isEmpty, !typing, event.modifierFlags.intersection([.command, .control, .option]).isEmpty else { return event }

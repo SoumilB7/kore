@@ -58,7 +58,7 @@ final class BoxBinding {
                 file.boxGone()
             }
         }
-        store.onChanged = { [weak self] folders in self?.workspace?.boxFoldersChanged(folders) }
+        store.onChanged = { [weak self] change in self?.workspace?.boxFoldersChanged(change) }
         return store
     }()
     /// Search in the box folder (the explorer's Search, Find in Folder…).
@@ -96,6 +96,7 @@ final class BoxBinding {
     private var focus: NSObjectProtocol?
 
     func windowOpened() {
+        BoxBinding.opened(alias: alias, folder: folder)
         connection.onSnapshot(key) { [weak self] in self?.adoptChats() }
         connection.retain()
         followPair()

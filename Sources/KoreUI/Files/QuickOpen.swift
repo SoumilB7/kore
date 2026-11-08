@@ -96,7 +96,7 @@ struct QuickOpenView: View {
             let typed = query.value.trimmingCharacters(in: .whitespaces)
             guard !typed.isEmpty else { return }
             try? await Task.sleep(for: .milliseconds(120))
-            guard !Task.isCancelled, case .success(let found) = await box.connection.search(root, typed, text: false, max: 300) else { return }
+            guard !Task.isCancelled, case .success(let found) = await box.connection.search(root, typed, text: false, max: 300, pages: nil) else { return }
             index.value = found.hits.map { $0.path.hasPrefix(root + "/") ? String($0.path.dropFirst(root.count + 1)) : $0.path }
         }
         .onChange(of: query.value) {

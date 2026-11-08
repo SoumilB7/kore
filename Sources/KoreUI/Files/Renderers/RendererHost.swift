@@ -11,13 +11,15 @@ struct RendererHost<Fallback: View>: View {
     var body: some View {
         let rendering = document.rendering
         VStack(spacing: 0) {
-            if document.box != nil {
-                // A box file: its text or image as read over the link, never a renderer's reading
-                // of this Mac's disk.
-                fallback()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .onAppear { document.loadIfNeeded() }
-            } else if rendering.resolved != document.url {
+            if document.box != nil, !document.loaded || document.preview == nil {
+                // A box file: read over the link first. One no renderer can show (binary, gone)
+                // is the editor's state.
+                if document.loaded {
+                    fallback().frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    Color.clear.onAppear { document.loadIfNeeded() }
+                }
+            } else if rendering.resolved != document.renderURL {
                 Color.clear
             } else if rendering.showsRenderer, let renderer = rendering.renderer, let info = rendering.info {
                 renderer.makeView(info, context: context)
@@ -39,9 +41,9 @@ struct RendererHost<Fallback: View>: View {
                     }
             }
         }
-        .task(id: document.url) { if document.box == nil { await rendering.resolve(document.url) } }
+        .task(id: document.renderURL) { await rendering.resolve(document.renderURL) }
         // A file can grow from empty into a match, or change kind.
-        .task(id: document.revision) { if document.revision > 0, document.box == nil { await rendering.refresh() } }
+        .task(id: document.revision) { if document.revision > 0 { await rendering.refresh() } }
     }
 
     private var context: RendererContext {
@@ -67,7 +69,7 @@ struct RendererHost<Fallback: View>: View {
                 guard let workspace, let document, let rendering,
                     workspace.activeFile === document, rendering.showsRenderer,
                     let rendererID, rendering.renderer?.id == rendererID,
-                    rendering.resolved == document.url
+                    rendering.resolved == document.renderURL
                 else { return false }
                 defer { rendering.focusPending = false }
                 return rendering.focusPending

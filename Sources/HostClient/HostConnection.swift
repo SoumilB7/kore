@@ -125,7 +125,9 @@ package final class HostConnection {
     @ObservationIgnored private var saveQueued = false
     @ObservationIgnored private var snapshotWatchers: [String: @MainActor () -> Void] = [:]
     /// Box windows' open explorer folders (1.8 `fs.watch`), by window, and who hears their changes.
-    @ObservationIgnored package var fileWatchers: [String: (folders: Set<String>, changed: (@MainActor (Set<String>) -> Void)?)] = [:]
+    @ObservationIgnored package var fileWatchers: [String: (folders: Set<String>, changed: (@MainActor (BoxChange) -> Void)?)] = [:]
+    /// Running searches' pages (1.8 `fs.hits`), by command id.
+    @ObservationIgnored var fileHits: [String: @MainActor ([FileHit]) -> Void] = [:]
     /// `sync.changed`'s readers, by the box folder they sync.
     @ObservationIgnored private var syncReaders: [String: @MainActor (Data) -> Void] = [:]
 
@@ -608,6 +610,8 @@ package final class HostConnection {
             toolCall(raw)
         case .unknown(let type) where type == FilesChanged.type:
             filesChanged(raw)
+        case .unknown(let type) where type == FilesHits.type:
+            filesHits(raw)
         default:
             break
         }
@@ -631,7 +635,7 @@ package final class HostConnection {
         if !fileWatchers.isEmpty {
             Task { [weak self] in
                 await self?.sendWatches()
-                for watcher in self?.fileWatchers.values.map({ $0 }) ?? [] { watcher.changed?(watcher.folders) }
+                for watcher in self?.fileWatchers.values.map({ $0 }) ?? [] { watcher.changed?(BoxChange(folders: watcher.folders)) }
             }
         }
         let queued = outbox

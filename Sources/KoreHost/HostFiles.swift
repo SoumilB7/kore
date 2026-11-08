@@ -72,7 +72,8 @@ package struct HostFiles: Sendable {
         return FilesResult(id: id, ok: true, path: place.path, entries: entries, more: more ? true : nil)
     }
 
-    package func read(id: String, path: String, max: Int?) -> FilesResult {
+    /// `base`: what the client holds; when the file is still that, only `unchanged` goes back.
+    package func read(id: String, path: String, max: Int?, base: FileStamp? = nil) -> FilesResult {
         let place: (path: String, real: String)
         switch self.place(path, .served) {
         case .failure(let refusal): return .refused(id, refusal.code, refusal.message)
@@ -80,6 +81,9 @@ package struct HostFiles: Sendable {
         }
         guard let found = Self.look(place.real), found.kind == .file, let size = found.size else {
             return .refused(id, .invalid, "Not a file.")
+        }
+        if let base, base == FileStamp(size: size, mtime: found.mtime) {
+            return FilesResult(id: id, ok: true, path: place.path, size: size, mtime: found.mtime, unchanged: true)
         }
         let limit = Swift.min(Swift.max(max ?? LinkFiles.readMax, 0), LinkFiles.readMax)
         let cut = size > Int64(limit)

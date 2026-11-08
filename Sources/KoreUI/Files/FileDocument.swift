@@ -89,13 +89,19 @@ final class FileDocument: Identifiable {
     @ObservationIgnored private(set) var box: BoxFile?
     /// A box image's picture, once read.
     private(set) var boxImage: NSImage?
+    /// A box file's bytes as last read or saved, in a private temporary file, for the renderers
+    /// (Markdown, HTML, images, CSV, diagrams), which read a file. Gone with the document.
+    private(set) var preview: URL?
+    @ObservationIgnored private let previewFolder = PreviewFolder()
+    /// What renderers read: a box file's preview copy, else the file.
+    var renderURL: URL { preview ?? url }
     /// The box sent only the first part of the file: its whole size.
     private(set) var boxCut: Int64?
 
     struct BoxFile {
         var path: String
         let alias: String
-        let read: @MainActor (String) async -> Result<BoxFileRead, HostRefusal>
+        let read: @MainActor (String, FileStamp?) async -> Result<BoxFileRead, HostRefusal>
         let write: @MainActor (String, Data, FileStamp?) async -> Result<FileStamp, BoxWriteFailure>
         var reading = false
         var saving = false
@@ -106,7 +112,7 @@ final class FileDocument: Identifiable {
     }
 
     init(
-        box path: String, alias: String, standIn: URL, read: @escaping @MainActor (String) async -> Result<BoxFileRead, HostRefusal>,
+        box path: String, alias: String, standIn: URL, read: @escaping @MainActor (String, FileStamp?) async -> Result<BoxFileRead, HostRefusal>,
         write: @escaping @MainActor (String, Data, FileStamp?) async -> Result<FileStamp, BoxWriteFailure>
     ) {
         autoSave = .shared
@@ -202,10 +208,12 @@ final class FileDocument: Identifiable {
         box.reading = true
         self.box = box
         Task { [weak self] in
-            let result = await box.read(box.path)
+            // Read again: only what changed comes (the box says `unchanged` otherwise).
+            let result = await box.read(box.path, again && !discard ? box.stamp : nil)
             guard let self else { return }
             self.box?.reading = false
             self.loaded = true
+            if case .success(let read) = result, read.unchanged { return }
             switch result {
             case .failure(let why):
                 // Read again and couldn't: what's shown stays (a save says if it's gone).
@@ -231,6 +239,7 @@ final class FileDocument: Identifiable {
                     // Past what the box sends, or a box that can't say when it was read: no saving.
                     self.readOnly = read.truncated || read.stamp == nil
                     if notice == .deleted || discard { notice = nil }
+                    self.keepPreview(Data(text.utf8))
                     if again, isText {
                         self.replaceInPlace(normal, lineEnding: crlf ? .crlf : .lf)
                     } else {
@@ -239,6 +248,7 @@ final class FileDocument: Identifiable {
                     }
                 case .image:
                     if let data = read.image, let image = NSImage(data: data) {
+                        self.keepPreview(data)
                         self.boxImage = image
                         self.file = TextFile(content: .image)
                     } else {
@@ -249,6 +259,16 @@ final class FileDocument: Identifiable {
                 }
             }
         }
+    }
+
+    /// The bytes the renderers read, in this document's own temporary folder.
+    private func keepPreview(_ data: Data) {
+        guard let folder = previewFolder.url else { return }
+        let file = folder.appendingPathComponent(url.lastPathComponent)
+        do {
+            try data.write(to: file, options: .atomic)
+            if preview != file { preview = file }
+        } catch {}
     }
 
     /// Text that came again, replacing only what differs (the caret and scroll stay).
@@ -298,6 +318,9 @@ final class FileDocument: Identifiable {
                 isDirty = storage.string != text
                 notice = nil
                 editor.refreshChanges()
+                // A renderer showing this file shows what was saved.
+                keepPreview(data)
+                revision += 1
                 if isDirty { scheduleAutoSave() }
             case .failure(.conflict(let theirs)):
                 if let theirs {
@@ -526,7 +549,7 @@ final class FileDocument: Identifiable {
     /// The disk against the unsaved edits, for the changes modal.
     func compare() async -> FileChange? {
         if let box {
-            guard case .success(let read) = await box.read(box.path), let theirs = read.text else { return nil }
+            guard case .success(let read) = await box.read(box.path, nil), let theirs = read.text else { return nil }
             return await UnifiedDiff.compare(old: theirs.replacingOccurrences(of: "\r\n", with: "\n"), new: storage.string, path: path)
         }
         guard case .text(let disk) = TextFile.read(url).content else { return nil }
@@ -638,4 +661,21 @@ final class FileDocument: Identifiable {
         default: "Unknown"
         }
     }
+}
+
+/// A box document's private temporary folder (0700) for its preview copy: made on first use,
+/// removed with the document.
+final class PreviewFolder: @unchecked Sendable {
+    private var made: URL?
+
+    var url: URL? {
+        if let made { return made }
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("kore-box-previews/" + UUID().uuidString, isDirectory: true)
+        guard (try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])) != nil
+        else { return nil }
+        made = folder
+        return folder
+    }
+
+    deinit { if let made { try? FileManager.default.removeItem(at: made) } }
 }

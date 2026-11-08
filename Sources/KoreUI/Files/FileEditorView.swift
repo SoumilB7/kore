@@ -138,6 +138,17 @@ private struct PathRow: View {
         let parts = relative.split(separator: "/").map(String.init)
         let base = String(document.path.dropLast(relative.count))
         HStack(spacing: Space.xs) {
+            // A box file: the box's name first, quietly.
+            if let box = document.box {
+                HStack(spacing: Space.xxs) {
+                    Image(systemName: "server.rack").font(Chrome.caption)
+                    Text(box.alias).font(Chrome.label)
+                }
+                .foregroundStyle(Theme.tertiary)
+                .padding(.horizontal, Space.xs)
+                .help("On \(box.alias): \(box.path)")
+                Image(systemName: "chevron.right").font(Chrome.glyphCrumb).foregroundStyle(Theme.tertiary)
+            }
             ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
                 if index > 0 {
                     Image(systemName: "chevron.right").font(Chrome.glyphCrumb).foregroundStyle(Theme.tertiary)

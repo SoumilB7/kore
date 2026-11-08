@@ -18,6 +18,10 @@ final class FolderWatches {
     /// The folders watched: the client's path, by its real place.
     private var folders: [String: String] = [:]
     private var pending: Set<String> = []
+    /// The entries' names that changed, by folder; nil for a folder to be read whole.
+    private var names: [String: Set<String>?] = [:]
+    /// Past this many names in a burst a folder is sent without them.
+    static let namesMax = 200
     private var flush: DispatchWorkItem?
     #if canImport(Darwin)
     private var watchers: [String: FolderWatcher] = [:]
@@ -27,7 +31,7 @@ final class FolderWatches {
     private var watches: [Int32: String] = [:]
     #endif
 
-    init(settle: TimeInterval = 0.2, push: @escaping (FilesChanged) -> Void) {
+    init(settle: TimeInterval = 0.3, push: @escaping (FilesChanged) -> Void) {
         self.settle = settle
         self.push = push
     }
@@ -42,7 +46,13 @@ final class FolderWatches {
         for real in next.keys where watchers[real] == nil {
             watchers[real] = FolderWatcher(URL(fileURLWithPath: real), latency: 0.05) { [weak self] paths in
                 // Only the folder's own entries: its tree below is other folders' business.
-                if paths.contains(where: { $0 == real || ($0 as NSString).deletingLastPathComponent == real }) { self?.noted(real) }
+                for path in paths {
+                    if path == real {
+                        self?.noted(real, name: nil)
+                    } else if (path as NSString).deletingLastPathComponent == real {
+                        self?.noted(real, name: (path as NSString).lastPathComponent)
+                    }
+                }
             }
         }
         #else
@@ -80,17 +90,26 @@ final class FolderWatches {
         folders = [:]
     }
 
-    private func noted(_ real: String) {
+    /// An entry `name` in the folder changed (nil: the folder itself, or too much to say).
+    private func noted(_ real: String, name: String?) {
         guard let path = folders[real] else { return }
         pending.insert(path)
+        if let name, let known = names[path] ?? Set(), known.count < Self.namesMax {
+            names[path] = known.union([name])
+        } else {
+            names[path] = .some(nil)
+        }
         guard flush == nil else { return }
         let work = DispatchWorkItem { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.flush = nil
                 let changed = self.pending.sorted()
+                var said: [String: [String]] = [:]
+                for folder in changed { if let list = self.names[folder] ?? nil { said[folder] = list.sorted() } }
                 self.pending = []
-                if !changed.isEmpty { self.push(FilesChanged(folders: changed)) }
+                self.names = [:]
+                if !changed.isEmpty { self.push(FilesChanged(folders: changed, names: said.isEmpty ? nil : said)) }
             }
         }
         flush = work
@@ -129,12 +148,13 @@ final class FolderWatches {
                 }
                 offset += 16 + length
                 if mask & Self.overflow != 0 {
-                    for real in watches.values { noted(real) }
+                    for real in watches.values { noted(real, name: nil) }
                     continue
                 }
                 guard let real = watches[wd] else { continue }
                 if mask & Self.ignored != 0 { watches[wd] = nil }
-                noted(real)
+                let name = String(decoding: buffer[(offset - length)..<offset].prefix { $0 != 0 }, as: UTF8.self)
+                noted(real, name: name.isEmpty ? nil : name)
             }
         }
     }

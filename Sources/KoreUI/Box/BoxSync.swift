@@ -50,6 +50,8 @@ struct BoxSyncButton: View {
             .frame(width: size, height: size)
             .background(lit ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
             .overlay(alignment: .topTrailing) { point(state) }
+            // In sync ⇄ syncing ⇄ paused: the point changes colour softly.
+            .animation(Motion.fade, value: state)
             .contentShape(RoundedRectangle(cornerRadius: Radius.control))
     }
 
@@ -63,6 +65,7 @@ struct BoxSyncButton: View {
             .padding(Size.avatarCutout)
             .background(Theme.background, in: Circle())
             .padding(Size.statusPointInset - Size.avatarCutout)
+            .transition(.opacity)
         }
     }
 
@@ -271,8 +274,8 @@ struct BoxOfflineDialog: View {
         let down = !box.connection.isOnline
         ZStack {
             if shown.value, down {
-                Theme.background.opacity(0.45).allowsHitTesting(false)
-                card.storyID(StoryID.Boxes.offline)
+                Theme.background.opacity(0.45).allowsHitTesting(false).transition(.opacity)
+                card.storyID(StoryID.Boxes.offline).transition(.opacity)
             }
         }
         .animation(Motion.fade, value: shown.value && down)

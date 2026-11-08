@@ -174,7 +174,13 @@ extension BoxList.Box {
     /// folder's window there, the chat in front).
     @MainActor func welcomeItems(open: @escaping @MainActor (BoxPlace, String?) -> Void) -> [WelcomeItem] {
         let connection = BoxList.shared.link(alias)
-        var items = folders.map { folder in
+        // The folders last opened first, then the rest as the box lists them.
+        let recent = BoxBinding.recents(alias)
+        let ordered = folders.enumerated().sorted { a, b in
+            let (x, y) = (recent.firstIndex(of: a.element.path) ?? Int.max, recent.firstIndex(of: b.element.path) ?? Int.max)
+            return x != y ? x < y : a.offset < b.offset
+        }.map(\.element)
+        var items = ordered.map { folder in
             let place = BoxPlace(alias: alias, folder: folder.path)
             let window = connection.windows.first { $0.id == folder.windowId }?.path ?? folder.path
             let parent = (window as NSString).deletingLastPathComponent
@@ -198,6 +204,16 @@ extension BoxList.Box {
 }
 
 extension BoxBinding {
+    /// A box's folders by when their windows last opened, newest first (the Welcome's order).
+    static func recents(_ alias: String, defaults: UserDefaults = .standard) -> [String] {
+        defaults.stringArray(forKey: "boxRecents." + alias) ?? []
+    }
+
+    static func opened(alias: String, folder: String, defaults: UserDefaults = .standard) {
+        let list = [folder] + recents(alias, defaults: defaults).filter { $0 != folder }
+        defaults.set(Array(list.prefix(20)), forKey: "boxRecents." + alias)
+    }
+
     /// Chats to put in front once their box window opens, by its key.
     static var pendingChat: [String: String] = [:]
 

@@ -79,13 +79,30 @@ struct BoxExplorer: View {
         if searching {
             BoxSearchView(workspace: workspace, search: box.search)
         } else if !store.rootLoaded {
-            DelayedSpinner().padding(.top, Layout.Explorer.stateTop)
+            // Quiet, in place: never a blank panel or a spinner over it.
+            Text("Loading…").font(Chrome.label).foregroundStyle(Theme.tertiary)
+                .frame(maxWidth: .infinity).padding(.top, Layout.Explorer.stateTop)
         } else if let why = store.rootError {
             ExplorerState(message: why, color: Theme.secondary, button: "Try Again") { Task { await store.refresh() } }
         } else if store.isEmpty {
-            ExplorerState(message: "This folder is empty", color: Theme.tertiary, button: "New File") { store.startNew(folder: false) }
+            VStack(spacing: Space.md) {
+                Text("This folder is empty").font(Chrome.label).foregroundStyle(Theme.tertiary)
+                HStack(spacing: Space.sm) {
+                    Button("New File") { store.startNew(folder: false) }.buttonStyle(SubtleButtonStyle())
+                    Button("New Folder") { store.startNew(folder: true) }.buttonStyle(SubtleButtonStyle())
+                }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.top, Layout.Explorer.stateTop)
         } else {
             tree
+        }
+        if let problem = store.problem, !searching {
+            // What the box refused, put back: one plain line, gone after a while.
+            Text(problem).font(Chrome.caption).foregroundStyle(Theme.secondary).lineLimit(2)
+                .padding(.horizontal, Layout.Explorer.headerInset).padding(.vertical, Space.xs)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity)
         }
     }
 
@@ -185,9 +202,12 @@ struct BoxExplorer: View {
             guard let index else { return .handled }
             let row = rows[index]
             if row.isFolder { store.toggle(row.id) } else { workspace.openBoxFile(row.id, preview: true) }
-        case .return:
-            // VS Code: Return renames.
+        case .return, KeyEquivalent(Character(UnicodeScalar(NSF2FunctionKey)!)):
+            // VS Code: Return (or F2) renames.
             if index != nil, store.picked.isEmpty, let selection = store.selection { store.edit = .rename(selection) }
+        case "n" where press.modifiers.contains(.command):
+            // ⌘N a file, ⇧⌘N a folder, in the tree.
+            store.startNew(folder: press.modifiers.contains(.shift))
         case _ where (press.key == .delete || press.key.character == "\u{7F}") && press.modifiers.contains(.command):
             if index != nil { BoxTreeMenu.trash(store.chosenTops, store: store) }
         case .escape where !store.picked.isEmpty:
@@ -277,7 +297,8 @@ private struct BoxTreeRow: View {
         .onDrag {
             // A chosen row carries the whole choice; the others only themselves.
             BoxDrag.paths = store.isChosen(row.id) && !store.picked.isEmpty ? store.chosenTops : [row.id]
-            return NSItemProvider(object: BoxDrag.marker as NSString)
+            // As text, the box paths: dropped on a chat's composer, they name the files there.
+            return NSItemProvider(object: BoxDrag.paths.joined(separator: " ") as NSString)
         }
         .onDrop(of: BoxDrop.types, delegate: BoxDrop(folder: row.isFolder ? row.id : store.parent(of: row.id), store: store, workspace: workspace))
         .koreContextMenu("explorer") {
@@ -386,17 +407,16 @@ private struct BoxNameField: View {
         Task {
             switch edit {
             case .newFile(let parent):
-                switch await store.create(value, in: parent, folder: false) {
-                case .success(let path):
+                if case .success(let path) = await store.create(value, in: parent, folder: false) {
                     workspace.openBoxFile(path, preview: false)
                     workspace.activeFile?.showsRaw = true
                     workspace.activeFile?.editor.focus()
-                case .failure(let why): BoxTreeMenu.show(why.message)
                 }
             case .newFolder(let parent):
-                if case .failure(let why) = await store.create(value, in: parent, folder: true) { BoxTreeMenu.show(why.message) }
+                // A refusal is the store's line; what was shown goes back.
+                _ = await store.create(value, in: parent, folder: true)
             case .rename(let path):
-                if case .failure(let why) = await store.rename(path, to: value) { BoxTreeMenu.show(why.message) }
+                _ = await store.rename(path, to: value)
             }
         }
     }
@@ -449,7 +469,7 @@ private struct BoxNameField: View {
         let paths = store.cut
         guard !paths.isEmpty else { return }
         store.cut = []
-        Task { if let failure = await store.move(paths, into: folder) { show(failure) } }
+        Task { _ = await store.move(paths, into: folder) }
     }
 
     /// One question for all of them (as the Files explorer asks), then the box's trash.
@@ -464,7 +484,7 @@ private struct BoxNameField: View {
         alert.addButton(withTitle: "Move to Trash")
         alert.addButton(withTitle: "Cancel")
         guard StorylineSeams.confirm?("trash") ?? (alert.runModal() == .alertFirstButtonReturn) else { return }
-        Task { if let failure = await store.trash(paths) { show(failure) } }
+        Task { _ = await store.trash(paths) }
     }
 
     static func show(_ message: String) {
@@ -479,7 +499,6 @@ private struct BoxNameField: View {
 /// The rows a drag in the box tree carries (the provider holds only a marker).
 @MainActor enum BoxDrag {
     static var paths: [String] = []
-    static let marker = "kore.box.rows"
 }
 
 /// A drop on a folder (a file row: its folder): rows from this tree move there; files from
@@ -513,7 +532,7 @@ private struct BoxDrop: DropDelegate {
                 alert.addButton(withTitle: "Cancel")
                 guard StorylineSeams.confirm?("move") ?? (alert.runModal() == .alertFirstButtonReturn) else { return false }
             }
-            Task { if let failure = await store.move(movable, into: folder) { BoxTreeMenu.show(failure) } }
+            Task { _ = await store.move(movable, into: folder) }
             return true
         }
         let (store, folder) = (store, folder)
@@ -551,9 +570,9 @@ private struct BoxDrop: DropDelegate {
                 }
             }
             if !skipped.isEmpty {
-                BoxTreeMenu.show("Not copied to \(store.alias): \(skipped.joined(separator: ", ")). Files of up to 12 MB go; folders don't.")
+                store.say("Not copied to \(store.alias): \(skipped.joined(separator: ", ")). Files up to 12 MB go; folders don't.")
             } else if let failure {
-                BoxTreeMenu.show(failure)
+                store.say(failure)
             }
         }
         return true
@@ -584,6 +603,7 @@ final class BoxSearchStore {
     @ObservationIgnored private let root: String
     @ObservationIgnored private let source: any BoxFileSource
     @ObservationIgnored private var task: Task<Void, Never>?
+    @ObservationIgnored private var generation = 0
 
     init(root: String, source: any BoxFileSource) {
         self.root = root
@@ -619,17 +639,23 @@ final class BoxSearchStore {
         let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { return clear() }
         running = true
-        let root = within ?? root, source = source
+        generation += 1
+        let root = within ?? root, source = source, asked = generation
         task = Task { [weak self] in
-            // Typing settles first.
+            // Typing settles first; the box stops the search before when this one starts.
             try? await Task.sleep(for: .milliseconds(200))
             guard !Task.isCancelled else { return }
-            let result = await source.search(root, query, text: true, max: 500)
-            guard !Task.isCancelled, let self else { return }
+            self?.hits = []
+            let result = await source.search(root, query, text: true, max: 500) { [weak self] page in
+                guard self?.generation == asked else { return }
+                self?.hits += page
+            }
+            guard !Task.isCancelled, let self, generation == asked else { return }
             running = false
             switch result {
             case .success(let found):
-                (hits, more, problem) = (found.hits, found.more, nil)
+                (more, problem) = (found.more, nil)
+                hits += found.hits
             case .failure(let why):
                 (hits, more, problem) = ([], false, why.message)
             }
@@ -718,7 +744,7 @@ extension FileDocument {
     /// A box file, read and saved through `source`.
     convenience init(box path: String, source: any BoxFileSource, standIn: URL) {
         self.init(
-            box: path, alias: source.alias, standIn: standIn, read: { await source.read($0, max: nil) },
+            box: path, alias: source.alias, standIn: standIn, read: { await source.read($0, max: nil, base: $1) },
             write: { await source.write($0, $1, base: $2) })
     }
 }
@@ -776,10 +802,14 @@ extension Workspace {
         }
     }
 
-    /// Files in these box folders changed: their open tabs read them again.
-    func boxFoldersChanged(_ folders: Set<String>) {
+    /// Files in these box folders changed: the open tabs it names read again (all of a folder
+    /// said without names; one whose file didn't change costs the box a stat).
+    func boxFoldersChanged(_ change: BoxChange) {
+        let named = change.paths
         for tab in tabs {
-            guard let file = tab.file, let path = file.box?.path, folders.contains((path as NSString).deletingLastPathComponent) else { continue }
+            guard let file = tab.file, let path = file.box?.path else { continue }
+            let folder = (path as NSString).deletingLastPathComponent
+            guard named.contains(path) || (change.folders.contains(folder) && change.names[folder] == nil) else { continue }
             file.reloadFromBox()
         }
     }
