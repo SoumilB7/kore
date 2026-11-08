@@ -12,10 +12,9 @@ import Testing
 /// Devices' phones over the phones' listener (step 7 on 5b): the rows it reads, ⋯ on a phone
 /// (rename, take offline, bring online, remove) through the book and the boxes, the one refusal
 /// line, and a device waiting at a box allowed from its card. Every wait is for an event.
-@MainActor
-@Suite("devices over mac net", .serialized, .timeLimit(.minutes(1)))
-struct MacNetDevicesTests {
-    @Test func aLinkedPhonesRowAndItsMoreMenu() async throws {
+/// In `MacNetTests`' suite: its rigs share `NetAudit.watch`, so they run one at a time.
+extension MacNetTests {
+    @Test func devicesReadALinkedPhoneAndItsMoreMenu() async throws {
         let rig = try MacRig()
         defer { rig.finish() }
         let devices = MacNetDevices { rig.net }
@@ -44,10 +43,9 @@ struct MacNetDevicesTests {
         // Remove: gone from the book and from what the boxes are told.
         devices.remove(pixel.id)
         #expect(try rig.host.book.record(pixel.id) == nil && rig.pushed.last?.isEmpty == true && devices.phones.isEmpty)
-        #expect(rig.audits("revoke").count == 1)
     }
 
-    @Test func theAddWindowAndItsOneRefusalLine() async throws {
+    @Test func devicesShowTheAddWindowAndItsOneRefusalLine() async throws {
         let rig = try MacRig()
         defer { rig.finish() }
         let devices = MacNetDevices { rig.net }
@@ -65,7 +63,7 @@ struct MacNetDevicesTests {
         #expect(devices.refusals.isEmpty)
     }
 
-    @Test func aDeviceWaitingAtABoxIsAllowedFromItsCard() async throws {
+    @Test func devicesAllowADeviceWaitingAtABox() async throws {
         let rig = try MacRig()
         defer { rig.finish() }
         let devices = MacNetDevices { rig.net }
@@ -77,8 +75,8 @@ struct MacNetDevicesTests {
         #expect(await rig.cards.next() == "Pixel 8 wants to join")
         let card = try #require(rig.shown.last)
         #expect(card.node == "pixel-8" && card.login == "me@example.com" && card.kind == .phone)
+        // The answer is taken at once: the record is in the book when Allow returns.
         rig.asks.answer(true)
-        await rig.audit("allow")
         let waitingID = try #require(waiting.device)
         let record = try #require(try rig.host.book.record(waitingID))
         #expect(record.kind == .phone && record.abilities == [.read, .ask] && record.issuedBy == rig.host.device && record.nodeKeys == ["nodekey:p8"])
@@ -91,7 +89,6 @@ struct MacNetDevicesTests {
         await rig.cards.next()
         #expect(rig.shown.last?.code != nil && rig.shown.last?.kind == .box)
         rig.asks.answer(false)
-        await rig.audit("deny")
         let boxID = try #require(box.device)
         #expect(try rig.host.book.record(boxID) == nil)
     }

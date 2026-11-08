@@ -54,7 +54,9 @@ struct LocalAPITests {
         let script = Script(answers: [FakeHTTPServer.ok(statusJSON)])
         let status = try TailnetLocal(api: script.client).status()
         #expect(status.backendState == .running)
-        #expect(status.selfNode == .init(publicKey: "nodekey:1387", tailscaleIPs: ["100.91.66.71", "fd7a:115c:a1e0::3738:4248"], userID: 118279842635465))
+        var me = TailnetStatus.SelfNode(publicKey: "nodekey:1387", tailscaleIPs: ["100.91.66.71", "fd7a:115c:a1e0::3738:4248"], userID: 118279842635465)
+        me.hostName = "mybox"
+        #expect(status.selfNode == me)
         #expect(status.peers.map(\.publicKey) == ["nodekey:0b99", "nodekey:4bd1"])
         #expect(status.peers[1].tags == ["tag:box"] && !status.peers[1].online)
         let request = try #require(script.server.requests.first)
