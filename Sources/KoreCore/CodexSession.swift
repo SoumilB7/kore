@@ -128,6 +128,27 @@ public actor CodexSession {
 
     /// Codex's answer to `thread/resume` for a thread with no rollout ("no rollout found for
     /// thread id …"): there's nothing to resume.
+    /// A rollout for this thread in Codex's sessions (`sessions/YYYY/MM/DD/rollout-…-<id>.jsonl`),
+    /// or its archived ones.
+    nonisolated static func rolloutOnDisk(_ id: String, home: URL) -> Bool {
+        let files = FileManager.default
+        let suffix = "-\(id).jsonl"
+        let archived = home.appendingPathComponent("archived_sessions")
+        if let names = try? files.contentsOfDirectory(atPath: archived.path), names.contains(where: { $0.hasSuffix(suffix) }) { return true }
+        let sessions = home.appendingPathComponent("sessions")
+        func entries(_ url: URL) -> [URL] {
+            ((try? files.contentsOfDirectory(atPath: url.path)) ?? []).map { url.appendingPathComponent($0) }
+        }
+        for year in entries(sessions) {
+            for month in entries(year) {
+                for day in entries(month) where ((try? files.contentsOfDirectory(atPath: day.path)) ?? []).contains(where: { $0.hasSuffix(suffix) }) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     public nonisolated static func isMissingRollout(_ error: any Error) -> Bool {
         guard case CodexAppServer.Failure.rpc(_, let message) = error else { return false }
         return message.localizedCaseInsensitiveContains("no rollout found")
@@ -545,13 +566,31 @@ public actor CodexSession {
                     result = try await server.request("thread/resume", .object(params))
                 }
             } catch where Self.isMissingRollout(error) {
-                // A thread that never ran a turn left nothing to resume: a new one, as it would
-                // have started.
-                params["threadId"] = nil
-                params["excludeTurns"] = nil
-                result = try await server.request("thread/start", .object(params))
-                page = nil
-                startedFresh = true
+                // Codex finds a thread's rollout by searching its sessions, which a busy Mac can
+                // cut short: a rollout that's there is asked for again, and never replaced by a
+                // new thread (the chat would lose its conversation). Only a thread that never ran
+                // a turn, with no rollout at all, starts anew, as it would have started.
+                if let home = await server.home, Self.rolloutOnDisk(resume, home: home) {
+                    var again: JSONValue?
+                    var last: any Error = error
+                    for _ in 0..<2 where again == nil {
+                        do {
+                            again = try await server.request("thread/resume", .object(params))
+                        } catch {
+                            last = error
+                            guard Self.isMissingRollout(error) else { throw error }
+                        }
+                    }
+                    guard let again else { throw last }
+                    result = again
+                    if let limit { page = (try? await server.request("thread/turns/list", Self.turnsParams(resume, nil, limit, .full))).map(Self.page) }
+                } else {
+                    params["threadId"] = nil
+                    params["excludeTurns"] = nil
+                    result = try await server.request("thread/start", .object(params))
+                    page = nil
+                    startedFresh = true
+                }
             }
         } else if let resume = options.resume, let turn = options.forkAt {
             params["threadId"] = .string(resume)

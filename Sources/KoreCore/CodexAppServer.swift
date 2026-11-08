@@ -153,17 +153,21 @@ public actor CodexAppServer {
     public var processEnd: ProcessEnd? { io?.end }
     /// Kore asked it to end (`close()`), so its exit was expected.
     public private(set) var closeAsked = false
+    /// The `CODEX_HOME` this app-server runs with: `~/.codex` when it has none.
+    public private(set) var home: URL?
 
     // MARK: - Process lifecycle
 
     private func launch(cwd: URL, executable: URL?, arguments: [String], environment: [String: String], pathFirst: String?) async throws {
         let resolved = try await CLIExecutable.resolve("codex", override: executable)
         try Task.checkCancellation()
+        let env = KoreReach.environment(resolved.environment, environment, pathFirst: pathFirst)
+        home = env["CODEX_HOME"].map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".codex")
         let io = try StdioProcess(
             executable: resolved.url,
             arguments: ["app-server"] + arguments,
             cwd: cwd,
-            environment: KoreReach.environment(resolved.environment, environment, pathFirst: pathFirst))
+            environment: env)
         self.io = io
         running = true
 
