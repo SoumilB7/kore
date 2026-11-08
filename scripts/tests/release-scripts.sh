@@ -27,12 +27,15 @@ mkdir -p $tmp/linux $tmp/oldssl
 print -r -- $'#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; *) echo Linux;; esac' > $tmp/linux/uname
 print -r -- $'#!/bin/sh\necho "usage: pkeyutl [-in file] [-sigfile file]"' > $tmp/oldssl/openssl
 chmod +x $tmp/linux/uname $tmp/oldssl/openssl
-# A kore-host that says 9.9.9, answers `verify` with $FAKE_VERIFY (0 by default) and notes install-service.
+# A kore-host that says 9.9.9, answers `verify` with $FAKE_VERIFY (0 by default; for a kore-tailnet
+# file $FAKE_VERIFY_TAILNET first), noting each file in ~/verified, and notes install-service.
 fake_host() { # version
     print -r -- "#!/bin/sh
 case \"\$1\" in
   --version) echo 'kore-host $1 (link 1.12)' ;;
-  verify) exit \${FAKE_VERIFY:-0} ;;
+  verify) echo \"\$2\" >> \"\$HOME/verified\"
+    case \"\$2\" in *kore-tailnet*) exit \${FAKE_VERIFY_TAILNET:-\${FAKE_VERIFY:-0}} ;; esac
+    exit \${FAKE_VERIFY:-0} ;;
   install-service) touch \"\$HOME/service-installed\"; echo 'kore-host is running' ;;
 esac"
 }
@@ -83,6 +86,20 @@ cp $tmp/xz.good $rel/kore-host-linux-x86_64.xz
 rm -rf $tmp/home; mkdir -p $tmp/home
 out=$(env -i HOME=$tmp/home PATH="$tmp/linux:/opt/homebrew/bin:/usr/bin:/bin" KORE_RELEASE_URL=file://$rel dash scripts/kore-host.sh 2>&1); code=$?
 check "the real kore-host.sh refuses a release another key signed" '(( code != 0 )) && ! installed && [[ $out == *"isn'"'"'t signed"* ]]'
+
+# Kore's own tailnet beside kore-host when the release lists it: openssl checks its signature, or
+# without Ed25519 the kore-host just installed does (`verify`); when neither can, a line, never fatal.
+print "fake kore-tailnet" | xz -c > $rel/kore-tailnet-linux-x86_64.xz
+{ print "# kore 9.9.9 $commit"; for f in kore-host-linux-x86_64.xz kore-host.sh kore-tailnet-linux-x86_64.xz; do print "$(sha $rel/$f)  $f"; done } > $rel/SHA256SUMS
+key=$(sign sign --ephemeral $rel/SHA256SUMS)
+sed "s|^KORE_RELEASE_KEY=.*|KORE_RELEASE_KEY=\"$key\"|" scripts/kore-host.sh > $tmp/kore-host.sh
+tailnet() { [[ -x $tmp/home/.local/bin/kore-tailnet ]] }
+out=$(box $tmp/linux); code=$?
+check "kore-tailnet goes beside kore-host when the release lists it" '(( code == 0 )) && installed && tailnet'
+out=$(box $tmp/oldssl); code=$?
+check "  without Ed25519 openssl the installed kore-host checks it first" '(( code == 0 )) && tailnet && grep -q "kore-tailnet-linux-x86_64.xz$" $tmp/home/verified'
+out=$(box $tmp/oldssl FAKE_VERIFY_TAILNET=1); code=$?
+check "  one nothing here can check is skipped in a line, never fatal" '(( code == 0 )) && installed && ! tailnet && [[ $out == *"kore-tailnet skipped: neither openssl nor kore-host"* ]]'
 
 # release.sh --dry-run over a folder with fake kore-host builds.
 dry=$tmp/dry

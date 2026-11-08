@@ -262,6 +262,9 @@ It downloads the box's kore-host (x86_64 or aarch64), checks it against the rele
 OpenSSL 3; where openssl can't, kore-host checks it), puts it in `~/.local/bin` and runs
 `install-service`. `kore-host update` does the same later; `kore-host verify SHA256SUMS` checks a
 downloaded release.
+The release's `kore-tailnet` (Kore's own tailnet, for a box without Tailscale) goes beside it,
+checked the same way (by openssl, else by the kore-host just installed); when nothing there can
+check its signature it's skipped with one line, never failing the install.
 
 Or build kore-host from a checkout of Kore with the same toolchain and SDK (see above), or take the
 one Set up kept in `~/Library/Application Support/Kore/kore-host/`.
