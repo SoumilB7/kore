@@ -239,22 +239,21 @@ struct KoreNetSystemTests {
 
     // MARK: The listener heals (2026-11-15)
 
-    /// KoreNet off and on with a phone allowed: the switch's choice and the bus's first status
-    /// each look; the two binds once refused each other and the Mac kept no port. (The phone app
-    /// is closed meanwhile: a phone told `bye refused` stays "Not allowed" until reopened, a phone
-    /// gap of its own, not this one.)
+    /// KoreNet off and on with a phone allowed (S35): the switch's choice and the bus's first
+    /// status each look (the two binds once refused each other and the Mac kept no port), and the
+    /// phone, told `bye off`, says so and comes back by itself (it used to stay "Not allowed").
     @Test func koreNetToggledWithAPhoneAllowedEndsListening() async throws {
-        try await play("KoreNet off and on, phone allowed · I8 I11") { w in
+        try await play("S35 KoreNet off and on, phone allowed · I3 I8 I11") { w in
             await w.koreNetOn()
             await w.plus()
             let pixel = w.phone("Pixel 9")
             await w.joinPhone(pixel)
-            await w.step("the phone app closes", .event("phone app closed")) { pixel.quit() }
-            await w.step("KoreNet off", .subject("KoreNet off"), until: { !w.mac.macNet.listening }) { Devices.shared.setOn(false) }
-            await w.step("KoreNet on again", .koreNetOn, until: { w.mac.macNet.listening }) { Devices.shared.setOn(true) }
-            let binds = w.net.listens(w.mac.ip)
-            await w.step("the phone app opens", .event("phone app opened"), until: { pixel.rows.first?.glyph == "●" }) { pixel.restart() }
-            #expect(w.mac.macNet.listening && w.net.listens(w.mac.ip) == binds)
+            await w.step("KoreNet off", .subject("KoreNet off"), until: { !w.mac.macNet.listening && pixel.rows.first?.words == "● KoreNet is off" }) {
+                Devices.shared.setOn(false)
+            }
+            await w.step("KoreNet on again", .koreNetOn, until: { w.mac.macNet.listening && pixel.rows.first?.glyph == "●" }) {
+                Devices.shared.setOn(true)
+            }
             await w.expectSettled(boxes: [], phones: [pixel])
         }
     }

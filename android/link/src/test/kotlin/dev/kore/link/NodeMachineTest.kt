@@ -51,6 +51,53 @@ class NodeMachineTest {
         assertEquals(AwayWhy.ASLEEP, (m.on(Event.Ended("quit"), 21_000) as State.Away).why)
     }
 
+    /** S35: the Mac's KoreNet switched off is not a refusal: the phone says so and comes back by itself. */
+    @Test fun aMacWhoseKoreNetWentOffIsTriedAgainUpToAMinuteAndComesBack() {
+        val m = machine()
+        m.on(Event.Start, 0)
+        m.on(Event.Connected, 0)
+        var s = m.on(Event.Ended("off"), 0) as State.Away
+        assertEquals(AwayWhy.NET_OFF, s.why)
+        // Its dials refused meanwhile (no port) stay "KoreNet is off", capped at a minute.
+        val delays = mutableListOf(s.at!!)
+        repeat(8) {
+            m.on(Event.Tick, s.at!!)
+            s = m.on(Event.Failed, s.at!!) as State.Away
+            assertEquals(AwayWhy.NET_OFF, s.why)
+            delays += s.at!! - delays.sum()
+        }
+        assertEquals(listOf(1_000L, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000), delays)
+        // Switched on: the next dial is up, and a later unreachable Mac backs off as before.
+        m.on(Event.Tick, s.at!!)
+        assertEquals(State.Up, m.on(Event.Connected, s.at!!))
+        m.on(Event.Ended(null), s.at!!)
+        m.on(Event.Tick, m.wakeAt!!)
+        assertEquals(AwayWhy.UNREACHABLE, (m.on(Event.Failed, m.wakeAt ?: 0) as State.Away).why)
+    }
+
+    @Test fun offScreenAMacWhoseKoreNetWentOffWaitsForTheAppOrTheNetwork() {
+        val m = machine()
+        m.on(Event.Start, 0)
+        m.on(Event.Connected, 0)
+        m.on(Event.Screen(false), 0)
+        val s = m.on(Event.Ended("off"), 0) as State.Away
+        assertEquals(AwayWhy.NET_OFF, s.why)
+        assertNull(s.at)
+        assertNull(m.wakeAt)
+        // The app opening or a network change (a trigger) dials it.
+        assertEquals(State.Connecting, m.on(Event.Trigger, 5))
+        // Gone off screen while waiting: its timer goes.
+        m.on(Event.Screen(true), 6)
+        assertEquals(1_000L + 6, (m.on(Event.Failed, 6) as State.Away).at)
+        assertNull((m.on(Event.Screen(false), 7) as State.Away).at)
+    }
+
+    @Test fun theOwnersDenyIsStillDenied() {
+        val m = machine()
+        m.on(Event.Start, 0)
+        assertEquals(State.Denied("refused"), m.on(Event.Ended("refused"), 0))
+    }
+
     @Test fun offScreenAWaitingBoxWaitsForATriggerOnly() {
         val m = machine(box = true)
         m.on(Event.Start, 0)

@@ -155,6 +155,9 @@ package enum NetControl: Equatable, Sendable {
         package static let replaced = "replaced"
         package static let proof = "proof"
         package static let refused = "refused"
+        /// The Mac's KoreNet was switched off: not a refusal, it comes back when switched on (a
+        /// phone retries by itself; an older phone reads it as any other end and backs off).
+        package static let off = "off"
         package static let service = "service"
         package static let version = "version"
         package static let timeout = "timeout"

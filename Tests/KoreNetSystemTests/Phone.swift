@@ -103,7 +103,7 @@ final class Slot: @unchecked Sendable {
 
 /// The phone's `NodeMachine` (android/link node/NodeMachine.kt), line for line, on virtual time.
 struct NodeMachine: Equatable {
-    enum AwayWhy: String { case asleep, off, unreachable, waiting }
+    enum AwayWhy: String { case asleep, off, unreachable, waiting, netOff }
     enum State: Equatable {
         case idle, connecting, awaitingAllow, up
         case away(AwayWhy, at: Int64?, attempt: Int)
@@ -124,6 +124,8 @@ struct NodeMachine: Equatable {
     static let restartMS: [Int64] = [1_000, 2_000, 5_000]
     /// A box's machine: `unknown` there means its Mac's push is on its way.
     var box = false
+    /// The node last said its KoreNet went off: dials it refuses meanwhile are that.
+    private var netOff = false
 
     mutating func on(_ event: Event, now: Int64) {
         let s = state
@@ -134,8 +136,10 @@ struct NodeMachine: Equatable {
         case .connected:
             attempt = 0
             quick = nil
+            netOff = false
             state = .up
-        case .failed: if s == .connecting || s == .awaitingAllow { state = backoff(now, .unreachable) }
+        case .failed:
+            if s == .connecting || s == .awaitingAllow { state = netOff ? backoff(now, .netOff, cap: Self.waitingCapMS) : backoff(now, .unreachable) }
         case .ended(let reason): if !passive(s) { state = ended(reason, now) }
         case .peerOffline:
             switch s {
@@ -164,10 +168,13 @@ struct NodeMachine: Equatable {
     private func passive(_ s: State) -> Bool { s == .idle || s == .removed || s == .signedOut }
 
     private mutating func ended(_ reason: String?, _ now: Int64) -> State {
+        netOff = reason == "off"
         switch reason {
         case "revoked": return .removed
         case "unknown": return box ? backoff(now, .waiting, cap: Self.waitingCapMS) : .denied("unknown")
         case "refused", "proof": return .denied(reason!)
+        // The Mac's KoreNet switched off: back by itself once it's on (on screen, as here).
+        case "off": return backoff(now, .netOff, cap: Self.waitingCapMS)
         case "paused": return .away(.off, at: nil, attempt: 0)
         case "online": return connecting(reset: true)
         case "restart":
@@ -219,6 +226,7 @@ struct PhoneRow: Equatable, CustomStringConvertible {
             case .off: "● Offline"
             case .unreachable: "● Offline · retrying"
             case .waiting: "● Waiting for MacBook"
+            case .netOff: "● KoreNet is off"
             }
         case .denied: "● Not allowed"
         case .removed: "● Removed"

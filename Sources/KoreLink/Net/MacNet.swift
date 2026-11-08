@@ -535,9 +535,10 @@ package final class MacNet {
         host.hold(Self.busKey, false)
         close()
         closeAddWindow()
-        for phone in Array(phones.values) { phone.end(NetControl.Reason.refused) }
+        // Switched off, not refused: each phone retries by itself and is back once it's on.
+        for phone in Array(phones.values) { phone.end(NetControl.Reason.off) }
         for (_, entry) in held { asks.cancel(entry.ask) }
-        for connection in shaking.values { connection.end(NetControl.Reason.refused) }
+        for connection in shaking.values { connection.end(NetControl.Reason.off) }
         held = [:]
         shaking = [:]
         whoising = 0

@@ -14,11 +14,17 @@ import kotlin.random.Random
  *   card), Denied (refused), Removed (revoked). A box that doesn't hold this phone yet (`unknown`)
  *   is waiting for its Mac's push: Away(WAITING), tried again on the Mac's directory naming the box,
  *   and by backoff capped at [WAITING_CAP_MS] while the app is on screen (off screen: the directory only).
+ * - A Mac whose KoreNet was switched off (`bye off`) is Away(NET_OFF), not Denied: tried again the
+ *   same way (backoff capped at [WAITING_CAP_MS] on screen; off screen on the app opening or a network
+ *   change), its refused dials meanwhile kept as NET_OFF. `refused` (the owner's Deny) stays Denied.
  * - SignedOut: the phone's tailnet needs a sign-in; nothing dials until it's back.
  */
 class NodeMachine(private val random: Random = Random.Default, private val box: Boolean = false) {
-    /** WAITING: a box that doesn't hold this phone yet (its Mac's push is on its way). */
-    enum class AwayWhy { ASLEEP, OFF, UNREACHABLE, WAITING }
+    /**
+     * OFF: an owner Mac took this phone offline (`paused`). WAITING: a box that doesn't hold this
+     * phone yet (its Mac's push is on its way). NET_OFF: the Mac's KoreNet is switched off.
+     */
+    enum class AwayWhy { ASLEEP, OFF, UNREACHABLE, WAITING, NET_OFF }
 
     sealed class State {
         /** Not running: the app is off screen (and background mode off), or KoreNet is off. */
@@ -64,6 +70,8 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
     private var quick: Int? = null
     private var lastSeen: Long? = null
     private var onScreen = true
+    /** The node last said its KoreNet went off: dials it refuses meanwhile are that, not unreachable. */
+    private var netOff = false
 
     /** Applies [event] at [now] (ms); a [State.Connecting] means: dial now. */
     fun on(event: Event, now: Long): State {
@@ -75,10 +83,15 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
             Event.Connected -> {
                 attempt = 0
                 quick = null
+                netOff = false
                 lastSeen = now
                 State.Up
             }
-            Event.Failed -> if (s is State.Connecting || s is State.AwaitingAllow) backoff(now, AwayWhy.UNREACHABLE) else s
+            Event.Failed -> when {
+                s !is State.Connecting && s !is State.AwaitingAllow -> s
+                netOff -> slowly(now, AwayWhy.NET_OFF)
+                else -> backoff(now, AwayWhy.UNREACHABLE)
+            }
             is Event.Ended -> if (s.passive) s else ended(event.reason, now)
             Event.PeerOffline -> when (s) {
                 is State.Connecting, is State.Away -> State.Away(AwayWhy.ASLEEP, null, lastSeen)
@@ -98,7 +111,7 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
             Event.Tick -> if (s is State.Away && s.at != null && now >= s.at) connecting(reset = false) else s
             is Event.Screen -> {
                 onScreen = event.on
-                if (!event.on && s is State.Away && s.why == AwayWhy.WAITING) s.copy(at = null) else s
+                if (!event.on && s is State.Away && (s.why == AwayWhy.WAITING || s.why == AwayWhy.NET_OFF)) s.copy(at = null) else s
             }
         }
         return state
@@ -109,11 +122,18 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
 
     private val State.passive: Boolean get() = this is State.Idle || this is State.Removed || this is State.SignedOut
 
-    private fun ended(reason: String?, now: Long): State = when (reason) {
+    private fun ended(reason: String?, now: Long): State {
+        netOff = reason == "off"
+        return endedFor(reason, now)
+    }
+
+    private fun endedFor(reason: String?, now: Long): State = when (reason) {
         "revoked" -> State.Removed
         // A box that doesn't hold this phone yet: its Mac's push (or the directory naming it) is on its way.
         "unknown" -> if (box) waiting(now) else State.Denied(reason)
         "refused", "proof" -> State.Denied(reason)
+        // The Mac's KoreNet switched off: back by itself once it's on again.
+        "off" -> slowly(now, AwayWhy.NET_OFF)
         "paused" -> State.Away(AwayWhy.OFF, null, lastSeen)
         // A Mac brought this phone online again (its parked link ends so): dial straight back.
         "online" -> connecting(reset = true)
@@ -149,8 +169,10 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
     }
 
     /** On screen: tried again by backoff up to [WAITING_CAP_MS]; off screen only a trigger tries it. */
-    private fun waiting(now: Long): State =
-        if (onScreen) backoff(now, AwayWhy.WAITING, WAITING_CAP_MS) else State.Away(AwayWhy.WAITING, null, lastSeen, attempt)
+    private fun waiting(now: Long): State = slowly(now, AwayWhy.WAITING)
+
+    private fun slowly(now: Long, why: AwayWhy): State =
+        if (onScreen) backoff(now, why, WAITING_CAP_MS) else State.Away(why, null, lastSeen, attempt)
 
     private fun jitter(ms: Long): Long = (ms * (0.8 + 0.4 * random.nextDouble())).toLong()
 

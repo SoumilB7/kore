@@ -162,6 +162,7 @@ fun stateWords(s: State): Pair<String, Int> = when (s) {
         NodeMachine.AwayWhy.OFF -> "● Offline" to K.dim
         NodeMachine.AwayWhy.UNREACHABLE -> "● Offline · retrying" to K.warn
         NodeMachine.AwayWhy.WAITING -> "● Waiting for your Mac" to K.dim
+        NodeMachine.AwayWhy.NET_OFF -> "● KoreNet is off" to K.dim
     }
     is State.Denied -> "● Not allowed" to K.err
     State.Removed -> "● Removed" to K.err

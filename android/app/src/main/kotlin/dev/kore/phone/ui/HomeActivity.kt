@@ -113,6 +113,7 @@ class HomeActivity : Activity() {
             trouble != null -> trouble.fact
             up || (s == NodeMachine.State.Connecting && snap != null) -> "${chats.size} chats" + if (running > 0) " · $running running" else ""
             s is NodeMachine.State.Away && s.why == NodeMachine.AwayWhy.WAITING -> "waiting for ${kore.mesh.ownerName()}"
+            s is NodeMachine.State.Away && s.why == NodeMachine.AwayWhy.NET_OFF -> "KoreNet is off on ${n.name}"
             s is NodeMachine.State.Away -> lastSeenWords(n.lastSeen) ?: stateWords(s).first.removePrefix("● ").lowercase()
             else -> stateWords(s).first.removePrefix("● ").lowercase()
         }

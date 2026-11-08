@@ -100,6 +100,8 @@ sealed class NetControl {
             const val REPLACED = "replaced"
             const val PROOF = "proof"
             const val REFUSED = "refused"
+            /** The Mac's KoreNet was switched off: it comes back when switched on. */
+            const val OFF = "off"
             const val SERVICE = "service"
             const val VERSION = "version"
             const val TIMEOUT = "timeout"

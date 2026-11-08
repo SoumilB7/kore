@@ -91,6 +91,7 @@ class DeviceActivity : NodeActivity() {
                 dev.kore.link.node.NodeMachine.AwayWhy.OFF -> "$macName took this phone offline" to null
                 dev.kore.link.node.NodeMachine.AwayWhy.UNREACHABLE -> "$macName is offline · retrying" to ("Retry" to { node.reconnectNow() })
                 dev.kore.link.node.NodeMachine.AwayWhy.WAITING -> "Waiting for ${kore.mesh.ownerName()}" to ("Retry" to { node.reconnectNow() })
+                dev.kore.link.node.NodeMachine.AwayWhy.NET_OFF -> "KoreNet is off on $macName" to ("Retry" to { node.reconnectNow() })
             }
             dev.kore.link.node.NodeMachine.State.SignedOut -> "Signed out of Tailscale" to ("Sign in" to { startActivity(Intent(this, JoinActivity::class.java).putExtra("signIn", true)) })
             dev.kore.link.node.NodeMachine.State.Idle -> if (!kore.mesh.networkOn) "KoreNet is off on this phone" to ("Turn on" to { kore.mesh.networkOn = true }) else return null
