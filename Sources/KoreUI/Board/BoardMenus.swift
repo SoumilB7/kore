@@ -138,8 +138,13 @@ package enum BoardMenus {
 /// direction, move a boundary, step density, split, zoom, detach, and layout undo when the keys
 /// aren't in a text field.
 @MainActor
-enum BoardKeys {
+package enum BoardKeys {
+    /// For a storyline's failure line: the board key monitors installed now, and keys they had.
+    package static var storyMonitors = 0
+    package static var storyHandled = 0
+
     static func handle(_ event: NSEvent, workspace: Workspace, tab: ChatTab, model: BoardModel) -> Bool {
+        storyHandled += 1
         let flags = event.modifierFlags.intersection([.command, .shift, .option, .control])
         let typing = event.window?.firstResponder is NSTextView
         let arrows: [UInt16: DropEdge] = [123: .left, 124: .right, 125: .bottom, 126: .top]

@@ -208,6 +208,7 @@ struct BoardView: View {
     private func installKeys() {
         guard keys.value == nil else { return }
         let workspace = workspace, tab = tab, model = model
+        BoardKeys.storyMonitors += 1
         keys.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
             guard let window = workspace.window, event.window === window, workspace.activeTab === tab, !workspace.hasOverlay,
                 OptionsMenu.shared.items.isEmpty
@@ -217,7 +218,10 @@ struct BoardView: View {
     }
 
     private func removeKeys() {
-        if let monitor = keys.value { NSEvent.removeMonitor(monitor) }
+        if let monitor = keys.value {
+            NSEvent.removeMonitor(monitor)
+            BoardKeys.storyMonitors -= 1
+        }
         keys.value = nil
     }
 }
