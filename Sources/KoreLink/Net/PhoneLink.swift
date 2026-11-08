@@ -166,6 +166,12 @@ package final class PhoneLink {
         }
     }
 
+    /// A message of the Mac's own for the phone (its directory), if it's still here.
+    func tell(_ data: Data) {
+        guard !ended else { return }
+        client.sink.sendRaw(data)
+    }
+
     /// A result for the phone, if it's still here.
     func answer(_ result: LinkMessage.Result) {
         guard !ended else { return }

@@ -18,6 +18,7 @@ extension HostDaemon {
             return client.sendRaw(DevicesWire.encode(DevicesWire.Result(id: set.id, ok: false, rev: devices.rev, message: "Only an owner Mac sets this box's devices.")))
         }
         let before = devices.all()
+        let waiting = devices.pending()
         do {
             let next = set.merge == true ? try devices.merge(records: set.records, from: peer) : try devices.set(rev: set.rev, records: set.records, from: peer)
             let ids = Set(next.devices.map(\.id))
@@ -29,6 +30,8 @@ extension HostDaemon {
             }
             client.sendRaw(DevicesWire.encode(DevicesWire.Result(id: set.id, ok: true, rev: next.rev)))
             endRevoked()
+            // A device waiting here that the set allowed leaves the list: the owner Macs hear.
+            if devices.pending() != waiting { pushPending() }
         } catch {
             client.sendRaw(DevicesWire.encode(DevicesWire.Result(id: set.id, ok: false, rev: devices.rev, message: "\(error)")))
         }

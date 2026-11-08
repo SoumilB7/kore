@@ -11,11 +11,14 @@ import kotlin.random.Random
  * - Away: the node said it sleeps or quits, or the tailnet says it's offline: wait for it to come
  *   back online (or the cap), never a tight loop.
  * - The node's answer to who this phone is: AwaitingAllow (first contact, the owner reads the Mac's
- *   card), Denied (refused, or a box that doesn't hold this phone yet), Removed (revoked).
+ *   card), Denied (refused), Removed (revoked). A box that doesn't hold this phone yet (`unknown`)
+ *   is waiting for its Mac's push: Away(WAITING), tried again on the Mac's directory naming the box,
+ *   and by backoff capped at [WAITING_CAP_MS] while the app is on screen (off screen: the directory only).
  * - SignedOut: the phone's tailnet needs a sign-in; nothing dials until it's back.
  */
-class NodeMachine(private val random: Random = Random.Default) {
-    enum class AwayWhy { ASLEEP, OFF, UNREACHABLE }
+class NodeMachine(private val random: Random = Random.Default, private val box: Boolean = false) {
+    /** WAITING: a box that doesn't hold this phone yet (its Mac's push is on its way). */
+    enum class AwayWhy { ASLEEP, OFF, UNREACHABLE, WAITING }
 
     sealed class State {
         /** Not running: the app is off screen (and background mode off), or KoreNet is off. */
@@ -50,12 +53,15 @@ class NodeMachine(private val random: Random = Random.Default) {
         /** A Join's welcome from this node: it allows this phone (again, after a revoke or a no). */
         data object Allowed : Event()
         data object Tick : Event()
+        /** The app came on screen or went off it: a waiting box keeps its backoff only on screen. */
+        data class Screen(val on: Boolean) : Event()
     }
 
     var state: State = State.Idle
         private set
     private var attempt = 0
     private var lastSeen: Long? = null
+    private var onScreen = true
 
     /** Applies [event] at [now] (ms); a [State.Connecting] means: dial now. */
     fun on(event: Event, now: Long): State {
@@ -87,6 +93,10 @@ class NodeMachine(private val random: Random = Random.Default) {
                 else -> s
             }
             Event.Tick -> if (s is State.Away && s.at != null && now >= s.at) connecting(reset = false) else s
+            is Event.Screen -> {
+                onScreen = event.on
+                if (!event.on && s is State.Away && s.why == AwayWhy.WAITING) s.copy(at = null) else s
+            }
         }
         return state
     }
@@ -98,7 +108,9 @@ class NodeMachine(private val random: Random = Random.Default) {
 
     private fun ended(reason: String?, now: Long): State = when (reason) {
         "revoked" -> State.Removed
-        "unknown", "refused", "proof" -> State.Denied(reason)
+        // A box that doesn't hold this phone yet: its Mac's push (or the directory naming it) is on its way.
+        "unknown" -> if (box) waiting(now) else State.Denied(reason)
+        "refused", "proof" -> State.Denied(reason)
         "paused" -> State.Away(AwayWhy.OFF, null, lastSeen)
         "quit", "sleep" -> State.Away(AwayWhy.ASLEEP, now + jitter(CAP_MS), lastSeen)
         // This side gave up on a dead socket (a probe got nothing): dial again at once.
@@ -111,15 +123,21 @@ class NodeMachine(private val random: Random = Random.Default) {
         return State.Connecting
     }
 
-    private fun backoff(now: Long, why: AwayWhy): State {
-        val base = minOf(CAP_MS.toDouble(), 1000.0 * (1L shl minOf(attempt, 16)))
+    private fun backoff(now: Long, why: AwayWhy, cap: Long = CAP_MS): State {
+        val base = minOf(cap.toDouble(), 1000.0 * (1L shl minOf(attempt, 16)))
         attempt += 1
         return State.Away(why, now + jitter(base.toLong()), lastSeen, attempt)
     }
+
+    /** On screen: tried again by backoff up to [WAITING_CAP_MS]; off screen only a trigger tries it. */
+    private fun waiting(now: Long): State =
+        if (onScreen) backoff(now, AwayWhy.WAITING, WAITING_CAP_MS) else State.Away(AwayWhy.WAITING, null, lastSeen, attempt)
 
     private fun jitter(ms: Long): Long = (ms * (0.8 + 0.4 * random.nextDouble())).toLong()
 
     companion object {
         const val CAP_MS = 300_000L
+        /** A box waiting for its Mac's push is tried at least this often while on screen. */
+        const val WAITING_CAP_MS = 60_000L
     }
 }

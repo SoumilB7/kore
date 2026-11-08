@@ -46,6 +46,8 @@ package struct NetPeer: Equatable, Sendable {
     package var resumed: Bool
     /// The ticket for the next session's resume (client side: keep it; server side: the one issued).
     package var ticket: Data
+    /// Client side: the server's device book rev, as its welcome said (an owner Mac's catch-up).
+    package var devicesRev: Int? = nil
 }
 
 package enum NetSessionError: Error, Equatable {
@@ -512,7 +514,10 @@ package final class NetSession {
         deadline = nil
         bindingDigest = binding.digest
         directory = welcome.directory
-        state = .established(NetPeer(record: record, abilities: welcome.abilities, service: client.service, resumed: welcome.resumed, ticket: welcome.ticket))
+        state = .established(
+            NetPeer(
+                record: record, abilities: welcome.abilities, service: client.service, resumed: welcome.resumed, ticket: welcome.ticket,
+                devicesRev: welcome.devicesRev))
         if let cursors = client.resume?.cursors, !cursors.isEmpty { control(.resume(cursors)) }
     }
 

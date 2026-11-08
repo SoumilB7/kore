@@ -281,7 +281,9 @@ extension DevicesPicture {
         // Waiting: deduped by node key, cooled ones gone, newest first, at most 8.
         var seen = Set<String>()
         var waiting: [PendingRow] = []
-        for box in boxes where box.online {
+        // Every box's: an offline one's as it last said (kept on its entry), so a device waiting
+        // there can be allowed with no window open.
+        for box in boxes {
             for device in box.pending where now.timeIntervalSince(device.lastSeen) < coolDown && seen.insert(device.nodeKey).inserted {
                 waiting.append(PendingRow(device: device, box: box.key, at: box.name))
             }

@@ -110,6 +110,7 @@ class HomeActivity : Activity() {
         val running = chats.count { it.str("state") == "working" }
         val fact = when {
             up || (s == NodeMachine.State.Connecting && snap != null) -> "${chats.size} chats" + if (running > 0) " · $running running" else ""
+            s is NodeMachine.State.Away && s.why == NodeMachine.AwayWhy.WAITING -> "waiting for ${kore.mesh.ownerName()}"
             s is NodeMachine.State.Away -> lastSeenWords(n.lastSeen) ?: stateWords(s).first.removePrefix("● ").lowercase()
             else -> stateWords(s).first.removePrefix("● ").lowercase()
         }

@@ -165,6 +165,11 @@ package final class KoreNetSwitch: NetRouter {
     @ObservationIgnored package var busHeld: Bool { bus != nil }
     /// Finished upgrades and choices (tests wait on them).
     @ObservationIgnored package var settled: (@MainActor (String) -> Void)?
+    /// What phones are told of the boxes changed (a box enrolled, gained a tailnet node key, was
+    /// renamed, taken offline or removed): the phones' listener sends them the directory.
+    @ObservationIgnored package var directoryChanged: (@MainActor () -> Void)?
+    /// The Mac woke or its network changed: the phones' listener looks again.
+    @ObservationIgnored package var phonesLook: (@MainActor () -> Void)?
 
     /// The links it routes (Kore: every held one; a test: its own).
     @ObservationIgnored private let connections: @MainActor () -> [HostConnection]
@@ -371,6 +376,31 @@ package final class KoreNetSwitch: NetRouter {
     /// The Mac's own book of the devices it dials (box records pinned over SSH).
     package func book(_ env: NetEnvironment) -> DeviceBook { DeviceBook(url: env.support.appendingPathComponent("net/devices.json")) }
 
+    /// This Mac's book now (on or off).
+    package var book: DeviceBook {
+        if let env { return book(env) }
+        return DeviceBook(url: NodeMigration.standardRoot().appendingPathComponent("net/devices.json"))
+    }
+
+    /// A box changed in Devices: renamed (`name`), taken offline or brought online (`paused`), or
+    /// removed. Its record in this Mac's book follows, and the phones hear the directory.
+    package func boxChanged(_ key: String, name: String? = nil, paused: Bool? = nil, removed: Bool = false) {
+        guard let entry = directory.entry(forKey: key) else { return }
+        var changed = false
+        _ = try? book.update { devices in
+            guard let i = devices.firstIndex(where: { $0.id == entry.device && $0.kind == .box }) else { return }
+            let before = devices[i]
+            if removed {
+                devices.remove(at: i)
+            } else {
+                if let name, !name.isEmpty { devices[i].name = String(name.prefix(64)) }
+                if let paused { devices[i].paused = paused ? true : nil }
+            }
+            changed = removed || devices[i] != before
+        }
+        if changed { directoryChanged?() }
+    }
+
     package func transport(for connection: HostConnection) -> (any HostTransport)? {
         guard state.reaches, let tailnet, let env, let entry = directory.entry(forKey: connection.alias), entry.enrolled, let nodeKey = entry.nodeKey
         else { return nil }
@@ -395,9 +425,11 @@ package final class KoreNetSwitch: NetRouter {
                 setup.ownUser = me.owner
                 return NetTransport.Opened(fd: fd, setup: setup)
             },
-            established: { [weak self, weak connection] _, _ in
+            established: { [weak self, weak connection] _, append in
                 Task { @MainActor in
                     guard let self, let connection else { return }
+                    // Its first tailnet node key (or a new one): phones may dial it now.
+                    if case .appended? = append { self.directoryChanged?() }
                     await self.welcomed(connection, id: entry.id)
                 }
             })
@@ -493,6 +525,7 @@ package final class KoreNetSwitch: NetRouter {
         HostLog.note(key, "korenet enroll", "\(outcome)")
         if outcome == .enrolled || outcome == .already {
             directory.update { $0[device.uuidString.lowercased()]?.enrolled = true }
+            directoryChanged?()
             if outcome == .enrolled { connection.ownRouteCameUp() }
             if directory.all[device.uuidString.lowercased()]?.nodeKey != nil {
                 connection.preferNet()

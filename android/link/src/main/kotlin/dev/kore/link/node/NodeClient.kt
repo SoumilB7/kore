@@ -93,7 +93,7 @@ class NodeClient(
     val device: StateFlow<Device> = deviceFlow.asStateFlow()
     val id: UUID get() = deviceFlow.value.id
 
-    private val machine = NodeMachine(machineRandom)
+    private val machine = NodeMachine(machineRandom, box = initial.kind == dev.kore.link.trust.NodeKind.BOX)
     private val stateFlow = MutableStateFlow<NodeMachine.State>(machine.state)
     val state: StateFlow<NodeMachine.State> = stateFlow.asStateFlow()
 
@@ -160,6 +160,15 @@ class NodeClient(
      */
     fun allowed(record: Device) {
         events.trySend(Internal.Allowed(record))
+    }
+
+    /**
+     * The Mac's directory named this node: one that turned this phone away (a box waiting for the
+     * Mac's push) or is out of reach dials again now.
+     */
+    fun named() {
+        val s = stateFlow.value
+        if (s is NodeMachine.State.Away || s is NodeMachine.State.Denied) post(NodeMachine.Event.Trigger)
     }
 
     /** Stops dialing and ends the link (the app went off screen with background mode off). */
@@ -304,6 +313,7 @@ class NodeClient(
 
     /** The app on screen or not, and the chat it shows: off screen a node sends attention only. */
     fun setPresence(onScreen: Boolean, chat: String? = null) {
+        post(NodeMachine.Event.Screen(onScreen))
         this.onScreen = onScreen
         visibleChat = if (onScreen) chat else null
         session?.send(Control.presence(onScreen, visibleChat).bytes())
@@ -541,7 +551,8 @@ class NodeClient(
                 attentionFlow.tryEmit(message)
             }
             "result" -> resultFlow.tryEmit(message)
-            // An owner Mac's directory: the boxes it knows (only a Mac's is taken).
+            // An owner Mac's directory: the boxes it knows (only a Mac's is taken). A box it names that
+            // turned this phone away, or is out of reach, is tried again at once ([onDirectory]'s).
             "devices.set" -> if (deviceFlow.value.kind == dev.kore.link.trust.NodeKind.MAC) {
                 (message["records"] as? JsonArray)?.mapNotNull { (it as? JsonObject)?.let(Device::fromJson) }?.let(onDirectory)
             }

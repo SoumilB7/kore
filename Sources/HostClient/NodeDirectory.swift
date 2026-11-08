@@ -27,6 +27,12 @@ package final class NodeDirectory: Sendable {
         package var lastNodeKey: String?
         /// It said another identity key under the same id: refused until it's forgotten.
         package var identityChanged = false
+        /// What this Mac last pushed there and the box took (`devices.set{merge}`): a box link that
+        /// comes up is caught up only when something changed since.
+        package var pushed: Pushed?
+        /// The devices waiting there for an Allow, as the box last said (`devices.pending`): the
+        /// Waiting list with no window open.
+        package var pending: [PendingDevice]?
 
         package init(
             device: UUID, name: String, ssh: String?, nodeKey: String?, identityKey: Data, enrolled: Bool = false, rekeyed: Bool = false, on: Bool? = nil
@@ -55,6 +61,8 @@ package final class NodeDirectory: Sendable {
             on = try c.decodeIfPresent(Bool.self, forKey: .on) ?? (nodeKey != nil)
             lastNodeKey = try c.decodeIfPresent(String.self, forKey: .lastNodeKey) ?? nodeKey
             identityChanged = try c.decodeIfPresent(Bool.self, forKey: .identityChanged) ?? false
+            pushed = try c.decodeIfPresent(Pushed.self, forKey: .pushed)
+            pending = try c.decodeIfPresent([PendingDevice].self, forKey: .pending)
         }
 
         package var id: NodeID { NodeID(device.uuidString.lowercased()) }
@@ -86,6 +94,20 @@ package final class NodeDirectory: Sendable {
             return Heard(entry: entry, refused: true)
         }
         return Heard(entry: before.hearing(node))
+    }
+
+    /// A push the box took: which Mac identity sent it, the Mac book's rev it carried, and the
+    /// box book's rev after it.
+    package struct Pushed: Codable, Equatable, Sendable {
+        package var by: UUID
+        package var bookRev: Int
+        package var boxRev: Int
+
+        package init(by: UUID, bookRev: Int, boxRev: Int) {
+            self.by = by
+            self.bookRev = bookRev
+            self.boxRev = boxRev
+        }
     }
 
     package static let defaultsKey = "koreNodes"
@@ -190,6 +212,19 @@ package final class NodeDirectory: Sendable {
             held = given
             defaults.set(given, forKey: Self.namesKey)
         }
+    }
+
+    /// Keeps the box's pending list on its entry (a box without one keeps nothing).
+    package func keepPending(_ list: [PendingDevice], forKey key: String) {
+        guard let entry = entry(forKey: key), (entry.pending ?? []) != list else { return }
+        update { $0[entry.id.raw]?.pending = list.isEmpty ? nil : list }
+    }
+
+    /// Notes what the box took of this Mac's push.
+    package func notePushed(_ pushed: Pushed?, device: UUID) {
+        let key = device.uuidString.lowercased()
+        guard let entry = all[key], entry.pushed != pushed else { return }
+        update { $0[key]?.pushed = pushed }
     }
 
     /// Forgets a box's KoreNet entry (Devices ⋯ Remove).

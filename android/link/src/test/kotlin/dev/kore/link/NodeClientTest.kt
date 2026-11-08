@@ -34,12 +34,12 @@ class NodeClientTest {
     private fun JsonObject.cmd() = this["cmd"] as JsonObject
 
     /** A node client whose dials are answered, in order, by [plan] (a link, or a failure). */
-    private class Rig(scope: TestScope, plan: List<() -> Any>, signer: RaiseSigner? = null) {
+    private class Rig(scope: TestScope, plan: List<() -> Any>, signer: RaiseSigner? = null, device: dev.kore.link.trust.Device = mac()) {
         val clock = { scope.testScheduler.currentTime }
         val links = mutableListOf<FakeLink>()
         val dials = mutableListOf<Long>()
         private val queue = ArrayDeque(plan)
-        val client = NodeClient(mac(), scope.backgroundScope, NodeDialer { device, _, enrolling ->
+        val client = NodeClient(device, scope.backgroundScope, NodeDialer { device, _, enrolling ->
             dials += clock()
             when (val next = (queue.removeFirstOrNull() ?: { NetFailure("timeout") })()) {
                 is FakeLink -> next.also { links += it }
@@ -54,6 +54,30 @@ class NodeClientTest {
     }
 
     private fun TestScope.link() = FakeLink(mac(), { testScheduler.currentTime })
+
+    @Test fun theMacsDirectoryNamingAWaitingBoxDialsItAtOnce() = runTest {
+        val link = FakeLink(box(), { testScheduler.currentTime })
+        val rig = Rig(this, listOf({ NetFailure("bye unknown") }, { link }), device = box())
+        rig.client.start()
+        runCurrent()
+        assertEquals(NodeMachine.AwayWhy.WAITING, (rig.client.state.value as State.Away).why)
+        advanceTimeBy(100)
+        rig.client.named()
+        runCurrent()
+        assertEquals(State.Up, rig.client.state.value)
+        assertEquals(listOf(0L, 100L), rig.dials)
+    }
+
+    @Test fun aNamedNodeThatIsUpIsLeftAlone() = runTest {
+        val link = link()
+        val rig = Rig(this, listOf({ link }))
+        rig.client.start()
+        runCurrent()
+        rig.client.named()
+        runCurrent()
+        assertEquals(State.Up, rig.client.state.value)
+        assertEquals(1, rig.dials.size)
+    }
 
     @Test fun startDialsAndRoutesTheSnapshotAndDeltas() = runTest {
         val link = link()

@@ -271,8 +271,7 @@ package struct DeviceStore: Sendable {
         }
         guard capped.contains(where: { $0.kind == .mac && $0.owner }) else { throw TrustError.refused("a set without an owner Mac") }
         let next = try book.apply(rev: rev, devices: capped, from: peer)
-        let ids = Set(next.devices.map(\.id))
-        _ = try? lockedPending { list in list.removeAll { $0.device.map(ids.contains) ?? false } }
+        dropAllowed(next.devices)
         return next
     }
 
@@ -284,9 +283,15 @@ package struct DeviceStore: Sendable {
             return record
         }
         let next = try book.applyIssued(capped, from: peer)
-        let ids = Set(next.devices.map(\.id))
-        _ = try? lockedPending { list in list.removeAll { $0.device.map(ids.contains) ?? false } }
+        dropAllowed(next.devices)
         return next
+    }
+
+    /// Pending entries the book now holds (by device id, or by a node key a record has) leave the list.
+    private func dropAllowed(_ records: [DeviceRecord]) {
+        let ids = Set(records.map(\.id))
+        let keys = Set(records.flatMap(\.nodeKeys))
+        _ = try? lockedPending { list in list.removeAll { ($0.device.map(ids.contains) ?? false) || keys.contains($0.nodeKey) } }
     }
 
     private func lockedPending<T>(_ body: (inout [PendingDevice]) throws -> T) throws -> T {

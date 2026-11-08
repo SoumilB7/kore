@@ -65,6 +65,9 @@ class FakeLink(
     fun types(): List<String> = sent.map { (it["t"] as kotlinx.serialization.json.JsonPrimitive).content }
 }
 
+fun box(id: UUID = UUID.fromString("0E4C2A91-5B7D-4F3E-9A61-2D8C7B5E1F04")) =
+    Device(id, "mybox", NodeKind.BOX, ByteArray(91) { 2 }, listOf("nodekey:box"), "mybox.tail.ts.net.")
+
 fun mac(id: UUID = UUID.fromString("B3D9E1F0-7A2C-4E6B-8D41-5C0F9A3E2B02")) =
     Device(id, "MacBook", NodeKind.MAC, ByteArray(91) { 1 }, listOf("nodekey:mac"), "macbook.tail.ts.net.")
 

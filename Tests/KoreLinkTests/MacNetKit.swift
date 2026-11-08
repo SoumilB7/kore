@@ -1,4 +1,5 @@
 import Foundation
+import HostClient
 import KoreNet
 import KoreTrust
 @testable import LinkProtocol
@@ -52,11 +53,20 @@ final class StubMacHost: MacNetHost {
     let macName = "MacBook"
     nonisolated let device = UUID()
     nonisolated let key = SoftwareIdentity()
+    let suite = "macnet-\(UUID().uuidString)"
+    let directory: NodeDirectory
+    /// The IPN bus holds asked for, by key.
+    var holds: [String: Bool] = [:]
 
     init(folder: URL, tailnet: (any Tailnet)?) {
         book = DeviceBook(url: folder.appendingPathComponent("devices.json"))
         self.tailnet = tailnet
+        directory = NodeDirectory(defaults: UserDefaults(suiteName: suite)!)
     }
+
+    func hold(_ key: String, _ held: Bool) { holds[key] = held }
+
+    func finish() { UserDefaults.standard.removePersistentDomain(forName: suite) }
 
     func identityReader() -> (@Sendable () throws -> (device: UUID, signer: any IdentitySigner))? {
         let (device, key) = (device, key)
@@ -145,6 +155,7 @@ final class MacRig {
 
     func finish() {
         net.stop()
+        host.finish()
         NetAudit.watch = nil
         try? FileManager.default.removeItem(at: folder)
     }

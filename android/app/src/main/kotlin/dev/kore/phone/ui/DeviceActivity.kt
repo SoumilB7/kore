@@ -84,6 +84,7 @@ class DeviceActivity : NodeActivity() {
                 dev.kore.link.node.NodeMachine.AwayWhy.ASLEEP -> listOfNotNull("$macName is asleep", lastSeenWords(node.lastSeen)).joinToString(" · ") to null
                 dev.kore.link.node.NodeMachine.AwayWhy.OFF -> "$macName took this phone offline" to null
                 dev.kore.link.node.NodeMachine.AwayWhy.UNREACHABLE -> "$macName is offline · retrying" to ("Retry" to { node.reconnectNow() })
+                dev.kore.link.node.NodeMachine.AwayWhy.WAITING -> "Waiting for ${kore.mesh.ownerName()}" to ("Retry" to { node.reconnectNow() })
             }
             is dev.kore.link.node.NodeMachine.State.Denied -> "$macName hasn't allowed this phone" to ("Try again" to { node.reconnectNow() })
             dev.kore.link.node.NodeMachine.State.Removed -> "$macName removed this phone" to ("Forget" to { kore.mesh.forget(node.id); finish() })

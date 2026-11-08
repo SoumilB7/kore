@@ -12,10 +12,41 @@ import org.junit.Test
 
 class NodeMachineTest {
     /** No jitter: nextDouble() is 0.5, so a delay is exactly its base. */
-    private fun machine() = NodeMachine(object : Random() {
+    private fun machine(box: Boolean = false) = NodeMachine(object : Random() {
         override fun nextBits(bitCount: Int) = 0
         override fun nextDouble() = 0.5
-    })
+    }, box = box)
+
+    @Test fun aBoxThatDoesntHoldThePhoneYetWaitsAndTriesAgainUpToAMinute() {
+        val m = machine(box = true)
+        m.on(Event.Start, 0)
+        val delays = (1..9).map {
+            val s = m.on(Event.Ended("unknown"), 0) as State.Away
+            assertEquals(AwayWhy.WAITING, s.why)
+            m.on(Event.Tick, s.at!!)
+            s.at
+        }
+        assertEquals(listOf(1_000L, 2_000, 4_000, 8_000, 16_000, 32_000, 60_000, 60_000, 60_000), delays)
+    }
+
+    @Test fun offScreenAWaitingBoxWaitsForATriggerOnly() {
+        val m = machine(box = true)
+        m.on(Event.Start, 0)
+        assertEquals(1_000L, (m.on(Event.Ended("unknown"), 0) as State.Away).at)
+        assertNull((m.on(Event.Screen(false), 1) as State.Away).at)
+        assertNull(m.wakeAt)
+        assertEquals(State.Connecting, m.on(Event.Trigger, 2))
+        assertNull((m.on(Event.Ended("unknown"), 3) as State.Away).at)
+        m.on(Event.Screen(true), 4)
+        assertEquals(State.Connecting, m.on(Event.Trigger, 5))
+        assertEquals(1_005L, (m.on(Event.Ended("unknown"), 5) as State.Away).at)
+    }
+
+    @Test fun aBoxStillDeniesRefusedAndAMacStillDeniesUnknown() {
+        fun after(box: Boolean, reason: String): State = machine(box).apply { on(Event.Start, 0) }.on(Event.Ended(reason), 0)
+        assertEquals(State.Denied("refused"), after(true, "refused"))
+        assertEquals(State.Denied("unknown"), after(false, "unknown"))
+    }
 
     @Test fun startDialsAndConnectedIsUp() {
         val m = machine()

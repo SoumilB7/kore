@@ -17,11 +17,33 @@ package protocol MacNetHost: AnyObject, Sendable {
     var tailnet: (any Tailnet)? { get }
     /// This Mac's device book: the boxes it dials, the phones it allowed.
     var book: DeviceBook { get }
+    /// The boxes this Mac knows on KoreNet: what each last took of this Mac's pushes, and the
+    /// devices waiting there.
+    var directory: NodeDirectory { get }
     /// This Mac's name, for a phone's directory.
     var macName: String { get }
     /// How to read this Mac's identity (made on first use) while KoreNet is on. The reader may
     /// block on the Keychain: it's called off the main actor.
     func identityReader() -> (@Sendable () throws -> (device: UUID, signer: any IdentitySigner))?
+    /// Holds the tailnet's IPN bus (`key` held) or lets it go: held while a phone is allowed or
+    /// the Add device window is open, so Tailscale coming back rebinds the port with no window.
+    func hold(_ key: String, _ held: Bool)
+}
+
+/// A box link as an owner Mac's push sees it (Kore: a `HostConnection`; tests: fakes).
+@MainActor
+package protocol BoxDevicesLink: AnyObject {
+    /// The box as the link's KoreNet session proved it (its record, its book's rev); nil on a
+    /// plain SSH grant link, which the box never takes a `devices.set` from.
+    var boxPeer: NetPeer? { get }
+    /// Up, and the box says it takes a merging `devices.set`.
+    var takesMerge: Bool { get }
+    func post(_ payload: Data) -> Bool
+}
+
+extension HostConnection: BoxDevicesLink {
+    package var boxPeer: NetPeer? { netPeer }
+    package var takesMerge: Bool { isOnline && caps.contains(DevicesWire.mergeCap) }
 }
 
 /// Audit lines (phase 18 §1 "Audit"): `audit <event>` in hosts.log, ids and kinds only, never content.
@@ -117,9 +139,20 @@ package final class MacNet {
     /// Node keys first seen, for the card's line.
     private var firstSeen: [String: Date] = [:]
 
-    /// Pushes the phones this Mac issued to the boxes it reaches (Kore: every held box link that
-    /// takes a merging `devices.set`).
-    package var pushDevices: @MainActor ([DeviceRecord]) -> Void = { records in MacNet.pushToBoxes(records) }
+    /// Tests: takes the phones this Mac issued instead of the box links (Kore: nil, every box
+    /// link that takes a merging `devices.set` hears).
+    package var pushDevices: (@MainActor ([DeviceRecord]) -> Void)?
+    /// The box links held now (tests: fakes).
+    package var boxLinks: @MainActor () -> [any BoxDevicesLink] = { HostConnection.held }
+    /// Pushes sent and not answered yet, by the set's id.
+    private var sent: [String: Sent] = [:]
+
+    private struct Sent {
+        var box: UUID
+        var pushed: NodeDirectory.Pushed
+        /// The box book's rev before it (its welcome's, or the last push's answer).
+        var before: Int?
+    }
     /// Runs `work` after `seconds` (tests: a hand clock); the closure it gives back cancels.
     package var schedule: @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> () -> Void = { seconds, work in
         let item = DispatchWorkItem { MainActor.assumeIsolated { work() } }
@@ -205,6 +238,7 @@ package final class MacNet {
     package func refresh() {
         generation += 1
         let mine = generation
+        host.hold(Self.busKey, !allowedPhones().isEmpty || addOpen)
         guard let tailnet = host.tailnet, Self.listens(on: true, running: true, phones: allowedPhones().count, addOpen: addOpen) else {
             return close()
         }
@@ -251,6 +285,8 @@ package final class MacNet {
             for socket in made ?? [] { Sockets.closeFD(socket.fd) }
             return
         }
+        let knew = device != nil
+        defer { if !knew, device != nil { catchUpBoxes() } }
         shared.withLock {
             $0.selfNode = status?.selfNode
             $0.ownUser = status?.selfNode?.owner
@@ -322,6 +358,7 @@ package final class MacNet {
     /// KoreNet went off: the port, every phone and every handshake go.
     package func stop() {
         generation += 1
+        host.hold(Self.busKey, false)
         close()
         closeAddWindow()
         for phone in Array(phones.values) { phone.end(NetControl.Reason.refused) }
@@ -571,10 +608,11 @@ package final class MacNet {
 
     /// The phones changed: the boxes hear (merging, only what this Mac issued), the port follows.
     package func phonesChanged() {
-        let state = shared.withLock { $0 }
-        // Every record this Mac issued (its phones, and devices it allowed at a box).
-        let mine = ((try? host.book.read().devices) ?? []).filter { $0.kind != .mac && $0.issuedBy == state.identity?.device }
-        pushDevices(mine)
+        if let pushDevices {
+            pushDevices(issued()?.records ?? [])
+        } else {
+            catchUpBoxes()
+        }
         refresh()
         Devices.shared.changed()
     }
@@ -655,12 +693,70 @@ package final class MacNet {
 
     // MARK: Boxes
 
-    /// The phones this Mac issued, to every box link that takes a merging `devices.set`.
-    package static func pushToBoxes(_ records: [DeviceRecord]) {
-        for connection in HostConnection.held where connection.caps.contains(DevicesWire.mergeCap) {
-            let set = DevicesWire.Set(id: UUID().uuidString, rev: 0, records: records, merge: true)
-            _ = connection.post(DevicesWire.encode(set))
+    /// The IPN bus hold the phones keep.
+    nonisolated static let busKey = "phones"
+
+    /// Every record this Mac issued (its phones, paused ones too, and devices it allowed at a
+    /// box), and its book's rev; nil before the identity is read.
+    func issued() -> (records: [DeviceRecord], rev: Int, by: UUID)? {
+        guard let me = device, let book = try? host.book.read() else { return nil }
+        return (book.devices.filter { $0.kind != .mac && $0.issuedBy == me }, book.rev, me)
+    }
+
+    /// Whether a box owes a push: nothing it took is known, or it was another identity's, or this
+    /// Mac's book moved on since, or the box's book is behind what it took (a lost or restored
+    /// book). A box whose book moved on by itself (its own allow, another Mac's push) is left be.
+    nonisolated static func owes(_ last: NodeDirectory.Pushed?, by: UUID, bookRev: Int, boxRev: Int?) -> Bool {
+        guard let last, last.by == by, last.bookRev == bookRev, let boxRev else { return true }
+        return boxRev < last.boxRev
+    }
+
+    /// Every box link up now hears what it owes.
+    package func catchUpBoxes() {
+        for link in boxLinks() { catchUp(link) }
+    }
+
+    /// A box link came up (any route): it gets the records this Mac issued when it owes them
+    /// (`owes`), at most once per link-up. Nothing polls: the next link-up looks again.
+    package func catchUp(_ link: any BoxDevicesLink) {
+        guard link.takesMerge, let peer = link.boxPeer, let (records, rev, me) = issued() else { return }
+        let box = peer.record.id
+        let last = host.directory.all[box.uuidString.lowercased()]?.pushed
+        // A push to this box already on its way carries this rev: nothing more.
+        if sent.values.contains(where: { $0.box == box && $0.pushed.by == me && $0.pushed.bookRev == rev }) { return }
+        guard Self.owes(last, by: me, bookRev: rev, boxRev: peer.devicesRev) else { return }
+        let set = DevicesWire.Set(id: UUID().uuidString, rev: 0, records: records, merge: true)
+        guard link.post(DevicesWire.encode(set)) else { return }
+        if sent.count >= 64 { sent = [:] }
+        sent[set.id] = Sent(box: box, pushed: .init(by: me, bookRev: rev, boxRev: peer.devicesRev ?? 0), before: peer.devicesRev)
+        NetAudit.line("push", ["box": box.uuidString.lowercased(), "records": "\(records.count)", "rev": "\(rev)"])
+    }
+
+    /// The box answered a push: what it took is noted (a refusal notes nothing, so the next
+    /// link-up pushes again). When its book changed, phones hear the directory: one waiting at
+    /// that box dials again at once.
+    package func took(_ result: DevicesWire.Result) {
+        guard let entry = sent.removeValue(forKey: result.id) else { return }
+        guard result.ok else {
+            HostLog.note("korenet", "push refused", result.message)
+            host.directory.notePushed(nil, device: entry.box)
+            return
         }
+        var pushed = entry.pushed
+        pushed.boxRev = result.rev
+        host.directory.notePushed(pushed, device: entry.box)
+        if result.rev != entry.before { pushDirectory() }
+    }
+
+    /// This Mac's directory (itself, its boxes on the tailnet) to every phone linked now, as a
+    /// `devices.set` a phone takes from a Mac: a box that joined, gained a node key, was renamed,
+    /// taken offline or removed, or now holds the phones, reaches them at once.
+    package func pushDirectory() {
+        let live = phones.values.filter { !$0.ended }
+        guard !live.isEmpty, let records = Self.directory(state: shared.withLock { $0 }, book: host.book) else { return }
+        let set = DevicesWire.Set(id: UUID().uuidString, rev: (try? host.book.read().rev) ?? 0, records: records)
+        let data = DevicesWire.encode(set)
+        for phone in live { phone.tell(data) }
     }
 
     /// A self-given name as a card shows it: printable, one line, at most 64 characters.

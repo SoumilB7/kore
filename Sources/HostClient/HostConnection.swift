@@ -1,5 +1,6 @@
 import Foundation
 import KoreCore
+import KoreNet
 import KoreTrust
 import LinkProtocol
 import Observation
@@ -340,6 +341,16 @@ package final class HostConnection {
     package var name: String { NodeNames.name(alias) }
 
     package var isOnline: Bool { phase == .online && ready }
+
+    /// The box as this link's KoreNet session proved it (tailnet, or SSH `attach --proto 2`): its
+    /// record and its book's rev; nil on a plain SSH grant link or while down.
+    package var netPeer: NetPeer? { (transport as? NetTransport)?.peer }
+
+    /// A link that takes a merging `devices.set` is ready (every route, every time): an owner Mac
+    /// catches the box up on what it issued (KoreLink's `MacNet`).
+    package static var devicesCatchUp: (@MainActor (HostConnection) -> Void)?
+    /// A box answered a `devices.set` on this link.
+    package static var devicesResult: (@MainActor (HostConnection, DevicesWire.Result) -> Void)?
 
     /// Dials again now (a refused link, after the user fixed the grant).
     package func retry() {
@@ -862,7 +873,13 @@ package final class HostConnection {
                 if wantsNet { preferNet() }
             }
         case .unknown(let type) where type == DevicesWire.pending:
-            if let list = DevicesWire.decode(DevicesWire.Pending.self, raw), list.pending != pendingDevices { pendingDevices = list.pending }
+            if let list = DevicesWire.decode(DevicesWire.Pending.self, raw) {
+                if list.pending != pendingDevices { pendingDevices = list.pending }
+                // Kept per box, so the Waiting list shows with no window open.
+                NodeDirectory.shared.keepPending(list.pending, forKey: alias)
+            }
+        case .unknown(let type) where type == DevicesWire.result:
+            if let result = DevicesWire.decode(DevicesWire.Result.self, raw) { Self.devicesResult?(self, result) }
         default:
             break
         }
@@ -908,6 +925,7 @@ package final class HostConnection {
             self.attempts = 0
         }
         if boxMinor >= 12, control == .full { pullUsage() }
+        if caps.contains(DevicesWire.mergeCap) { Self.devicesCatchUp?(self) }
     }
 
     /// Calls that go again after a drop are kept on disk, so a quit Kore sends them when it's back

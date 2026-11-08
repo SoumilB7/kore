@@ -126,6 +126,20 @@ struct DevicesTests {
         #expect(store.rev == 9)
     }
 
+    @Test func aMergeDropsThePendingEntriesItAllowsByIdOrNodeKey() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        let macKey = SoftwareIdentity()
+        let mac = record(.mac, key: macKey, owner: true)
+        try store.book.update { $0.append(mac) }
+        let byId = record(.phone, issuedBy: mac.id, nodeKey: "nk:a")
+        let byKey = record(.phone, issuedBy: mac.id, nodeKey: "nk:b")
+        store.notePending(pending("nk:a2", device: byId.id), at: t0)
+        store.notePending(pending("nk:b", device: nil), at: t0)
+        store.notePending(pending("nk:other"), at: t0)
+        _ = try store.merge(records: [byId, byKey], from: try proven(mac, macKey))
+        #expect(store.pending().map(\.nodeKey) == ["nk:other"])
+    }
+
     @Test func abilitiesMapOntoGrantControl() {
         #expect(GrantControl([.run]) == .full)
         #expect(GrantControl([.read, .ask]) == .act)

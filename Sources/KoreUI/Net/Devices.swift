@@ -154,7 +154,7 @@ package final class Devices {
         if case .refused(let why)? = connection?.phase { facts.refused = why }
         facts.entry = directory.entry(forKey: key)
         facts.paused = NetPauses.shared.contains(key)
-        facts.pending = connection?.pendingDevices ?? []
+        facts.pending = connection?.pendingDevices ?? facts.entry?.pending ?? []
         return facts
     }
 
@@ -226,7 +226,9 @@ package final class Devices {
     package func rename(_ row: DeviceRow, to name: String) {
         switch row.kind {
         case .phone: if let id = UUID(uuidString: row.id) { phones?.rename(id, to: name) }
-        case .box: NodeDirectory.shared.rename(row.id, to: name)
+        case .box:
+            NodeDirectory.shared.rename(row.id, to: name)
+            KoreNetSwitch.shared?.boxChanged(row.id, name: NodeNames.name(row.id))
         case .mac: break
         }
         changed()
@@ -237,6 +239,7 @@ package final class Devices {
         case .phone: if let id = UUID(uuidString: row.id) { phones?.remove(id) }
         case .box:
             NetPauses.shared.set(row.id, paused: false)
+            KoreNetSwitch.shared?.boxChanged(row.id, removed: true)
             NodeDirectory.shared.forget(row.id)
             BoxList.shared.remove(row.id)
         case .mac: break
@@ -249,6 +252,7 @@ package final class Devices {
         case .phone: if let id = UUID(uuidString: row.id) { phones?.setPaused(id, paused) }
         case .box:
             NetPauses.shared.set(row.id, paused: paused)
+            KoreNetSwitch.shared?.boxChanged(row.id, paused: paused)
             if paused { HostConnection.live(row.id)?.takeOffline() } else { HostConnection.live(row.id)?.bringOnline() }
         case .mac: break
         }

@@ -115,6 +115,9 @@ class Mesh(private val app: KoreApp) {
 
     fun node(id: UUID?): NodeClient? = nodesFlow.value.firstOrNull { it.id == id } ?: if (id == null) nodesFlow.value.firstOrNull() else null
     fun node(id: String?): NodeClient? = node(id?.let { runCatching { UUID.fromString(it) }.getOrNull() })
+    /** The Mac that tells boxes about this phone, by name (the first Mac known). */
+    fun ownerName(): String = nodesFlow.value.firstOrNull { it.device.value.kind == NodeKind.MAC }?.name ?: "your Mac"
+
     /** Two or more devices: notifications name theirs. */
     val many: Boolean get() = nodesFlow.value.size > 1
 
@@ -123,7 +126,14 @@ class Mesh(private val app: KoreApp) {
         onScreen = on
         keeper.onScreen(on)
         if (on) apply()
-        nodesFlow.value.forEach { if (on) it.reconnectNow() else it.setPresence(false) }
+        nodesFlow.value.forEach {
+            if (on) {
+                it.post(NodeMachine.Event.Screen(true))
+                it.reconnectNow()
+            } else {
+                it.setPresence(false)
+            }
+        }
     }
 
     /**
@@ -163,7 +173,13 @@ class Mesh(private val app: KoreApp) {
             have[d.id] ?: NodeClient(
                 d, app.scope, dialer, raiseSigner = raiseSigner,
                 onRecord = { book.put(it) },
-                onDirectory = { records -> book.applyDirectory(d.id, deviceId, records); syncNodes() },
+                onDirectory = { records ->
+                    book.applyDirectory(d.id, deviceId, records)
+                    syncNodes()
+                    // A box the Mac names now holds this phone, or can be reached: tried again at once.
+                    val named = records.filter { it.kind == NodeKind.BOX }.map { it.id }.toSet()
+                    nodesFlow.value.filter { it.id in named }.forEach(NodeClient::named)
+                },
             ).also { client ->
                 if (keeper.running) client.start()
                 val notifier = Notifier(app, d.id.toString()) { if (many) client.name else null }

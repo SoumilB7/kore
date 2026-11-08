@@ -81,6 +81,27 @@ struct HostNetTests {
         #expect(pushed.pending.map(\.nodeKey) == [phone.nodeKey])
     }
 
+    @Test func aWaitingPhoneLeavesTheListAndGetsInOnceItsMacPushesIt() async throws {
+        let rig = try await NetRig.make()
+        defer { rig.finish() }
+        let mac = Device("mac")
+        try rig.allow(mac)
+        let owner = try await up(rig, mac)
+        let phone = Device("pixel", kind: .phone)
+        let knock = try rig.dial(phone)
+        try await knock.until { knock.closed != nil }
+        try await owner.until { owner.types.contains(DevicesWire.pending) }
+        // The Mac's catch-up: the box holds the phone, its pending entry goes, the owner hears.
+        try owner.sendRaw(DevicesWire.encode(DevicesWire.Set(id: "m1", rev: 0, records: [rig.record(phone, issuedBy: mac.id)], merge: true)))
+        try await owner.until { owner.types.filter { $0 == DevicesWire.pending }.count == 2 }
+        let pushed = try #require(owner.got.last { StreamWire.type($0) == DevicesWire.pending }.flatMap { DevicesWire.decode(DevicesWire.Pending.self, $0) })
+        #expect(pushed.pending.isEmpty && rig.store.pending().isEmpty)
+        // Its next dial is let in, nothing else done.
+        let back = try await up(rig, phone)
+        guard case .established(let peer) = back.session.state else { return }
+        #expect(peer.abilities == [.read, .ask])
+    }
+
     @Test func anUnclaimedBoxKeepsItsFirstMacUntilItsOwnerAllows() async throws {
         let rig = try await NetRig.make()
         defer { rig.finish() }

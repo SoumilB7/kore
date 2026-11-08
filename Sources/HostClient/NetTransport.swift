@@ -46,6 +46,10 @@ package final class NetTransport: HostTransport, @unchecked Sendable {
     /// Set by `close` at once (not on the queue): a dial whose `open` was under way when the link
     /// let it go never says hello, so the box never takes it over a newer link of this Mac.
     private let closing = Mutex(false)
+    private let proven = Mutex<NetPeer?>(nil)
+    /// The box as its welcome's proof showed it (its record, its book's rev), once established:
+    /// set before any of its frames come up.
+    package var peer: NetPeer? { proven.withLock { $0 } }
 
     package init(
         route: Binding.Route, clock: @escaping @Sendable () -> Date = { Date() }, open: @escaping @Sendable () throws -> Opened,
@@ -125,6 +129,7 @@ package final class NetTransport: HostTransport, @unchecked Sendable {
         let messages = session.pump()
         if !up, case .established(let peer) = session.state {
             up = true
+            proven.withLock { $0 = peer }
             established?(peer, session.nodeKeyAppend)
             let held = waiting
             waiting = []

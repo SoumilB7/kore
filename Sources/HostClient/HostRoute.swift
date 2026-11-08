@@ -83,7 +83,10 @@ package final class LinkWake {
     private let center: NotificationCenter
     private var observer: NSObjectProtocol?
 
-    package init(center: NotificationCenter, name: Notification.Name, probe: @escaping @MainActor (String) -> Void = { HostConnection.probeAll($0) }) {
+    package init(center: NotificationCenter, name: Notification.Name, probe: @escaping @MainActor (String) -> Void = { why in
+        HostConnection.probeAll(why)
+        KoreNetSwitch.shared?.phonesLook?()
+    }) {
         self.center = center
         observer = center.addObserver(forName: name, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { probe("wake") }
@@ -120,7 +123,10 @@ package final class PathChanges {
     /// Times it fired (tests).
     package private(set) var fired = 0
 
-    package init(wait: Duration = .seconds(1), fire: @escaping @MainActor () -> Void = { HostConnection.networkChanged() }) {
+    package init(wait: Duration = .seconds(1), fire: @escaping @MainActor () -> Void = {
+        HostConnection.networkChanged()
+        KoreNetSwitch.shared?.phonesLook?()
+    }) {
         self.wait = wait
         self.fire = fire
     }
