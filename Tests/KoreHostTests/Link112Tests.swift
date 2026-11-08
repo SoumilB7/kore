@@ -348,9 +348,19 @@ struct AttentionTests {
         defer { s.rig.finish() }
         let client = try await connect(s)
         s.backend.sink.yield(.approvalRequested(ask))
-        try await until { events(client).contains { $0.0 == .open } }
+        try await said("open", s, client) { events(client).contains { $0.0 == .open } }
         s.backend.sink.yield(.approvalWithdrawn("ap1"))
-        try await until { events(client).contains { $0.0 == .clear } }
+        try await said("clear", s, client) { events(client).contains { $0.0 == .clear } }
+    }
+
+    /// `until`, and on a timeout what the client heard and what the chat holds.
+    func said(_ what: String, _ s: Setup, _ client: Client, _ check: () -> Bool) async throws {
+        do {
+            try await until(check)
+        } catch {
+            Issue.record("no \(what): heard \(events(client).map { "\($0.0)" }), the chat's cards \(s.hc.chat?.approvals.pending.map(\.id) ?? ["no chat"]), \(client.got.count) messages")
+            throw error
+        }
     }
 
     @Test(arguments: ["claude", "codex"])
