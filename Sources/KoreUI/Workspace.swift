@@ -1419,6 +1419,7 @@ extension Workspace {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
+        panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.directoryURL = folder.deletingLastPathComponent()
         guard panel.runModal() == .OK, let url = panel.url else { return }

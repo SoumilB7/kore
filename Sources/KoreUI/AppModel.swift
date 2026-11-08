@@ -90,6 +90,7 @@ package final class AppModel {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
+        panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
         panel.prompt = "Open"
         return panel.runModal() == .OK ? panel.url : nil
