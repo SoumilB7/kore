@@ -13,6 +13,7 @@
 // connection from the box. The node is signed out (and so deleted) at the end, pass, fail or ^C.
 // `--ssh-host <ip>` reaches the box at that address (its LAN one) without touching ~/.ssh/config.
 #if os(macOS)
+import CryptoKit
 import Darwin
 import Foundation
 import KoreNet
@@ -462,6 +463,52 @@ let listing = link.result("ls1")
 note("fs.list rtt", ms(now() - start))
 let names = (listing?["entries"] as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
 check("fs.list \(folder) lists kore-host", listing?["ok"] as? Bool == true && names.contains("kore-host"), "\(listing.map { "\($0)" } ?? "no answer")")
+
+// MARK: 4b. A login moved (1.14), with a fake credential only: refused when its bytes are wrong,
+// staged 0600 where nothing runs it and no account lists it, placed on commit, fingerprinted
+// without the token, then sent back and deleted. Everything is under the test daemon's own HOME
+// in the scratch folder: never the box's real accounts. Opt in: KORE_E2E_LOGINS=1.
+
+if ProcessInfo.processInfo.environment["KORE_E2E_LOGINS"] == "1" {
+    let accounts = folder + "/home/.config/claude-accounts"
+    let fake = Data(#"{"claudeAiOauth":{"accessToken":"e2e-fake-access","refreshToken":"e2e-fake-refresh","expiresAt":1}}"#.utf8)
+    let hex = { (bytes: any Sequence<UInt8>) in bytes.map { String(format: "%02x", $0) }.joined() }
+    let sha = hex(SHA256.hash(data: fake))
+    func move(_ id: String, _ cmd: [String: Any], _ timeout: Double = 10) -> [String: Any]? {
+        try? link.send(["t": "cmd", "id": id, "cmd": cmd])
+        return link.result(id, timeout)
+    }
+    let base: [String: Any] = ["type": "account.import", "provider": "claude", "login": "e2e", "host": "e2e-mac"]
+    let wrong = move("lm0", base.merging(["phase": "prepare", "moveId": "e2emove-0000", "data": fake.base64EncodedString(), "sha": String(repeating: "0", count: 64)]) { $1 })
+    check("login: bytes that don't match their sha are refused", wrong?["ok"] as? Bool == false && wrong?["message"] as? String == "sentWrong", "\(wrong.map { "\($0)" } ?? "no answer")")
+    var start = now()
+    let staged = move("lm1", base.merging(["phase": "prepare", "moveId": "e2emove-0001", "data": fake.base64EncodedString(), "sha": sha]) { $1 })
+    note("login prepare rtt", ms(now() - start))
+    check("login: a fake login is staged", staged?["ok"] as? Bool == true, "\(staged.map { "\($0)" } ?? "no answer")")
+    let stagedFile = accounts + "/.incoming-e2emove-0001/.credentials.json"
+    let onBox = ssh("stat -c %a \(stagedFile); sha256sum \(stagedFile) | cut -c1-64; ls -A \(accounts)").out
+    check("login: …0600, the bytes sent, and not listed as an account", onBox.contains("600") && onBox.contains(sha) && !onBox.split(separator: "\n").contains("e2e"), onBox)
+    start = now()
+    let placed = move("lm2", base.merging(["phase": "commit", "moveId": "e2emove-0001"]) { $1 }, 30)
+    note("login commit rtt (the CLI reads it after placing)", ms(now() - start))
+    check("login: committed, placed as e2e", placed?["ok"] as? Bool == true && placed?["login"] as? String == "e2e", "\(placed.map { "\($0)" } ?? "no answer")")
+    note("login: the box's CLI read it after placing, signedIn", "\(placed?["signedIn"].map { "\($0)" } ?? "not said")")
+    let placedOut = ssh("ls -A \(accounts); stat -c %a \(accounts)/e2e/.credentials.json; test -e \(accounts)/.incoming-e2emove-0001 && echo staged-left || echo staged-gone").out
+    check("login: in place 0600, staging gone", placedOut.split(separator: "\n").contains("e2e") && placedOut.contains("600") && placedOut.contains("staged-gone"), placedOut)
+    let key = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+    let prints = move("lm3", ["type": "account.fingerprints", "provider": "claude", "key": key.base64EncodedString()])
+    let want = String(hex(HMAC<SHA256>.authenticationCode(for: Data("e2e-fake-refresh".utf8), using: SymmetricKey(data: key))).prefix(16))
+    let got = (prints?["prints"] as? [[String: Any]] ?? []).first { $0["login"] as? String == "e2e" }?["fingerprint"] as? String
+    // The CLI's read after placing may have refreshed or wiped the fake: then the print differs.
+    check("login: fingerprints answer, without the token", prints?["ok"] as? Bool == true && !"\(prints ?? [:])".contains("e2e-fake-refresh"), "\(prints.map { "\($0)" } ?? "no answer")")
+    note("login: fingerprint of e2e matches this Mac's HMAC of the fake", got == want ? "yes" : "no (the CLI changed the file after placing)")
+    let back = move("lm4", ["type": "account.export", "provider": "claude", "phase": "prepare", "moveId": "e2emove-0002", "login": "e2e"])
+    let backData = (back?["data"] as? String).flatMap { Data(base64Encoded: $0) }
+    check("login: sent back with its sha", back?["ok"] as? Bool == true && backData.map { hex(SHA256.hash(data: $0)) } == back?["sha"] as? String, "\(back?["ok"] ?? "no answer")")
+    let gone = move("lm5", ["type": "account.export", "provider": "claude", "phase": "commit", "moveId": "e2emove-0002"])
+    let goneOut = ssh("test -e \(accounts)/e2e && echo left || echo deleted; cat \(folder)/state/kore-host/login-moves.json 2>/dev/null").out
+    check("login: deleted on the box after the move back, nothing paused", gone?["ok"] as? Bool == true && goneOut.contains("deleted") && !goneOut.contains("e2emove-0002"), goneOut)
+}
 
 start = now()
 try? link.send(["t": "cmd", "id": "new1", "cmd": ["type": "chat.new", "folder": folder, "provider": "claude"]])
