@@ -188,6 +188,10 @@
       "type": "delta"
     },
     {
+      "file": "delta.background.json",
+      "type": "delta"
+    },
+    {
       "file": "tx.page.attachments.json",
       "type": "tx.page"
     },

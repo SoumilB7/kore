@@ -31,6 +31,8 @@ abstract class NodeActivity : Activity() {
     /** The top bar's title: the device's, the window's or the chat's name. */
     protected lateinit var barTitle: TextView
     protected lateinit var barLead: android.widget.FrameLayout
+    /** A chat's waiting symbols, after the title (link 1.13). */
+    protected lateinit var barAfter: LinearLayout
     /** A small state dot at the end of the top bar; screens that have a state show it. */
     protected lateinit var barDot: android.view.View
     protected open val showsBack = true
@@ -54,6 +56,7 @@ abstract class NodeActivity : Activity() {
     }
 
     private fun topBar(): android.view.View = LinearLayout(this).apply {
+        tag = BAR_ROW
         orientation = LinearLayout.HORIZONTAL
         gravity = android.view.Gravity.CENTER_VERTICAL
         setPadding(dp(4), dp(4), if (showsGear) dp(4) else dp(16), dp(4))
@@ -75,11 +78,18 @@ abstract class NodeActivity : Activity() {
             ellipsize = android.text.TextUtils.TruncateAt.END
             visibility = android.view.View.GONE
         }
+        // The title, then (a chat's) waiting symbols 8 after it; the title gives way when space is short.
+        barAfter = waitingSymbols().apply { visibility = android.view.View.GONE }
         titleColumn = LinearLayout(this@NodeActivity).apply {
             orientation = LinearLayout.VERTICAL
             gravity = android.view.Gravity.CENTER_VERTICAL
             minimumHeight = dp(48)
-            addView(barTitle)
+            addView(LinearLayout(this@NodeActivity).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = android.view.Gravity.CENTER_VERTICAL
+                addView(barTitle, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+                addView(barAfter, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = dp(8) })
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
             addView(banner)
         }
         addView(titleColumn, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))

@@ -201,7 +201,10 @@ class ChatActivity : NodeActivity() {
         if (provider != was) adapter.notifyDataSetChanged()
         barTitle.text = chat?.str("title") ?: "Chat"
         // The lead: the logo, or the spinner in the CLI's colour while a turn runs.
-        val working = chat?.bool("running") == true
+        // Between turns, a sub-agent or a background command keeps it working (link 1.13).
+        val waiting = Waiting.of(chat)
+        val working = chat?.bool("running") == true || waiting != null
+        barAfter.showWaiting(waiting)
         provider?.let { leadLogo.setImageResource(providerLogo(it)) }
         leadSpin.tint = if (provider == "codex") Tone.spinCodex else Tone.spinClaude
         leadLogo.visibility = if (working) View.INVISIBLE else View.VISIBLE

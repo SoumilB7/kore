@@ -457,6 +457,24 @@ package struct LinkCardDigest: Encodable, Sendable, Equatable {
     package var digest: String { Data(SHA256.hash(data: canonical)).base64EncodedString() }
 }
 
+/// 1.13: what a chat has going in the background, during a turn or between turns: its live
+/// sub-agents and its running background commands (armed schedules aren't counted). A client
+/// shows a symbol for each kind while it's above 0, and counts the chat as working.
+package struct ChatBackground: Codable, Sendable, Equatable {
+    package var agents: Int
+    package var commands: Int
+
+    package init(agents: Int, commands: Int) {
+        self.agents = agents
+        self.commands = commands
+    }
+
+    /// Nil when nothing runs, so the field is left out.
+    package static func of(agents: Int, commands: Int) -> ChatBackground? {
+        agents > 0 || commands > 0 ? ChatBackground(agents: max(0, agents), commands: max(0, commands)) : nil
+    }
+}
+
 package struct ChatMeta: Codable, Sendable, Equatable {
     package enum State: String, LenientEnum { case needsYou, failed, stuck, working, idle, unknown }
 
@@ -529,6 +547,8 @@ package struct ChatMeta: Codable, Sendable, Equatable {
     /// labels its rows by them. Set at turn boundaries only, never per streamed token.
     package var lastAt: Int64?
     package var last: String?
+    /// 1.13: live sub-agents and running background commands; omitted when both are 0.
+    package var background: ChatBackground?
 
     /// `last`'s longest, in characters.
     package static let lastCap = 120

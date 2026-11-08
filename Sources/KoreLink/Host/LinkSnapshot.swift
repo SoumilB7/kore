@@ -268,12 +268,20 @@ enum LinkSnapshot {
             case .idle: .idle
             }
         let sendable = LinkPolicy.check(.send(chatId: "", text: "."), facts) == .allow
-        return ChatMeta(
+        var made = ChatMeta(
             id: chat.id.uuidString, provider: chat.provider.id, title: chat.title, state: state,
             mode: .init(id: chat.controls.mode, level: facts.level, planOn: chat.provider.planToggle != nil ? chat.controls.planMode : nil),
             modeIds: chat.controls.availableModes.map(\.id), allowedModeIds: LinkPolicy.allowedModes(facts, control: full ? .full : .standard).sorted(),
             model: chat.controls.currentModel?.name, queued: chat.queuedCount, running: chat.isBusy, cards: cards(chat),
             can: .init(send: sendable && !chat.accountRestartPending, stop: chat.isWorking), commands: commands(chat))
+        made.background = background(chat)
+        return made
+    }
+
+    /// 1.13: the chat's live sub-agents and running background commands, as the tab's spinner
+    /// counts them (`TabWork`). Read under Observation, so a change marks the chat dirty.
+    static func background(_ chat: Chat) -> ChatBackground? {
+        .of(agents: chat.transcriptView.runningAgents.count, commands: chat.commands.stoppable.count)
     }
 
     // MARK: Cards

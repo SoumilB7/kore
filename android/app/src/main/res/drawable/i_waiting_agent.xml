@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The sub-agent symbol (spec §4): an accent triangle, 9, on a 16 accentFill circle. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp" android:height="16dp" android:viewportWidth="16" android:viewportHeight="16">
+    <path android:fillColor="#216AB1E7" android:pathData="M8,0 A8,8 0 1,1 7.99,0 Z" />
+    <path android:fillColor="#6AB1E7" android:pathData="M8,4.58 L11.6,11.24 L4.4,11.24 Z" />
+</vector>

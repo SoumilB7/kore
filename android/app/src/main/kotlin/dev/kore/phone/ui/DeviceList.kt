@@ -28,6 +28,8 @@ object DeviceList {
         val line: String,
         val cue: Cue,
         val unread: Boolean,
+        /** Link 1.13: what it waits on in the background (symbols on its second line). */
+        val waiting: Waiting? = null,
     )
 
     /** Which chats moved since this phone last showed them: unread (its own record, nothing on the wire). */
@@ -63,7 +65,9 @@ object DeviceList {
             for (chat in chatsIn(w, chats)) {
                 val id = chat.str("id") ?: continue
                 val at = lastAt(chat)
-                val cue = cue(chat.str("state"))
+                val waiting = Waiting.of(chat)
+                // Background work keeps it working between turns (link 1.13).
+                val cue = cue(chat.str("state")).let { if (it == Cue.NONE && waiting != null) Cue.WORKING else it }
                 val line = when (cue) {
                     Cue.NEEDS -> chat.objs("cards").firstOrNull()?.str("title")?.let { firstLine(it) } ?: "Needs you"
                     Cue.WORKING -> "Working"
@@ -73,14 +77,14 @@ object DeviceList {
                 val row = Row(
                     key = "c:$id", chatId = id, windowId = wid, boardIds = null, title = chat.str("title") ?: "Chat",
                     provider = chat.str("provider"), age = if (cue == Cue.WORKING) "now" else age(at, now), line = line, cue = cue,
-                    unread = cue == Cue.NONE && seen.unread(id, at),
+                    unread = cue == Cue.NONE && seen.unread(id, at), waiting = waiting,
                 )
                 made += Made(row, rank(cue), at ?: Long.MIN_VALUE, made.size)
             }
             for (board in boardsIn(w)) {
                 val ids = board.obj("board")?.objs("sections").orEmpty().flatMap { it.strs("chatIds") }
                 val members = ids.mapNotNull { byId[it] }
-                val states = members.map { cue(it.str("state")) }
+                val states = members.map { m -> cue(m.str("state")).let { if (it == Cue.NONE && Waiting.of(m) != null) Cue.WORKING else it } }
                 val cue = states.minByOrNull(::rank) ?: Cue.NONE
                 val at = members.mapNotNull(::lastAt).maxOrNull()
                 val count = if (ids.size == 1) "1 chat" else "${ids.size} chats"

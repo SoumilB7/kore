@@ -364,14 +364,14 @@ class DeviceActivity : NodeActivity() {
         title.type(if (strong) Type.BodyMedium else Type.Body)
         title.setTextColor(Tone.text)
         age.text = row.age
-        line.text = row.line
-        line.visibility = if (row.line.isEmpty()) View.GONE else View.VISIBLE
+        line.text = row.waiting?.let { android.text.SpannableStringBuilder(waitingPrefix(it)).append(row.line) } ?: row.line
+        line.visibility = if (row.line.isEmpty() && row.waiting == null) View.GONE else View.VISIBLE
         line.setTextColor(when (row.cue) {
             DeviceList.Cue.NEEDS -> Tone.warn
             DeviceList.Cue.FAILED -> Tone.err
             else -> Tone.dim
         })
-        v.contentDescription = listOf(row.title, row.age, if (row.unread) "unread" else "", if (working) "working" else "", row.line).filter { it.isNotEmpty() }.joinToString(", ")
+        v.contentDescription = listOf(row.title, row.age, if (row.unread) "unread" else "", if (working) "working" else "", row.waiting?.words ?: "", row.line).filter { it.isNotEmpty() }.joinToString(", ")
         v.setOnClickListener {
             if (row.chatId != null) startActivity(Intent(this, ChatActivity::class.java).putExtra("chat", row.chatId))
             else startActivity(Intent(this, WindowActivity::class.java).putExtra("window", row.windowId))

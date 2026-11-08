@@ -111,6 +111,8 @@ enum HostMeta {
             made.owner = owner
         }
         if hc.isFrozen { made.moving = true }
+        // 1.13: live sub-agents and running background commands, as the Mac counts them.
+        if let chat { made.background = .of(agents: chat.transcriptView.runningAgents.count, commands: chat.commands.stoppable.count) }
         // Recency for a phone's list: kept with the record, else when the chat was made.
         made.lastAt = hc.record.lastAt ?? Int64(hc.record.created) * 1000
         made.last = hc.record.last

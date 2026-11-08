@@ -389,6 +389,29 @@ struct StreamTests {
         #expect(rig.host.chat(hc.id) == nil && rig.host.closedChats.map(\.id) == [hc.id])
     }
 
+    /// Link 1.13: the box's meta says what its chat has going in the background, live sub-agents
+    /// and running background commands (an armed schedule isn't one), and leaves it out once
+    /// nothing does.
+    @Test func theMetaCountsBackgroundWork() async throws {
+        let backend = StreamStandIn()
+        let (rig, grant, hc) = try rig(backend)
+        defer { rig.finish() }
+        let client = try await StreamClient(rig, grant: grant)
+        client.send(ChatFollow(chatId: hc.id, after: nil, log: nil))
+        try await until { client.flat.contains { if case .controlsLoaded = $0 { true } else { false } } }
+        #expect(HostMeta.meta(hc).background == nil)
+
+        backend.sink.yield(.agentSpawned(AgentInfo(id: "scout", parent: .main, toolId: nil, name: "Scout", type: nil, model: nil, prompt: nil, background: true)))
+        backend.sink.yield(.commandStarted(ActiveCommand(id: "loop", kind: .shell, title: "loop", startedAt: .now, owner: .main)))
+        backend.sink.yield(.commandStarted(ActiveCommand(id: "hourly", kind: .scheduled, title: "hourly", startedAt: .now, owner: .main)))
+        try await until { HostMeta.meta(hc).background == ChatBackground(agents: 1, commands: 1) }
+
+        backend.sink.yield(.agentFinished(id: "scout", .completed, result: nil))
+        backend.sink.yield(.commandEnded(id: "loop", .completed, at: .now))
+        try await until { HostMeta.meta(hc).background == nil }
+        client.close()
+    }
+
     /// A follow's catch-up ends with a frame marked live, empty when there's nothing to catch up;
     /// a CLI's commands end in the log with it, at its stop and after a box that stopped without
     /// saying so, so a client reading the log from 0 never shows one running for ever.

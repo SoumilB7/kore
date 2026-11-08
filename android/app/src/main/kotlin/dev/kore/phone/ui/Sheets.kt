@@ -563,7 +563,7 @@ fun Activity.barButton(bar: View, glyph: String, description: String, go: (View)
     // The bar's row: the title sits in a column (its state line goes under it), so the button
     // goes on the first horizontal row above it, at the end, never under the title; ⋮ stays last.
     var row = bar.parent
-    while (row is LinearLayout && row.orientation != LinearLayout.HORIZONTAL) row = row.parent
+    while (row is LinearLayout && row.tag != BAR_ROW) row = row.parent
     val bar = row as LinearLayout
     val more = (0 until bar.childCount).firstOrNull { bar.getChildAt(it).tag == MORE }
     bar.addView(b, if (more != null && glyph != "⋮") more else bar.childCount, LinearLayout.LayoutParams(dp(48), dp(48)))
@@ -571,6 +571,8 @@ fun Activity.barButton(bar: View, glyph: String, description: String, go: (View)
 }
 
 private const val MORE = "bar.more"
+/** The bar's own row (`NodeActivity`), where its buttons go. */
+const val BAR_ROW = "bar.row"
 
 /** One of the bar's icons: 22 dp in a 48 dp round target, `dim` at rest. */
 fun Activity.barIcon(icon: Int, description: String): android.widget.ImageView = android.widget.ImageView(this).apply {
