@@ -261,6 +261,8 @@ if (( ${#test_targets} )); then
       # Each target in its own process under its own name (swiftpm-testing-helper-<target>): its
       # own defaults domain, as when swift test ran them one after another.
       mkdir -p $out/helpers
+      # How long one test target may run (KORE_GATE_TEST_LIMIT): the longest takes about a minute.
+      test_limit=${KORE_GATE_TEST_LIMIT:-600}
       # `jobs` at a time, the longest-running targets first.
       order=(HostClientTests KoreHostTests KoreNetSystemTests KoreLinkTests KoreUITests KoreCoreTests StorylineTests NetTrustTests)
       queue=(${order:*test_targets} ${test_targets:|order})
@@ -272,8 +274,23 @@ if (( ${#test_targets} )); then
         done
         ln -sf $helper $out/helpers/swiftpm-testing-helper-$t
         b=$bins/$t.xctest/Contents/MacOS/$t
-        ( DYLD_FRAMEWORK_PATH=$clt/Library/Developer/Frameworks DYLD_LIBRARY_PATH=$clt/Library/Developer/usr/lib \
-            $out/helpers/swiftpm-testing-helper-$t --test-bundle-path $b $b --testing-library swift-testing > $out/swift-test-$t.log 2>&1
+        ( log=$out/swift-test-$t.log
+          DYLD_FRAMEWORK_PATH=$clt/Library/Developer/Frameworks DYLD_LIBRARY_PATH=$clt/Library/Developer/usr/lib \
+            $out/helpers/swiftpm-testing-helper-$t --test-bundle-path $b $b --testing-library swift-testing > $log 2>&1 &
+          h=$!
+          # A test that waits for good (an await nothing resumes) would hold the check and its
+          # slot for hours: past the limit its target is ended, and says which tests never ended.
+          ( sleep $test_limit
+            if kill -0 $h 2>/dev/null; then
+              stuck=$(sed 's/\x1b\[[0-9;]*m//g' $log | awk '/◇ Test .* started/ { sub(/.*◇ Test /, ""); sub(/ started.*/, ""); s[$0] = 1 }
+                /[✔✘] Test .* (passed|failed)/ { sub(/.*[✔✘] Test /, ""); sub(/ (passed|failed).*/, ""); delete s[$0] }
+                END { for (n in s) printf "%s ", n }')
+              print "✘ $t failed: hung past ${test_limit} s, ended; never finished: ${stuck:-?}" >> $log
+              kill -9 $h
+            fi ) &
+          w=$!
+          wait $h
+          kill $w 2>/dev/null
           defaults delete swiftpm-testing-helper-$t >/dev/null 2>&1 ) &
         pids+=($!)
       done
