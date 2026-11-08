@@ -222,6 +222,8 @@ extension StoryID {
         package static func answer(_ entry: UUID) -> StoryID { StoryID(.transcript, "answer", key: entry.uuidString) }
         package static func fold(_ turn: String) -> StoryID { StoryID(.transcript, "fold", key: turn) }
         package static func tool(_ id: String) -> StoryID { StoryID(.transcript, "tool", key: id) }
+        /// A tool header's file name, by the name: a click opens the file.
+        package static func fileName(_ name: String) -> StoryID { StoryID(.transcript, "file-name", key: name) }
         package static func explored(_ id: String) -> StoryID { StoryID(.transcript, "explored", key: id) }
         /// `.part(.stop)` and `.part(.open)`.
         package static func agent(_ id: String) -> StoryID { StoryID(.transcript, "agent", key: id) }

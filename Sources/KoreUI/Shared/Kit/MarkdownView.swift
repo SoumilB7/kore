@@ -68,13 +68,13 @@ private struct MarkdownBlockView: View {
     var body: some View {
         switch block.kind {
         case .heading(let level, let text):
-            Text(text)
+            RunText(text: text)
                 .font(TextStyle.heading(level))
                 .foregroundStyle(Theme.text)
                 .selectableText(path, text, .heading(level))
                 .fixedSize(horizontal: false, vertical: true)
         case .paragraph(let text):
-            Text(text)
+            RunText(text: text)
                 .font(TextStyle.body)
                 .foregroundStyle(Theme.text)
                 .lineSpacing(TextStyle.leading)
@@ -264,7 +264,7 @@ private struct MarkdownTableView: View {
     }
 
     private func cell(_ text: AttributedString, header: Bool, at cell: [Int]) -> some View {
-        Text(text)
+        RunText(text: text)
             .font(TextStyle.body)
             .bold(header)
             .foregroundStyle(Theme.text)
@@ -272,5 +272,39 @@ private struct MarkdownTableView: View {
             .padding(Inset.tableCell)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: header ? .center : .leading)
             .background(Theme.background)
+    }
+}
+
+/// A markdown text. In a selectable transcript row it's drawn without `.link`: Kore's selection
+/// opens a link on a click there (it keeps the links), and a SwiftUI link is a text responder of
+/// its own; an answer streaming under the transparent titlebar kept changing it, which can send
+/// AppKit round its window-regions pass until it throws ("more Update Structural Regions passes
+/// than there are views"). The words, colours and underline are the same; VoiceOver still finds
+/// links, with an action to open each.
+private struct RunText: View {
+    let text: AttributedString
+    @Environment(\.transcriptSelection) private var selection
+    @Environment(\.selectionEntry) private var entry
+    @Environment(\.openURL) private var openURL
+
+    var body: some View {
+        if selection != nil, entry != nil, text.runs.contains(where: { $0.link != nil }) {
+            let links = text.runs.compactMap { run in run.link.map { (String(text[run.range].characters), $0) } }
+            Text(Self.unlinked(text))
+                .accessibilityAddTraits(.isLink)
+                .accessibilityActions {
+                    ForEach(links.indices, id: \.self) { index in
+                        Button("Open \(links[index].0)") { openURL(links[index].1) }
+                    }
+                }
+        } else {
+            Text(text)
+        }
+    }
+
+    static func unlinked(_ text: AttributedString) -> AttributedString {
+        var drawn = text
+        for run in text.runs where run.link != nil { drawn[run.range].link = nil }
+        return drawn
     }
 }

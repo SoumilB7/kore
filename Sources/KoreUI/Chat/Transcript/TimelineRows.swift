@@ -1103,17 +1103,36 @@ struct ToolHeader: View {
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: Space.md) {
-            // A file link opens in a Kore tab, through the transcript's openURL.
+            // The file name opens in a Kore tab, through the transcript's openURL: drawn as text,
+            // not a SwiftUI link (`FileNameClick`); the selection's copy keeps the link.
             if let selectionPath {
-                Text(line).lineLimit(2).tint(textColor).help(path ?? "")
+                drawn.lineLimit(2).help(path ?? "")
                     .selectableText(selectionPath, selectionLine, .toolHeader)
             } else {
-                Text(line).lineLimit(2).tint(textColor).help(path ?? "")
+                drawn.lineLimit(2).help(path ?? "")
+                    .modifier(FileNameClick(url: path.map { OpenInEditor.url($0, in: folder) }, path: path))
             }
             if added > 0 || removed > 0 { ChangeCounts(added: added, removed: removed) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .modifier(FileMenu(url: path.map { OpenInEditor.url($0, in: folder) }))
+    }
+
+    /// The header as drawn: the same words and colours as `line`, the file name's run marked
+    /// (`FileNameRun`) where `line` has its link.
+    private var drawn: Text {
+        let words = line
+        var text = Text("")
+        for run in words.runs {
+            var piece = AttributedString(words[run.range])
+            if run.link != nil {
+                piece.link = nil
+                text = text + Text(piece).customAttribute(FileNameRun())
+            } else {
+                text = text + Text(piece)
+            }
+        }
+        return text
     }
 
     private var selectionLine: AttributedString {
@@ -1149,6 +1168,56 @@ struct ToolHeader: View {
         var gap = AttributedString(" ")
         gap.font = TextStyle.codeSmall
         return name + gap + rest
+    }
+}
+
+/// The file name's run in a tool header.
+private struct FileNameRun: TextAttribute {}
+
+/// A click on a tool header's file name opens it, with a link's pointer; the header keeps a
+/// link's role and action for VoiceOver. The name is plain text, not a SwiftUI link: a link
+/// makes the text a responder of its own, and a header changing as a turn streams, under the
+/// transparent titlebar, can send AppKit round its window-regions pass until it throws ("more
+/// Update Structural Regions passes than there are views"). Where the name is comes from the
+/// text's own layout, so only it takes the click.
+private struct FileNameClick: ViewModifier {
+    let url: URL?
+    let path: String?
+    @Environment(\.openURL) private var openURL
+
+    func body(content: Content) -> some View {
+        if let url, let path {
+            content
+                .overlayPreferenceValue(Text.LayoutKey.self) { layouts in
+                    GeometryReader { geometry in
+                        ForEach(Array(Self.rects(layouts, geometry).enumerated()), id: \.offset) { index, rect in
+                            Color.clear
+                                .contentShape(Rectangle())
+                                .frame(width: rect.width, height: rect.height)
+                                .onTapGesture { openURL(url) }
+                                .pointerStyle(.link)
+                                .storyID(index == 0 ? StoryID.Transcript.fileName((path as NSString).lastPathComponent) : nil) { openURL(url) }
+                                .position(x: rect.midX, y: rect.midY)
+                        }
+                    }
+                }
+                .accessibilityAddTraits(.isLink)
+                .accessibilityAction(named: Text("Open \((path as NSString).lastPathComponent)")) { openURL(url) }
+        } else {
+            content
+        }
+    }
+
+    /// The file name's runs, line by line, where they are in the text.
+    private static func rects(_ layouts: Text.LayoutKey.Value, _ geometry: GeometryProxy) -> [CGRect] {
+        layouts.flatMap { anchored in
+            let origin = geometry[anchored.origin]
+            return anchored.layout.flatMap { line in
+                line.compactMap { run in
+                    run[FileNameRun.self] == nil ? nil : run.typographicBounds.rect.offsetBy(dx: origin.x, dy: origin.y)
+                }
+            }
+        }
     }
 }
 
