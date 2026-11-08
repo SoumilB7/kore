@@ -8,6 +8,10 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
 - Tables get a Copy button in their corner while you hover; it copies what selecting the table
   copies, and takes no room.
 
+### Fixed
+- Switching tabs no longer redraws every chat kept open in the background; switches are a
+  little faster.
+
 ## [0.3.5] - 2026-11-21
 
 ### Added

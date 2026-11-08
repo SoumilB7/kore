@@ -89,4 +89,38 @@ final class ChatLinkTests {
         #expect(workspace.explorerOpen)
         workspace.closeAll()
     }
+
+    /// A chat tab's links (`ChatLinks`) open from the chat shown at the click: the one action
+    /// made for the first chat opens from the chat switched to since, at its folder then, and a
+    /// second window's opens in that window.
+    @Test func aChatTabsLinksOpenFromTheChatShownAtTheClick() throws {
+        for side in ["a", "b", "c"] {
+            try FileManager.default.createDirectory(at: folder.appendingPathComponent(side), withIntermediateDirectories: true)
+            try "x".write(to: folder.appendingPathComponent("\(side)/notes.txt"), atomically: true, encoding: .utf8)
+        }
+        let notes = URL(string: "notes.txt")!
+        let workspace = Workspace(folder: folder, restore: false)
+        let a = Chat(provider: .claude, folder: folder.appendingPathComponent("a"))
+        let b = Chat(provider: .claude, folder: folder.appendingPathComponent("b"))
+        let links = ChatLinks()
+        let open = links.action(workspace, chat: a)
+        open(notes)
+        #expect(workspace.activeTab.file?.path == realPath(root + "/a/notes.txt"))
+        // Switched to B: the action made with A shown opens from B.
+        _ = links.action(workspace, chat: b)
+        open(notes)
+        #expect(workspace.activeTab.file?.path == realPath(root + "/b/notes.txt"))
+        // B's folder read at the click, not when it showed.
+        b.folder = folder.appendingPathComponent("c")
+        open(notes)
+        #expect(workspace.activeTab.file?.path == realPath(root + "/c/notes.txt"))
+        // A second window's chat tab opens in its own window.
+        let other = Workspace(folder: folder, restore: false)
+        let otherLinks = ChatLinks()
+        otherLinks.action(other, chat: a)(notes)
+        #expect(other.activeTab.file?.path == realPath(root + "/a/notes.txt"))
+        #expect(workspace.activeTab.file?.path == realPath(root + "/c/notes.txt"))
+        workspace.closeAll()
+        other.closeAll()
+    }
 }

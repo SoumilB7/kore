@@ -33,6 +33,8 @@ struct ChatView: View {
     @StateObject private var height = Local<CGFloat>(0)
     /// The composer's smallest height for the shown chat at this width.
     @StateObject private var composer = Held(ComposerGrowth())
+    /// What opens the links over the shown chat: one action for the view's life (`ChatLinks`).
+    @StateObject private var links = ChatLinks()
 
     var body: some View {
         let chats = kept.update(active, tabs: workspace.tabs)
@@ -138,10 +140,7 @@ struct ChatView: View {
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height.value = $0 }
         .environment(\.hiddenTab, active == nil)
         // The approvals' and the changes modal's files open in Kore, as the transcript's do.
-        .environment(\.openURL, OpenURLAction { [workspace] url in
-            workspace.openLink(url, from: chat.folder)
-            return .handled
-        })
+        .environment(\.openURL, links.action(workspace, chat: chat))
         .overlay {
             // None while hidden: the agent map's keys would reach it from under a file.
             if active != nil {
@@ -431,6 +430,31 @@ final class KeptChats: ObservableObject {
             shownAt[oldest.id] = nil
         }
         return chats
+    }
+}
+
+/// Opens the links over a chat tab's approvals, composer and modals from the chat shown, read as
+/// one is clicked. One action for the view's life: a new one with each render was a change every
+/// kept transcript under it read, so each of them, hidden ones too, drew all its texts again on
+/// every tab switch.
+@MainActor
+final class ChatLinks: ObservableObject {
+    private weak var workspace: Workspace?
+    private weak var chat: Chat?
+    private var made: OpenURLAction?
+
+    /// The one action, opening from now on in `workspace` from `chat`'s folder.
+    func action(_ workspace: Workspace, chat: Chat) -> OpenURLAction {
+        self.workspace = workspace
+        self.chat = chat
+        if let made { return made }
+        let made = OpenURLAction { [weak self] url in
+            guard let self, let workspace = self.workspace else { return .discarded }
+            workspace.openLink(url, from: self.chat?.folder)
+            return .handled
+        }
+        self.made = made
+        return made
     }
 }
 
