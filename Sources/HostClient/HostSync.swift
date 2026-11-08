@@ -374,7 +374,7 @@ package final class HostSync {
         Task { [weak self] in
             let result = await connection.command { HostWire.syncWatch(id: $0, folder: folder) }
             if !result.ok, let self, self.started {
-                self.notice = result.code == .invalid ? "kore-host on \(self.pair.alias) can't sync yet" : result.message ?? "Sync paused"
+                self.notice = result.code == .invalid ? "\(self.pair.alias) can't sync yet · update it" : result.message ?? "Sync paused"
             }
         }
     }

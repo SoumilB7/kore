@@ -5,8 +5,8 @@ import LinkProtocol
 import src
 import SwiftUI
 
-// A window whose chats live on a box: a folder picked from the box's list, then the folder window as for this Mac, its chats run through the link. Nothing here
-// runs until such a window opens.
+// A window whose chats live on a box: the folder window as for this Mac, its chats run on the
+// box. Nothing here runs until such a window opens.
 
 /// The scene's value: the alias, and the box's folder once picked.
 struct BoxPlace: Codable, Hashable {
@@ -122,6 +122,14 @@ final class BoxBinding {
     }
 
     var online: Bool { connection.phase == .online }
+
+    /// The window's one cue, on the title row's box button: its line, marked while the box is
+    /// offline or its sync has something to say.
+    var cue: (line: String, marked: Bool) {
+        if let notice = sync?.notice { return (alias + " · " + notice, true) }
+        guard online else { return (line, true) }
+        return (alias + " · " + (sync != nil ? "in sync" : shownFolder), false)
+    }
 
     static func when(_ date: Date) -> String {
         Calendar.current.isDateInToday(date)
@@ -248,156 +256,16 @@ final class BoxChatServices: ChatServices {
 
 // MARK: - The window
 
-/// A box's window: its folders first, then that folder's window.
+/// A box folder's window. A place without a folder (none opens one now) closes.
 struct BoxWindow: View {
     @Binding var place: BoxPlace
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         if let folder = place.folder {
             FolderWindow(box: BoxBinding(alias: place.alias, folder: folder))
         } else {
-            BoxFolders(alias: place.alias) { place.folder = $0.path }
+            Color.clear.onAppear { dismiss() }
         }
-    }
-}
-
-/// The box's folders, as `folders.list` gives them: a click opens one.
-private struct BoxFolders: View {
-    let alias: String
-    let pick: (BoxFolder) -> Void
-    @StateObject private var connection: Local<HostConnection>
-    @StateObject private var folders: Local<[BoxFolder]>
-    /// Add folder…'s path while it's a field; nil while it's a row.
-    @StateObject private var adding = Local<String?>(nil)
-    /// Why the last path couldn't be added.
-    @StateObject private var addFailed = Local<String?>(nil)
-    @FocusState private var pathFocused: Bool
-
-    init(alias: String, pick: @escaping (BoxFolder) -> Void) {
-        self.alias = alias
-        self.pick = pick
-        let connection = BoxBinding.connection(alias)
-        _connection = StateObject(wrappedValue: Local(connection))
-        _folders = StateObject(wrappedValue: Local(connection.folders))
-    }
-
-    var body: some View {
-        let connection = connection.value
-        VStack(spacing: Layout.Welcome.sectionGap) {
-            VStack(spacing: Space.sm) {
-                Text(alias).font(Chrome.display).foregroundStyle(Theme.text)
-                Text(status(connection)).font(Chrome.body).foregroundStyle(Theme.secondary)
-                if unreachable(connection) {
-                    Button("Try again") { connection.retry() }.buttonStyle(SubtleButtonStyle(prominent: true)).padding(.top, Space.sm)
-                }
-            }
-            VStack(alignment: .leading, spacing: Space.xs) {
-                ForEach(folders.value, id: \.self) { folder in
-                    row(icon: "folder", folder.name, detail: folder.path) { pick(folder) }
-                }
-                if connection.isOnline { addRow(connection) }
-            }
-            .frame(width: Layout.Welcome.contentWidth)
-        }
-        .padding(.vertical, Layout.Welcome.paddingV)
-        .padding(.horizontal, Layout.Welcome.paddingH)
-        .frame(minWidth: Layout.Welcome.width, minHeight: Layout.Welcome.minHeight)
-        .navigationTitle(alias)
-        .onAppear { connection.retain() }
-        // A moment later, so the folder's window takes the link over without it dropping.
-        .onDisappear { DispatchQueue.main.asyncAfter(deadline: .now() + 3) { connection.release() } }
-        .task(id: connection.phase) {
-            if connection.phase == .online { folders.value = await connection.listFolders() }
-        }
-    }
-
-    private func row(icon: String, _ title: String, detail: String? = nil, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            HStack(spacing: Space.lg) {
-                Image(systemName: icon).font(Chrome.label).foregroundStyle(Theme.secondary)
-                Text(title).font(Chrome.bodyMedium).foregroundStyle(Theme.text)
-                Spacer(minLength: Space.xl)
-                if let detail { Text(detail).font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.middle) }
-            }
-            .padding(.horizontal, Space.lg)
-            .padding(.vertical, Space.sm)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(SubtleButtonStyle())
-    }
-
-    /// Add folder…: a row, and clicked, a path field in its place (there's no Finder for the box),
-    /// with one line under it.
-    @ViewBuilder private func addRow(_ connection: HostConnection) -> some View {
-        if let path = adding.value {
-            VStack(alignment: .leading, spacing: Space.xs) {
-                HStack(spacing: Space.sm) {
-                    TextField("", text: Binding(get: { path }, set: { adding.value = $0; addFailed.value = nil }), prompt: Text("~/Code/project").foregroundStyle(Theme.tertiary))
-                        .textFieldStyle(.plain)
-                        .font(Chrome.body)
-                        .focused($pathFocused)
-                        .fieldWell(focused: pathFocused)
-                        .onSubmit { add(connection) }
-                        .onExitCommand { adding.value = nil }
-                    Button("Open") { add(connection) }.smallButton(prominent: true).disabled(path.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-                Text(addFailed.value ?? "A folder already on \(alias)")
-                    .font(Chrome.caption)
-                    .foregroundStyle(addFailed.value == nil ? Theme.tertiary : Theme.danger)
-                    .padding(.leading, Space.sm)
-            }
-            .onAppear { pathFocused = true }
-        } else {
-            row(icon: "plus", "Add folder…") { adding.value = "" }
-        }
-    }
-
-    private func add(_ connection: HostConnection) {
-        guard let path = adding.value, !path.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        Task {
-            switch await connection.addFolder(path) {
-            case .success(let folder):
-                folders.value = connection.folders
-                adding.value = nil
-                pick(folder)
-            case .failure(let refusal):
-                addFailed.value = refusal.message
-            }
-        }
-    }
-
-    /// It can't be reached, or it refused this Mac: Try again shows.
-    private func unreachable(_ connection: HostConnection) -> Bool {
-        switch connection.phase {
-        case .refused, .offline: true
-        case .idle, .connecting, .online: false
-        }
-    }
-
-    private func status(_ connection: HostConnection) -> String {
-        switch connection.phase {
-        case .online: folders.value.isEmpty ? "No folders on \(alias)" : "Pick a folder"
-        case .refused(let why): why
-        case .offline: connection.lastHeard.map { "Offline · " + BoxBinding.when($0) } ?? "Can't reach \(alias)"
-        case .idle, .connecting: "Connecting…"
-        }
-    }
-}
-
-/// The title row's one cue in a box's window, where a folder window names its folder: the box's
-/// name, or "<alias> offline · 14:32" while it can't be reached.
-struct BoxCue: View {
-    let box: BoxBinding
-
-    var body: some View {
-        // A synced folder's one notice (both kept, or why it paused) stands in for the name.
-        let notice = box.sync?.notice
-        Text(notice.map { box.alias + " · " + $0 } ?? (box.sync != nil && box.online ? box.alias + " · in sync" : box.line))
-            .font(Chrome.label)
-            .foregroundStyle(box.online && notice == nil ? Theme.secondary : Theme.tertiary)
-            .lineLimit(1)
-            .truncationMode(.middle)
-            .layoutPriority(-1)
-            .help(box.sync.map { $0.pair.mac + " ⇄ " + box.folder } ?? box.folder)
     }
 }

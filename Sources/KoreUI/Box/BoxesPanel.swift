@@ -20,12 +20,12 @@ struct BoxesSwitch: View {
 /// row opens.
 struct BoxesPanel: View {
     let workspace: Workspace
-    @Environment(\.openWindow) private var openWindow
     /// The rows opened, by alias; a box's window starts with its own.
     @StateObject private var open: Local<Set<String>>
-    /// Add folder…'s field: the box it's under, and the path.
-    @StateObject private var addingFolder = Local<(alias: String, path: String)?>(nil)
-    @StateObject private var folderFailed = Local<String?>(nil)
+    /// Add folder…'s field: the box it's under.
+    @StateObject private var addingFolder = Local<String?>(nil)
+    /// The folder row lit by a click (its window glyphs show): alias and path.
+    @StateObject private var selected = Local<BoxPlace?>(nil)
     /// Add a box…'s field.
     @StateObject private var addingBox = Local<String?>(nil)
     @FocusState private var fieldFocused: Bool
@@ -40,7 +40,8 @@ struct BoxesPanel: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: Space.xs) {
-                BoxesSwitch(workspace: workspace)
+                // A box's window shows only Boxes: no switch.
+                if workspace.box == nil { BoxesSwitch(workspace: workspace) }
                 Text("Boxes").font(Chrome.bodyMedium).foregroundStyle(Theme.secondary)
                 Spacer(minLength: Space.md)
             }
@@ -86,15 +87,21 @@ struct BoxesPanel: View {
         if let note = box.note { noteLine(note, alias: box.alias) }
         ForEach(box.folders, id: \.self) { folder in
             let here = workspace.box?.alias == box.alias && workspace.box?.folder == folder.path
+            let place = BoxPlace(alias: box.alias, folder: folder.path)
+            let picked = selected.value == place
             let missing = folder.missing == true
-            row(indent: 1, lit: here) {
-                openWindow(value: BoxPlace(alias: box.alias, folder: folder.path))
+            // A click lights it; its glyphs open it.
+            row(indent: 1, lit: here || picked) {
+                selected.value = place
             } label: {
                 Image(systemName: "folder").font(Chrome.caption).foregroundStyle(missing ? Theme.tertiary : Theme.secondary)
-                Text(folder.name).font(Chrome.label).foregroundStyle(missing ? Theme.tertiary : here ? Theme.text : Theme.secondary).lineLimit(1)
+                Text(folder.name).font(Chrome.label).foregroundStyle(missing ? Theme.tertiary : here || picked ? Theme.text : Theme.secondary)
+                    .lineLimit(1)
+                    .help(missing ? "Missing on \(box.alias): \(folder.path)" : folder.path)
+                Spacer(minLength: 0)
+                if picked, !here, !missing { BoxFolderGlyphs(place: place, here: workspace.givesWay) }
             }
             .disabled(missing)
-            .help(missing ? "Missing on \(box.alias): \(folder.path)" : folder.path)
         }
         if box.status == .ready { addFolder(box.alias) }
     }
@@ -116,19 +123,15 @@ struct BoxesPanel: View {
     }
 
     @ViewBuilder private func addFolder(_ alias: String) -> some View {
-        if let adding = addingFolder.value, adding.alias == alias {
-            VStack(alignment: .leading, spacing: Space.xxs) {
-                field(Binding(get: { adding.path }, set: { addingFolder.value = (alias, $0); folderFailed.value = nil }), prompt: "~/Code/project") {
-                    submitFolder(alias)
-                } cancel: { addingFolder.value = nil }
-                Text(folderFailed.value ?? "A folder already on \(alias)")
-                    .font(Chrome.caption)
-                    .foregroundStyle(folderFailed.value == nil ? Theme.tertiary : Theme.danger)
+        if addingFolder.value == alias {
+            BoxAddFolderField(alias: alias) { addingFolder.value = nil } added: { folder in
+                addingFolder.value = nil
+                selected.value = BoxPlace(alias: alias, folder: folder.path)
             }
-            .padding(.leading, Space.xl + Space.md).padding(.vertical, Space.xs)
+            .padding(.leading, Space.xl + Space.md)
         } else {
             row(indent: 1) {
-                (addingFolder.value, folderFailed.value, addingBox.value) = ((alias, ""), nil, nil)
+                (addingFolder.value, addingBox.value) = (alias, nil)
             } label: {
                 Image(systemName: "plus").font(Chrome.caption).foregroundStyle(Theme.tertiary)
                 Text("Add folder…").font(Chrome.label).foregroundStyle(Theme.secondary)
@@ -139,7 +142,7 @@ struct BoxesPanel: View {
     @ViewBuilder private var addBox: some View {
         if let typed = addingBox.value {
             VStack(alignment: .leading, spacing: 0) {
-                field(Binding(get: { typed }, set: { addingBox.value = $0 }), prompt: "SSH host") { submitBox(typed) } cancel: { addingBox.value = nil }
+                field(Binding(get: { typed }, set: { addingBox.value = $0 }), prompt: "SSH alias") { submitBox(typed) } cancel: { addingBox.value = nil }
                     .padding(.vertical, Space.xs)
                 ForEach(list.suggestions(typed).prefix(6), id: \.self) { alias in
                     row(indent: 1) { submitBox(alias) } label: {
@@ -191,19 +194,6 @@ struct BoxesPanel: View {
         open.value.insert(alias)
         guard list.box(alias)?.status != .probing else { return }
         Task { await list.probe(alias) }
-    }
-
-    private func submitFolder(_ alias: String) {
-        guard let path = addingFolder.value?.path.trimmingCharacters(in: .whitespaces), !path.isEmpty else { return }
-        Task {
-            switch await list.addFolder(alias, path: path) {
-            case .success(let folder):
-                addingFolder.value = nil
-                openWindow(value: BoxPlace(alias: alias, folder: folder.path))
-            case .failure(let refusal):
-                folderFailed.value = refusal.message
-            }
-        }
     }
 
     private func submitBox(_ alias: String) {

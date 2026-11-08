@@ -482,8 +482,8 @@ package final class HostConnection {
             control = welcome.policy.control
         case .bye(let reason):
             switch reason {
-            case .auth: refuse("\(alias) didn't accept this Mac's grant \"\(grant)\"")
-            case .version: refuse("\(alias) runs a link this Kore can't read")
+            case .auth: refuse("\(alias) turned this Mac away")
+            case .version: refuse("\(alias) and this Kore don't match · update one")
             case .replaced: refuse("Another Kore with this Mac's grant took over \(alias)")
             default: drop("the box said \(reason.rawValue)")
             }

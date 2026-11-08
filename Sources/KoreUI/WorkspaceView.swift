@@ -412,17 +412,14 @@ struct TabBar: View {
                 }
                 .storyID(StoryID.Titlebar.newtab)
             Spacer(minLength: Space.xl)
-            if let box = workspace.box {
-                BoxCue(box: box)
-            } else {
-                Text(workspace.folder.lastPathComponent)
-                    .font(Chrome.label)
-                    .foregroundStyle(Theme.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .layoutPriority(-1)
-                    .help(workspace.folder.path)
-            }
+            // A box folder's name too; its box's cue is on the box button.
+            Text(workspace.folder.lastPathComponent)
+                .font(Chrome.label)
+                .foregroundStyle(Theme.secondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .layoutPriority(-1)
+                .help(workspace.box.map { $0.alias + " · " + $0.shownFolder } ?? workspace.folder.path)
             if let chat = workspace.activeTab.chat {
                 AgentsButton(chat: chat, height: tabHeight).storyID(StoryID.Titlebar.agents, press: chat.agentMap.toggle)
                 CommandsButton(chat: chat, height: tabHeight)
