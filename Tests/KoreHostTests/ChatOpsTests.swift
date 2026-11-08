@@ -146,6 +146,8 @@ struct ChatOpsTests {
         rig.sessions["codex"] = [SessionSummary(id: "thread1", agent: .codex, title: "Codex work", updated: old, archived: true)]
         _ = hc.live(services: rig.host.services)
         await hc.chat?.startOnce()
+        // The engine takes its session a pass later (it steps aside between events): wait for it.
+        for _ in 0..<100 where hc.chat?.status.sessionId != "s1" { try await Task.sleep(for: .milliseconds(20)) }
         hc.noted(try #require(hc.chat))
         #expect(hc.record.session == "s1")
         rig.host.close(hc)

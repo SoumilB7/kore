@@ -91,8 +91,12 @@ struct BoxStallTests {
             #expect(status == 0)
             io.close()
         }
-        // The pipes' read ends close at EOF; let the last handlers run.
-        try await Task.sleep(for: .milliseconds(300))
+        // The pipes' read ends close at EOF, off their handlers' queue: give them up to 3 s.
+        var waited = 0
+        while openDescriptors() > before + 2, waited < 3000 {
+            try await Task.sleep(for: .milliseconds(50))
+            waited += 50
+        }
         #expect(openDescriptors() <= before + 2, "before \(before), after \(openDescriptors())")
     }
 }
