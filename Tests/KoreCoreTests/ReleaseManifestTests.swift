@@ -77,4 +77,13 @@ struct ReleaseManifestTests {
         #expect(!ReleaseManifest.newer("0.2.3", than: "0.2.3.0"))
         #expect(!ReleaseManifest.newer("0.2.2", than: "0.2.10"))
     }
+
+    /// kore-host.sh and install.sh check releases with the same key Kore.app and kore-host carry.
+    @Test func theScriptsCarryTheCompiledKey() throws {
+        let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        for script in ["scripts/kore-host.sh", "install.sh"] {
+            let text = try String(contentsOf: root.appendingPathComponent(script), encoding: .utf8)
+            #expect(text.contains("\nKORE_RELEASE_KEY=\"\(KoreReleaseKey.base64)\"\n"), "\(script)")
+        }
+    }
 }

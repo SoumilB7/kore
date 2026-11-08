@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 import Observation
 
 /// Kore's own updates: the repo's latest release, asked for when a window opens and at no other
@@ -57,14 +58,7 @@ package final class Updater {
     }
 
     /// "0.10.0" is newer than "0.9.3"; a missing part counts as 0.
-    nonisolated static func newer(_ a: String, than b: String) -> Bool {
-        let x = a.split(separator: ".").map { Int($0) ?? 0 }, y = b.split(separator: ".").map { Int($0) ?? 0 }
-        for i in 0..<max(x.count, y.count) {
-            let p = i < x.count ? x[i] : 0, q = i < y.count ? y[i] : 0
-            if p != q { return p > q }
-        }
-        return false
-    }
+    nonisolated static func newer(_ a: String, than b: String) -> Bool { ReleaseManifest.newer(a, than: b) }
 
     /// A storyline's release.
     package func storySet(_ state: State) { self.state = state }
@@ -81,17 +75,24 @@ package final class Updater {
         state = .installing(version, since: Date())
         let story = storyInstaller
         Task.detached {
-            let failure = if let story { await story() } else { Self.runInstaller() }
+            let failure = if let story { await story() } else { Self.runInstaller(version) }
             await MainActor.run { self.state = .failed(version, failure) }
         }
     }
 
+    /// The installer's line, pinned to the release found: install.sh checks that release's
+    /// signature and refuses one older than this app. Only a plain version is passed on.
+    nonisolated static func installLine(_ version: String) -> String {
+        let pinned = !version.isEmpty && version.allSatisfy { $0.isASCII && ($0.isNumber || $0 == ".") } ? " -s -- v\(version)" : ""
+        return "set -o pipefail; curl -fsSL https://raw.githubusercontent.com/\(repo)/main/install.sh | bash" + pinned
+    }
+
     /// Runs the installer to its end, which a successful one doesn't let this process see. What
     /// went wrong, in its words.
-    nonisolated private static func runInstaller() -> String {
+    nonisolated private static func runInstaller(_ version: String) -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/bin/bash")
-        process.arguments = ["-c", "set -o pipefail; curl -fsSL https://raw.githubusercontent.com/\(repo)/main/install.sh | bash"]
+        process.arguments = ["-c", installLine(version)]
         // To a file, not a pipe: it has to outlive Kore, and a build says more than a pipe holds.
         let log = FileManager.default.temporaryDirectory.appendingPathComponent("kore-update-\(UUID().uuidString).log")
         FileManager.default.createFile(atPath: log.path, contents: nil)
