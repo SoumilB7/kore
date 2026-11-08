@@ -193,4 +193,74 @@ struct TranscriptRulesTests {
         #expect(actions("second")?.canFork == true)
         #expect(s.items.filter { $0.actions?.always == true }.count == 1)
     }
+
+    /// A second width step with the reader's row kept: its frames still at the width before are
+    /// the lazy stack's guesses and move nobody; its first frame at the new width moves the view
+    /// by as much as it moved.
+    @Test func quickWidthStepWaitsForTheRowsNewWidth() {
+        let hold = WidthHold()
+        let offset: CGFloat = 4257
+        func y(_ put: WidthHold.Put?) -> CGFloat? {
+            if case .hold(.offset(let y)) = put { return y }
+            return nil
+        }
+        _ = hold.placed("row", CGRect(x: 44, y: 2800, width: 912, height: 2374), offset: offset, inset: 0, visible: 623, following: false)
+        hold.rest = (offset, false)
+        #expect(y(hold.placed("row", CGRect(x: 40, y: 360, width: 820, height: 2374), offset: offset, inset: 0, visible: 623, following: false)) == offset - 2440)
+        hold.resized()
+        #expect(hold.placed("row", CGRect(x: 36, y: 1962, width: 820, height: 2374), offset: 1817, inset: 0, visible: 623, following: false) == nil)
+        #expect(hold.holding)
+        #expect(y(hold.placed("row", CGRect(x: 36, y: 2398, width: 728, height: 2374), offset: 1817, inset: 0, visible: 623, following: false)) == offset - 402)
+    }
+
+    /// The first width step: another row's frame still at the old width comes between, and the
+    /// row kept's next frame at the old width is a guess too; its first at the new width says.
+    @Test func firstWidthStepWaitsForTheRowsNewWidth() {
+        let hold = WidthHold()
+        let offset: CGFloat = 4267
+        func y(_ put: WidthHold.Put?) -> CGFloat? {
+            if case .hold(.offset(let y)) = put { return y }
+            return nil
+        }
+        _ = hold.placed("row", CGRect(x: 40, y: 2800, width: 912, height: 2374), offset: offset, inset: 0, visible: 623, following: false)
+        hold.rest = (offset, false)
+        #expect(y(hold.placed("other", CGRect(x: 40, y: 5300, width: 820, height: 900), offset: offset, inset: 0, visible: 623, following: false)) == offset)
+        _ = hold.placed("next", CGRect(x: 40, y: 6300, width: 912, height: 900), offset: offset, inset: 0, visible: 623, following: false)
+        #expect(hold.placed("row", CGRect(x: 40, y: 4400, width: 912, height: 2374), offset: offset, inset: 0, visible: 623, following: false) == nil)
+        #expect(hold.holding)
+        // Carried out of the built rows before it's laid out at the new width: held, not sought.
+        #expect(hold.left("row") == nil)
+        #expect(hold.seeking == nil)
+        #expect(y(hold.placed("row", CGRect(x: 36, y: 2400, width: 820, height: 2374), offset: offset, inset: 0, visible: 623, following: false)) == offset - 400)
+    }
+
+    /// The row kept leaves the built rows before it's laid out at the new width, the rows above
+    /// it laid out anew by estimates: the rows after it, laid out at the old width some time
+    /// (their heights known), say where it went by where they are at the new one.
+    @Test func rowsAfterTheRowKeptSayWhereItWent() {
+        let hold = WidthHold()
+        hold.order = { ["a1", "u2", "row", "u3", "a3"] }
+        let offset: CGFloat = 4417
+        func y(_ put: WidthHold.Put?) -> CGFloat? {
+            if case .hold(.offset(let y)) = put { return y }
+            return nil
+        }
+        // Laid out at the old width, the end first: the rows after it aren't built any more.
+        _ = hold.placed("u3", CGRect(x: 40, y: 5330, width: 912, height: 68), offset: 5000, inset: 0, visible: 623, following: false)
+        _ = hold.placed("a3", CGRect(x: 40, y: 5398, width: 912, height: 2374), offset: 5000, inset: 0, visible: 623, following: false)
+        _ = hold.left("u3")
+        _ = hold.left("a3")
+        _ = hold.placed("row", CGRect(x: 40, y: 2956, width: 912, height: 2374), offset: offset, inset: 0, visible: 623, following: false)
+        hold.rest = (offset, false)
+        hold.resized()
+        // The new width: a row after it first, at a place of the lazy stack's.
+        #expect(y(hold.placed("a4", CGRect(x: 40, y: 5244, width: 820, height: 2374), offset: offset, inset: 0, visible: 623, following: false)) == offset)
+        // Its own frame still at the old width, a guess, and the view carried off it.
+        #expect(hold.placed("row", CGRect(x: 40, y: 4557, width: 912, height: 2374), offset: offset, inset: 0, visible: 623, following: false) == nil)
+        #expect(hold.left("row") == nil)
+        // The row after it, laid out at the new width: the view goes as far as that row went.
+        #expect(y(hold.placed("a3", CGRect(x: 40, y: 2802, width: 820, height: 2374), offset: offset, inset: 0, visible: 623, following: false)) == offset - 2596)
+        // And then by its own frame at the new width.
+        #expect(y(hold.placed("row", CGRect(x: 40, y: 360, width: 820, height: 2374), offset: 1821, inset: 0, visible: 623, following: false)) == offset - 2596)
+    }
 }

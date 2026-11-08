@@ -308,7 +308,29 @@ struct TranscriptTimeline: View, Equatable {
                 let readerLeft = Self.readerLeft(inputs: shift.readerInputs, taken: followTaken.value)
                 // A move with no scroll phase (the scroll bar, End) never reaches `.idle` above.
                 // A new width can leave the content's height past its rows: looked at soon.
-                if old.count == new.count, old[4] > 0, new[4] != old[4] { checkBlank(soon: true) }
+                if old.count == new.count, old[4] > 0, new[4] != old[4] {
+                    // A reader above the end (a row kept through the steps before, or where they
+                    // left it at the first): SwiftUI, which keeps the view on a row it picks as
+                    // content is laid out again, can carry it far off by its estimates and take
+                    // the row kept out of the built rows (a seek then lands at the end of an
+                    // estimated height). Held at a point instead, it's where the hold has it (or
+                    // the reader left it), and the row's frames at the new width move it.
+                    widthHold.resized()
+                    let held: CGFloat? = if widthHold.holding, case .offset(let y) = shift.held?.place {
+                        y
+                    } else if !widthHold.holding, !following.value, let rest = widthHold.rest, !rest.atEnd {
+                        rest.offset
+                    } else {
+                        nil
+                    }
+                    if let y = held, !shift.zoomAdjusting,
+                        position.value.isPositionedByUser || position.value.point.map({ abs($0.y - y - insetTop.value) > 0.5 }) ?? true
+                    {
+                        scroll(position, to: y)
+                        nudge.value &+= 1
+                    }
+                    checkBlank(soon: true)
+                }
                 if !gesturing.value, offset != geometry.value.offset { checkBlank() }
                 // Keep measuring, but let neither a retained bottom target nor restoration,
                 // paging or folding replace the absolute position held during a pinch.
@@ -639,6 +661,7 @@ struct TranscriptTimeline: View, Equatable {
                     if zoomRejoining.value { zoomRejoining.value = false }
                 }
                 shift.onLetGo = { [widthHold] in widthHold.drop() }
+                widthHold.order = { [weak store = store] in store?.sections.flatMap { $0.items.map(\.id) } ?? [] }
                 // Back from behind other windows, a scroll view has come back with nothing drawn.
                 shift.onReturn = { [shown] in if shown.value { checkBlank() } }
                 if StoryHost.installed {
@@ -1167,7 +1190,7 @@ enum FoldMove: Equatable {
 /// when it starts above the top, the share of it above stays above, as its text wraps the same way
 /// all through. The reader's scroll moves no row in the content, so it's never answered.
 @MainActor
-private final class WidthHold: ObservableObject {
+final class WidthHold: ObservableObject {
     enum Put {
         case hold(ScrollShift.Place)
         /// The row was laid out off screen and isn't built: to it, and on from its next frame.
@@ -1222,6 +1245,11 @@ private final class WidthHold: ObservableObject {
             places[key].flatMap { now in abs(now.width - (width ?? now.width)) <= 0.5 ? (abs(was.minY - row.place.minY), now.minY - was.minY) : nil }
         }.min { $0.0 < $1.0 }
         if let moved { return .hold(.offset(row.offset + moved.1)) }
+        // Not laid out at the new width yet: SwiftUI carried the view off it (keeping a row it
+        // picked, by its estimates), the row didn't move. The hold puts the view back, and the
+        // row's first frame at the new width moves it; a seek lands by those estimates (at the
+        // end of an estimated height).
+        guard !unplaced else { return nil }
         seeking = id
         return .seek(id)
     }
@@ -1231,6 +1259,7 @@ private final class WidthHold: ObservableObject {
     func placed(_ id: String, _ frame: CGRect, offset: CGFloat?, inset: CGFloat, visible: CGFloat, following: Bool) -> Put? {
         let put = take(at: frame.width, offset: offset, inset: inset, visible: visible, following: following)
         places[id] = frame
+        heights[id] = frame.height
         if case .none = put, let since = endSince, abs(frame.width - (width ?? frame.width)) <= 0.5 {
             let now = Date()
             guard following, now < since + Self.waitsAtMost else {
@@ -1242,7 +1271,18 @@ private final class WidthHold: ObservableObject {
         }
         // A frame still at the width it was kept at is the lazy stack placing it by its guesses
         // for the rows around while they're laid out again: the next, at the new width, says.
-        guard holding, let row, row.id == id, abs(frame.width - (width ?? frame.width)) <= 0.5 else { return put }
+        if let was = stale, row?.id == id {
+            guard abs(frame.width - was) > 0.5 else { return put }
+            stale = nil
+        }
+        guard holding, let row, abs(frame.width - (width ?? frame.width)) <= 0.5 else { return put }
+        guard row.id == id else {
+            // The row kept left the built rows before it was laid out at this width: a row laid
+            // out with it at the old width says where it went, as it's laid out at this one.
+            guard unplaced, places[row.id] == nil, let was = witnesses[id] else { return put }
+            until = max(until, Date() + Self.lasts / 4)
+            return .hold(.offset(row.offset + frame.minY - was.minY))
+        }
         unplaced = false
         seeking = nil
         until = max(until, Date() + Self.lasts / 4)
@@ -1253,8 +1293,15 @@ private final class WidthHold: ObservableObject {
     /// The first frame at a new width: unless a row is kept already (a drag under way), the row
     /// kept is taken from the frames still at the old width.
     private func take(at width: CGFloat, offset: CGFloat?, inset: CGFloat, visible: CGFloat, following: Bool) -> Put? {
-        defer { self.width = width }
-        guard let old = self.width, abs(width - old) > 0.5 else { return nil }
+        guard let old = self.width else {
+            self.width = width
+            return nil
+        }
+        guard abs(width - old) > 0.5 else { return nil }
+        // With a row kept, another row placed by the lazy stack's guesses at the width the view
+        // just left: not a new width (the rows' width stays the new one, for the frames after).
+        if holding, let before, abs(width - before) <= 0.5 { return nil }
+        self.width = width
         if following, rest?.atEnd ?? true {
             until = Date() + Self.lasts
             row = nil
@@ -1275,9 +1322,55 @@ private final class WidthHold: ObservableObject {
         row = built.filter { $0.value.minY - top < visible && $0.value.maxY > top }
             .min { abs($0.value.minY - top) < abs($1.value.minY - top) }
             .map { kept in (kept.key, kept.value, kept.value.minY < top && kept.value.height > 0 ? (top - kept.value.minY) / kept.value.height : 0, offset) }
-        witnesses = row.map { kept in built.filter { $0.key != kept.id } } ?? [:]
+        witnesses = row.map { kept in chained(to: kept).merging(built.filter { $0.key != kept.id }) { $1 } } ?? [:]
         unplaced = row != nil
+        // Its frames at the old width are guesses too (another row's frame still at the old
+        // width can come after this one's at the new width).
+        stale = row?.place.width
         return .hold(.offset(offset))
+    }
+
+    /// The row kept's width when the view's width changed (it's kept, or the width changed again
+    /// with it kept). Until the row is laid out at another width, its frames are the lazy
+    /// stack's guesses (other rows' frames at either width come between, so the width last seen
+    /// doesn't tell).
+    private var stale: CGFloat?
+
+    /// The rows' ids, in order (`TranscriptStore.sections`).
+    var order: (() -> [String])?
+    /// Each row's height as last laid out.
+    private var heights: [String: CGFloat] = [:]
+    /// The rows' width as the view's width last changed: frames still at it are guesses.
+    private var before: CGFloat?
+
+    /// Where the rows next to the row kept were at the old width, one after another from it, as
+    /// far as their heights are known (built then or not): when it leaves the built rows before
+    /// it's laid out at the new width (a lazy stack laying the rows above out by new estimates
+    /// can move the content under the view), they say where it went.
+    private func chained(to kept: (id: String, place: CGRect, share: CGFloat, offset: CGFloat)) -> [String: CGRect] {
+        guard let ids = order?(), let at = ids.firstIndex(of: kept.id) else { return [:] }
+        var found: [String: CGRect] = [:]
+        var y = kept.place.maxY
+        for id in ids[(at + 1)...] {
+            guard let height = heights[id] else { break }
+            found[id] = CGRect(x: kept.place.minX, y: y, width: kept.place.width, height: height)
+            y += height
+        }
+        y = kept.place.minY
+        for id in ids[..<at].reversed() {
+            guard let height = heights[id] else { break }
+            y -= height
+            found[id] = CGRect(x: kept.place.minX, y: y, width: kept.place.width, height: height)
+        }
+        return found
+    }
+
+    /// The view's own width changed.
+    func resized() {
+        before = width
+        guard holding, let row, let place = places[row.id] else { return }
+        stale = place.width
+        until = max(until, Date() + Self.lasts)
     }
 
     /// No built row reaches below `y` in the content.
@@ -1285,6 +1378,8 @@ private final class WidthHold: ObservableObject {
 
     /// The reader scrolled, or the view keeps its place another way: nothing is held.
     func drop() {
+        stale = nil
+        before = nil
         row = nil
         endSince = nil
         unplaced = false
@@ -1294,6 +1389,9 @@ private final class WidthHold: ObservableObject {
 
     /// A scroll view built anew lays its rows out afresh: none of it is a new width.
     func reset() {
+        stale = nil
+        before = nil
+        heights = [:]
         row = nil
         endSince = nil
         unplaced = false
