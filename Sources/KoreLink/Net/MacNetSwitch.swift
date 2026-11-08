@@ -35,8 +35,10 @@ package enum MacNetSwitch {
 
     /// A listener for `net`, following its state from now on.
     @discardableResult
-    package static func follow(_ net: KoreNetSwitch, feed: LinkFeed = .shared, asks: DeviceAsks = DeviceAsks()) -> MacNet {
-        let mac = MacNet(host: net, feed: feed, asks: asks)
+    package static func follow(
+        _ net: KoreNetSwitch, feed: LinkFeed = .shared, asks: DeviceAsks = DeviceAsks(), clock: @escaping @Sendable () -> Date = { Date() }
+    ) -> MacNet {
+        let mac = MacNet(host: net, feed: feed, asks: asks, clock: clock)
         net.directoryChanged = { [weak mac] in mac?.pushDirectory() }
         net.phonesLook = { [weak mac] in mac?.refresh() }
         watch(net, mac)
