@@ -86,31 +86,18 @@ struct BoxSyncButton: View {
 
     private func syncedCard(_ pair: SyncPair) -> some View {
         let sync = box.sync
-        return VStack(alignment: .leading, spacing: Space.sm) {
-            Text(sync?.notice ?? "Synced locally to \(SyncPairs.shown(mac: pair.mac))")
-                .font(Chrome.label)
-                .foregroundStyle(Theme.secondary)
-                .lineLimit(2)
-                .help(pair.mac)
-            HStack(spacing: Space.sm) {
-                // A round that stopped before a bulk delete goes on only with this.
-                if let sync, let count = sync.askDeletes {
-                    Button("Delete \(count.formatted()) files") { sync.allowDeletes() }.smallButton(danger: true)
-                }
-                Spacer(minLength: 0)
-                Button("Stop syncing") {
-                    SyncPairList.shared.unpair(alias: box.alias, box: box.folder)
-                    BoxBinding.pairsChanged()
-                    close()
-                }
-                .smallButton()
-                Button("Open \(URL(fileURLWithPath: pair.mac).lastPathComponent)") {
-                    NSWorkspace.shared.open(URL(fileURLWithPath: pair.mac))
-                    close()
-                }
-                .smallButton(prominent: true)
-            }
-        }
+        return BoxSyncedCard(
+            line: sync?.notice ?? "Synced locally to \(SyncPairs.shown(mac: pair.mac))", mac: pair.mac, deletes: sync?.askDeletes,
+            allowDeletes: { sync?.allowDeletes() },
+            stop: {
+                SyncPairList.shared.unpair(alias: box.alias, box: box.folder)
+                BoxBinding.pairsChanged()
+                close()
+            },
+            open: {
+                NSWorkspace.shared.open(URL(fileURLWithPath: pair.mac))
+                close()
+            })
     }
 
     private func pairingCard(_ pairing: BoxPairing) -> some View {
@@ -178,6 +165,30 @@ struct BoxSyncButton: View {
         SyncPairList.shared.pair(mac: mac, alias: box.alias, box: box.folder)
         BoxBinding.pairsChanged()
         close()
+    }
+}
+
+/// The Sync popup while synced: its one line (or why it's paused), the bulk delete it waits on,
+/// Stop syncing and Open the Mac folder.
+struct BoxSyncedCard: View {
+    let line: String
+    let mac: String
+    let deletes: Int?
+    let allowDeletes: () -> Void
+    let stop: () -> Void
+    let open: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.sm) {
+            Text(line).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(2).help(mac)
+            HStack(spacing: Space.sm) {
+                // A round that stopped before a bulk delete goes on only with this.
+                if let deletes { Button("Delete \(deletes.formatted()) files", action: allowDeletes).smallButton(danger: true) }
+                Spacer(minLength: 0)
+                Button("Stop syncing", action: stop).smallButton()
+                Button("Open \(URL(fileURLWithPath: mac).lastPathComponent)", action: open).smallButton(prominent: true)
+            }
+        }
     }
 }
 

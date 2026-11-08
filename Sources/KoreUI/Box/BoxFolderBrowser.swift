@@ -33,10 +33,10 @@ final class BoxFolderBrowserModel {
     /// The folders, in order: what ↑ ↓ step through (files show greyed and don't light).
     var folders: [FileEntry] { entries.filter(\.isFolder) }
 
-    /// The path's parts, each with its folder: "/", "home", "me", …
+    /// The path's parts, each with its folder: "home", "me", … (the box's name stands for `/`).
     var crumbs: [(name: String, path: String)] {
         guard let path else { return [] }
-        var out: [(String, String)] = [("/", "/")]
+        var out: [(String, String)] = []
         var at = ""
         for part in path.split(separator: "/") {
             at += "/" + part
@@ -146,9 +146,9 @@ struct BoxFolderBrowser: View {
         VStack(alignment: .leading, spacing: Space.sm) {
             crumbs
             list
-            if let problem = model.problem {
-                Text(problem).font(Chrome.caption).foregroundStyle(Theme.danger).lineLimit(2)
-            }
+            // One plain line, its room always kept: nothing below moves when it comes.
+            Text(model.problem ?? " ").font(Chrome.caption).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.tail)
+                .help(model.problem ?? "")
             TextField("", text: $typed.value, prompt: Text(model.path ?? "Path on \(model.alias)").foregroundStyle(Theme.tertiary))
                 .textFieldStyle(.plain)
                 .font(Chrome.label)
@@ -186,14 +186,15 @@ struct BoxFolderBrowser: View {
         .storyID(StoryID.Boxes.browser)
         .task { await model.start() }
         .onChange(of: model.path) { _, path in typed.value = path ?? "" }
+        .onAppear { if typed.value.isEmpty { typed.value = model.path ?? "" } }
     }
 
     private var crumbs: some View {
         HStack(spacing: Space.xxs) {
             Image(systemName: "server.rack").font(Chrome.caption).foregroundStyle(Theme.tertiary)
-            Text(model.alias).font(Chrome.label).foregroundStyle(Theme.secondary)
+            Button(model.alias) { Task { await model.go("/") } }.buttonStyle(.plain).font(Chrome.label).foregroundStyle(Theme.secondary)
             ForEach(Array(model.crumbs.enumerated()), id: \.offset) { index, crumb in
-                if index > 0 { Image(systemName: "chevron.right").font(Chrome.glyphCrumb).foregroundStyle(Theme.tertiary) }
+                Image(systemName: "chevron.right").font(Chrome.glyphCrumb).foregroundStyle(Theme.tertiary)
                 Button(crumb.name) { Task { await model.go(crumb.path) } }
                     .buttonStyle(.plain)
                     .font(Chrome.label)

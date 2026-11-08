@@ -31,9 +31,8 @@ struct BoxExplorer: View {
         .background(floating ? Theme.surface : Theme.background)
         .environment(\.listGround, floating ? .surface : .window)
         .onHover { hovered.value = $0 }
+        // The link back after a drop lists the open folders again (`HostConnection`'s watches).
         .task { await store.start() }
-        // The link back after a drop: what changed meanwhile shows.
-        .onChange(of: box.connection.isOnline) { _, online in if online, store.rootLoaded { Task { await store.refresh() } } }
     }
 
     private var searching: Bool { workspace.sidebar == .search }

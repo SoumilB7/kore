@@ -21,6 +21,7 @@ struct BoxExplorerTests {
         func list(_ path: String?, hidden: Bool) async -> Result<BoxListing, HostRefusal> {
             let path = path ?? "/home/me"
             listed.append(path)
+            if listLag > .zero { try? await Task.sleep(for: listLag) }
             if let why = refusals[path] { return .failure(HostRefusal(message: why)) }
             guard let entries = folders[path] else { return .failure(HostRefusal(message: "Not there on this box.")) }
             return .success(BoxListing(path: path, entries: entries, more: false))
@@ -43,6 +44,7 @@ struct BoxExplorerTests {
         var refuseEdits: String?
         /// Edits take this long to answer, as over a link.
         var lag: Duration = .zero
+        var listLag: Duration = .zero
 
         private func parent(_ path: String) -> String { (path as NSString).deletingLastPathComponent }
         private func name(_ path: String) -> String { (path as NSString).lastPathComponent }

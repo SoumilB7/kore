@@ -65,6 +65,12 @@ final class BoxBinding {
     private(set) lazy var search = BoxSearchStore(root: folder, source: connection)
     private(set) var filesMade = false
 
+    /// A store made elsewhere (a snapshot's fake box) as this window's files.
+    func adopt(_ store: BoxExplorerStore) {
+        files = store
+        filesMade = true
+    }
+
     /// A box path's stand-in under `folderURL`, for a file tab's path row.
     func standIn(_ path: String) -> URL {
         let inside = path.hasPrefix(folder + "/") ? String(path.dropFirst(folder.count)) : "/" + BoxFolder.lastPart(path)

@@ -51,7 +51,7 @@ struct BoxWelcomeTests {
         #expect(browser.path == "/home/me")
         #expect(browser.home == "/home/me")
         #expect(browser.folders.map(\.name) == ["Code", "data"])
-        #expect(browser.crumbs.map(\.name) == ["/", "home", "me"])
+        #expect(browser.crumbs.map(\.name) == ["home", "me"])
         // Files don't light: ↓ steps through folders only.
         browser.step(1)
         browser.step(1)
