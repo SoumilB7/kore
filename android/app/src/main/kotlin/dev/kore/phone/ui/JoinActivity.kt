@@ -76,6 +76,7 @@ class JoinActivity : Activity() {
                 val mac = s.macs.firstOrNull()
                 val line = when {
                     mac == null -> "Signed in. No Mac is on your tailnet yet."
+                    s.addClosed -> "Open Add device on your Mac.\nIn Kore there: Devices, then +."
                     s.stopped -> "$mac didn't answer. In Kore there, open Devices and press +, then try again."
                     else -> "$mac is on your tailnet.\nIn Kore there, open Devices and press +."
                 }
@@ -88,8 +89,9 @@ class JoinActivity : Activity() {
                 addView(facts(listOf("This phone" to (android.os.Build.MODEL ?: "Android"), "Tailscale" to s.self.shortName, "Address" to (s.self.ips.firstOrNull() ?: ""))))
                 quiet("Cancel") { flow.cancel() }
             }
-            is Step.Denied -> screen(halo(R.drawable.ic_mac), "Not allowed on ${s.mac}", "${s.mac} said no to this phone.") {
-                secondary("Try again") { flow.again() }
+            is Step.Denied -> screen(halo(R.drawable.ic_mac), if (s.timedOut) "No answer on ${s.mac}" else "Not allowed on ${s.mac}",
+                if (s.timedOut) "Nobody pressed Allow on ${s.mac} in time." else "${s.mac} said no to this phone.") {
+                secondary("Ask again") { flow.again() }
                 quiet("Leave KoreNet") { leave() }
             }
             is Step.NoMac -> screen(halo(R.drawable.ic_mac), "No Mac with Kore here",

@@ -40,7 +40,7 @@ class Mesh(private val app: KoreApp) {
     private val prefs = app.getSharedPreferences("kore", android.content.Context.MODE_PRIVATE)
 
     val tailnet: Tailnet by lazy { EmbeddedTailnet(app, hostname()).also { it.onNetworkChanged = { nodes.value.forEach(NodeClient::reconnectNow) } } }
-    val raiseKey = RaiseKey { app.frontActivity }
+    val raiseKey = RaiseKey({ app.frontActivity }, ::renewRaiseKey)
     private val raiseSigner = SingleFlight(raiseKey)
 
     /** Kore's id for this phone: made on joining, kept across sign-ins and Tailscale's re-logins; a new one after Leave. */
@@ -155,6 +155,23 @@ class Mesh(private val app: KoreApp) {
             notifiers.remove(id)?.let { (n, job) -> job.cancel(); n.clearAll() }
         }
         nodesFlow.update { next }
+    }
+
+    /**
+     * A new `kore_raise` (a fingerprint enrolled on the phone): its public half to every Mac (a box
+     * learns it from its Mac); each says on screen once its owner answered.
+     */
+    private fun renewRaiseKey(pub: ByteArray) {
+        for (node in nodesFlow.value.filter { it.device.value.kind == NodeKind.MAC }) app.scope.launch {
+            say("New fingerprint: Allow it on ${node.name}")
+            val r = node.raiseKey(pub)
+            say(if (r["ok"]?.toString() == "true") "${node.name} took the new fingerprint" else "${node.name} didn't take the new fingerprint")
+        }
+    }
+
+    private fun say(text: String) {
+        val a = app.frontActivity ?: return
+        a.runOnUiThread { dev.kore.phone.ui.Quiet.say(a, text) }
     }
 
     /** Forgets one device (a box that was removed, a Mac that revoked this phone). */

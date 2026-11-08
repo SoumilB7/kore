@@ -59,9 +59,10 @@ object IdentityKey : IdentitySigner {
 /**
  * `kore_raise`, the one biometric key: a strong fingerprint per signature (a CryptoObject), for
  * raising a chat's mode or Arsenal tier from the phone. A new fingerprint enrolled on the phone
- * invalidates it; it's made again, and the Mac has to learn its new public half (open decision).
+ * invalidates it; it's made again and its public half goes to each Mac (`raise.key`), taken once
+ * the owner Allows it there.
  */
-class RaiseKey(private val front: () -> Activity?) : RaiseSigner {
+class RaiseKey(private val front: () -> Activity?, private val renewed: (ByteArray) -> Unit = {}) : RaiseSigner {
     val publicKey: ByteArray get() = key().let { keyStore().getCertificate(ALIAS).publicKey.encoded }
 
     private fun key(): PrivateKey = ecKey(ALIAS, biometric = true)
@@ -73,7 +74,9 @@ class RaiseKey(private val front: () -> Activity?) : RaiseSigner {
         try {
             signature.initSign(key())
         } catch (e: KeyPermanentlyInvalidatedException) {
+            // A fingerprint was enrolled: a new key, whose public half each Mac takes on its owner's Allow.
             runCatching { keyStore().deleteEntry(ALIAS) }
+            runCatching { publicKey }.onSuccess(renewed)
             return@withContext null
         }
         suspendCancellableCoroutine { cont ->

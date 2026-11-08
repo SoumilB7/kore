@@ -202,7 +202,9 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         }
         note = when (r.str("code")) {
             "denied.sendCap" -> "This chat only takes messages on the Mac."
-            "denied.raiseMode" -> "That mode needs your fingerprint first."
+            "denied.raiseMode" -> r.str("message") ?: "That needs your fingerprint first."
+            // A risky card's Allow without the fingerprint: nothing was sent.
+            "cancelled" -> "Allow needs your fingerprint."
             "stale.card", "gone.card" -> "That card changed. Look again."
             "rateLimited" -> "Too fast. Try again in a moment."
             else -> "Not sent (${r.str("code") ?: "refused"})."
@@ -541,7 +543,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             return
         }
         if (kind in setOf("model", "effort", "fast", "autoCompact")) want.remove(kind)
-        val words = if (code == "denied.raiseMode") "That needs Kore on the device itself." else refusalWords(code)
+        val words = if (code == "denied.raiseMode") r.str("message") ?: refusalWords(code) else refusalWords(code)
         val sheet = live.lastOrNull { it.isShowing }
         if (sheet != null) { sheet.say(words); sheet.refresh() } else quiet(words)
     }
