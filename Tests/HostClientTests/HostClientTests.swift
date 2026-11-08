@@ -263,6 +263,51 @@ struct HostClientTests {
         connection.release()
     }
 
+    @Test func signInOnTheBox() async throws {
+        let dials = Dials()
+        let connection = makeConnection(root: Fixture.scratch(), dials: dials)
+        connection.retain()
+        #expect(await until { dials.hosts.count == 1 })
+        let host = dials.hosts[0]
+        _ = await host.handshake(windows: [], chats: [])
+        #expect(await until { connection.isOnline })
+        let accounts = connection.accounts
+
+        // The CLI's login: the page and code come back, the code from the page goes to the box,
+        // and the sign-in's end says who it is.
+        accounts.signIn("claude")
+        let ask = try #require(await host.next("cmd"))
+        #expect((ask["cmd"] as? [String: Any])?["type"] as? String == "account.signIn")
+        let id = try #require(ask["id"] as? String)
+        host.send(.result(.init(id: id, ok: true, message: "https://claude.ai/oauth?a=1 https://claude.ai/manual?a=1")))
+        #expect(await until { accounts.line("claude").step == .waiting(.init(url: URL(string: "https://claude.ai/manual?a=1"), code: nil)) })
+        accounts.submit("claude", code: "abc#123")
+        let submit = try #require(await host.next("cmd"))
+        #expect((submit["cmd"] as? [String: Any])?["input"] as? String == "abc#123")
+        host.send(.result(.init(id: submit["id"] as! String, ok: true)))
+        host.send(.result(.init(id: id + ":done", ok: true, message: "Signed in as me@example.com.")))
+        #expect(await until { accounts.line("claude") == .init(said: "Signed in as me@example.com.", step: .idle) })
+
+        // A device code whose end comes at once, before anyone waits on it.
+        accounts.signIn("codex")
+        let codex = try #require(await host.next("cmd"))
+        let codexId = try #require(codex["id"] as? String)
+        host.send(.result(.init(id: codexId, ok: true, message: "https://auth.openai.com/device code ABCD-1234")))
+        host.send(.result(.init(id: codexId + ":done", ok: true, message: "Signed in.")))
+        #expect(await until { accounts.line("codex").said == "Signed in." && accounts.line("codex").step == .idle })
+        #expect(HostWire.page("https://auth.openai.com/device code ABCD-1234").code == "ABCD-1234")
+
+        // GitHub: a device code, then the box says it's signed in.
+        accounts.signInGitHub()
+        let gh = try #require(await host.next("cmd"))
+        #expect((gh["cmd"] as? [String: Any])?["type"] as? String == "auth.gh")
+        host.send(json: ["t": "result", "id": gh["id"] as! String, "ok": true, "url": "https://github.com/login/device", "code": "WXYZ-0000"])
+        #expect(await until { accounts.line("gh").step == .waiting(.init(url: URL(string: "https://github.com/login/device"), code: "WXYZ-0000")) })
+        host.send(json: ["t": "delta", "rev": 2, "host": ["ghSignedIn": true]])
+        #expect(await until { accounts.line("gh") == .init(said: "Signed in", step: .idle) })
+        connection.release()
+    }
+
     @Test func sshHostsAndArguments() {
         let config = """
             Host mybox

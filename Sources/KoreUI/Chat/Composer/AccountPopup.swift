@@ -388,7 +388,10 @@ struct AccountPopup: View {
             chat: chat, id: StoryID.Composer.account, room: room, isOpen: { state.isOpen }, stepBack: { state.stepBack() }, close: { state.close() },
             editing: { state.isEditing }
         ) {
-            if case .platform(let platform) = state.editor {
+            if let box = (chat.services as? BoxChatServices)?.connection {
+                // A chat on a box: its logins are the box's.
+                BoxAccountLines(chat: chat, connection: box)
+            } else if case .platform(let platform) = state.editor {
                 PlatformFormView(state: state, platform: platform)
                     .transition(.opacity.animation(Motion.fade))
             } else {

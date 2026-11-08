@@ -38,6 +38,10 @@ package final class HostConnection {
     package private(set) var lastHeard: Date?
     package private(set) var windows: [LinkWindow] = []
     package private(set) var folders: [BoxFolder] = []
+    /// GitHub's CLI on the box is signed in, as the box last said; nil until it says.
+    package private(set) var ghSignedIn: Bool?
+    /// The CLIs' logins on the box, and GitHub's (made on first use).
+    @ObservationIgnored package private(set) lazy var accounts = BoxAccounts(connection: self)
     @ObservationIgnored package private(set) var chats: [String: ChatMeta] = [:]
     @ObservationIgnored package private(set) var clis: [CLIState] = []
     @ObservationIgnored package private(set) var providers: [ProviderInfo] = []
@@ -70,6 +74,9 @@ package final class HostConnection {
     @ObservationIgnored private var waiting: [String: CheckedContinuation<LinkMessage.Result, Never>] = [:]
     @ObservationIgnored private var folderAsks: [String: CheckedContinuation<[BoxFolder], Never>] = [:]
     @ObservationIgnored private var followers: [String: Weak] = [:]
+    @ObservationIgnored private var wantRaw: Set<String> = []
+    @ObservationIgnored private var raws: [String: Data] = [:]
+    @ObservationIgnored private var early: [String: LinkMessage.Result] = [:]
     @ObservationIgnored private var saveQueued = false
     @ObservationIgnored private var snapshotWatchers: [String: @MainActor () -> Void] = [:]
 
@@ -170,6 +177,22 @@ package final class HostConnection {
                 outbox.append((id, data))
             }
         }
+    }
+
+    /// A command whose result's own bytes are wanted too (fields 1.4's types don't read).
+    package func commandRaw(_ payload: (String) -> Data) async -> (LinkMessage.Result, Data?) {
+        let id = "c\(serial + 1)"
+        wantRaw.insert(id)
+        let result = await command(payload)
+        wantRaw.remove(id)
+        return (result, raws.removeValue(forKey: result.id))
+    }
+
+    /// A later result for a command already answered (`<id>:done`, a sign-in's end): at once when
+    /// it came already, else when it comes.
+    package func later(_ id: String) async -> LinkMessage.Result {
+        if let result = early.removeValue(forKey: id) { return result }
+        return await withCheckedContinuation { waiting[id] = $0 }
     }
 
     /// The folders the box serves: asked again while linked, else as last known.
@@ -343,11 +366,16 @@ package final class HostConnection {
             if result.id.hasPrefix("tx.open:") {
                 followers[String(result.id.dropFirst("tx.open:".count))]?.follower?.received(message, raw: raw, seq: nil)
             } else if inFlight.remove(result.id) != nil || waiting[result.id] != nil {
+                if wantRaw.remove(result.id) != nil { raws[result.id] = raw }
                 waiting.removeValue(forKey: result.id)?.resume(returning: result)
+            } else if result.id.hasSuffix(HostWire.doneSuffix) {
+                // A sign-in's end, before anyone waits on it.
+                early[result.id] = result
             }
         default:
             break
         }
+        if let gh = HostWire.ghSignedIn(message, raw: raw), gh != ghSignedIn { ghSignedIn = gh }
     }
 
     /// The box's state is in: followed chats catch up, waiting commands go, pings begin.

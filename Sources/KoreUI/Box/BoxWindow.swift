@@ -150,7 +150,7 @@ final class BoxBinding {
 final class BoxChatServices: ChatServices {
     private let app = AppChatServices.shared
     private weak var binding: BoxBinding?
-    private let connection: HostConnection
+    let connection: HostConnection
     private let folder: String
     private(set) var chatId: String?
 
