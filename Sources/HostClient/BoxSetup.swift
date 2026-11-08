@@ -100,6 +100,10 @@ package enum BoxFix: Equatable, Sendable {
     case copy(String)
     /// Install a tool there that needs no password (Homebrew).
     case install(String)
+    /// Install Swift's Linux kit on this Mac (the user's yes), then Set up or Update again.
+    case installLinuxKit(update: Bool)
+    /// Open the log a build on this Mac left.
+    case showLog(String)
 
     package var title: String {
         switch self {
@@ -112,7 +116,8 @@ package enum BoxFix: Equatable, Sendable {
         case .differences: "Fix"
         case .tryAgain: "Try again"
         case .copy: "Copy"
-        case .install: "Install"
+        case .install, .installLinuxKit: "Install"
+        case .showLog: "Show log"
         }
     }
 }
@@ -129,11 +134,13 @@ package struct BoxSetup: Sendable {
     package var shell: BoxShell
     /// The binary for a platform (`linux-x86_64`, `macos-arm64`), and whether it's a temp file to
     /// remove after.
-    package var binary: @Sendable (String) async throws -> (url: URL, temporary: Bool)
+    package var binary: @Sendable (BoxBinary.Request) async throws -> (url: URL, temporary: Bool)
+    /// The user said yes to installing Swift's Linux kit, for a build that needs it.
+    package var mayInstallKit = false
 
     package init(
         alias: String, grant: String, shell: BoxShell = BoxShell(),
-        binary: @escaping @Sendable (String) async throws -> (url: URL, temporary: Bool) = { try await BoxBinary.local(platform: $0) }
+        binary: @escaping @Sendable (BoxBinary.Request) async throws -> (url: URL, temporary: Bool) = { try await BoxBinary.local($0) }
     ) {
         self.alias = alias
         self.grant = grant
@@ -141,6 +148,8 @@ package struct BoxSetup: Sendable {
         self.binary = binary
     }
 
+    /// What a Linux box's first Set up asks before installing the kit that builds kore-host.
+    package static let kitLine = "Building kore-host needs Swift's Linux kit (about 2 GB)"
     /// Where it goes, under the box's home (what `SSHTransport.defaultCommand` runs).
     static let target = ".local/bin/kore-host"
     /// Room it needs in the box's home, in KB: the binary, unpacked, and its state.
@@ -173,7 +182,7 @@ package struct BoxSetup: Sendable {
 
     /// Sets the box up (`allow`: and grants this Mac full control), saying each step as it starts.
     @discardableResult
-    package func run(allow: Bool, step: @MainActor @Sendable (String) -> Void) async throws(Failure) -> Done {
+    package func run(allow: Bool, step: @escaping @MainActor @Sendable (String) -> Void) async throws(Failure) -> Done {
         let retry: BoxFix = allow ? .setUp : .update
         await step("Checking \(alias)…")
         let machine = try await detect()
@@ -185,7 +194,13 @@ package struct BoxSetup: Sendable {
 
         await step("Getting kore-host for \(machine.kind)…")
         let file: (url: URL, temporary: Bool)
-        do { file = try await binary(platform) } catch {
+        do {
+            file = try await binary(BoxBinary.Request(platform: platform, mayInstallKit: mayInstallKit) { await step($0) })
+        } catch is BoxHostBuild.KitNeeded {
+            throw Failure(message: Self.kitLine, fix: .installLinuxKit(update: !allow))
+        } catch let why as Failure {
+            throw why
+        } catch {
             throw Failure(message: "Couldn't get kore-host for \(alias): \(error.localizedDescription)", fix: retry)
         }
         defer { if file.temporary { try? FileManager.default.removeItem(at: file.url) } }
@@ -290,14 +305,26 @@ package struct BoxSetup: Sendable {
 }
 
 /// The kore-host binary for a box's platform (`linux-x86_64`, `linux-aarch64`, `macos-arm64`,
-/// `macos-x86_64`): a development build named by the `koreHostBinary` default (a file, or a folder
-/// holding `kore-host-<platform>[.xz]`); one Kore carries (`Contents/Resources/kore-host-<platform>.xz`,
-/// in builds made with `KORE_BUNDLE_BOX_HOST=1`); for a Mac like this one, the kore-host built
-/// beside Kore; else this version's from its GitHub release, checked against the SHA-256 the build
-/// wrote into Info.plist and kept for next time.
+/// `macos-x86_64`), in this order: a development build named by the `koreHostBinary` default (a
+/// file, or a folder holding `kore-host-<platform>[.xz]`); the one this version built before (the
+/// cache); for a Mac like this one, the kore-host built beside Kore; else built now from this
+/// Kore's source (`BoxHostBuild`).
 package enum BoxBinary {
     package static let overrideKey = "koreHostBinary"
-    package static let releases = "https://github.com/SoumilB7/kore/releases/download"
+
+    /// What Set up asks for: the platform, whether the user said yes to Swift's Linux kit, and
+    /// where to say each step.
+    package struct Request: Sendable {
+        package var platform: String
+        package var mayInstallKit: Bool
+        package var step: @Sendable (String) async -> Void
+
+        package init(platform: String, mayInstallKit: Bool = false, step: @escaping @Sendable (String) async -> Void = { _ in }) {
+            self.platform = platform
+            self.mayInstallKit = mayInstallKit
+            self.step = step
+        }
+    }
 
     /// The box's CPU from `uname -sm` ("Linux x86_64"): nil for another system or CPU.
     package static func arch(uname: String) -> String? {
@@ -319,34 +346,36 @@ package enum BoxBinary {
         #endif
     }
 
-    /// Info.plist's key for a platform's SHA-256 (Linux's keep their first names).
-    static func shaKey(_ platform: String) -> String {
-        platform.hasPrefix("linux-") ? "KoreHostSHA256-" + platform.dropFirst("linux-".count) : "KoreHostSHA256-" + platform
-    }
-
-    /// The binary for `platform`, unpacked to a temp file when it's compressed.
+    /// The binary for the request, unpacked to a temp file when it's compressed.
     package static func local(
-        platform: String, override: String? = UserDefaults.standard.string(forKey: overrideKey), bundle: Bundle = .main,
-        beside: URL? = Bundle.main.executableURL?.deletingLastPathComponent()
+        _ request: Request, override: String? = UserDefaults.standard.string(forKey: overrideKey),
+        beside: URL? = Bundle.main.executableURL?.deletingLastPathComponent(), build: BoxHostBuild = .here
     ) async throws -> (url: URL, temporary: Bool) {
+        let platform = request.platform
         let name = "kore-host-" + platform
-        var packed: URL?
+        var found: URL?
         if let path = override, !path.isEmpty {
             let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
             var isDir: ObjCBool = false
             if FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
-                packed = [name + ".xz", name].map { url.appendingPathComponent($0) }.first { FileManager.default.fileExists(atPath: $0.path) }
+                found = [name + ".xz", name].map { url.appendingPathComponent($0) }.first { FileManager.default.fileExists(atPath: $0.path) }
             } else {
-                packed = url
+                found = url
             }
         }
-        if packed == nil { packed = bundle.url(forResource: name, withExtension: "xz") }
-        if packed == nil, platform == here, let beside {
+        if found == nil { found = build.cached(platform) }
+        if found == nil, platform == here, let beside {
             let built = beside.appendingPathComponent("kore-host")
-            if FileManager.default.isExecutableFile(atPath: built.path) { packed = built }
+            if FileManager.default.isExecutableFile(atPath: built.path) { found = built }
         }
         let file: URL
-        if let packed { file = packed } else { file = try await download(platform: platform, bundle: bundle) }
+        if let found {
+            file = found
+        } else {
+            file = URL(fileURLWithPath: try await BoxBuilds.shared.once("build-" + platform) {
+                try await build.build(platform, mayInstallKit: request.mayInstallKit, step: request.step).path
+            })
+        }
         guard file.pathExtension == "xz" else { return (file, false) }
         let data = try unxz(Data(contentsOf: file))
         let temp = FileManager.default.temporaryDirectory.appendingPathComponent("\(name)-\(UUID().uuidString.prefix(8))")
@@ -354,39 +383,8 @@ package enum BoxBinary {
         return (temp, true)
     }
 
-    /// The Linux binary for a CPU (`x86_64`, `aarch64`).
-    package static func local(arch: String, override: String? = UserDefaults.standard.string(forKey: overrideKey)) async throws -> (url: URL, temporary: Bool) {
-        try await local(platform: "linux-" + arch, override: override)
-    }
-
-    /// This version's binary from its release, once: kept under Application Support, and used only
-    /// when its SHA-256 is the one this build recorded.
-    static func download(platform: String, bundle: Bundle) async throws -> URL {
-        guard let version = bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String,
-            let expected = (bundle.object(forInfoDictionaryKey: shaKey(platform)) as? String)?.lowercased()
-        else { throw BoxBinaryError("this Kore has none for \(platform)") }
-        let file = "kore-host-\(platform).xz"
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let kept = support.appendingPathComponent("Kore/kore-host/v\(version)/" + file)
-        if let data = try? Data(contentsOf: kept), HostWire.sha256(data) == expected { return kept }
-        guard let url = URL(string: "\(releases)/v\(version)/" + file) else { throw BoxBinaryError("No release address") }
-        let (data, response) = try await URLSession.shared.data(from: url)
-        guard (response as? HTTPURLResponse)?.statusCode == 200 else { throw BoxBinaryError("release v\(version) has none for \(platform)") }
-        guard HostWire.sha256(data) == expected else { throw BoxBinaryError("the download isn't the one this Kore was built with") }
-        try FileManager.default.createDirectory(at: kept.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: kept, options: .atomic)
-        return kept
-    }
-
     /// An `.xz` file's contents (Compression's LZMA reads the xz format).
     package static func unxz(_ data: Data) throws -> Data {
         try (data as NSData).decompressed(using: .lzma) as Data
     }
-}
-
-/// Why there's no kore-host binary to put on a box, in a line.
-package struct BoxBinaryError: LocalizedError {
-    package let message: String
-    package init(_ message: String) { self.message = message }
-    package var errorDescription: String? { message }
 }

@@ -47,9 +47,9 @@ rest itself and says what's missing.
    <box> · Set up". **Set up** runs, a line at a time:
    - **Checking** the machine, and stopping with one line if Kore can't run there (another CPU,
      macOS before 15, under 150 MB free);
-   - **Getting** the right kore-host (Linux x86_64 or aarch64, or macOS) from the app, the
-     `koreHostBinary` setting, or this version's GitHub release, checked against the SHA-256 the
-     build recorded;
+   - **Getting** the right kore-host (Linux x86_64 or aarch64, or macOS): built on this Mac the
+     first time, from the source Kore was built from, then kept (see
+     [How Set up gets kore-host](#how-set-up-gets-kore-host));
    - **Copying** it to `~/.local/bin/kore-host.new`, running its `--version` there, and only then
      moving it over the old one (a running copy isn't disturbed, and one that can't run there
      never replaces one that can);
@@ -82,6 +82,9 @@ Each failure is one line with the one action that fixes it:
 | rsync isn't on <box> · sync needs it | Copy, or Install where no password is needed |
 | No agents on <box> yet | Set up agents |
 | N differences from this Mac | Fix |
+| Building kore-host needs Swift's Linux kit (about 2 GB) | Install (once, then Set up again) |
+| Couldn't build kore-host | Show log |
+| Couldn't install Swift's Linux kit | Show log |
 
 These lines show under the box's name in the new window, one at a time, only when there's
 something to do; with nothing else to say, a GitHub line shows while `gh` isn't signed in there.
@@ -150,20 +153,59 @@ Under the agents, the popup lists what else differs from this Mac, so box chats 
 The compare is kept with the box and runs again only on Set up, Update, Set up agents or **Check
 again**.
 
+## How Set up gets kore-host
+
+Kore's release carries no binaries: Kore itself is built from source on your Mac, and so is
+kore-host, the first time a box needs it. Set up and Update look, in order, for:
+
+1. the `koreHostBinary` setting (`defaults write dev.kore.Kore koreHostBinary <path>`): a file,
+   or a folder holding `kore-host-<platform>[.xz]`, for development;
+2. the cache: `~/Library/Application Support/Kore/kore-host/<version>-<commit>-<platform>`
+   (`linux-x86_64`, `linux-aarch64`, `macos-arm64`, `macos-x86_64`), what an earlier Set up
+   built;
+3. for a Mac box like this Mac, the `kore-host` built beside Kore (a development build);
+4. a build, now.
+
+A build uses the source at the commit Kore was built from (Info.plist's `KoreSourceCommit`): the
+checkout Kore was compiled in when it's still there at that commit, else a shallow fetch of that
+commit from github.com/SoumilB7/kore into `~/Library/Application Support/Kore/kore-host-src`
+(a build without the key fetches its version's tag). The box's line says each step ("Getting
+Kore's source…", "Building kore-host for Linux arm64… 3 min"); builds run at low priority, and
+two boxes that need the same build share one.
+
+- **A Mac box** builds with this Mac's own Swift (`swift build -c release --product kore-host
+  --arch arm64|x86_64`). Nothing to install.
+- **A Linux box** needs Swift's Linux kit: the open-source Swift toolchain this source pins
+  (6.4.2) and its Static Linux SDK, about 2 GB in all. When either is missing, the box's line asks
+  once: "Building kore-host needs Swift's Linux kit (about 2 GB) · Install". Install puts it in
+  your home, without sudo:
+  - swiftly, from swift.org's installer (`installer -pkg swiftly.pkg -target
+    CurrentUserHomeDirectory`, used only when it's signed by Swift Open Source), then
+    `swiftly init --no-modify-profile --skip-install`, so your shell profile is left alone;
+  - the toolchain: `swiftly install 6.4.2`, into `~/Library/Developer/Toolchains`;
+  - the SDK: `swift sdk install <url> --checksum <checksum>`, the address and checksum from
+    swift.org's release list (`/api/v1/install/releases.json`); swift checks the download
+    against the checksum.
+
+  The build is then `swift build --swift-sdk <arch>-swift-linux-musl -c release --product
+  kore-host -Xlinker --strip-all`: a static binary that runs on any distribution.
+
+A failure is one line: "Couldn't build kore-host · Show log" (the log is
+`<version>-<commit>-<platform>.log` beside the cache), or "Couldn't install Swift's Linux kit ·
+Show log" (`linux-kit.log`). A new version's first build removes what older versions left in the
+cache; the scratch folders (`.build-linux`, `.build-macos`) stay, so its build is incremental.
+Whatever the source, the box runs the new binary's `--version` before it replaces the old one.
+
 ## Setting it up by hand
 
-A Kore built with `KORE_BUNDLE_BOX_HOST=1` carries the binaries as
-`Contents/Resources/kore-host-linux-x86_64.xz`, `kore-host-linux-aarch64.xz`,
-`kore-host-macos-arm64.xz` and `kore-host-macos-x86_64.xz`; any other build downloads its
-version's from the GitHub release (`kore-host-<platform>.xz`) and uses it only if its SHA-256
-matches the one the build recorded. A development build of Kore uses the `kore-host` built beside
-it for a Mac box like the Mac it runs on, and `defaults write dev.kore.Kore koreHostBinary <path>`
-names a file, or a folder holding `kore-host-<platform>[.xz]`.
+Build kore-host from a checkout of Kore with the same toolchain and SDK (see above), or take the
+one Set up kept in `~/Library/Application Support/Kore/kore-host/`.
 
 ```sh
-# On the Mac
-curl -LO https://github.com/SoumilB7/kore/releases/download/v<version>/kore-host-linux-x86_64.xz
-xz -dc kore-host-linux-x86_64.xz > kore-host
+# On the Mac, in a checkout of Kore
+swift=~/Library/Developer/Toolchains/swift-6.4.2-RELEASE.xctoolchain/usr/bin/swift
+$swift build --swift-sdk x86_64-swift-linux-musl -c release --product kore-host -Xlinker --strip-all
+cp "$($swift build --swift-sdk x86_64-swift-linux-musl -c release --show-bin-path)/kore-host" kore-host
 ssh box mkdir -p .local/bin
 scp kore-host box:.local/bin/kore-host.new
 ssh box 'chmod 755 .local/bin/kore-host.new && mv -f .local/bin/kore-host.new .local/bin/kore-host'

@@ -7,7 +7,8 @@ import SwiftUI
 
 /// A box's one line, and its action after a dot ("Stopped on mybox · Start"). Copy puts the
 /// command in the pasteboard; Set up agents and Fix open the agents popup under the line (and
-/// `opened` closes the popup it's in, one at a time); the rest are the list's.
+/// `opened` closes the popup it's in, one at a time); Show log opens a build's log; the rest are
+/// the list's.
 struct BoxNoteLine: View {
     let note: BoxList.Note
     let alias: String
@@ -43,6 +44,8 @@ struct BoxNoteLine: View {
         case .setUpAgents, .differences:
             BoxCard.shared.showAgents(alias, under: anchor.value)
             opened?()
+        case .showLog(let path):
+            NSWorkspace.shared.open(URL(fileURLWithPath: path))
         default:
             Task { await BoxList.shared.act(action, on: alias) }
         }

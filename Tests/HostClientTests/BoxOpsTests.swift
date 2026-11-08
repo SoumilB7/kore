@@ -206,7 +206,7 @@ struct BoxOpsTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         try packed.write(to: dir.appendingPathComponent("kore-host.xz"))
         defaults.set(dir.appendingPathComponent("kore-host.xz").path, forKey: BoxBinary.overrideKey)
-        let local = try await BoxBinary.local(arch: "x86_64", override: defaults.string(forKey: BoxBinary.overrideKey))
+        let local = try await BoxBinary.local(BoxBinary.Request(platform: "linux-x86_64"), override: defaults.string(forKey: BoxBinary.overrideKey))
         defer { try? FileManager.default.removeItem(at: local.url) }
         #expect(local.temporary)
         #expect(try String(contentsOf: local.url, encoding: .utf8) == "kore-host test\n")

@@ -108,6 +108,8 @@ package final class BoxList {
     @ObservationIgnored private let cacheRoot: URL
     @ObservationIgnored private var probes: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var busy: Set<String> = []
+    /// The user said yes to Swift's Linux kit this run (asked once, on the box's line).
+    @ObservationIgnored private var kitConsent = false
     /// How long a probe waits for kore-host's state.
     @ObservationIgnored package var patience: Duration = .seconds(20)
     /// Between tries to reach a box its setup just started.
@@ -295,7 +297,8 @@ package final class BoxList {
     // MARK: Setting a box up
 
     /// The line's action: set up (or grant this Mac again), start the service, update, try again,
-    /// or install a tool. Set up agents, Fix and Copy are the view's.
+    /// install a tool, or install Swift's Linux kit and set up again. Set up agents, Fix, Copy and
+    /// Show log are the view's.
     package func act(_ action: Action, on alias: String) async {
         switch action {
         case .setUp, .update:
@@ -319,7 +322,10 @@ package final class BoxList {
             update(alias) { $0.status = .working("Installing \(tool) on \(alias)…") }
             let failed = await installTool(tool, on: alias)
             update(alias) { $0.status = failed.map { .failed($0.message, $0.fix) } ?? .ready }
-        case .setUpAgents, .differences, .copy: break
+        case .installLinuxKit(let update):
+            kitConsent = true
+            await act(update ? .update : .setUp, on: alias)
+        case .setUpAgents, .differences, .copy, .showLog: break
         }
     }
 
@@ -337,7 +343,8 @@ package final class BoxList {
         guard box(alias) != nil, !busy.contains(alias) else { return }
         busy.insert(alias)
         defer { busy.remove(alias) }
-        let setup = makeSetup(alias, grant ?? BoxSetup.grant(for: alias, defaults: defaults))
+        var setup = makeSetup(alias, grant ?? BoxSetup.grant(for: alias, defaults: defaults))
+        setup.mayInstallKit = kitConsent
         update(alias) { $0.status = .working(retry == .start ? "Starting…" : "Checking \(alias)…") }
         do {
             let done = try await work(setup) { [weak self] line in self?.update(alias) { $0.status = .working(line) } }

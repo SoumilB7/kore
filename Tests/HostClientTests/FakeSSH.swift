@@ -132,9 +132,10 @@ struct FakeSSH {
     func finish() { try? FileManager.default.removeItem(at: root) }
 
     /// A binary per platform, written as "binary for <platform>".
-    func binary() -> @Sendable (String) throws -> (url: URL, temporary: Bool) {
+    func binary() -> @Sendable (BoxBinary.Request) throws -> (url: URL, temporary: Bool) {
         let root = root
-        return { platform in
+        return { request in
+            let platform = request.platform
             let file = root.appendingPathComponent("kore-host-\(platform)")
             try Data("binary for \(platform)".utf8).write(to: file)
             return (file, true)

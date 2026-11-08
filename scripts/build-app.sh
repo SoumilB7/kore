@@ -46,6 +46,7 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>CFBundleShortVersionString</key><string>$VERSION</string>
     <key>CFBundleVersion</key><string>$VERSION</string>
     <key>KoreBuild</key><string>$BUILD_SHA</string>
+    <key>KoreSourceCommit</key><string>${KORE_SOURCE_COMMIT:-$(git rev-parse HEAD 2>/dev/null)}</string>
     <key>LSMinimumSystemVersion</key><string>15.0</string>
     <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
     <key>NSHighResolutionCapable</key><true/>
