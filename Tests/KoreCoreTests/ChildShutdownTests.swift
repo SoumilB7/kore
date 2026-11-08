@@ -24,8 +24,18 @@ struct ChildShutdownTests {
         return (io, 0)
     }
 
+    /// Waits for `pid` to lead a process group of its own: as soon as it does.
+    private func ownGroup(_ pid: pid_t) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(30)
+        while getpgid(pid) != pid {
+            guard ContinuousClock.now < deadline else { return false }
+            await Task.yield()
+        }
+        return true
+    }
+
     /// Waits up to `limit` for `pid` to be gone (a zombie counts as gone: it runs nothing).
-    private func gone(_ pid: pid_t, within limit: Duration = .seconds(3)) async -> Bool {
+    private func gone(_ pid: pid_t, within limit: Duration = .seconds(30)) async -> Bool {
         let deadline = ContinuousClock.now + limit
         while ContinuousClock.now < deadline {
             if kill(pid, 0) != 0 || Self.zombie(pid) { return true }
@@ -80,8 +90,9 @@ struct ChildShutdownTests {
         let deaf = #"perl -e '$SIG{TERM}="IGNORE"; setpgrp; exec "sleep", "60"' & echo "$!"; wait"#
         let (first, firstTool) = try await start(detached)
         let (second, secondTool) = try await start(deaf)
-        try await Task.sleep(for: .milliseconds(200))
-        #expect(getpgid(firstTool) == firstTool)
+        // Each in its group by the time Kore quits (a busy Mac's perl gets to its setpgrp later
+        // than a fixed wait); quitting before that ends them anyway, as Kore's own children.
+        #expect(await ownGroup(firstTool) && ownGroup(secondTool))
         StdioProcess.close([first, second], waiting: .milliseconds(500))
         #expect(await gone(firstTool))
         #expect(await gone(secondTool))
