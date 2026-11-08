@@ -163,9 +163,11 @@ package struct DeviceBook: Sendable {
     /// and a fresh WhoIs of the same user (or the same tags); the last three are kept. A WhoIs
     /// failure (no user, no tags) refuses, and the SSH route's `"ssh"` is never appended. A device
     /// enrolled over SSH (no user yet) takes its first node key only from a WhoIs of `ownUser`,
-    /// this device's own Tailscale user, and is that user's from then on.
+    /// this device's own Tailscale user, and is that user's from then on. On a tagged device
+    /// (`ownUser` nil) it takes it when Kore's app capability in that WhoIs (`cap`) allows the
+    /// record's abilities, and is that WhoIs's tags' (or user's) from then on.
     @discardableResult
-    package func appendNodeKey(_ peer: VerifiedPeer, whoisUserId: Int64?, whoisTags: [String], ownUser: Int64? = nil) throws -> NodeKeyAppend {
+    package func appendNodeKey(_ peer: VerifiedPeer, whoisUserId: Int64?, whoisTags: [String], ownUser: Int64? = nil, cap: Ability? = nil) throws -> NodeKeyAppend {
         guard peer.binding.route == Binding.Route.tailnet.rawValue, peer.nodeKey != Binding.Route.sshNodeKey else {
             throw TrustError.refused("node key off the tailnet")
         }
@@ -175,8 +177,18 @@ package struct DeviceBook: Sendable {
             let record = devices[i]
             guard record.identityKey == peer.identityKey else { throw TrustError.refused("identity key differs") }
             if record.sshOnly {
-                guard let user = whoisUserId, whoisTags.isEmpty, user == ownUser else { throw TrustError.refused("whois") }
-                devices[i].userId = user
+                if let ownUser {
+                    guard let user = whoisUserId, whoisTags.isEmpty, user == ownUser else { throw TrustError.refused("whois") }
+                    devices[i].userId = user
+                } else {
+                    guard let cap, cap.allows(record.abilities) else { throw TrustError.refused("whois") }
+                    if whoisTags.isEmpty {
+                        guard let user = whoisUserId else { throw TrustError.refused("whois") }
+                        devices[i].userId = user
+                    } else {
+                        devices[i].tags = whoisTags
+                    }
+                }
                 devices[i].nodeKeys = [peer.nodeKey]
                 outcome = .appended(dropped: nil)
                 return

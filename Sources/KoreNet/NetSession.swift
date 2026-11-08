@@ -24,11 +24,14 @@ package struct NetPeerFacts: Sendable, Equatable {
     package var nodeKey: String
     package var userId: Int64?
     package var tags: [String]
+    /// What Kore's app capability in its WhoIs grants it (tagged peers capped at read+ask).
+    package var cap: Ability?
 
-    package init(nodeKey: String, userId: Int64?, tags: [String] = []) {
+    package init(nodeKey: String, userId: Int64?, tags: [String] = [], cap: Ability? = nil) {
         self.nodeKey = nodeKey
         self.userId = userId
         self.tags = tags
+        self.cap = cap
     }
 
     package static let ssh = NetPeerFacts(nodeKey: Binding.Route.sshNodeKey, userId: nil)
@@ -334,31 +337,40 @@ package final class NetSession {
         self.hello = hello
         guard hello.v == NetControl.version else { return fail(NetControl.Reason.version) }
         guard let entry = server.services[hello.service] else { return fail(NetControl.Reason.service) }
-        let known: DeviceRecord?
-        do {
-            known = try server.book.record(hello.device)
-        } catch {
-            return fail(NetControl.Reason.unknown)
-        }
+        // Proof first: an unknown device, a bad proof and a paused device all look the same
+        // (`bye unknown`) to a peer that hasn't proven itself.
+        guard let binding = try? Binding(
+            route: server.route.rawValue, nonceS: nonceS, nonceC: hello.nonce, deviceC: hello.device, deviceS: server.local.device,
+            nodeKeyC: server.peer.nodeKey, nodeKeyS: server.local.nodeKey)
+        else { return fail(NetControl.Reason.unknown) }
+        let known = try? server.book.record(hello.device)
         var commit: (@Sendable (VerifiedPeer) -> Bool)?
         let record: DeviceRecord
+        let peer: VerifiedPeer
         if let known {
+            guard let proven = IdentityProof.verify(hello.sig, binding: binding, side: .client, record: known) else {
+                return fail(NetControl.Reason.unknown)
+            }
             guard !known.isPaused else { return fail(NetControl.Reason.paused) }
             record = known
+            peer = proven
         } else {
+            // A stranger's enroll names its key: the hello must be signed with it before
+            // anything is noted about it.
+            if let enroll = hello.enroll, !IdentityProof.verify(hello.sig, over: binding.digest, key: enroll.identityKey) {
+                return fail(NetControl.Reason.unknown)
+            }
             switch server.stranger?(hello) ?? .refuse(NetControl.Reason.unknown) {
             case .refuse(let reason): return fail(reason)
             case .enroll(let made, let keep):
-                guard made.id == hello.device else { return fail(NetControl.Reason.proof) }
+                guard made.id == hello.device, let proven = IdentityProof.verify(hello.sig, binding: binding, side: .client, record: made) else {
+                    return fail(NetControl.Reason.unknown)
+                }
                 record = made
+                peer = proven
                 commit = keep
             }
         }
-        guard let binding = try? Binding(
-            route: server.route.rawValue, nonceS: nonceS, nonceC: hello.nonce, deviceC: hello.device, deviceS: server.local.device,
-            nodeKeyC: server.peer.nodeKey, nodeKeyS: server.local.nodeKey),
-              let peer = IdentityProof.verify(hello.sig, binding: binding, side: .client, record: record)
-        else { return fail(NetControl.Reason.proof) }
         let request = PolicyTable.Request(
             pair: .init(record.kind, server.local.kind), service: entry.policy, queue: entry.queue,
             path: PolicyTable.Path(rawValue: server.route.rawValue)!, abilities: record.abilities)
@@ -427,7 +439,9 @@ package final class NetSession {
     private func adopt(_ peer: VerifiedPeer, record: DeviceRecord, route: Binding.Route, facts: NetPeerFacts, book: DeviceBook, ownUser: Int64?) -> Bool {
         if route == .ssh { return facts.nodeKey == Binding.Route.sshNodeKey }
         if record.nodeKeys.contains(peer.nodeKey) { return true }
-        guard let outcome = try? book.appendNodeKey(peer, whoisUserId: facts.userId, whoisTags: facts.tags, ownUser: ownUser) else { return false }
+        guard let outcome = try? book.appendNodeKey(peer, whoisUserId: facts.userId, whoisTags: facts.tags, ownUser: ownUser, cap: facts.cap) else {
+            return false
+        }
         nodeKeyAppend = outcome
         return true
     }

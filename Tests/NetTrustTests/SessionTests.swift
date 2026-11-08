@@ -125,8 +125,9 @@ struct SessionTests {
         let p = try Pairing()
         // The box's WhoIs of the caller sees another node than the Mac's own Status.
         let (c, s) = try p.connect(sawNodeKey: "nodekey:mitm")
-        #expect(s.state == .closed(NetControl.Reason.proof))
-        #expect(c.state == .closed("bye proof"))
+        // A proof that fails says no more than an unknown device does.
+        #expect(s.state == .closed(NetControl.Reason.unknown))
+        #expect(c.state == .closed("bye unknown"))
     }
 
     @Test func anUnknownDeviceGetsByeUnknown() throws {
