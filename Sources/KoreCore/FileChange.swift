@@ -55,6 +55,13 @@ public struct FileChange: Sendable, Hashable, Identifiable, Codable {
         self.isTruncated = isTruncated
     }
 
+    /// The same change under other paths (a box's file as its window here names it).
+    public func at(_ place: (String) -> String) -> FileChange {
+        let kind: Kind = if case .move(let from) = self.kind { .move(from: place(from)) } else { self.kind }
+        return FileChange(
+            path: place(path), kind: kind, hunks: hunks, added: added, removed: removed, isBinary: isBinary, isTruncated: isTruncated)
+    }
+
     /// The same change, with the hunks of another of the same file appended (one tool call
     /// editing a file twice, or a turn's edits merged per file).
     public func merged(with later: FileChange) -> FileChange {

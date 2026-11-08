@@ -61,6 +61,9 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     /// The box's title for the chat changed (a rename there, or its first title).
     package var onTitle: ((String) -> Void)?
+    /// A changed file's path as this Mac's window names it (a box path's stand-in): the changes
+    /// views and a file tab's turn mark read it.
+    package var localPath: ((String) -> String)?
     /// A chat made from this Mac has its id on the box.
     package var onCreated: ((String) -> Void)?
     /// The chat's Arsenal tier here (`watch`, `own`, `drive`; nil for off), told to the box with
@@ -211,6 +214,10 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             let shown = approval.withoutAlwaysAllow()
             asked[approval.id] = shown
             return .approvalRequested(shown)
+        case .turnChanges(let turn, let changes) where localPath != nil:
+            return .turnChanges(turn, changes.map { $0.at(localPath!) })
+        case .fileChanged(let tool, let changes, let agent) where localPath != nil:
+            return .fileChanged(toolId: tool, changes.map { $0.at(localPath!) }, agent: agent)
         default:
             return event
         }

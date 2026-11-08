@@ -347,3 +347,93 @@ folders open and close (and an empty list when the window closes); without a wat
 again when a turn ends. It lists a folder when it's opened, keeps each listing, and lists it
 again only on its `fs.changed`; it reads an open file again only when a change names it, with
 the stamp it holds. It writes a file only when it's saved (by hand or Auto Save), whole.
+
+## Link 1.8: terminals and git on a box
+
+A box window's terminal panel runs its shells on the box, and its explorer, editor and diffs read
+the box's git. Full grants only: anything else is `denied.control`. The welcome's `caps` say
+`pty` and `git` to a full grant; a client sends none of these to a box that doesn't. Each message
+is its own type (`t`), not a `cmd`, so a key crosses as one small frame with no answer; each is
+checked by `LinkPolicy.checkBox` against the grant as its file says now, then where its path leads.
+Everything rides the one link: no other connection, process or timer on the Mac.
+
+### Terminals
+
+| `t` | fields | |
+|---|---|---|
+| `pty.open` | `id, cwd, cols, rows, shell?` | A login shell in `cwd` (a served folder or one inside it), `cols` x `rows` (1 to 4000). `shell`: an absolute path `/etc/shells` lists; absent, the box user's own (else bash, else sh). Result: `ptyId`, `shell` (its name, "bash"). |
+| `pty.attach` | `id, ptyId, after?, cols?, rows?` | This link shows the pty again (after a drop). Result: `ptyId`, `shell`, `exited?` (its code when the shell ended meanwhile); `gone: true` when the box has no such pty for this grant. Then its output from byte `after`. |
+| `pty.input` | `ptyId, data` | Keys and pastes, base64, at most 64 KiB a frame. No answer. |
+| `pty.resize` | `ptyId, cols, rows` | The view's new size (`TIOCSWINSZ`). No answer. |
+| `pty.close` | `ptyId` | The tab closed: SIGHUP to the shell's group, SIGKILL 3 s later if it's still there. No answer. |
+
+Box to client:
+
+- `pty.output {ptyId, seq, data, reset?}`: what the shell wrote, base64, at most 96 KiB a frame.
+  `seq` is how many bytes it wrote before these, so each frame starts where the last ended.
+  `reset: true`: the client clears the screen, then shows these (the start of what the box kept).
+- `pty.exit {ptyId, code}`: the shell ended; `code` is its exit status, or 128 + the signal.
+
+How output goes:
+
+- The first output after a quiet spell goes at once (a key's echo waits for nothing); more within
+  the same 1/60 s goes as one frame at its end. A quiet shell sends nothing.
+- The pty is read only while the link keeps up: when the connection's queue passes 256 KiB, or a
+  frame's worth waits, the box stops reading until it drains, so a flood waits in the shell
+  rather than in memory.
+- The box keeps the last 256 KiB each shell wrote. A pty belongs to its grant, not the link: when
+  the link drops it runs on, read into that scrollback. `pty.attach` with `after` the client's
+  position sends what it missed; with no `after`, or one older than what was kept, it sends the
+  scrollback with `reset`. A shell that ended while no client showed it is kept until one
+  attaches, which gets its last output and `pty.exit`.
+- A grant holds 8 live ptys. Opening a ninth closes the one no client has shown longest, else it
+  is `busy`. A pty no client has shown for 24 hours is closed (one timer, armed only while it
+  is detached).
+- The shell's environment is the daemon's less the service's own and a CLI session's variables,
+  with `TERM=xterm-256color`, `COLORTERM=truecolor`, `SHELL`, `PWD`, and `LANG=C.UTF-8` when no
+  locale is set. A command entered in a terminal (a line ended with Return), once its output has
+  settled for 0.4 s, counts as a change for git below.
+
+Where `cwd` may lead: absolute, normalised before any check, inside a served folder, and its real
+place (links resolved) still inside it: else `denied.path`. A `ptyId` of another grant is `gone`.
+
+### Git
+
+Read-only: no commit, push, checkout or staging (a local window offers none either). The box
+runs git with `--no-optional-locks` and `GIT_OPTIONAL_LOCKS=0`, so it never takes the index lock
+a chat's own git needs, and with no pager or prompt.
+
+| `t` | fields | |
+|---|---|---|
+| `git.status` | `id, root, watch?` | The states under `root` (a served folder or one inside it). Result: `root`, `states`. `watch: true`: the box also pushes `git.changed` while the link lasts; `watch: false` ends it. |
+| `git.unwatch` | `root` | No more `git.changed` for `root`. No answer. |
+| `git.diff` | `id, root, path?, staged?` | `git diff --relative -M` under `root` (paths relative to it), of one `path` in it or all; `staged`: the index against HEAD. Result: `diff` (unified, no colour), `truncated?` past 768 KiB. |
+| `git.lineChanges` | `id, path` | A file's text at HEAD, for its editor's change bars. Result: `base`, absent for a file HEAD doesn't have (no bars), `truncated` past 768 KiB. The client diffs its own text against it, so the bars follow typing with no further asks. |
+
+`states` is `{full?, set?, gone?, none?, more?}`: `set` maps paths relative to `root` (a whole
+untracked or ignored folder's ending in `/`) to one letter: `m` modified, `a` added, `r` renamed,
+`d` deleted, `u` untracked, `i` ignored, `c` conflicted; `gone` lists paths now clean. The first
+answer on a link is the whole map (`full: true`); every later answer and push carries only what
+changed since what this link was sent (an empty `states` when nothing did). `none: true`: not a
+git work tree, or git can't run there. `more: true`: cut at 20,000 paths.
+
+How status runs:
+
+- One `git status --porcelain=v2 -z --ignored --untracked-files=normal` per root, read once into
+  the map. The box keeps the last map per root and runs git again only after a change, one run
+  at a time per root; asks meanwhile share it.
+- Changes it hears of: a chat's turn ending in that folder, a command run in a terminal there
+  (above), a file written over the link, and, while a client watches, the repository's own folder
+  (its index or HEAD moving: a commit, a stage, a checkout; inotify on Linux, FSEvents on a Mac
+  box; lock files ignored). A change settles 0.4 s, then one status runs if a client watches the
+  root and each watcher is pushed what changed for it; with no watcher, the next ask runs it.
+  Nothing polls.
+- `git.diff` and `git.lineChanges` run on demand, one at a time per root.
+
+Where paths may lead: `root` and `path` absolute, inside a served folder, their real place still
+inside it, else `denied.path`.
+
+The Mac asks for status only while a box window's explorer is on screen in a visible window,
+with `watch: true`, and unwatches when it hides; a link that comes back asks once more (and gets
+the whole map). A file's HEAD text is asked when its editor opens or the file's state changes,
+and kept until then.

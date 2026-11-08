@@ -13,21 +13,24 @@ import Testing
 struct BoxTermGitTests {
     /// The rig's connection, its transports kept so a test can drop the link.
     @MainActor private final class Link {
-        var transports: [DaemonTransport] = []
         let connection: HostConnection
 
         init(_ rig: BoxRig) {
             let (path, grant) = (rig.host.paths.socket.path, rig.grant)
-            var made: (DaemonTransport) -> Void = { _ in }
+            let made = Made()
             connection = HostConnection(alias: "local", cache: HostCache(alias: "local", root: rig.root.appendingPathComponent("cache"))) {
                 let transport = DaemonTransport(path: path, grant: grant)
-                made(transport)
+                made.all.append(transport)
                 return transport
             }
-            made = { [unowned self] in self.transports.append($0) }
+            self.made = made
             connection.backoff = [.milliseconds(50)]
             connection.retain()
         }
+
+        @MainActor final class Made { var all: [DaemonTransport] = [] }
+        private let made: Made
+        var transports: [DaemonTransport] { made.all }
     }
 
     private func git(_ folder: URL, _ args: String...) throws {
@@ -150,5 +153,13 @@ struct BoxTermGitTests {
         status.visible = false
         #expect(await until(5) { !rig.host.git.watching(folder.path) })
         link.connection.release()
+    }
+
+    @Test func aChangeKeepsItsCountsUnderTheWindowsName() {
+        let diff = "diff --git a/a.txt b/a.txt\n--- a/a.txt\n+++ b/a.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n"
+        let change = UnifiedDiff.files(diff, root: URL(fileURLWithPath: "/home/me/app"))[0]
+        let named = change.at { "/mybox/home/app" + $0.dropFirst("/home/me/app".count) }
+        #expect(named.path == "/mybox/home/app/a.txt")
+        #expect(named.added == 1 && named.removed == 1 && named.hunks == change.hunks)
     }
 }

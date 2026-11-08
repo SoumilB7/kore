@@ -303,6 +303,11 @@ final class BoxChatServices: ChatServices {
             chat.adoptName(title)
         }
         backend.onCreated = { [weak self] in self?.chatId = $0 }
+        // A turn's changed files under the folder, named as this window's file tabs name them.
+        if let binding {
+            let folder = binding.folder
+            backend.localPath = { [weak binding] path in path.hasPrefix(folder + "/") ? binding?.standIn(path).path ?? path : path }
+        }
         backend.arsenal = { [weak self] in self?.chat?.arsenal?.rawValue }
         return backend
     }
