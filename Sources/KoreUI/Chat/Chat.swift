@@ -1070,7 +1070,7 @@ package final class Chat: Identifiable {
                 // Arsenal changed since the agent was last told: this message carries a line saying so.
                 if arsenal != arsenalTold {
                     arsenalTold = arsenal
-                    backend.noteNextTurn(KoreReach.note(tier: arsenal?.rawValue, chat: String(self.id.uuidString.prefix(8)).lowercased()))
+                    backend.noteNextTurn(KoreReach.note(tier: arsenal?.title, chat: String(self.id.uuidString.prefix(8)).lowercased()))
                 }
                 let turn = try await backend.send(text, files: Attachments.files(sent), queued: queued, id: id)
                 // A fork's CLI has its session once a message went out, not when it was shown.

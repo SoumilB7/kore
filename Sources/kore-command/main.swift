@@ -17,7 +17,7 @@ let usage = """
            kore pending [<chat>] cards waiting on you
            kore history [--folder F] [--search Q] [--archived]
                                  a window's past chats
-           kore options          what Own may set on this chat now
+           kore options          what Act limited may set on this chat now
            kore rename <name>    rename this chat
            kore model <model>    switch this chat's model
            kore effort <level>   set its effort
@@ -25,9 +25,9 @@ let usage = """
            kore mode <mode>      lower its mode (only you raise one)
            kore compact          compact it, once this turn ends
            kore new [--claude|--codex] [--model M] [--mode X] ["message"]
-                                 a new chat in this window, in front (Drive)
+                                 a new chat in this window, in front (Act unlimited)
            kore fork <chat> [--at <message>] [--model M] ["message"]
-                                 fork a chat (. for this one) into a tab in front (Drive)
+                                 fork a chat (. for this one) into a tab in front (Act unlimited)
            kore wait <chat> [--timeout s]
                                  until its turn ends or a card asks: its answer
            kore send <chat> "message"
@@ -41,8 +41,8 @@ let usage = """
            kore mcp              the same reads as an MCP server, on stdio
            kore help             show this
 
-    Own's commands change the chat they run in (at Own), or with Drive a chat named first:
-    kore model <chat> <model>. Drive reaches the chats it can read at or below this chat's mode.
+    Act limited's commands change the chat they run in, or with Act unlimited a chat named first:
+    kore model <chat> <model>. Act unlimited reaches the chats it can read at or below this chat's mode.
     A chat is its title (any part only it has), its short id, or . for the chat this runs in.
     Every read takes --json. A folder named like a command opens with a slash: kore ./ls
     """

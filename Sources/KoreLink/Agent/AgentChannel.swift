@@ -530,11 +530,11 @@ package final class AgentChannel {
         return drivable(chat, client, id)
     }
 
-    /// Drive reaches any chat it can read whose mode is at or below its own (the owner's rule,
-    /// 2026-11-08: "any chat at its level"). What it can read is Watch's limit.
+    /// Act unlimited (`drive`) reaches any chat it can read whose mode is at or below its own (the
+    /// owner's rule, 2026-11-08: "any chat at its level"). What it can read is Read's (`watch`) limit.
     private func drivable(_ chat: Chat, _ client: Client, _ id: String) -> Chat? {
         guard tier(client) >= .drive, let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }) else {
-            fail(client, id, .notOwn, "Own changes only this chat.")
+            fail(client, id, .notOwn, "Act limited changes only this chat.")
             return nil
         }
         guard chat.noFreer(than: own) else {

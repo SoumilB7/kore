@@ -112,16 +112,28 @@ enum Reads {
         let caller = data["caller"] as? Object ?? [:]
         let tier = data["tier"] as? String ?? "off"
         if caller["class"] as? String == "chat" {
-            say("chat \(str(caller["short"]))  \(str(caller["title"]))  · \(tier)")
+            say("chat \(str(caller["short"]))  \(str(caller["title"]))  · \(tierName(tier))")
         } else {
-            say("external · \(tier)")
+            say("external · \(tierName(tier))")
+        }
+    }
+
+    /// A tier's name as the user sees it, from its wire id (`watch`, `own`, `drive`, `full`, `off`).
+    static func tierName(_ id: String) -> String {
+        switch id {
+        case "watch": "Read"
+        case "own": "Act limited"
+        case "drive": "Act unlimited"
+        case "full": "Full"
+        case "off", "": "Off"
+        default: id
         }
     }
 
     static func caps(_ client: AgentClient, _ o: Options) throws(AgentClient.Failure) {
         let data = try client.run("agent.caps")
         if o.json { return printJSON(data) }
-        say("Kore access: \(str(data["tier"]))")
+        say("Kore access: \(tierName(str(data["tier"])))")
         for command in data["commands"] as? [String] ?? [] { say("  \(command)") }
     }
 

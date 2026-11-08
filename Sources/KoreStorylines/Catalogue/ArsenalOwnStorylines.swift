@@ -18,19 +18,19 @@ final class ArsenalOwn: ChatStoryline {
             turns: [CLIScript.reply("Ready.")])
     }
 
-    /// Opens `role`'s tiers from the titlebar's icon and picks the row whose title starts with `prefix`.
+    /// Opens `role`'s tiers from the titlebar's icon and picks the row titled `title`.
     private struct PickTier: Step {
         let role: String
-        let prefix: String
-        var label: String { "\(role)'s tiers: \(prefix)" }
+        let title: String
+        var label: String { "\(role)'s tiers: \(title)" }
         var timeout: Duration? { .seconds(10) }
 
         @MainActor func run(_ story: StoryContext) async throws {
             try await story.idle()
             try await OpenArsenalTiers(role: role).run(story)
             let rows = StoryID.Options.rows
-            guard let index = rows.firstIndex(where: { $0.title.hasPrefix(prefix) }), rows[index].enabled else {
-                throw StoryFailure.expectation("an enabled “\(prefix)…” row in \(rows.map(\.title))")
+            guard let index = rows.firstIndex(where: { $0.title == title }), rows[index].enabled else {
+                throw StoryFailure.expectation("an enabled “\(title)” row in \(rows.map(\.title))")
             }
             try await Press(.id(StoryID.Options.item(index))).run(story)
         }
@@ -68,15 +68,15 @@ final class ArsenalOwn: ChatStoryline {
             Do("a in Codex's Full access") { story in try AgentCast.of(story).chat("a").storySetMode("fullAccess") },
             chat("Full access") { $0.mode == "fullAccess" },
         ] : []) + [
-            // Watch: reads, and changes nothing.
+            // Read: reads, and changes nothing.
             Key(.cmdOption("k")),
             tier(.watch, "⌥⌘K"),
-            KoreAs(["model", "verse"], a, "Watch can't switch the model", status: 5, says: notCovered),
+            KoreAs(["model", "verse"], a, "Read can't switch the model", status: 5, says: notCovered),
 
-            // Own, from the tiers popup: the chat's last tier from then on.
-            PickTier(role: "a", prefix: "Own:"),
+            // Act limited, from the tiers popup: the chat's last tier from then on.
+            PickTier(role: "a", title: "Act limited"),
             tier(.own, "picked in the popup"),
-            KoreAs(["whoami"], a, "whoami says Own", expect: ["{a}", "· own"]),
+            KoreAs(["whoami"], a, "whoami says Act limited", expect: ["{a}", "· Act limited"]),
             KoreAs(["options"], a, "the choices", expect: ["haiku · Haiku", "(haiku, verse)", "(low, medium, high)"]),
             KoreAs(["model", "verse"], a, "the model", expect: ["Model Verse."]),
             chat("the composer has it") { $0.storyModel == "verse" },
@@ -90,7 +90,7 @@ final class ArsenalOwn: ChatStoryline {
 
             // Only its own chat, and no name another open chat has; format characters dropped.
             CastChat("b"),
-            KoreAs(["model", "{b}", "haiku"], a, "another chat", status: 5, says: "Own changes only this chat."),
+            KoreAs(["model", "{b}", "haiku"], a, "another chat", status: 5, says: "Act limited changes only this chat."),
             KoreAs(["rename", "{b.title}"], a, "b's name", status: 1, says: "Another open chat is named that."),
             KoreAs(["rename", "Own\u{202E} test 2"], a, "a bidi override dropped", expect: ["Renamed."]),
             chat("the name without it") { $0.storyTitle == "Own test 2" },
@@ -102,14 +102,14 @@ final class ArsenalOwn: ChatStoryline {
             Do("and off again") { story in try AgentCast.of(story).chat("a").storySetPlanAllow(false) },
             KoreAs(["show", "{b}"], a, "still reads it") { status, _, _ in status == 0 },
 
-            // Back to Watch: Own's commands go with it.
-            PickTier(role: "a", prefix: "Watch:"),
-            tier(.watch, "Watch again"),
-            KoreAs(["effort", "low"], a, "Watch again can't", status: 5, says: notCovered),
-            PickTier(role: "a", prefix: "Own:"),
-            tier(.own, "Own again"),
+            // Back to Read: Act limited's commands go with it.
+            PickTier(role: "a", title: "Read"),
+            tier(.watch, "Read again"),
+            KoreAs(["effort", "low"], a, "Read again can't", status: 5, says: notCovered),
+            PickTier(role: "a", title: "Act limited"),
+            tier(.own, "Act limited again"),
         ] + (codex ? [
-            // Codex: Own lowers the mode, and leaving Full access ends its access, after the answer.
+            // Codex: Act limited lowers the mode, and leaving Full access ends its access, after the answer.
             KoreAs(["mode", "approveForMe"], a, "lower, out of Full access", expect: ["Mode Approve for me.", "Kore access ends"]),
             chat("the mode is lower") { $0.mode == "approveForMe" },
             tier(nil, "out of Full access"),
@@ -126,7 +126,7 @@ final class ArsenalOwn: ChatStoryline {
             chat("the mode as it was") { $0.mode == "default" },
             KoreAs(["mode", "plan"], a, "lower, to Plan", expect: ["Mode Plan."]),
             chat("Plan") { $0.mode == "plan" },
-            KoreAs(["mode", "default"], a, "back up isn't Own's", status: 1, says: "Only you can raise a chat's mode."),
+            KoreAs(["mode", "default"], a, "back up isn't Act limited's", status: 1, says: "Only you can raise a chat's mode."),
         ])
     }
 }

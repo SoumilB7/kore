@@ -157,7 +157,7 @@ final class ArsenalButton: ChatStoryline {
             closed("default sandbox"),
             Full(role: "a"),
         ] : []) + [
-            // The right-click, with the switch off: the switch on and Watch, said once in the chat.
+            // The right-click, with the switch off: the switch on and Read, said once in the chat.
             TabRow(role: "a", title: "Arsenal"),
             Expect("the switch is on") { _ in Arsenal.shared.allowed },
             tier("a", .watch, "right-click"),
@@ -165,12 +165,12 @@ final class ArsenalButton: ChatStoryline {
             open,
             icon,
             Snapshot("titlebar-arsenal-watch"),
-            KoreAs(["whoami"], a, "whoami names the chat", expect: ["{a}", "· watch"]),
+            KoreAs(["whoami"], a, "whoami names the chat", expect: ["{a}", "· Read"]),
             KoreAs(["ls"], a, "ls lists it", expect: ["{a}"]),
 
             // The right-click again: off, follows end, the socket closes.
             StartFollower("f", ["log", ".", "-f"], a),
-            TabRow(role: "a", title: "Arsenal · Watch"),
+            TabRow(role: "a", title: "Arsenal · Read"),
             tier("a", nil, "right-click again"),
             Followed("f", "the follow ended", timeout: .seconds(5)) { _, status, _ in status != nil },
             closed("off"),
@@ -190,7 +190,7 @@ final class ArsenalButton: ChatStoryline {
             tier("a", nil, "Off from the icon"),
             noIcon,
 
-            // Last tier, and the popup: Watch can be chosen, what isn't built can't.
+            // Last tier, and the popup: the built tiers by name, nothing else.
             key,
             tier("a", .watch, "back on at its last tier"),
             // A file in front: no icon; a again: the icon.
@@ -200,11 +200,10 @@ final class ArsenalButton: ChatStoryline {
             icon,
             OpenArsenalTiers(role: "a"),
             Expect("the popup: Off, the tiers, Stop agent control") { _ in
-                let rows = StoryID.Options.rows.map(\.title)
-                return rows.first == "Off" && rows.contains { $0.hasPrefix("Watch:") } && rows.last == "Stop agent control"
+                // A rule is a row with no title: the names are what's left.
+                let rows = StoryID.Options.rows.map(\.title).filter { !$0.isEmpty }
+                return rows == ["Off", "Read", "Act limited", "Act unlimited", "Stop agent control"]
             },
-            PressRow(title: "Full: not built yet"),
-            tier("a", .watch, "a tier not built does nothing"),
             Key(.escape),
             OpenArsenalTiers(role: "a"),
             Press(.id(StoryID.Options.item(0))),

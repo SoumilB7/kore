@@ -2,11 +2,19 @@ import Foundation
 import Observation
 
 /// A chat's Arsenal tier (`z-docs/design/kore-access.html`). Each adds to the one before; Full has no
-/// commands behind it yet, so it's named in the popup but can't be chosen.
+/// commands behind it yet, so the popup leaves it out. The raw values are the wire and defaults ids
+/// (`watch`, `own`, `drive`); `title` is what the user and the agent read.
 package enum ArsenalTier: String, CaseIterable, Sendable {
     case watch, own, drive, full
 
-    var title: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
+    var title: String {
+        switch self {
+        case .watch: "Read"
+        case .own: "Act limited"
+        case .drive: "Act unlimited"
+        case .full: "Full"
+        }
+    }
     var built: Bool { self != .full }
 
     /// What it lets the chat's agent do, in a line.
@@ -132,24 +140,15 @@ package final class Arsenal {
         return OptionItem("Arsenal", key: Self.key) { [self] in flip(chat) }
     }
 
-    /// The tiers' popup. The last lines are what it reaches: Own changes only this chat, and never
-    /// raises its mode; the chat's mode caps only what's still to come.
+    /// The tiers' popup: the tier names and the way out, nothing else.
     func tierItems(_ chat: Chat) -> [OptionItem] {
         var items = [OptionItem("Off", checked: chat.arsenal == nil) { [self] in turnOff(chat) }]
         items += ArsenalTier.allCases.filter(\.built).map { tier in
-            OptionItem(
-                "\(tier.title): \(tier.reach)", checked: chat.arsenal == tier, tint: chat.arsenal == tier ? Theme.Arsenal.color(tier) : nil
-            ) { [self] in choose(tier, chat) }
+            OptionItem(tier.title, checked: chat.arsenal == tier, tint: chat.arsenal == tier ? Theme.Arsenal.color(tier) : nil) { [self] in
+                choose(tier, chat)
+            }
         }
-        items.append(.rule)
-        items += ArsenalTier.allCases.filter { !$0.built }.map { OptionItem("\($0.title): not built yet", enabled: false) }
-        items += [
-            .rule,
-            OptionItem("Drive reaches chats at \(chat.controls.activeMode.label) or lower", enabled: false),
-            OptionItem("Approvals stay yours", enabled: false),
-            .rule,
-            OptionItem("Stop agent control", destructive: true) { [self] in stopAll() },
-        ]
+        items += [.rule, OptionItem("Stop agent control", destructive: true) { [self] in stopAll() }]
         return items
     }
 }

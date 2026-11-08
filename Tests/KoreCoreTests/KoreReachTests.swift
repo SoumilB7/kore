@@ -20,10 +20,10 @@ struct KoreReachTests {
         #expect(KoreReach.instructions.contains("kore_new_chat"))
     }
 
-    @Test func theNoteIsIdsOnlyAndKnownAsKores() {
-        let on = KoreReach.note(tier: "drive", chat: "1a2b3c4d")
+    @Test func theNoteNamesTheTierAndIsKnownAsKores() {
+        let on = KoreReach.note(tier: "Act unlimited", chat: "1a2b3c4d")
         let off = KoreReach.note(tier: nil, chat: "1a2b3c4d")
-        #expect(on == "Kore note: Arsenal is now drive for this chat (1a2b3c4d): the kore tools act within that tier.")
+        #expect(on == "Kore note: Arsenal is now Act unlimited for this chat (1a2b3c4d): the kore tools act within that tier.")
         #expect(off.contains("now off") && KoreReach.isNote(on) && KoreReach.isNote(off) && !KoreReach.isNote("hello"))
     }
 

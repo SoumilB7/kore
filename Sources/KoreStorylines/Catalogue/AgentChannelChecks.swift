@@ -460,7 +460,7 @@ final class AgentChannelAll: ChatStoryline {
             SendTo("a", Self.first), TurnsDone("a", 1),
 
             // 1. The switch off: nothing there, and `kore` says so at once.
-            Do("grant a Watch with the switch off") { story in AgentGrants.set(.watch, chat: try AgentCast.of(story).id("a")) },
+            Do("grant a Read with the switch off") { story in AgentGrants.set(.watch, chat: try AgentCast.of(story).id("a")) },
             Expect("1. switch off: no channel, no socket, no folder") { _ in
                 AgentChannel.current == nil && !FileManager.default.fileExists(atPath: directory.path)
             },
@@ -476,17 +476,17 @@ final class AgentChannelAll: ChatStoryline {
             Expect("2. on with no grant: still no socket") { _ in AgentChannel.current == nil && !exists() },
 
             // 3. Watch: every read, short and --json.
-            Do("grant a Watch") { story in AgentGrants.set(.watch, chat: try AgentCast.of(story).id("a")) },
+            Do("grant a Read") { story in AgentGrants.set(.watch, chat: try AgentCast.of(story).id("a")) },
             Expect("3. the socket 0600 in a 0700 folder", found: { _ in "socket \(mode(socket).map { String($0, radix: 8) } ?? "none"), folder \(mode(directory.path).map { String($0, radix: 8) } ?? "none")" }) { _ in
                 AgentChannel.current != nil && mode(socket) == 0o600 && mode(directory.path) == 0o700
             },
-            KoreAs(["whoami"], a, "this chat, watching", expect: ["chat {a}  {a.title}  · watch"]),
+            KoreAs(["whoami"], a, "this chat, watching", expect: ["chat {a}  {a.title}  · Read"]),
             KoreAs.json(["whoami"], a, "whoami's data") { o, cast in
                 try AgentJSON.path(o, "caller", "class") as? String == "chat" && AgentJSON.path(o, "caller", "chat") as? String == cast.id("a")
                     && AgentJSON.path(o, "caller", "short") as? String == cast.short("a") && o["tier"] as? String == "watch" && o["proto"] as? Int == 1
             },
             KoreAs(["caps"], a, "the tier and its nine commands") { status, out, _ in
-                status == 0 && out.contains("Kore access: watch") && AgentCommand.allowed(.watch).allSatisfy { out.contains("  \($0.name)\n") }
+                status == 0 && out.contains("Kore access: Read") && AgentCommand.allowed(.watch).allSatisfy { out.contains("  \($0.name)\n") }
             },
             KoreAs.json(["caps"], a, "caps' data") { o, _ in
                 o["tier"] as? String == "watch" && (o["commands"] as? [String]) == AgentCommand.allowed(.watch).map(\.name)
@@ -570,7 +570,7 @@ final class AgentChannelAll: ChatStoryline {
             Expect("no follower, the taps off") { _ in AgentChannel.current?.connections == 0 && !AgentTaps.on },
 
             // 4. What Watch can't do, and nothing changes a grant.
-            Do("grant c Watch") { story in AgentGrants.set(.watch, chat: try AgentCast.of(story).id("c")) },
+            Do("grant c Read") { story in AgentGrants.set(.watch, chat: try AgentCast.of(story).id("c")) },
             RawLines(
                 Self.forbidden.enumerated().map { RawLines.cmd("f\($0.offset)", $0.element, "{\"chat\":\".\",\"tier\":\"full\",\"text\":\"hi\"}") }
                     + [RawLines.cmd("caps", "agent.caps", "{\"tier\":\"full\"}")],
@@ -611,13 +611,13 @@ final class AgentChannelAll: ChatStoryline {
             TypeText("KORE_AGENT_SOCKET='\(socket)' '\(KoreRun.binary.path)' whoami > \(term) 2>&1; echo exit=$? >> \(term)"), Key(.returnKey),
             Expect("5. Kore's terminal: external", timeout: .seconds(10)) { story in
                 let out = (try? String(contentsOf: story.folder.appendingPathComponent(term), encoding: .utf8)) ?? ""
-                return out.contains("external · watch") && out.contains("exit=0")
+                return out.contains("external · Read") && out.contains("exit=0")
             },
             Do("outsiders off again") { _ in AgentGrants.setExternal(.off) },
             Key(.ctrl("`")),
 
             // 6. 30 a minute, then the next minute.
-            Do("grant b Watch") { story in AgentGrants.set(.watch, chat: try AgentCast.of(story).id("b")) },
+            Do("grant b Read") { story in AgentGrants.set(.watch, chat: try AgentCast.of(story).id("b")) },
             Do("mark the audit") { _ in auditMark = try AgentAudit.commands().count },
             RawLines((1...31).map { RawLines.cmd("r\($0)", "agent.whoami") }, replies: 31, b, "6. 30 served, the 31st refused") { replies, _ in
                 let results = replies.dropFirst()
@@ -631,13 +631,13 @@ final class AgentChannelAll: ChatStoryline {
                 return lines.count == 30 && lines.allSatisfy { $0["result"] == "ok" && $0["chat"] == b && $0["cmd"] == "agent.whoami" } && throttled
             },
             KoreAs(["whoami"], b, "6. kore says so, exit 5", status: 5, says: "Too many commands: 30 a minute."),
-            KoreAs(["whoami"], a, "6. a's own budget untouched", expect: ["· watch"]),
+            KoreAs(["whoami"], a, "6. a's own budget untouched", expect: ["· Read"]),
             MinuteWait(seconds: 61),
             KoreAs(["whoami"], b, "6. a minute on, b is served again", expect: ["chat {b}"]),
 
             // 9. `kore mcp`.
             KoreAs(
-                ["mcp"], a, "9. initialize, every tool, each read tool once, Drive's refused at Watch",
+                ["mcp"], a, "9. initialize, every tool, each read tool once, Act unlimited's refused at Read",
                 input: [
                     #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#,
                     #"{"jsonrpc":"2.0","method":"notifications/initialized"}"#,
@@ -674,7 +674,7 @@ final class AgentChannelAll: ChatStoryline {
                     && text(15)?["cards"] is [Any]
                     && text(16)?["sessions"] is [Any]
                     && AgentJSON.path(replies[17], "result", "isError") as? Bool == true
-                    && ((AgentJSON.path(replies[17], "result", "content") as? [[String: Any]])?.first?["text"] as? String ?? "").hasPrefix("This needs Arsenal's Drive tier; this chat has Watch.")
+                    && ((AgentJSON.path(replies[17], "result", "content") as? [[String: Any]])?.first?["text"] as? String ?? "").hasPrefix("This needs Arsenal's Act unlimited tier; this chat has Read.")
                     && AgentJSON.path(replies[18], "error", "code") as? Int == -32601
             },
             KoreAs(
@@ -689,7 +689,7 @@ final class AgentChannelAll: ChatStoryline {
 
             // 7. The audit: one line a command, ids only.
             Do("mark the audit") { _ in auditMark = try AgentAudit.commands().count },
-            KoreAs(["whoami"], a, "7. one ok", expect: ["· watch"]),
+            KoreAs(["whoami"], a, "7. one ok", expect: ["· Read"]),
             KoreAs(["show", "no-such-chat"], a, "7. one no_chat", status: 1, says: "No open chat matches"),
             KoreAs(["ls"], .outside(), "7. refused at hello: no command", status: 5, says: "Only Kore's chats"),
             RawLines([RawLines.cmd("x", "chat.send", "{\"text\":\"secret words\"}"), RawLines.cmd("y", "tx.read", "{\"chat\":\"{a}\"}")], replies: 2, c, "7. one refused, one read") { replies, _ in
@@ -803,7 +803,7 @@ final class AgentWhoamiLive: Storyline {
                 AgentGrants.setEnabled(true)
             },
             OpenFolder(), StartChat(),
-            Do("grant the chat Watch") { story in
+            Do("grant the chat Read") { story in
                 let chat = try story.activeChat()
                 AgentCast.of(story).chats["a"] = chat
                 AgentGrants.set(.watch, chat: chat.id.uuidString)
@@ -862,13 +862,13 @@ final class AgentOwnLive: Storyline {
             },
             OpenFolder(), StartChat(),
         ] + codex + [
-            Do("Arsenal on, at Own, as the tiers popup picks it") { story in
+            Do("Arsenal on, at Act limited, as the tiers popup picks it") { story in
                 let chat = try story.activeChat()
                 AgentCast.of(story).chats["a"] = chat
                 Arsenal.shared.setAllowed(true)
                 Arsenal.shared.choose(.own, chat)
             },
-            Expect("Own, and the socket") { story in try story.activeChat().arsenal == .own && AgentChannel.current != nil },
+            Expect("Act limited, and the socket") { story in try story.activeChat().arsenal == .own && AgentChannel.current != nil },
             // The socket given in the command: a CLI's shell may not have Kore's environment, and
             // `kore` would otherwise find the owner's own Kore, which it refuses.
             Send("Run this exact shell command and reply with only its output, nothing else: export KORE_AGENT_SOCKET=\(directory.appendingPathComponent(AgentChannel.socketName).path); \(link) options; \(link) rename own-live"),
@@ -915,13 +915,13 @@ final class AgentDriveLive: Storyline {
             },
             OpenFolder(), StartChat(),
         ] + (codex ? [SetMode("fullAccess")] : []) + [
-            Do("Arsenal on, at Drive, as the tiers popup picks it") { story in
+            Do("Arsenal on, at Act unlimited, as the tiers popup picks it") { story in
                 let chat = try story.activeChat()
                 AgentCast.of(story).chats["a"] = chat
                 Arsenal.shared.setAllowed(true)
                 Arsenal.shared.choose(.drive, chat)
             },
-            Expect("Drive, and the socket") { story in try story.activeChat().arsenal == .drive && AgentChannel.current != nil },
+            Expect("Act unlimited, and the socket") { story in try story.activeChat().arsenal == .drive && AgentChannel.current != nil },
             Send("Run this exact shell command and reply with only its output, nothing else: export KORE_AGENT_SOCKET=\(directory.appendingPathComponent(AgentChannel.socketName).path); \(link) new --model \(model) '\(ask)'"),
             AllowUntilDone(),
             Expect("a new tab in front, Arsenal off, on \(model)", found: { story in try? story.activeChat().storyTitle }) { story in
@@ -1266,12 +1266,12 @@ final class AgentChannelCost: ChatStoryline {
         ] + roles.dropFirst().map { CastChat($0) } + [
             WaitIdle(),
             Phase("off", hold: 30),
-            Do("switch on, a granted Watch") { story in
+            Do("switch on, a granted Read") { story in
                 AgentGrants.setEnabled(true)
                 try grant(story, "a")
             },
             Phase("on-idle", hold: 30),
-            Do("every chat granted Watch") { story in for role in roles { try grant(story, role) } },
+            Do("every chat granted Read") { story in for role in roles { try grant(story, role) } },
             Phase("latency", [
                 RoundTrips(arguments: ["ls"], runs: 100, roles: roles),
                 RoundTrips(arguments: ["show", "."], runs: 100, roles: roles),
@@ -1366,7 +1366,7 @@ final class AgentWatchLimit: ChatStoryline {
         let a = KoreCaller.chat("a")
         let missing = "No open chat matches"
         return super.steps() + [
-            Do("agent control on; a has Watch") { story in
+            Do("agent control on; a has Read") { story in
                 let cast = AgentCast.of(story)
                 cast.directory = directory
                 cast.chats["a"] = try story.activeChat()
@@ -1397,7 +1397,7 @@ final class AgentWatchLimit: ChatStoryline {
             KoreAs(["history", "--folder", "{d.folder}"], a, "its folder's past chats refused", status: 1, says: "own folder"),
 
             // Its access on: there. Its access off again: gone, and a follow of it ends.
-            Do("d gets Watch") { story in AgentGrants.set(.watch, chat: try AgentCast.of(story).id("d")) },
+            Do("d gets Read") { story in AgentGrants.set(.watch, chat: try AgentCast.of(story).id("d")) },
             KoreAs(["ls"], a, "now listed") { status, out, story in try status == 0 && Self.shows("d", out, story) },
             KoreAs(["pending"], a, "and its card", expect: [Self.card.title]),
             StartFollower("f", ["log", "{d}", "-f", "--json"], a),

@@ -31,7 +31,7 @@ final class AgentWatchReads: ChatStoryline {
                 AgentChannel.directory = URL(fileURLWithPath: "/tmp/kas-\(UUID().uuidString.prefix(8))", isDirectory: true)
                 AgentGrants.setEnabled(false)
             },
-            Do("grant the chat Watch, with the switch off") { story in AgentGrants.set(.watch, chat: try story.activeChat().id.uuidString) },
+            Do("grant the chat Read, with the switch off") { story in AgentGrants.set(.watch, chat: try story.activeChat().id.uuidString) },
             Expect("no socket while the switch is off") { _ in AgentChannel.current == nil && !Self.socketExists },
             Do("turn the switch on") { _ in AgentGrants.setEnabled(true) },
             Expect("the socket, 0600") { _ in AgentChannel.current != nil && Self.socketMode == 0o600 },
@@ -39,7 +39,7 @@ final class AgentWatchReads: ChatStoryline {
             TurnFinished(1),
             RunKore(["ls"], "refused: external callers aren't served") { status, out in status == 5 && out.contains("Only Kore's chats") },
             Do("let external callers watch (the test seam)") { _ in AgentGrants.setExternal(.watch) },
-            RunKore(["whoami"], "external, watching") { status, out in status == 0 && out.contains("external · watch") },
+            RunKore(["whoami"], "external, watching") { status, out in status == 0 && out.contains("external · Read") },
             RunKore(["ls"], "the chat, idle", expect: { story in [try short(story), "idle", try story.activeChat().provider.id] }),
             RunKore(["log", "{short}"], "the first turn", expect: { _ in ["› " + Self.first, Self.reply] }),
             Do("follow the chat") { story in try follow.start(["log", try short(story), "-f", "--json", "-n", "1"]) },

@@ -97,7 +97,7 @@ public enum KoreReach {
         kore_list_chats and kore_read_chat read chats, kore_set_model changes this chat's model, and more. \
         Ordinary coding needs none of them. Use them when the user asks for something in Kore, such as \
         another tab or agent. They work only while the user has Arsenal on for this chat, at a tier that \
-        covers the request; otherwise a tool answers how the user turns it on: tell the user that. Never \
+        covers the request (Read, Act limited, Act unlimited); otherwise a tool answers how the user turns it on: tell the user that. Never \
         run the claude or codex CLI yourself in place of a Kore chat.
         """
 
@@ -107,7 +107,7 @@ public enum KoreReach {
         return other + "\n\n" + instructions
     }
 
-    /// The line the next turn carries after Arsenal changed for the chat: ids only.
+    /// The line the next turn carries after Arsenal changed for the chat: the tier's name and the chat's short id.
     public static func note(tier: String?, chat short: String) -> String {
         guard let tier else { return "\(notePrefix) Arsenal is now off for this chat (\(short)): the kore tools won't act until the user turns it on." }
         return "\(notePrefix) Arsenal is now \(tier) for this chat (\(short)): the kore tools act within that tier."

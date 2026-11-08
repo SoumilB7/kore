@@ -27,19 +27,19 @@ final class ArsenalDrive: ChatStoryline {
             ])
     }
 
-    /// Picks `prefix`'s row in `role`'s tiers popup.
+    /// Picks the row titled `title` in `role`'s tiers popup.
     private struct PickTier: Step {
         let role: String
-        let prefix: String
-        var label: String { "\(role)'s tiers: \(prefix)" }
+        let title: String
+        var label: String { "\(role)'s tiers: \(title)" }
         var timeout: Duration? { .seconds(10) }
 
         @MainActor func run(_ story: StoryContext) async throws {
             try await story.idle()
             try await OpenArsenalTiers(role: role).run(story)
             let rows = StoryID.Options.rows
-            guard let index = rows.firstIndex(where: { $0.title.hasPrefix(prefix) }), rows[index].enabled else {
-                throw StoryFailure.expectation("an enabled “\(prefix)…” row in \(rows.map(\.title))")
+            guard let index = rows.firstIndex(where: { $0.title == title }), rows[index].enabled else {
+                throw StoryFailure.expectation("an enabled “\(title)” row in \(rows.map(\.title))")
             }
             try await Press(.id(StoryID.Options.item(index))).run(story)
         }
@@ -84,10 +84,10 @@ final class ArsenalDrive: ChatStoryline {
             SendTo("a", "hello"), TurnsDone("a", 1),
             Do("a in \(codex ? "Full access" : "Manual")") { story in try AgentCast.of(story).chat("a").storySetMode(codex ? "fullAccess" : "default") },
             Key(.cmdOption("k")),
-            PickTier(role: "a", prefix: "Own:"),
-            KoreAs(["new", "hi"], a, "Own can't open a chat", status: 5, says: "doesn't cover that"),
-            PickTier(role: "a", prefix: "Drive:"),
-            role("a", "Drive") { $0.arsenal == .drive },
+            PickTier(role: "a", title: "Act limited"),
+            KoreAs(["new", "hi"], a, "Act limited can't open a chat", status: 5, says: "doesn't cover that"),
+            PickTier(role: "a", title: "Act unlimited"),
+            role("a", "Act unlimited") { $0.arsenal == .drive },
 
             // A new chat, as a person opens one: its own tab, in front, its message sent with who sent
             // it, its Arsenal off, its mode no freer than a's.
@@ -226,7 +226,7 @@ final class ArsenalDrive: ChatStoryline {
             KoreAs(["new"], a, "a fourth within the hour", expect: ["Opened a \(name) chat."]),
 
             // Off: nothing reaches anything.
-            PickTier(role: "a", prefix: "Off"),
+            PickTier(role: "a", title: "Off"),
             role("a", "a off") { $0.arsenal == nil },
             KoreAs(["send", "{b}", "hi"], a, "off", status: 5, says: "agent control is off"),
         ]

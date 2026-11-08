@@ -112,12 +112,12 @@ final class ArsenalReach: ChatStoryline {
                     && call.error && call.text.contains("Arsenal is off for this chat") && call.text.contains("⌥⌘K")
             },
 
-            Do("a in \(codex ? "Full access" : "Manual"), Arsenal at Drive") { story in
+            Do("a in \(codex ? "Full access" : "Manual"), Arsenal at Act unlimited") { story in
                 let a = try AgentCast.of(story).chat("a")
                 a.storySetMode(codex ? "fullAccess" : "default")
                 Arsenal.shared.choose(.drive, a)
             },
-            role("a", "Drive") { $0.arsenal == .drive },
+            role("a", "Act unlimited") { $0.arsenal == .drive },
             // a in front, at Drive: the icon in the titlebar.
             ExpectElement(.id(StoryID.Titlebar.arsenal)),
             Snapshot("titlebar-arsenal-drive"),
@@ -126,7 +126,7 @@ final class ArsenalReach: ChatStoryline {
                 let notes = ScriptedWorld.shared.backend(session: a.sessionId)?.log.compactMap { call -> String? in
                     if case .note(let note) = call { note } else { nil }
                 } ?? []
-                return notes.count == 1 && notes[0].hasPrefix("Kore note: Arsenal is now drive for this chat (\(String(a.id.uuidString.prefix(8)).lowercased()))")
+                return notes.count == 1 && notes[0].hasPrefix("Kore note: Arsenal is now Act unlimited for this chat (\(String(a.id.uuidString.prefix(8)).lowercased()))")
             },
 
             // A model by a loose name, as the CLI lists it.
@@ -271,13 +271,13 @@ final class ArsenalAskLive: Storyline {
             },
             OpenFolder(), StartChat(),
         ] + (variant == .codex ? [SetMode("fullAccess")] : []) + [
-            Do("Arsenal on, at Drive") { story in
+            Do("Arsenal on, at Act unlimited") { story in
                 let chat = try story.activeChat()
                 AgentCast.of(story).chats["a"] = chat
                 Arsenal.shared.setAllowed(true)
                 Arsenal.shared.choose(.drive, chat)
             },
-            Expect("Drive, and the socket") { story in try story.activeChat().arsenal == .drive && AgentChannel.current != nil },
+            Expect("Act unlimited, and the socket") { story in try story.activeChat().arsenal == .drive && AgentChannel.current != nil },
             Send(Self.ask),
             AllowUntilDone(),
             Expect("a Codex tab in front, on gpt-6-luna, with the agent's message", timeout: .seconds(120), found: { story in

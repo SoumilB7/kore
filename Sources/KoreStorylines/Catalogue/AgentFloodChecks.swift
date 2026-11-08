@@ -209,7 +209,7 @@ final class AgentFlood: ChatStoryline {
             },
             // A long page: built on the main thread, encoded and masked off it.
             fresh(),
-            Do("a has Watch") { story in
+            Do("a has Read") { story in
                 let cast = AgentCast.of(story)
                 cast.chats["a"] = try story.activeChat()
                 AgentGrants.set(.watch, chat: try cast.id("a"))
