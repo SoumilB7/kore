@@ -34,10 +34,10 @@ if [[ ! -f $rel/kore.apk ]] && security find-generic-password -s kore-android-ke
 fi
 out=$(KORE_RELEASE_DIR=$rel scripts/release.sh --dry-run 2>&1); code=$?
 print -r -- "$out" > $s/release.log
-key=${${out##*throwaway key }%%;*}
+key=${${out##*throwaway key }%%)*}
 check "release.sh --dry-run builds and signs v$V" '(( code == 0 )) && [[ $key =~ "^[A-Za-z0-9+/]{43}=$" ]]'
 (( code == 0 )) || { print "see $s/release.log"; exit 1 }
-print -r -- "$out" | sed -n '/would publish/,/^$/p'
+print -r -- "$out" | sed -n '/as the latest release/,/^already there/p'
 
 # Served as GitHub lays a release out, plus two bad copies: a changed file, an edited SHA256SUMS.
 srv=$s/srv
