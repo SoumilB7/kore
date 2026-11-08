@@ -219,6 +219,9 @@ extension StoryTranscript {
         }
     }
 
+    /// The built sections' headers, top to bottom: each message as the transcript shows it.
+    package var sectionHeaders: [String] { store.sections.compactMap { $0.header?.text } }
+
     package var earlierAvailable: Bool { store.earlierAvailable }
     package var readerAtEnd: Bool { store.readerAtEnd?() ?? false }
     package var endWhy: String { "\(store.storyEndWhy?() ?? "-"); on screen \(store.isOnScreen) (views \(store.viewsOnScreen), covered \(store.covered), hidden \(store.hidden)), unloads \(store.unloads)" }

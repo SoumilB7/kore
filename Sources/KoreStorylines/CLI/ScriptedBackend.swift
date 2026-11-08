@@ -140,6 +140,16 @@ package final class ScriptedBackend: ChatBackend {
             offer(.queued(text))
             return true
         }
+        // Queued while a turn ran, it got here as that turn ended: it starts the next turn, said
+        // so under its id (Claude's `startQueuedTurn`, Codex's turn/start with it as clientId).
+        if let queued {
+            log.append(.queued(text))
+            let index = sends
+            sends += 1
+            record(.userMessage(text: text, attachments: [], id: queued))
+            enqueue { await $0.playTurn($0.script(for: index), queued: (queued, ToolID.make())) }
+            return true
+        }
         log.append(.send(text))
         if options.fork != nil, let sessionId {
             world.list(sessionId, provider: provider, folder: options.folder, title: forkTitle ?? options.forkTitle ?? text)
