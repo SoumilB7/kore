@@ -55,6 +55,7 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 |---|---|---|
 | `chat.new` | `folder, provider, modelId?` | `folder` (an absolute path the box serves) in place of `windowId`; `windowId` still works. Result: `chatId`, `windowId`. The CLI starts on the first send. |
 | `chat.setModel` | `chatId, modelId` | Also for an `act` grant. A chat whose CLI isn't running starts on that model. |
+| `chat.setMode`, `chat.setPlan`, `chat.planReady`, `chat.answer approvePlanAcceptEdits` | as §6 | A `full` grant may raise the mode (Auto, Bypass, leaving plan, approving with auto-accept edits): it's the owner's own machine over SSH. `act` keeps §6's lower-only rule (`denied.raiseMode`). A full grant's `ChatMeta.allowedModeIds` lists every mode. |
 | `folders.list` | | Result: `folders: [{windowId, path}]`. |
 | `folder.add` | `path` | An absolute path to an existing folder; it's added to `config.json`. Result: `folders`. `gone.folder` otherwise. |
 | `account.refresh` | `provider` | Result `message`: "Signed in as …" / "… isn't signed in.". |

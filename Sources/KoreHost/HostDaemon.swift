@@ -178,8 +178,12 @@ package final class HostDaemon {
     private func broadcast(windows: Bool = false, chats changed: [HostChat]) {
         guard !connections.isEmpty else { return }
         let windows = windows ? self.windows : nil
-        let metas = changed.map(HostMeta.meta)
-        for connection in connections where connection.proven { connection.delta(windows: windows, chats: metas) }
+        guard !changed.isEmpty || windows != nil else { return }
+        let lower = changed.map { HostMeta.meta($0) }
+        let any = changed.map { HostMeta.meta($0, raise: true) }
+        for connection in connections where connection.proven {
+            connection.delta(windows: windows, chats: connection.grant?.control == .full ? any : lower)
+        }
     }
 
     private func transcriptChanged(_ hc: HostChat, upserts: [LinkEntry], removed: [String], order: [String]?, turns: [LinkTurn], reset: Bool) {
@@ -206,7 +210,7 @@ package final class HostDaemon {
         case .send(_, let text, let blobs):
             guard let hc else { return fail(.goneChat, "") }
             guard blobs.isEmpty else { return fail(.invalid, "Uploads aren't on the box yet.") }
-            if case .deny(let code, let message) = LinkPolicy.check(command, HostMeta.facts(hc)) { return fail(code, message) }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc), control: control) { return fail(code, message) }
             guard let chat = live(hc) else { return fail(.busy, "Too many CLIs are running on this box.") }
             guard chat.sendFromLink(text) else { return fail(.busy, "The chat can't take a message right now.") }
             armIdle(hc)
@@ -217,7 +221,7 @@ package final class HostDaemon {
             return .init(id: id, ok: true)
         case .answer(_, let cardId, let action, _, let answers):
             guard let hc else { return fail(.goneChat, "") }
-            if case .deny(let code, let message) = LinkPolicy.check(command, HostMeta.facts(hc)) { return fail(code, message) }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc), control: control) { return fail(code, message) }
             guard let chat = hc.chat else { return fail(.goneCard, "That was answered or withdrawn.") }
             if cardId == HostMeta.planReadyID { return planReady(chat, action == .implement ? .implement : .stay, id: id) }
             guard let approval = chat.approvals.pending.first(where: { $0.id == cardId }) else { return fail(.goneCard, "That was answered or withdrawn.") }
@@ -226,6 +230,7 @@ package final class HostDaemon {
             case .allow: decision = .allow
             case .deny: decision = .deny
             case .approvePlan: decision = .approvePlan(autoAcceptEdits: false)
+            case .approvePlanAcceptEdits where control == .full: decision = .approvePlan(autoAcceptEdits: true)
             case .keepPlanning: decision = .keepPlanning
             case .submitAnswers: decision = .answers(answers ?? [:])
             default: return fail(.action, "That card doesn't take that answer.")
@@ -235,7 +240,7 @@ package final class HostDaemon {
             return .init(id: id, ok: true)
         case .setMode(_, let modeId):
             guard let hc else { return fail(.goneChat, "") }
-            if case .deny(let code, let message) = LinkPolicy.check(command, HostMeta.facts(hc)) { return fail(code, message) }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc), control: control) { return fail(code, message) }
             hc.live(services: services).setMode(modeId, remember: false)
             if let chat = hc.chat { hc.noted(chat) }
             armIdle(hc)
@@ -243,13 +248,14 @@ package final class HostDaemon {
             return .init(id: id, ok: true)
         case .setPlan(_, let on):
             guard let hc else { return fail(.goneChat, "") }
-            if case .deny(let code, let message) = LinkPolicy.check(command, HostMeta.facts(hc)) { return fail(code, message) }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc), control: control) { return fail(code, message) }
             hc.live(services: services).setPlanMode(on)
             armIdle(hc)
             broadcast(chats: [hc])
             return .init(id: id, ok: true)
         case .planReady(_, let choice):
-            guard let chat = hc?.chat else { return fail(.goneCard, "No plan is waiting.") }
+            guard let hc, let chat = hc.chat else { return fail(.goneCard, "No plan is waiting.") }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc), control: control) { return fail(code, message) }
             return planReady(chat, choice, id: id)
         case .new(let windowId, let provider):
             return newChat(id: id, folder: folder(windowId: windowId), provider: provider, modelId: nil)
@@ -346,6 +352,17 @@ package final class HostDaemon {
     }
 
     // MARK: Accounts
+
+    /// The link's policy, but a full grant (the owner's own machine over SSH) may also raise a
+    /// chat's mode (owner, 2026-11-10): Auto, leaving plan, approving a plan with auto-accept.
+    static func check(_ command: LinkCommand, _ facts: LinkPolicy.ChatFacts, control: GrantControl) -> LinkPolicy.Verdict {
+        let verdict = LinkPolicy.check(command, facts)
+        if control == .full, case .deny(.raiseMode, _) = verdict {
+            if case .setMode(_, let modeId) = command, facts.modes[modeId] == nil { return verdict }
+            return .allow
+        }
+        return verdict
+    }
 
     /// The CLIs' own logins on the box. A sign-in's result carries its page (and code) in
     /// `message`, for the client to open; `<id>:done` says how it ended. The others answer once

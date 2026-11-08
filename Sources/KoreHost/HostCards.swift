@@ -34,8 +34,10 @@ enum HostMeta {
             commands: Set(commands.filter { $0.kind != .kore }.map(\.name)), koreEntries: Set(commands.filter { $0.kind == .kore }.map(\.name)))
     }
 
-    static func meta(_ hc: HostChat) -> ChatMeta {
+    /// `raise`: the grant may raise the mode (a full grant), so every mode is allowed.
+    static func meta(_ hc: HostChat, raise: Bool = false) -> ChatMeta {
         let facts = facts(hc)
+        let allowed = raise ? Set(facts.modes.keys) : LinkPolicy.allowedModes(facts)
         let chat = hc.chat
         let state: ChatMeta.State =
             if let chat, !chat.approvals.pending.isEmpty || chat.approvals.offerImplementPlan { .needsYou }
@@ -48,7 +50,7 @@ enum HostMeta {
         return ChatMeta(
             id: hc.id, provider: hc.provider.id, title: hc.title, state: state,
             mode: .init(id: modeID(hc), level: facts.level, planOn: hc.provider.planToggle != nil ? (chat?.controls.planMode ?? false) : nil),
-            modeIds: (chat?.controls.availableModes ?? hc.provider.modes).map(\.id), allowedModeIds: LinkPolicy.allowedModes(facts).sorted(),
+            modeIds: (chat?.controls.availableModes ?? hc.provider.modes).map(\.id), allowedModeIds: allowed.sorted(),
             model: chat?.controls.currentModel?.name ?? hc.record.modelId, queued: chat?.queuedCount ?? 0, running: chat?.isBusy ?? false,
             cards: cards(hc), can: .init(send: !(chat?.accountRestartPending ?? false), stop: chat?.isWorking ?? false), commands: Array(commands))
     }

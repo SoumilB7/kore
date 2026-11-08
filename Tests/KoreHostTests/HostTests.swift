@@ -213,6 +213,24 @@ struct HostTests {
         #expect(b.cliRunning)
     }
 
+    @Test func aFullGrantMayRaiseTheModeAndAnActGrantMayNot() throws {
+        let rig = try HostRig()
+        defer { rig.finish() }
+        let hc = try #require(rig.host.newChat(folder: rig.folder.path, provider: "claude", modelId: nil))
+        #expect(HostMeta.modeID(hc) == "default")
+        let refused = rig.host.apply(.setMode(chatId: hc.id, modeId: "auto"), id: "1", control: .act) { _ in }
+        #expect(refused?.code == .raiseMode)
+        #expect(!HostMeta.meta(hc).allowedModeIds.contains("auto"))
+        let raised = rig.host.apply(.setMode(chatId: hc.id, modeId: "auto"), id: "2", control: .full) { _ in }
+        #expect(raised?.ok == true)
+        #expect(HostMeta.modeID(hc) == "auto")
+        #expect(hc.record.mode == "auto")
+        #expect(HostMeta.meta(hc, raise: true).allowedModeIds.contains("bypassPermissions"))
+        // Lowering stays open to an act grant; an unknown mode is refused to anyone.
+        #expect(rig.host.apply(.setMode(chatId: hc.id, modeId: "plan"), id: "3", control: .act) { _ in }?.ok == true)
+        #expect(rig.host.apply(.setMode(chatId: hc.id, modeId: "nope"), id: "4", control: .full) { _ in }?.code == .invalid)
+    }
+
     @Test func watchGrantsCantAct() throws {
         let rig = try HostRig()
         defer { rig.finish() }
