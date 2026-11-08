@@ -99,7 +99,9 @@ struct TerminalTests {
         rig.type(pty, "sleep 0.3; echo sec''ond\r")
         try await until { !rig.text(pty).isEmpty }
         rig.client.socket.close()
-        try await Task.sleep(for: .milliseconds(600))
+        // The shell writes on with no one attached: kept by the box (not a fixed wait, which a
+        // busy Mac's shell can outlast).
+        try await until { rig.rig.host.terminals.kept(pty).contains("second\r\n") }
         #expect(rig.rig.host.terminals.count == 1)
 
         // From where this client stood: only what it missed, no reset.

@@ -127,6 +127,8 @@ final class HostTerminals {
 
     /// Ptys held now, and those hung up but not yet reaped (tests).
     var count: Int { ptys.count }
+    /// What a shell wrote that's still kept for a reattach (tests).
+    func kept(_ id: String) -> String { ptys[id].map { String(decoding: $0.keptBytes, as: UTF8.self) } ?? "" }
     var reaping: Int { closing.count }
 
     // MARK: The shell
@@ -192,6 +194,7 @@ final class HostPty {
 
     /// What the shell wrote, the last `scrollback` bytes; `kept` is the stream position of its first.
     private var ring = Data()
+    var keptBytes: Data { ring }
     private var kept: Int64 = 0
     /// Bytes the shell has written in all.
     private var written: Int64 = 0
