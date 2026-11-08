@@ -199,7 +199,7 @@ struct DevicesPictureTests {
         let needsLogin = Self.status(.needsLogin, authURL: "https://login.tailscale.com/a/1f2e")
         let a = Self.picture(state: .sidecar, status: needsLogin)
         #expect(a.net == .notJoined && !a.net.adds)
-        #expect(Self.look(a) == NetIconLook(dimmed: true, dot: nil, line: "Sign in to join your tailnet"))
+        #expect(Self.look(a) == NetIconLook(dimmed: true, dot: nil, line: "Sign in to use KoreNet without the Tailscale app"))
         let b = Self.picture(state: .sidecar, status: needsLogin, signingIn: true)
         #expect(b.signingIn && Self.look(b).line == "Finish signing in — it's open in your browser")
         let c = Self.picture(state: .sidecar, status: Self.status(), signingIn: true, nudge: true)

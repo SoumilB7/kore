@@ -312,7 +312,7 @@ struct DevicesPopup: View {
                 }
                 .storyID(StoryID.Net.line)
             } else {
-                NetAction(title: "Sign in to join your tailnet", glyph: .external, trailing: true) { devices.signIn() }
+                NetAction(title: DevicesWords.signIn, glyph: .external, trailing: true) { devices.signIn() }
                     .help("Kore runs Tailscale inside the app")
                     .storyID(StoryID.Net.lineAction, press: { devices.signIn() })
             }
@@ -547,7 +547,7 @@ private struct NetLine<Content: View>: View {
     }
 }
 
-/// An accent action row ("Get the phone app ↗", "Sign in to join your tailnet ↗").
+/// An accent action row ("Get the phone app ↗", "Sign in to use KoreNet without the Tailscale app ↗").
 private struct NetAction: View {
     let title: String
     let glyph: NetGlyph.Kind

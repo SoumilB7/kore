@@ -78,6 +78,30 @@ struct DevicesUITests {
         #expect(!devices.signingIn && !sides.net.held.contains("signin"))
     }
 
+    /// The owner's one sign-in after Tailscale's app went: the line says why, a page that comes a
+    /// moment after the press opens when it comes, and a second press (or a fresh page from the
+    /// node) opens nothing more: one browser tab, never a loop.
+    @Test func signInOpensOnePageEvenWhenItComesLate() async {
+        let waiting = TailnetStatus(backendState: .needsLogin, selfNode: nil)
+        let sides = Sides(ScriptedNet(on: true, state: .sidecar, status: waiting, authURL: nil))
+        let devices = devices(sides)
+        #expect(devices.look().line == "Sign in to use KoreNet without the Tailscale app")
+        devices.signIn()
+        devices.signIn()
+        #expect(sides.opened.isEmpty && devices.signingIn && sides.net.reads == 1)
+        #expect(devices.look().line == "Finish signing in — it's open in your browser")
+        sides.net.authURL = "https://login.tailscale.com/a/late"
+        for _ in 0..<1000 where sides.opened.isEmpty { await Task.yield() }
+        #expect(sides.opened == [URL(string: "https://login.tailscale.com/a/late")!])
+        sides.net.authURL = "https://login.tailscale.com/a/again"
+        devices.signIn()
+        for _ in 0..<50 { await Task.yield() }
+        #expect(sides.opened.count == 1)
+        sides.net.set(state: .sidecar, status: ScriptedNet.running)
+        await Observed.until { !devices.signingIn }
+        #expect(sides.opened.count == 1 && !sides.net.held.contains("signin"))
+    }
+
     @Test func openTailscaleAndRenew() {
         let sides = Sides(ScriptedNet(on: true, state: .stopped, status: nil))
         let devices = devices(sides)

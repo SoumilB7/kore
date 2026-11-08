@@ -407,6 +407,11 @@ extension DevicesPicture {
 
 /// The popup's and the icon's words, and the offline one-liners.
 package enum DevicesWords {
+    /// Kore's own tailnet before its one sign-in: why it asks, in its own words.
+    package static let signIn = "Sign in to use KoreNet without the Tailscale app"
+    /// After the browser opened, until the node runs.
+    package static let finishSignIn = "Finish signing in — it's open in your browser"
+
     /// ⋯ Remove's one item: a box only reached over SSH is forgotten on this Mac; a box this Mac
     /// enrolled, and a phone, leave KoreNet here. Either way nothing of it stays on this Mac.
     package static func remove(_ name: String, kind: DeviceRow.Kind, enrolled: Bool) -> String {
@@ -540,7 +545,7 @@ package struct NetIconLook: Equatable, Sendable {
         case .stopped: return NetIconLook(dimmed: true, dot: .ring, line: "Tailscale is off on this Mac")
         case .signedOut: return NetIconLook(dimmed: true, dot: .ring, line: "Tailscale is signed out on this Mac")
         case .unavailable: return NetIconLook(dimmed: true, dot: .ring, line: "Kore's tailnet couldn't start")
-        case .notJoined: return NetIconLook(dimmed: true, dot: nil, line: picture.signingIn ? "Finish signing in — it's open in your browser" : "Sign in to join your tailnet")
+        case .notJoined: return NetIconLook(dimmed: true, dot: nil, line: picture.signingIn ? DevicesWords.finishSignIn : DevicesWords.signIn)
         default: break
         }
         if picture.lockedOut { return NetIconLook(dimmed: false, dot: .ring, line: "This Mac waits for a Tailnet Lock signature") }

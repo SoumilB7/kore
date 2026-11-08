@@ -105,8 +105,8 @@ package final class Devices {
     package private(set) var revision = 0
     /// Kore's own tailnet waits for the browser's sign-in.
     package private(set) var signingIn = false
-    /// Sign in was clicked before Tailscale had its page: it opens when the page comes (a while).
-    private var signInWanted = false
+    /// This sign-in's page went to the browser.
+    @ObservationIgnored private var signInOpened = false
     /// Just joined Kore's own tailnet: the empty line offers "Add a device" this once.
     package private(set) var nudge = false
     /// The join sheet up now, by box.
@@ -226,32 +226,28 @@ package final class Devices {
         changed()
     }
 
-    /// "Sign in to join your tailnet": Kore's own tailnet's page in the browser; the line waits
-    /// until the tailnet runs (closing the popup doesn't cancel).
+    /// "Sign in to use KoreNet without the Tailscale app": Kore's own tailnet's page in the
+    /// browser, opened once per press (the page may come a moment after the node asks for a
+    /// login: it opens when it comes); the line waits until the tailnet runs (closing the popup
+    /// doesn't cancel). A second press while it waits opens nothing more: never a loop of tabs.
     package func signIn() {
-        guard let net, let page = net.authURL.flatMap(URL.init(string:)) else {
-            // The page isn't there yet: the click isn't lost, it opens once a read brings it.
-            guard let net, !signInWanted else { return }
-            signInWanted = true
-            net.readStatus()
-            Task {
-                await Observed.until { !self.signInWanted || self.net?.authURL != nil }
-                guard signInWanted else { return }
-                signInWanted = false
-                signIn()
-            }
-            Task {
-                try? await Task.sleep(for: .seconds(15))
-                signInWanted = false
-            }
-            return
-        }
-        openURL(page)
+        guard let net, !signingIn else { return }
         signingIn = true
+        signInOpened = false
         net.hold("signin", true)
+        if let page = net.authURL.flatMap(URL.init(string:)) {
+            openURL(page)
+            signInOpened = true
+        } else {
+            net.readStatus()
+        }
         Task {
             await Observed.until {
                 guard self.signingIn else { return true }
+                if !self.signInOpened, let page = self.net?.authURL.flatMap(URL.init(string:)) {
+                    self.signInOpened = true
+                    self.openURL(page)
+                }
                 return self.net?.facts.status?.backendState == .running
             }
             guard signingIn else { return }
