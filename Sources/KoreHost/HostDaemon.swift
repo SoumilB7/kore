@@ -58,6 +58,12 @@ package final class HostDaemon {
     /// `chats.state` as last written (`HostUpdates`), and the update a Mac asked for while it runs.
     var chatsNoted: [Int]?
     var updating: (id: String, client: LinkClient)?
+    /// A Mac's update whose files come from the Mac (`from: mac`), while they arrive.
+    var receiving: UpdateReceive?
+    /// The release file this box runs (tests name another).
+    package var updateAsset = HostUpdate(target: URL(fileURLWithPath: "/")).asset
+    /// Where a Mac's files land before `kore-host update --file` reads them.
+    package var updateInbox = FileManager.default.temporaryDirectory.appendingPathComponent("kore-host-update-in", isDirectory: true)
     /// Starts `kore-host update --by <Mac>` apart from this process (tests run a stand-in).
     package var updateSpawn: (_ arguments: [String], _ out: URL) -> pid_t? = { HostDaemon.spawnDetached(HostService.executable(), $0, out: $1) }
     /// Link 1.8: the grants' terminals, and git for the explorer, editor and diffs.
@@ -414,6 +420,7 @@ package final class HostDaemon {
 
     func ended(_ connection: LinkClient) {
         movesEnded(connection)
+        updateEnded(connection)
         if connections.contains(where: { $0 === connection }), connection.proven { HostJournal.note("disconnect", connection.said) }
         connections.removeAll { $0 === connection }
         toolCallsEnded(connection)

@@ -309,6 +309,7 @@ final class LinkClient {
         if type == UsageWire.since { return host.usageSince(data, from: self) }
         if type == UpdateWire.keep { return host.updateKeep(data, from: self) }
         if type == UpdateWire.update { return host.updateNow(data, from: self) }
+        if type == UpdateWire.piece { return host.updatePiece(data, from: self) }
         guard let control = current() else { return }
         guard control == .full else {
             denied(type)
