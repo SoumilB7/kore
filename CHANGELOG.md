@@ -2,6 +2,29 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
+## [0.3.0] - 2026-11-15
+
+### Added
+- Boxes: Claude and Codex chats on a Linux server or another Mac, with kore-host. A box window
+  has the box's files, terminals, git and Arsenal, and its folders sync two ways with a Mac folder.
+- KoreNet: your Mac, your boxes and your phone on one private tailnet. A new device waits on an
+  Allow card, and the network icon lists them all.
+- Kore for Android: your Mac's and boxes' chats on your phone over KoreNet. Approvals and
+  questions wait for you there too.
+- Arsenal: a chat can open, message, fork and wait on other Kore chats, up to the tier you allow.
+- Copy, cut and paste chats and files across windows and boxes. A transfer bar shows each one and
+  can cancel it.
+- Roll a chat back to any message, in place.
+- Signed releases: every file a release carries is in a SHA256SUMS signed with Kore's release key,
+  and the installers and updates check it. Boxes keep themselves on the latest release unless you
+  turn off Keep boxes updated.
+
+### Changed
+- Chats out of sight keep only their newest turns in memory; transcripts scroll and resize
+  lighter.
+- Usage shows this Mac and your boxes in one line.
+- ⌘Q takes two presses or a hold.
+
 ## [0.2.3] - 2026-11-01
 
 ### Added
@@ -63,6 +86,3 @@ First release.
 - Install a missing `claude` or `codex` CLI from a new tab.
 - Stay-awake while chats work; a notice when the network drops.
 - The `kore` command: `kore <folder>` opens a folder, `kore setup` installs missing CLIs.
-
-[0.1.1]: ../../releases/tag/v0.1.1
-[0.1.0]: ../../releases/tag/v0.1.0
