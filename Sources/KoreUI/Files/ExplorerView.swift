@@ -70,7 +70,6 @@ struct ExplorerSidebar: View {
     private var header: some View {
         let searching = workspace.sidebar == .search
         return HStack(spacing: Space.xs) {
-            BoxesSwitch(workspace: workspace)
             Text(searching ? "Search" : workspace.folder.lastPathComponent)
                 .font(Chrome.bodyMedium)
                 .foregroundStyle(Theme.secondary)

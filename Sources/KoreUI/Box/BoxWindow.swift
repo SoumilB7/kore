@@ -65,27 +65,46 @@ final class BoxBinding {
     func windowOpened() {
         connection.onSnapshot(key) { [weak self] in self?.adoptChats() }
         connection.retain()
-        if let pair = SyncPairs.pair(alias: alias, box: folder), let sync = HostSync(pair: pair, connection: connection) {
-            self.sync = sync
-            sync.start()
-            // A box that can't watch its copy lists it again as the window comes forward.
-            focus = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] note in
-                let window = ObjectIdentifier(note.object as AnyObject)
-                MainActor.assumeIsolated {
-                    guard let self, let mine = self.workspace?.window, ObjectIdentifier(mine) == window else { return }
-                    self.sync?.refresh()
-                }
-            }
-        }
+        followPair()
     }
 
     func windowClosed() {
         connection.onSnapshot(key, nil)
+        stopSync()
+        connection.release()
+    }
+
+    /// The Mac folder this one syncs with, as the panel and tooltip show it (`~/Desktop/app`).
+    var syncedTo: String? { SyncPairList.shared.pair(alias: alias, box: folder).map { SyncPairs.shown(mac: $0.mac) } }
+
+    /// The sync follows the folder's pair: started once it's made, stopped once it's gone.
+    func followPair() {
+        let pair = SyncPairList.shared.pair(alias: alias, box: folder)
+        guard pair?.mac != sync?.pair.mac || pair?.box != sync?.pair.box else { return }
+        stopSync()
+        guard let pair, let sync = HostSync(pair: pair, connection: connection) else { return }
+        self.sync = sync
+        sync.start()
+        // A box that can't watch its copy lists it again as the window comes forward.
+        focus = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] note in
+            let window = ObjectIdentifier(note.object as AnyObject)
+            MainActor.assumeIsolated {
+                guard let self, let mine = self.workspace?.window, ObjectIdentifier(mine) == window else { return }
+                self.sync?.refresh()
+            }
+        }
+    }
+
+    private func stopSync() {
         sync?.stop()
         sync = nil
         if let focus { NotificationCenter.default.removeObserver(focus) }
         focus = nil
-        connection.release()
+    }
+
+    /// Every open box window's sync follows the pairs (one was made or stopped).
+    static func pairsChanged() {
+        for workspace in Workspace.all.allObjects where !workspace.isClosed { workspace.box?.followPair() }
     }
 
     /// Chats in this folder the window doesn't show yet (opened on the box or elsewhere, or none
@@ -121,6 +140,9 @@ final class BoxBinding {
     }
 
     var online: Bool { connection.phase == .online }
+
+    /// The folder label's hover line: "mybox · ~/Code/app · synced locally to ~/Desktop/app".
+    var label: String { alias + " · " + shownFolder + (syncedTo.map { " · synced locally to " + $0 } ?? "") }
 
     /// The window's one cue, on the title row's box button: its line, marked while the box is
     /// offline or its sync has something to say.

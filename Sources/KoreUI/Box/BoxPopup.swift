@@ -57,9 +57,8 @@ struct BoxButton: View {
     }
 }
 
-/// The box popup: in a box's window its line first; then "Open <folder> on <box>" where the window
-/// has a Mac folder; a row per box (its dot and name), whose click shows its folders one level
-/// deeper; Add a box…, a field in its place. A folder's click only lights it: its window glyphs
+/// The box popup: in a box's window its line first; a row per box (its dot and name), whose click
+/// shows its folders one level deeper; Add a box…, a field in its place. A folder's click only lights it: its window glyphs
 /// (or Return) open it. ↑ ↓ move the lit row, Return takes it, Esc goes back a level, then closes.
 struct BoxPopup: View {
     let workspace: Workspace?
@@ -71,19 +70,6 @@ struct BoxPopup: View {
         case boxes
         /// A box's folders.
         case box(String)
-        /// Which box the window's folder opens on.
-        case pick
-    }
-
-    /// The top row's way through a first copy.
-    enum Copy: Equatable {
-        case idle, checking
-        /// Big: one line, then Copy or Cancel.
-        case ask(String, alias: String)
-        case copying(String)
-        case failed(String)
-        /// kore-host on the box didn't answer in time: its note's action, and Try again.
-        case unreachable(String)
     }
 
     /// A row the keys can light: its click, and Return's when that differs.
@@ -108,10 +94,6 @@ struct BoxPopup: View {
 
     @Environment(\.openWindow) private var openWindow
     @StateObject private var level = Local(Level.boxes)
-    @StateObject private var copy = Local(Copy.idle)
-    /// The first copy under way: cancelled with Cancel or the popup closing, so it never opens a
-    /// window after the user moved on.
-    @StateObject private var copying = Held<Task<Void, Never>?>(nil)
     /// The lit row, by id: the pointer's or the keys'.
     @StateObject private var lit = Local<String?>(nil)
     /// Add a box…'s field while it's open.
@@ -154,8 +136,6 @@ struct BoxPopup: View {
         .onDisappear {
             if let m = monitor.value { NSEvent.removeMonitor(m) }
             monitor.value = nil
-            copying.value?.cancel()
-            copying.value = nil
         }
     }
 
@@ -165,12 +145,8 @@ struct BoxPopup: View {
         switch level.value {
         case .boxes: boxesLevel
         case .box(let alias): foldersLevel(alias)
-        case .pick: pickLevel
         }
     }
-
-    /// The window's folder on this Mac; nil in a box's window and the new window.
-    private var mac: URL? { workspace.flatMap { $0.box == nil ? $0.folder : nil } }
 
     private var rule: Piece {
         .view("rule", AnyView(Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.xxs)))
@@ -189,10 +165,6 @@ struct BoxPopup: View {
                 .padding(.horizontal, Space.sm)
                 .padding(.bottom, Space.xs))))
             }
-            pieces.append(rule)
-        }
-        if mac != nil, !list.boxes.isEmpty {
-            pieces += syncPieces
             pieces.append(rule)
         }
         for box in list.boxes {
@@ -218,74 +190,6 @@ struct BoxPopup: View {
             }))))
         }
         return pieces
-    }
-
-    /// "Open <folder> on <box>", or where it stands: checking, the one question, copying, why not.
-    private var syncPieces: [Piece] {
-        let name = mac?.lastPathComponent ?? ""
-        func label(_ text: String, chevron: Bool = false) -> AnyView {
-            AnyView(HStack(spacing: Space.sm) {
-                syncGlyph
-                Text(text).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
-                if chevron {
-                    Spacer(minLength: 0)
-                    Image(systemName: "chevron.right").font(Chrome.glyphCrumb).foregroundStyle(Theme.tertiary)
-                }
-            })
-        }
-        switch copy.value {
-        case .idle:
-            if let pair = mac.flatMap({ SyncPairs.pair(mac: $0.standardizedFileURL.path) }) {
-                return [.item(Item(id: "sync", story: StoryID.Boxes.sync, click: { openPair(pair) }, label: label("Open on \(pair.alias) · in sync")))]
-            }
-            if list.boxes.count == 1, let only = list.boxes.first {
-                return [.item(Item(id: "sync", story: StoryID.Boxes.sync, click: { begin(only.alias) }, label: label("Open \(name) on \(only.alias)")))]
-            }
-            return [.item(Item(id: "sync", story: StoryID.Boxes.sync, click: { level.value = .pick }, label: label("Open \(name) on…", chevron: true)))]
-        case .checking:
-            return [.view("sync.state", AnyView(line("Checking \(name)…", glyph: true)))]
-        case .copying(let alias):
-            return [
-                .view("sync.state", AnyView(line("Copying \(name) to \(alias)…", glyph: true))),
-                .view("sync.ask", AnyView(HStack(spacing: Space.sm) {
-                    Spacer(minLength: 0)
-                    Button("Cancel") { cancelCopy() }.smallButton()
-                }
-                .padding(.horizontal, Space.sm)
-                .padding(.bottom, Space.xs))),
-            ]
-        case .unreachable(let alias):
-            let note = list.box(alias)?.note
-            return [
-                .view("sync.state", AnyView(line(note?.line ?? "Can't reach \(alias)", tint: Theme.secondary, glyph: true))),
-                .view("sync.ask", AnyView(HStack(spacing: Space.sm) {
-                    Spacer(minLength: 0)
-                    if let action = note?.action {
-                        Button(action.title) { Task { await list.act(action, on: alias) } }.smallButton()
-                    }
-                    Button("Try again") { begin(alias) }.smallButton(prominent: true)
-                }
-                .padding(.horizontal, Space.sm)
-                .padding(.bottom, Space.xs))),
-            ]
-        case .failed(let why):
-            return [.view("sync.state", AnyView(line(why, tint: Theme.danger, glyph: true)))]
-        case .ask(let question, let alias):
-            return [
-                .view("sync.state", AnyView(line(question, glyph: true))),
-                .view("sync.ask", AnyView(HStack(spacing: Space.sm) {
-                    Spacer(minLength: 0)
-                    Button("Cancel") { copy.value = .idle }.smallButton()
-                    Button("Copy") { Task { await makeCopy(alias) } }.smallButton(prominent: true)
-                }
-                .padding(.horizontal, Space.sm)
-                .padding(.bottom, Space.xs))),
-            ]
-        }
-    }
-
-    private var syncGlyph: some View {
-        Image(systemName: "arrow.triangle.2.circlepath").font(Chrome.caption).foregroundStyle(Theme.accent).frame(width: Size.Box.lead)
     }
 
     private func foldersLevel(_ alias: String) -> [Piece] {
@@ -335,26 +239,8 @@ struct BoxPopup: View {
         return pieces
     }
 
-    /// The boxes the window's folder could open on.
-    private var pickLevel: [Piece] {
-        var pieces: [Piece] = [
-            .item(Item(id: "back", click: { level.value = .boxes }, label: AnyView(HStack(spacing: Space.sm) {
-                Image(systemName: "chevron.left").font(Chrome.glyphCrumb).foregroundStyle(Theme.secondary).frame(width: Size.Box.lead)
-                Text("Open \(mac?.lastPathComponent ?? "") on…").font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(1)
-            })))
-        ]
-        for box in list.boxes {
-            pieces.append(.item(Item(id: "pick:" + box.alias, story: StoryID.Boxes.box(box.alias), click: { begin(box.alias) }, label: AnyView(HStack(spacing: Space.sm) {
-                StatusDot(state: box.dotState).frame(width: Size.Box.lead)
-                Text(box.alias).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1)
-            }))))
-        }
-        return pieces
-    }
-
-    private func line(_ text: String, tint: Color = Theme.secondary, glyph: Bool = false) -> some View {
+    private func line(_ text: String, tint: Color = Theme.secondary) -> some View {
         HStack(spacing: Space.sm) {
-            if glyph { syncGlyph }
             Text(text).font(Chrome.label).foregroundStyle(tint).lineLimit(2)
         }
         .padding(.horizontal, Space.sm)
@@ -384,62 +270,6 @@ struct BoxPopup: View {
         openWindow(value: place)
     }
 
-    private func openPair(_ pair: SyncPair) {
-        openFolder(BoxPlace(alias: pair.alias, folder: pair.box))
-    }
-
-    /// The first copy: counted and checked against the box's room, asked once when big.
-    private func begin(_ alias: String) {
-        guard let mac else { return }
-        guard let box = SyncBox.ssh(alias) else {
-            copy.value = .failed("\(alias) isn't an SSH alias Kore can use")
-            return
-        }
-        level.value = .boxes
-        copy.value = .checking
-        copying.value?.cancel()
-        copying.value = Task {
-            switch await HostSync.preflight(mac: mac, box: box) {
-            case .refuse(let why): if !Task.isCancelled { copy.value = .failed(why) }
-            case .ask(let question): if !Task.isCancelled { copy.value = .ask(question, alias: alias) }
-            case .go: await makeCopy(alias)
-            }
-        }
-    }
-
-    private func cancelCopy() {
-        copying.value?.cancel()
-        copying.value = nil
-        copy.value = .idle
-    }
-
-    /// Makes the box copy and opens its window, which keeps the two in sync. Gives up after about
-    /// 20 s without kore-host; a cancel stops it and the connection's dialling with it.
-    private func makeCopy(_ alias: String) async {
-        guard let mac, let box = SyncBox.ssh(alias), !Task.isCancelled else { return }
-        copy.value = .copying(alias)
-        let connection = BoxBinding.connection(alias)
-        connection.retain()
-        let made = await HostSync.firstCopy(mac: mac, connection: connection, box: box)
-        let cancelled = Task.isCancelled
-        switch made {
-        case .success(let pair) where !cancelled:
-            copy.value = .idle
-            openPair(pair)
-            // A moment later, so the window takes the connection over without it dropping.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { connection.release() }
-            return
-        case .failure(.unreachable) where !cancelled:
-            copy.value = .unreachable(alias)
-            Task { await list.probe(alias) }
-        case .failure(.refused(let why)) where !cancelled:
-            copy.value = .failed(why)
-        default:
-            break
-        }
-        connection.release()
-    }
-
     private func addBox(_ typed: String) {
         guard let alias = BoxList.alias(typed) else { return }
         list.add(alias)
@@ -455,7 +285,7 @@ struct BoxPopup: View {
             case 53:
                 // Esc: a field's own first (it closes the field), then a level up, then the popup.
                 guard !typing, window.firstResponder as? NSTextView == nil else { return event }
-                if level.value != .boxes { level.value = .boxes } else if copy.value != .idle { cancelCopy() } else { close() }
+                if level.value != .boxes { level.value = .boxes } else { close() }
                 return nil
             case 125, 126:
                 let items = pieces.compactMap { if case .item(let item) = $0 { item } else { nil } }

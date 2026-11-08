@@ -41,7 +41,7 @@ package struct BoxFolder: Codable, Sendable, Equatable, Hashable {
         name = BoxFolder.lastPart(path)
     }
 
-    static func lastPart(_ path: String) -> String {
+    package static func lastPart(_ path: String) -> String {
         let trimmed = path.hasSuffix("/") ? String(path.dropLast()) : path
         return trimmed.split(separator: "/").last.map(String.init) ?? trimmed
     }

@@ -11,6 +11,8 @@ struct WelcomeView: View {
     @StateObject private var lit = Local<Int?>(nil)
     @StateObject private var window = Held<NSWindow?>(nil)
     @StateObject private var monitor = Held<Any?>(nil)
+    /// The SSH config names a host (read once): the box button can add it as a box.
+    @StateObject private var sshHosts = Local(false)
 
     var body: some View {
         VStack(spacing: Layout.Welcome.sectionGap) {
@@ -82,13 +84,16 @@ struct WelcomeView: View {
         .fixedSize(horizontal: false, vertical: true)
         // The box button, where a folder window's title row has it: after the traffic lights.
         .overlay(alignment: .topLeading) {
-            Group { if !BoxList.shared.boxes.isEmpty { BoxButton(workspace: nil, size: Size.Box.welcomeButton) } }
+            // A box window starts here (a Mac folder's window never turns into one): shown once
+            // there's a box, or an SSH host to add as one.
+            Group { if !BoxList.shared.boxes.isEmpty || sshHosts.value { BoxButton(workspace: nil, size: Size.Box.welcomeButton) } }
                 .padding(.leading, Size.Box.welcomeInset)
                 .padding(.top, Space.xs)
                 .ignoresSafeArea(.container, edges: .top)
         }
         .background(WindowReader { window.value = $0 })
         .onAppear {
+            sshHosts.value = !BoxList.shared.suggestions().isEmpty
             if monitor.value == nil { monitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { key($0) } }
             app.welcomeTakesKeys = true
         }

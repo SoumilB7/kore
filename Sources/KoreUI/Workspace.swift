@@ -162,10 +162,11 @@ package final class Workspace {
     var explorerWidth = Layout.Explorer.width {
         didSet { saveExplorer() }
     }
-    /// The left panel shows Boxes in place of the files (its header's switch).
-    var showsBoxes = false {
-        didSet { if showsBoxes != oldValue { saveExplorer() } }
-    }
+    /// The left panel shows Boxes: a box's window, whose folder isn't on this Mac. A window's kind
+    /// is fixed when it opens; a window on this Mac's folder never shows boxes.
+    var showsBoxes: Bool { box != nil }
+    /// The title row's box button: a box's window only.
+    var hasBoxButton: Bool { box != nil }
     /// ⌘P: files, or go to line (⌃G).
     var quickOpen: QuickOpenMode?
     /// What the sidebar shows: the tree, or Search (⇧⌘F).
@@ -213,10 +214,9 @@ package final class Workspace {
         if restore, let explorer = Self.savedExplorer(for: folder) {
             explorerWidth = explorer.width
             explorerOpen = explorer.open
-            showsBoxes = explorer.boxes == true
         }
-        // A box's window has no files here: its panel is the boxes.
-        if box != nil { showsBoxes = true }
+        // A box's window opens on its panel: the boxes, its folder lit.
+        if box != nil { explorerOpen = true }
         bindTabs(previous: [])
         trimDrafts()
         Self.all.add(self)
@@ -902,8 +902,6 @@ package final class Workspace {
     private struct ExplorerState: Codable {
         var open: Bool
         var width: CGFloat
-        /// The left panel showed Boxes, not the files.
-        var boxes: Bool?
     }
 
     private static let explorerKey = "explorer"
@@ -911,7 +909,7 @@ package final class Workspace {
     private func saveExplorer() {
         guard box == nil, Self.persists(folder) else { return }
         UserDefaults.standard.set(
-            try? JSONEncoder().encode(ExplorerState(open: explorerOpen, width: explorerWidth, boxes: showsBoxes ? true : nil)),
+            try? JSONEncoder().encode(ExplorerState(open: explorerOpen, width: explorerWidth)),
             forKey: Self.key(Self.explorerKey, folder))
     }
 

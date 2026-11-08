@@ -106,13 +106,121 @@ struct HostSyncTests {
         #expect(said.status == 0)
         #expect(read(root, "out.txt") == hostile)
         #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("pwned").path))
-        #expect(HostSync.boxName(URL(fileURLWithPath: "/x/$(touch y) it's")) == "folder--touch-y--it-s")
-        #expect(HostSync.boxName(URL(fileURLWithPath: "/x/.hidden")) == "folder.hidden")
-        #expect(!HostSync.safeOrigin("-uhack") && !HostSync.safeOrigin("ext::sh -c id") && HostSync.safeOrigin("git@github.com:a/b.git"))
         #expect(!SyncBox.validAlias("-oProxyCommand=x") && !SyncBox.validAlias("a:b") && !SyncBox.validAlias("a b") && SyncBox.validAlias("my-box.lan"))
     }
 
+    /// A Mac folder syncs with one box folder: never one inside or around a synced one, on either
+    /// side, and the refusal names the pair in the way.
+    @Test func nestedPairsRefused() throws {
+        let root = scratch("ksn")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let app = root.appendingPathComponent("app"), other = root.appendingPathComponent("other")
+        try write(app, "sub/a.txt", "a")
+        try write(other, "b.txt", "b")
+        let pairs = [SyncPair(mac: app.path, alias: "testbox", box: "/home/me/Code/app")]
+        func refusal(_ mac: URL, _ box: String, alias: String = "testbox") -> String? { SyncPairs.refusal(mac: mac, alias: alias, box: box, in: pairs) }
+        // The Mac side: inside, around, the same.
+        #expect(refusal(app.appendingPathComponent("sub"), "/home/me/Code/x")?.hasPrefix("Inside ") == true)
+        #expect(refusal(root, "/home/me/Code/x")?.hasPrefix("Holds ") == true)
+        #expect(refusal(app, "/home/me/Code/x")?.contains("already syncs with testbox · ~/Code/app") == true)
+        // The box side: the folder itself, one inside it, one around it.
+        #expect(refusal(other, "/home/me/Code/app")?.hasPrefix("Already synced locally to") == true)
+        #expect(refusal(other, "/home/me/Code/app/web")?.contains("~/Code/app on testbox") == true)
+        #expect(refusal(other, "/home/me/Code")?.contains("~/Code/app on testbox") == true)
+        // Elsewhere, or the same path on another box, is fine; home and / never sync whole.
+        #expect(refusal(other, "/home/me/Code/x") == nil)
+        #expect(refusal(other, "/home/me/Code/app/web", alias: "otherbox") == nil)
+        #expect(refusal(FileManager.default.homeDirectoryForCurrentUser, "/home/me/Code/x") != nil)
+        // The panel: a folder inside a synced one says so and offers no second sync.
+        #expect(SyncPairs.around(alias: "testbox", box: "/home/me/Code/app/web", in: pairs) == pairs[0])
+        #expect(SyncPairs.around(alias: "testbox", box: "/home/me/Code/app", in: pairs) == nil)
+        #expect(SyncPairs.around(alias: "testbox", box: "/home/me/Code/apple", in: pairs) == nil)
+        #expect(SyncPairs.shown(box: "/home/me/Code/app") == "~/Code/app")
+    }
+
     // MARK: With a box
+
+    /// An empty box folder takes the Mac folder's files, with nothing asked.
+    @Test(.enabled(if: binary != nil))
+    func pairsWithAnEmptyBoxFolder() async throws {
+        let rig = try await Rig(Self.binary!)
+        defer { rig.end() }
+        let mac = rig.root.appendingPathComponent("desk/app")
+        try write(mac, "a.txt", "one")
+        try write(mac, "sub/b.txt", "two")
+        let box = try await rig.boxFolder("app")
+        #expect(await rig.check(mac, box) == .go(.toBox))
+        let pair = rig.pair(mac, box)
+        #expect(SyncPairs.pair(alias: "testbox", box: box.path, rig.defaults) == pair)
+        let sync = try rig.sync(pair)
+        #expect(await until(15) { read(box, "a.txt") == "one" && read(box, "sub/b.txt") == "two" })
+        #expect(read(mac, "a.txt") == "one")
+        sync.stop()
+    }
+
+    /// An empty Mac folder takes the box folder's files, with nothing asked.
+    @Test(.enabled(if: binary != nil))
+    func pairsAnEmptyMacFolder() async throws {
+        let rig = try await Rig(Self.binary!)
+        defer { rig.end() }
+        let box = try await rig.boxFolder("site")
+        try write(box, "index.html", "<p>")
+        try write(box, "css/s.css", "p{}")
+        try write(box, ".git/HEAD", "ref")
+        let mac = rig.root.appendingPathComponent("desk/site")
+        try FileManager.default.createDirectory(at: mac, withIntermediateDirectories: true)
+        #expect(await rig.check(mac, box) == .go(.toMac))
+        let sync = try rig.sync(rig.pair(mac, box))
+        #expect(await until(15) { read(mac, "index.html") == "<p>" && read(mac, "css/s.css") == "p{}" })
+        #expect(read(mac, ".git/HEAD") == nil)
+        #expect(read(box, "index.html") == "<p>")
+        sync.stop()
+    }
+
+    /// Both have files: one question, then a merge that keeps both of a file that differs.
+    @Test(.enabled(if: binary != nil))
+    func bothHaveFilesAskToMerge() async throws {
+        let rig = try await Rig(Self.binary!)
+        defer { rig.end() }
+        let box = try await rig.boxFolder("both")
+        try write(box, "box.txt", "made on the box")
+        try write(box, "same.txt", "box version, longer")
+        let mac = rig.root.appendingPathComponent("desk/both")
+        try write(mac, "mac.txt", "made here")
+        try write(mac, "same.txt", "mac version")
+        #expect(await rig.check(mac, box) == .ask(HostSync.mergeQuestion, .merge))
+        let sync = try rig.sync(rig.pair(mac, box))
+        #expect(await until(15) { read(mac, "box.txt") == "made on the box" && read(box, "mac.txt") == "made here" })
+        #expect(await until(10) { read(mac, "same (testbox).txt") == "box version, longer" && read(box, "same (testbox).txt") == "box version, longer" })
+        #expect(read(mac, "same.txt") == "mac version")
+        #expect(await until(5) { read(box, "same.txt") == "mac version" })
+        sync.stop()
+    }
+
+    /// Stop syncing ends the sync and forgets the pair; every file stays on both sides.
+    @Test(.enabled(if: binary != nil))
+    func stopSyncingDeletesNothing() async throws {
+        let rig = try await Rig(Self.binary!)
+        defer { rig.end() }
+        let mac = rig.root.appendingPathComponent("desk/keep")
+        for i in 0..<5 { try write(mac, "f\(i).txt", "\(i)") }
+        let box = try await rig.boxFolder("keep")
+        let pair = rig.pair(mac, box)
+        let sync = try rig.sync(pair)
+        #expect(await until(15) { read(box, "f4.txt") == "4" })
+        try await settle(sync)
+        HostSync.unpair(alias: "testbox", box: box.path, root: rig.cache, defaults: rig.defaults)
+        #expect(SyncPairs.pair(alias: "testbox", box: box.path, rig.defaults) == nil)
+        // No longer synced: a change on either side stays there.
+        try write(mac, "after.txt", "mac only")
+        try FileManager.default.removeItem(at: box.appendingPathComponent("f0.txt"))
+        try await Task.sleep(for: .seconds(2))
+        #expect(read(box, "after.txt") == nil)
+        #expect(read(mac, "f0.txt") == "0")
+        for i in 0..<5 { #expect(read(mac, "f\(i).txt") == "\(i)") }
+        for i in 1..<5 { #expect(read(box, "f\(i).txt") == "\(i)") }
+        sync.stop()
+    }
 
     @Test(.enabled(if: binary != nil))
     func twoWays() async throws {
@@ -129,9 +237,8 @@ struct HostSyncTests {
         let odd = ["it's $(touch PWNED) x.md", "-rf", "ünï code.txt", "q\"uote`s`.txt"]
         for name in odd { try write(mac, name, name) }
 
-        // The first copy: made, served, paired, then the files once the sync starts.
+        // An empty box folder, served and paired, then the files once the sync starts.
         let pair = try await rig.copy(mac)
-        #expect(pair.fresh == true)
         #expect(rig.connection.folders.map(\.path).contains(pair.box))
         #expect(SyncPairs.pair(mac: mac.standardizedFileURL.path, rig.defaults) == pair)
         let copy = URL(fileURLWithPath: pair.box)
@@ -141,7 +248,6 @@ struct HostSyncTests {
         #expect(read(copy, "node_modules/x.js") == nil)
         #expect(!FileManager.default.fileExists(atPath: copy.appendingPathComponent("PWNED").path))
         #expect(!FileManager.default.fileExists(atPath: mac.appendingPathComponent("PWNED").path))
-        #expect(await until(5) { SyncPairs.pair(mac: mac.standardizedFileURL.path, rig.defaults)?.fresh == nil })
 
         // The Mac's edit reaches the box, once: its echo from the box carries nothing back.
         try await settle(sync)
@@ -234,32 +340,21 @@ struct HostSyncTests {
         sync.stop()
     }
 
-    /// Two Mac folders with one name get two box copies; a retry after a failed first round keeps
-    /// what box chats made meanwhile.
+    /// A pair from before box folders were picked (a fresh copy, `fresh`) still syncs: its first
+    /// round makes the box the Mac's, once; a retry after that treats both as its own.
     @Test(.enabled(if: binary != nil))
-    func copiesAndRetries() async throws {
+    func oldPairsKeepWorking() async throws {
         let rig = try await Rig(Self.binary!)
         defer { rig.end() }
-        let first = rig.root.appendingPathComponent("work/app"), second = rig.root.appendingPathComponent("home/app")
-        try write(first, "w.txt", "work")
-        try write(second, "h.txt", "home")
-        let one = try await rig.copy(first), two = try await rig.copy(second)
-        #expect(one.box.hasSuffix("/app") && two.box.hasSuffix("/app-2"))
-        #expect(SyncPairs.pair(mac: second.standardizedFileURL.path, rig.defaults)?.box == two.box)
-
-        // As after a first round that failed: no agreed list, no seed. A box chat made a file and
-        // changed one the Mac has too.
-        var retry = two
-        retry.fresh = nil
-        SyncPairs.save(retry, rig.defaults)
-        let copy = URL(fileURLWithPath: two.box)
-        try write(copy, "agent.txt", "made on the box")
-        try write(copy, "h.txt", "box version")
-        let sync = try rig.sync(retry)
-        #expect(await until(15) { read(second, "agent.txt") == "made on the box" })
-        #expect(await until(10) { read(second, "h (testbox).txt") == "box version" })
-        #expect(read(second, "h.txt") == "home")
-        #expect(read(copy, "agent.txt") == "made on the box")
+        let mac = rig.root.appendingPathComponent("work/app")
+        try write(mac, "w.txt", "work")
+        let box = try await rig.boxFolder("app")
+        try write(box, "stale.txt", "from the clone")
+        let old = SyncPair(mac: mac.standardizedFileURL.path, alias: "testbox", box: box.path, fresh: true)
+        SyncPairs.save(old, rig.defaults)
+        let sync = try rig.sync(old)
+        #expect(await until(15) { read(box, "w.txt") == "work" && read(box, "stale.txt") == nil })
+        #expect(await until(5) { SyncPairs.pair(mac: mac.standardizedFileURL.path, rig.defaults)?.fresh == nil })
         sync.stop()
     }
 
@@ -281,8 +376,12 @@ struct HostSyncTests {
         defer { connection.release() }
         let defaults = try #require(UserDefaults(suiteName: "kore-sync-real-\(UUID().uuidString)"))
         let box = try #require(SyncBox.ssh(alias))
-        #expect(await HostSync.preflight(mac: mac, box: box) == .go)
-        let pair = try await HostSync.firstCopy(mac: mac, connection: connection, box: box, defaults: defaults).get()
+        #expect(await until(20) { connection.isOnline })
+        let made = await box.shell("mkdir -p -- \"$HOME/Code/kore-sync-check\" && cd -- \"$HOME/Code/kore-sync-check\" && pwd")
+        let path = made.out.trimmingCharacters(in: .whitespacesAndNewlines)
+        _ = try await connection.addFolder(path).get()
+        #expect(await HostSync.check(mac: mac, alias: alias, box: path, via: box, pairs: []) == .go(.toBox))
+        let pair = HostSync.pair(mac: mac, alias: alias, box: path, root: root.appendingPathComponent("cache"), defaults: defaults)
         print("real box copy: \(pair.box)")
         let sync = try #require(HostSync(pair: pair, connection: connection, box: box, root: root.appendingPathComponent("cache"), defaults: defaults))
         sync.start()
@@ -356,8 +455,26 @@ struct HostSyncTests {
             box = try fakeBox(root, base: root.appendingPathComponent("code"))
         }
 
+        /// A folder on "the box", served by kore-host: as it names it.
+        func boxFolder(_ name: String) async throws -> URL {
+            let url = root.appendingPathComponent("code/\(name)")
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            return URL(fileURLWithPath: try await connection.addFolder(url.path).get().path)
+        }
+
+        func check(_ mac: URL, _ folder: URL) async -> HostSync.Check {
+            await HostSync.check(mac: mac, alias: "testbox", box: folder.path, via: box, pairs: SyncPairs.all(defaults))
+        }
+
+        func pair(_ mac: URL, _ folder: URL) -> SyncPair {
+            HostSync.pair(mac: mac, alias: "testbox", box: folder.path, root: cache, defaults: defaults)
+        }
+
+        /// The Mac folder paired with an empty box folder of its name.
         func copy(_ mac: URL) async throws -> SyncPair {
-            try await HostSync.firstCopy(mac: mac, connection: connection, box: box, defaults: defaults).get()
+            let folder = try await boxFolder(mac.lastPathComponent)
+            #expect(await check(mac, folder) == .go(.toBox))
+            return pair(mac, folder)
         }
 
         func sync(_ pair: SyncPair) throws -> HostSync {

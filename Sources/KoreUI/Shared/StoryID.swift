@@ -92,8 +92,6 @@ extension StoryID {
         package static func folder(_ path: String) -> StoryID { StoryID(.titlebar, "boxes.folder", key: path) }
         package static let add = StoryID(.titlebar, "boxes.add")
         package static let field = StoryID(.titlebar, "boxes.field")
-        /// "Open <folder> on <box>": the window's folder, kept in sync with a box's copy.
-        package static let sync = StoryID(.titlebar, "boxes.sync")
     }
 
     package enum Tabs {

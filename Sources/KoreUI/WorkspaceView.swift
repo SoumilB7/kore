@@ -382,8 +382,8 @@ struct TabBar: View {
         let strip = strip(layout)
         HStack(spacing: Size.tabGap) {
             ExplorerButton(workspace: workspace, size: tabHeight).storyID(StoryID.Titlebar.explorer)
-            // The box button once there's a box (the Boxes panel adds the first), and in a box's window.
-            let boxButton = workspace.box != nil || !BoxList.shared.boxes.isEmpty
+            // A box's window only: a window on this Mac's folder stays one.
+            let boxButton = workspace.hasBoxButton
             if boxButton { BoxButton(workspace: workspace, size: tabHeight) }
             if let explorerDock {
                 let buttons: CGFloat = boxButton ? 2 : 1
@@ -423,7 +423,7 @@ struct TabBar: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .layoutPriority(-1)
-                .help(workspace.box.map { $0.alias + " · " + $0.shownFolder } ?? workspace.folder.path)
+                .help(workspace.box?.label ?? workspace.folder.path)
             if let chat = workspace.activeTab.chat {
                 AgentsButton(chat: chat, height: tabHeight).storyID(StoryID.Titlebar.agents, press: chat.agentMap.toggle)
                 CommandsButton(chat: chat, height: tabHeight)

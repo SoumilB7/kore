@@ -87,13 +87,15 @@ package final class AppModel {
     /// Welcome's keys' monitor is in (storylines wait for it before a key).
     @ObservationIgnored package internal(set) var welcomeTakesKeys = false
 
-    func chooseFolder() -> URL? {
+    /// The open-folder panel (New Folder in it): Open, or another verb (Sync).
+    func chooseFolder(prompt: String = "Open", message: String? = nil) -> URL? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.allowsMultipleSelection = false
-        panel.prompt = "Open"
+        panel.prompt = prompt
+        if let message { panel.message = message }
         return panel.runModal() == .OK ? panel.url : nil
     }
 
