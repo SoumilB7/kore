@@ -513,6 +513,7 @@ struct TranscriptTimeline: View, Equatable {
                 if hidden { actions.unloadOld() }
             }
             .onChange(of: store.unloads) { renewOutOfSight() }
+            .onChange(of: sections.isEmpty) { _, empty in if !empty { landHistory(sections.count) } }
             .onChange(of: store.folded?.seq) {
                 letGo()
                 // Its work rows all go in one update, and AppKit's document can keep the height
@@ -817,6 +818,15 @@ struct TranscriptTimeline: View, Equatable {
         settle(at: nil)
         renewing.value = Date() + Self.settleLimit
         mount.value &+= 1
+    }
+
+    /// A history landing all at once in a view that held nothing: the lazy stack placed none of
+    /// it, so its pin to the end aims at heights it estimated, and can rest past the rows' end
+    /// with nothing drawn. Looked at soon rather than in 2 s (`checkBlank`), which brings the end
+    /// back onto the rows, or builds the scroll view again at the end. A first send isn't a history.
+    private func landHistory(_ sections: Int) {
+        guard sections > 1, following.value, store.sentAt == nil else { return }
+        checkBlank(soon: true)
     }
 
     /// This view counts its store's chat as on screen while it shows it.

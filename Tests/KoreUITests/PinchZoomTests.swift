@@ -245,4 +245,57 @@ struct PinchZoomTests {
         #expect(!PinchZoom.isAdjusting(scroll) && scroll.magnification == 1)
     }
 
+
+    /// Back at its natural size, a page keeps no place of its own: its tab comes back where its
+    /// transcript put it (the end moved on while it was out of sight), and nothing scrolls sideways.
+    @Test func aPageBackAtItsSizeKeepsNoPlaceAndNoSidewaysScroll() {
+        let (window, scroll, _, point) = editor()
+        let elasticity = scroll.horizontalScrollElasticity
+        let pinch = PinchZoom(zoom: Zoom(saved: 1, persist: { _ in }))
+        pinch.attach(window)
+        defer { pinch.detach(); window.contentView = nil }
+        let first = UUID(), second = UUID()
+        pinch.setActiveTab(first, openTabs: [first, second])
+        #expect(pinch.receive(0.5, phase: .began, at: point))
+        #expect(pinch.receive(0, phase: .ended, at: point))
+        #expect(scroll.magnification > 1 && scroll.horizontalScrollElasticity == .allowed)
+        #expect(pinch.receive(-1, phase: .began, at: point))
+        #expect(pinch.receive(0, phase: .ended, at: point))
+        pinch.completeLayout()
+        #expect(scroll.magnification == 1 && scroll.horizontalScrollElasticity == elasticity && abs(scroll.contentView.bounds.minX) < 0.001)
+        pinch.setActiveTab(second, openTabs: [first, second])
+        // The tab's own view moves on meanwhile (a reply came, followed to its end).
+        scroll.contentView.scroll(to: CGPoint(x: 0, y: 1200))
+        pinch.setActiveTab(first, openTabs: [first, second])
+        pinch.completeLayout()
+        #expect(scroll.magnification == 1 && abs(scroll.contentView.bounds.minY - 1200) < 0.001)
+    }
+
+    /// Left magnified, a page comes back so, where it was; at the natural size meanwhile it's drawn
+    /// from its left edge. Other content in its place starts at the natural size.
+    @Test func aPageLeftMagnifiedComesBackOnlyToItsOwnContent() {
+        let (window, scroll, _, point) = editor()
+        let pinch = PinchZoom(zoom: Zoom(saved: 1, persist: { _ in }))
+        pinch.attach(window)
+        defer { pinch.detach(); window.contentView = nil }
+        let first = UUID(), second = UUID()
+        pinch.setActiveTab(first, openTabs: [first, second])
+        #expect(pinch.receive(0.5, phase: .began, at: CGPoint(x: 450, y: 200)))
+        #expect(pinch.receive(0, phase: .ended, at: CGPoint(x: 450, y: 200)))
+        pinch.completeLayout()
+        let scale = scroll.magnification, origin = scroll.contentView.bounds.origin
+        #expect(scale > 1 && origin.x > 1)
+        pinch.setActiveTab(second, openTabs: [first, second])
+        #expect(scroll.magnification == 1 && abs(scroll.contentView.bounds.minX) < 0.001)
+        pinch.setActiveTab(first, openTabs: [first, second])
+        pinch.completeLayout()
+        #expect(abs(scroll.magnification - scale) < 0.00001)
+        #expect(hypot(scroll.contentView.bounds.minX - origin.x, scroll.contentView.bounds.minY - origin.y) < 0.00001)
+        pinch.setActiveTab(second, openTabs: [first, second])
+        scroll.documentView = EditorTextView(frame: CGRect(x: 0, y: 0, width: 500, height: 2000))
+        pinch.setActiveTab(first, openTabs: [first, second])
+        pinch.completeLayout()
+        #expect(scroll.magnification == 1 && abs(scroll.contentView.bounds.minX) < 0.001)
+        _ = point
+    }
 }

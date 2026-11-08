@@ -200,7 +200,7 @@ package final class PinchZoom {
             guard let scroll = target(in: window, at: point) else { return false }
             let page = pages[activeTab] ?? Page()
             pages[activeTab] = page
-            activate(page, on: scroll)
+            activate(page, on: scroll, pinching: true)
             let active = Session(page: page, scroll: scroll, fontScale: zoom.scale, point: point)
             session = active
             holdViewport(active)
@@ -220,9 +220,13 @@ package final class PinchZoom {
         return true
     }
 
-    private func activate(_ page: Page, on scroll: NSScrollView) {
+    private func activate(_ page: Page, on scroll: NSScrollView, pinching: Bool = false) {
         if page.scroll === scroll, page.document === scroll.documentView, page.original != nil { return }
+        // A page left magnified comes back so on its own content only: another chat in the tab
+        // (or the same one built again) starts at its natural size, where its transcript puts it.
+        let same = page.document != nil && page.document === scroll.documentView
         deactivate(page)
+        if !same { (page.scale, page.origin) = (1, nil) }
         page.scroll = scroll
         page.document = scroll.documentView
         page.original = Configuration(allows: scroll.allowsMagnification, minimum: scroll.minMagnification,
@@ -231,7 +235,8 @@ package final class PinchZoom {
         scroll.allowsMagnification = true
         scroll.minMagnification = Self.minimum
         scroll.maxMagnification = Self.maximum
-        // Horizontal trackpad panning must remain available even without a visible scroller.
+        // Horizontal trackpad panning must remain available even without a visible scroller,
+        // while the page is magnified or a pinch is under way (`fitSides`).
         scroll.horizontalScrollElasticity = .allowed
         if scroll.magnification != page.scale {
             let clip = scroll.contentView
@@ -243,18 +248,42 @@ package final class PinchZoom {
             clip.scroll(to: clip.constrainBoundsRect(CGRect(origin: origin, size: clip.bounds.size)).origin)
             scroll.reflectScrolledClipView(clip)
         }
+        if !pinching { fitSides(scroll, page) }
         ScrollShift.magnified(scroll)
+    }
+
+    /// Sideways only while magnified: trackpad panning then, even without a visible scroller. At
+    /// the natural size the page is as wide as its view, and its left edge is the view's.
+    private func fitSides(_ scroll: NSScrollView, _ page: Page) {
+        guard let original = page.original else { return }
+        let magnified = scroll.magnification > 1.001
+        let sides: NSScrollView.Elasticity = magnified ? .allowed : original.horizontalElasticity
+        if scroll.horizontalScrollElasticity != sides { scroll.horizontalScrollElasticity = sides }
+        guard !magnified else { return }
+        let clip = scroll.contentView
+        let left = scroll.documentView?.frame.minX ?? 0
+        guard abs(clip.bounds.minX - left) > 0.5 else { return }
+        clip.scroll(to: CGPoint(x: left, y: clip.bounds.minY))
+        scroll.reflectScrolledClipView(clip)
     }
 
     private func deactivate(_ page: Page) {
         guard let original = page.original, let scroll = page.scroll else { page.original = nil; return }
-        page.scale = scroll.magnification
-        page.origin = scroll.contentView.bounds.origin
+        // Only a page left magnified keeps its place: at its natural size, the tab comes back
+        // where its transcript puts it (at the end if it was there, whatever came meanwhile).
+        let magnified = scroll.magnification > 1.001
+        page.scale = magnified ? scroll.magnification : 1
+        page.origin = magnified ? scroll.contentView.bounds.origin : nil
         scroll.magnification = original.scale
         scroll.minMagnification = original.minimum
         scroll.maxMagnification = original.maximum
         scroll.allowsMagnification = original.allows
         scroll.horizontalScrollElasticity = original.horizontalElasticity
+        let clip = scroll.contentView, left = scroll.documentView?.frame.minX ?? 0
+        if abs(clip.bounds.minX - left) > 0.5 {
+            clip.scroll(to: CGPoint(x: left, y: clip.bounds.minY))
+            scroll.reflectScrolledClipView(clip)
+        }
         page.original = nil
         ScrollShift.magnified(scroll)
     }
@@ -286,6 +315,7 @@ package final class PinchZoom {
 
     private func finish(_ session: Session) {
         releaseViewport(session)
+        if let scroll = session.scroll { fitSides(scroll, session.page) }
         if let scroll = session.scroll, let document = session.document {
             session.page.scale = scroll.magnification
             session.page.origin = scroll.contentView.bounds.origin
@@ -313,6 +343,7 @@ package final class PinchZoom {
             let clip = scroll.contentView
             clip.scroll(to: clip.constrainBoundsRect(CGRect(origin: session.baseOrigin, size: clip.bounds.size)).origin)
             scroll.reflectScrolledClipView(clip)
+            fitSides(scroll, session.page)
             session.page.scale = scroll.magnification
             session.page.origin = clip.bounds.origin
         }
