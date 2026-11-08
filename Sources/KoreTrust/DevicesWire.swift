@@ -9,11 +9,15 @@ package enum DevicesWire {
         package var id: String
         package var rev: Int
         package var records: [DeviceRecord]
+        /// Only the records the sending Mac issued (its phones) are set; the rest of the box's
+        /// book stays, and `rev` isn't compared. Sent to boxes that say `devices.merge` in their caps.
+        package var merge: Bool?
 
-        package init(id: String, rev: Int, records: [DeviceRecord]) {
+        package init(id: String, rev: Int, records: [DeviceRecord], merge: Bool? = nil) {
             self.id = id
             self.rev = rev
             self.records = records
+            self.merge = merge
         }
     }
 
@@ -42,6 +46,8 @@ package enum DevicesWire {
     }
 
     package static let set = "devices.set"
+    /// The cap a box lists when it takes a merging `devices.set`.
+    package static let mergeCap = "devices.merge"
     package static let result = "devices.result"
     package static let pending = "devices.pending"
 

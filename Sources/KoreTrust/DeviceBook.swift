@@ -147,6 +147,34 @@ package struct DeviceBook: Sendable {
         }
     }
 
+    /// `devices.set{merge}` (phase 18 step 5b): the records an owner Mac issued (its phones) become
+    /// these; every other record stays. A record of another issuer, or a Mac, can't be set so.
+    @discardableResult
+    package func applyIssued(_ records: [DeviceRecord], from issuer: VerifiedPeer) throws -> Contents {
+        try locked {
+            var book = try readUnlocked()
+            guard let mac = book.devices.first(where: { $0.id == issuer.device }), mac.kind == .mac, mac.owner,
+                  mac.identityKey == issuer.identityKey else { throw TrustError.refused("devices.set from a non-owner") }
+            for record in records {
+                guard record.issuedBy == issuer.device, record.kind != .mac, record.id != issuer.device else {
+                    throw TrustError.refused("a merged record the Mac didn't issue")
+                }
+                try record.validate()
+            }
+            let ids = Set(records.map(\.id))
+            guard ids.count == records.count else { throw TrustError.invalidRecord("duplicate id") }
+            let kept = book.devices.filter { $0.issuedBy != issuer.device }
+            guard !kept.contains(where: { ids.contains($0.id) }) else { throw TrustError.refused("another device's record") }
+            let devices = kept + records
+            guard devices != book.devices else { return book }
+            let before = book
+            book.devices = devices
+            book.rev += 1
+            try write(book, over: before)
+            return book
+        }
+    }
+
     /// Removes a device, and with a Mac every record it issued.
     @discardableResult
     package func remove(_ id: UUID) throws -> Contents {

@@ -85,16 +85,19 @@ package struct TailnetStatus: Decodable, Sendable, Equatable {
         package var userID: Int64?
         /// A tagged node's tags (its `UserID` is then Tailscale's stand-in, never a person).
         package var tags: [String]?
+        /// Its MagicDNS name, with Tailscale's trailing dot (empty when it has none).
+        package var dnsName: String
 
         enum CodingKeys: String, CodingKey {
-            case publicKey = "PublicKey", tailscaleIPs = "TailscaleIPs", userID = "UserID", tags = "Tags"
+            case publicKey = "PublicKey", tailscaleIPs = "TailscaleIPs", userID = "UserID", tags = "Tags", dnsName = "DNSName"
         }
 
-        package init(publicKey: String, tailscaleIPs: [String], userID: Int64?, tags: [String]? = nil) {
+        package init(publicKey: String, tailscaleIPs: [String], userID: Int64?, tags: [String]? = nil, dnsName: String = "") {
             self.publicKey = publicKey
             self.tailscaleIPs = tailscaleIPs
             self.userID = userID
             self.tags = tags
+            self.dnsName = dnsName
         }
 
         /// Signed out, Self has no addresses yet (`null`).
@@ -104,6 +107,7 @@ package struct TailnetStatus: Decodable, Sendable, Equatable {
             tailscaleIPs = try c.decodeIfPresent([String].self, forKey: .tailscaleIPs) ?? []
             userID = try c.decodeIfPresent(Int64.self, forKey: .userID)
             tags = try c.decodeIfPresent([String].self, forKey: .tags)
+            dnsName = try c.decodeIfPresent(String.self, forKey: .dnsName) ?? ""
         }
 
         /// The person this node belongs to; nil for a tagged node.

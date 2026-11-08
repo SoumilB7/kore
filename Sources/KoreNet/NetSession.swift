@@ -78,6 +78,9 @@ package final class NetSession {
         /// This node's own Tailscale user: a device enrolled over SSH takes its first node key only
         /// from a WhoIs of this user.
         package var ownUser: Int64?
+        /// What the welcome tells this peer of the devices here (a Mac's to a phone: its own
+        /// record, then its boxes); nil sends none.
+        package var directory: ((DeviceRecord) -> [DeviceRecord]?)?
 
         package init(local: NetLocal, route: Binding.Route, peer: NetPeerFacts, book: DeviceBook, tickets: ResumeTickets) {
             self.local = local
@@ -125,6 +128,9 @@ package final class NetSession {
     package enum Stranger: Sendable {
         case refuse(String)
         case enroll(DeviceRecord, commit: @Sendable (VerifiedPeer) -> Bool)
+        /// Kept waiting for the owner's answer (the Mac's Allow card) for at most `seconds`, once
+        /// its proof by the record's key held: `admit` with the record kept, or `refuse`.
+        case hold(DeviceRecord, seconds: TimeInterval)
     }
 
     package enum State: Equatable {
@@ -153,8 +159,20 @@ package final class NetSession {
     package private(set) var nodeKeyAppend: DeviceBook.NodeKeyAppend?
     /// Server side: the device came in through its enroll (a record made now).
     package private(set) var enrolled = false
+    /// Server side: a stranger's proven hello waiting for the owner (`Stranger.hold`).
+    package var awaitingAllow: Bool { held != nil }
+    /// The record a held stranger waits with.
+    package var heldRecord: DeviceRecord? { held?.record }
+    private var held: (server: Server, hello: NetControl.Hello, binding: Binding, record: DeviceRecord, peer: VerifiedPeer)?
     /// When the handshake gives up; nil once established.
     package private(set) var deadline: Date?
+    /// Client side: the directory the welcome carried (a Mac's, to a phone).
+    package private(set) var directory: [DeviceRecord]?
+    /// The binding digest B once established: what a phone's raises sign over.
+    package private(set) var bindingDigest: Data?
+    /// The `n` of the last `pong` heard (a probe's answer), and of the last `ping` sent.
+    package private(set) var lastPong: Int?
+    package private(set) var lastPing = 0
 
     private let fd: Int32
     private let role: Role
@@ -271,6 +289,24 @@ package final class NetSession {
     /// Says `bye` (as far as the socket takes it) and ends.
     package func close(_ reason: String) { fail(reason) }
 
+    /// Server side: established, and nothing has come since the welcome yet, so the client's
+    /// cursors (`resume`) may still be on their way.
+    package var awaitingCursors: Bool {
+        guard case .established = state, case .server = role else { return false }
+        return awaitingFirst
+    }
+
+    /// An on-demand probe (`{"t":"ping","n":…}` on the interactive queue): its `n`. The peer's
+    /// `pong` sets `lastPong`.
+    @discardableResult
+    package func ping() -> Int? {
+        guard case .established = state else { return nil }
+        lastPing += 1
+        control(.ping(lastPing))
+        flush()
+        return lastPing
+    }
+
     private var isClosed: Bool {
         if case .closed = state { return true }
         return false
@@ -311,6 +347,7 @@ package final class NetSession {
     private func end(_ reason: String) {
         guard !isClosed else { return }
         state = .closed(reason)
+        held = nil
         deadline = nil
         Sockets.closeFD(fd)
     }
@@ -331,6 +368,12 @@ package final class NetSession {
         case (.established, _, .credit(let n)):
             awaitingFirst = false
             scheduler.grant(n)
+        case (.established, _, .ping(let n)):
+            // A client with cursors sends them first: a ping before them means it has none.
+            awaitingFirst = false
+            control(.pong(n))
+        case (.established, _, .pong(let n)):
+            lastPong = n
         default:
             fail(NetControl.Reason.protocolError)
         }
@@ -339,7 +382,7 @@ package final class NetSession {
     private func serverHello(_ server: Server, _ hello: NetControl.Hello) {
         self.hello = hello
         guard hello.v == NetControl.version else { return fail(NetControl.Reason.version) }
-        guard let entry = server.services[hello.service] else { return fail(NetControl.Reason.service) }
+        guard server.services[hello.service] != nil else { return fail(NetControl.Reason.service) }
         // Proof first: an unknown device, a bad proof and a paused device all look the same
         // (`bye unknown`) to a peer that hasn't proven itself.
         guard let binding = try? Binding(
@@ -365,6 +408,14 @@ package final class NetSession {
             }
             switch server.stranger?(hello) ?? .refuse(NetControl.Reason.unknown) {
             case .refuse(let reason): return fail(reason)
+            case .hold(let made, let seconds):
+                guard made.id == hello.device, let proven = IdentityProof.verify(hello.sig, binding: binding, side: .client, record: made) else {
+                    return fail(NetControl.Reason.unknown)
+                }
+                held = (server, hello, binding, made, proven)
+                verified = proven
+                deadline = clock().addingTimeInterval(seconds)
+                return
             case .enroll(let made, let keep):
                 guard made.id == hello.device, let proven = IdentityProof.verify(hello.sig, binding: binding, side: .client, record: made) else {
                     return fail(NetControl.Reason.unknown)
@@ -374,6 +425,28 @@ package final class NetSession {
                 commit = keep
             }
         }
+        welcome(server, hello, binding: binding, record: record, peer: peer, commit: commit)
+    }
+
+    /// The owner's answer to a held stranger: `record` (as kept, with its abilities) is welcomed;
+    /// nil refuses with `reason`.
+    package func admit(_ record: DeviceRecord?, reason: String = NetControl.Reason.refused) {
+        guard let held, case .handshaking = state else { return }
+        self.held = nil
+        guard let record, record.id == held.record.id, record.identityKey == held.record.identityKey else {
+            fail(reason)
+            return
+        }
+        enrolled = true
+        welcome(held.server, held.hello, binding: held.binding, record: record, peer: held.peer, commit: { _ in true })
+        flush()
+    }
+
+    private func welcome(
+        _ server: Server, _ hello: NetControl.Hello, binding: Binding, record: DeviceRecord, peer: VerifiedPeer,
+        commit: (@Sendable (VerifiedPeer) -> Bool)?
+    ) {
+        guard let entry = server.services[hello.service] else { return fail(NetControl.Reason.service) }
         let request = PolicyTable.Request(
             pair: .init(record.kind, server.local.kind), service: entry.policy, queue: entry.queue,
             path: PolicyTable.Path(rawValue: server.route.rawValue)!, abilities: record.abilities)
@@ -393,7 +466,11 @@ package final class NetSession {
         let ticket = server.tickets.issue(for: record.id)
         scheduler.grant(hello.credit)
         let rev = (try? server.book.read().rev) ?? 0
-        control(.welcome(.init(sig: sig, credit: server.credit, ticket: ticket, resumed: resumed, abilities: granted, devicesRev: rev)))
+        // The digest every raise on this session signs over.
+        bindingDigest = binding.digest
+        control(.welcome(.init(
+            sig: sig, credit: server.credit, ticket: ticket, resumed: resumed, abilities: granted, devicesRev: rev,
+            directory: server.directory?(record))))
         self.binding = binding
         decoder.preAuth = false
         deadline = nil
@@ -433,6 +510,8 @@ package final class NetSession {
         scheduler.grant(welcome.credit)
         decoder.preAuth = false
         deadline = nil
+        bindingDigest = binding.digest
+        directory = welcome.directory
         state = .established(NetPeer(record: record, abilities: welcome.abilities, service: client.service, resumed: welcome.resumed, ticket: welcome.ticket))
         if let cursors = client.resume?.cursors, !cursors.isEmpty { control(.resume(cursors)) }
     }

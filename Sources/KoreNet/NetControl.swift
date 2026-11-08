@@ -13,6 +13,11 @@ package enum NetControl: Equatable, Sendable {
     /// (chat events `{log,s}`, pty byte seq, revs), opaque here, for the service above. Kept out of
     /// the hello so the pre-auth frame stays small.
     case resume([String: JSONValue])
+    /// Either side, any time after the welcome: "are you there?" (`n` echoed). Sent only on
+    /// demand (an app resume, a command unanswered too long), never on a timer.
+    case ping(Int)
+    /// The answer to `ping`, with its `n`, on the interactive queue.
+    case pong(Int)
     case bye(String)
 
     package static let version = 2
@@ -119,8 +124,11 @@ package enum NetControl: Equatable, Sendable {
         /// The server's device book rev: an owner Mac pushes `devices.set` when it holds a newer
         /// one (a box offline through a change catches up).
         package var devicesRev: Int?
+        /// A Mac's welcome to a phone: its own record first, then the boxes it knows (public
+        /// data only). The phone pins the Mac from it on first contact.
+        package var directory: [DeviceRecord]?
 
-        package init(sig: Data, credit: Int, ticket: Data, resumed: Bool, abilities: Ability, devicesRev: Int? = nil) {
+        package init(sig: Data, credit: Int, ticket: Data, resumed: Bool, abilities: Ability, devicesRev: Int? = nil, directory: [DeviceRecord]? = nil) {
             v = NetControl.version
             self.sig = sig
             self.credit = credit
@@ -128,6 +136,7 @@ package enum NetControl: Equatable, Sendable {
             self.resumed = resumed
             self.abilities = abilities
             self.devicesRev = devicesRev
+            self.directory = directory
         }
     }
 
@@ -166,6 +175,8 @@ extension NetControl: Codable {
             self = .credit(n)
         case "bye": self = .bye(try c.decode(String.self, forKey: .reason))
         case "resume": self = .resume(try c.decode([String: JSONValue].self, forKey: .cursors))
+        case "ping": self = .ping(try c.decode(Int.self, forKey: .n))
+        case "pong": self = .pong(try c.decode(Int.self, forKey: .n))
         default: throw DecodingError.dataCorruptedError(forKey: .t, in: c, debugDescription: "unknown control \(t)")
         }
     }
@@ -191,14 +202,22 @@ extension NetControl: Codable {
         case .resume(let cursors):
             try c.encode("resume", forKey: .t)
             try c.encode(cursors, forKey: .cursors)
+        case .ping(let n):
+            try c.encode("ping", forKey: .t)
+            try c.encode(n, forKey: .n)
+        case .pong(let n):
+            try c.encode("pong", forKey: .t)
+            try c.encode(n, forKey: .n)
         }
     }
 
     package func encoded() throws -> Data {
         let e = JSONEncoder()
         e.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        // A welcome's directory holds records: their dates as `TrustJSON` writes them.
+        e.dateEncodingStrategy = .iso8601
         return try e.encode(self)
     }
 
-    package static func decode(_ data: Data) throws -> NetControl { try JSONDecoder().decode(NetControl.self, from: data) }
+    package static func decode(_ data: Data) throws -> NetControl { try TrustJSON.decoder().decode(NetControl.self, from: data) }
 }
