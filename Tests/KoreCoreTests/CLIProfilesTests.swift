@@ -36,6 +36,27 @@ import Testing
         #expect(throws: Never.self) { try CLIProfiles.repairForLaunch("codex") }
     }
 
+    /// A login moved here from another device is listed, and the active login stays as it was:
+    /// only the owner's pick (or a sign-in landing) makes a login active.
+    @Test func aPlacedLoginIsListedAndNeverMadeActive() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let main = base.appendingPathComponent("main", isDirectory: true)
+        try FileManager.default.createDirectory(at: main.appendingPathComponent("sessions"), withIntermediateDirectories: true)
+        CLIProfiles.root.value = base.appendingPathComponent("accounts")
+        CLIProfiles.mains.value = ["codex": main]
+        CLIProfiles.reload()
+        defer {
+            CLIProfiles.root.value = nil
+            CLIProfiles.mains.value = [:]
+            CLIProfiles.reload()
+            try? FileManager.default.removeItem(at: base)
+        }
+        let id = try CLIProfiles.prepare("codex")
+        CLIProfiles.place("codex", id, email: "work@acme.dev")
+        #expect(CLIProfiles.added("codex").map(\.id) == [id] && CLIProfiles.added("codex").first?.email == "work@acme.dev")
+        #expect(CLIProfiles.active("codex") == nil)
+    }
+
     @Test func anAddedLoginKeepsItsOwnLoginAndSharesTheRest() throws {
         let files = FileManager.default
         let base = files.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

@@ -57,11 +57,7 @@ package final class MacLoginMoves {
 
         package static var live: Profiles { Profiles(
             prepare: { try CLIProfiles.prepare($0) }, folder: { CLIProfiles.folder($0, $1) },
-            adopt: { cli, id, email, workspace in
-                let active = CLIProfiles.active(cli)
-                CLIProfiles.adopt(cli, id, email: email, workspace: workspace)
-                CLIProfiles.activate(cli, active)
-            },
+            adopt: { cli, id, email, workspace in CLIProfiles.place(cli, id, email: email, workspace: workspace) },
             remove: { CLIProfiles.remove($0, $1) }, added: { CLIProfiles.added($0) }, mainEmail: { CLIProfiles.mainEmail($0) },
             main: { cli in
                 let main = CLIProfiles.mainFolder(cli)

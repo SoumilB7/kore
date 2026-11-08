@@ -242,6 +242,13 @@ public enum CLIProfiles {
         }
     }
 
+    /// A prepared login moved here from another device: listed, the active login left as it is
+    /// (only a pick or a landed sign-in makes one active).
+    public static func place(_ cli: String, _ id: String, email: String?, workspace: String? = nil) {
+        link(cli, id)
+        change { $0.added[cli, default: []].append(Profile(id: id, email: email, workspace: workspace)) }
+    }
+
     /// Makes `id` (nil: main) the login every CLI from now on starts with, its links brought up
     /// to date with main's folder.
     public static func activate(_ cli: String, _ id: String?) {
