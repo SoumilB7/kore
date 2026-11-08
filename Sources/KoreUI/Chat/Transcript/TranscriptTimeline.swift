@@ -37,6 +37,9 @@ struct TranscriptTimeline: View, Equatable {
     /// The last content height and offset, to undo a fold's shrink above the reader.
     @StateObject private var geometry = Held((height: CGFloat(0), offset: CGFloat(0)))
     @StateObject private var pendingFold = Held(false)
+    /// A turn folded above the reader: the answer row kept where it was on screen, with its top
+    /// then, until when, and whether the view was taken to it (it went out of the built rows).
+    @StateObject private var foldKeep = Held((id: String, top: CGFloat, until: Date, sought: Bool)?.none)
     /// The send already followed, and a saved place still to go back to.
     @StateObject private var lastSend = Held(Date?.none)
     /// Until then, a glide to the end is under way: layout doesn't pin over it. And the send
@@ -105,6 +108,9 @@ struct TranscriptTimeline: View, Equatable {
     /// up to `limit`): the offset it's held at, or none to only keep it within the measured end.
     @StateObject private var settling = Held((offset: CGFloat?, until: Date, limit: Date)?.none)
     @StateObject private var mount = Local(0)
+    /// The view was taken up onto the rows' end (`checkBlank`): if the next check finds it past
+    /// the end again, the scroll view is built again.
+    @StateObject private var endPinned = Held(false)
     @StateObject private var shown = Held(false)
     /// The store this view counts as on screen in (`countOnScreen`).
     @StateObject private var counted = Held(TranscriptStore?.none)
@@ -218,6 +224,7 @@ struct TranscriptTimeline: View, Equatable {
                     restoreInRow.value = nil
                     anchor.value = nil
                     paged.value = nil
+                    foldKeep.value = nil
                 } else if new == .idle, old == .interacting || old == .decelerating {
                     let g = context.geometry
                     following.value = g.contentOffset.y + g.containerSize.height >= g.contentSize.height - Self.atBottom
@@ -384,6 +391,16 @@ struct TranscriptTimeline: View, Equatable {
                         proxy.scrollTo(kept.id, anchor: .top)
                     }
                 }
+                if let kept = foldKeep.value {
+                    // The answer kept through a fold went out of the built rows: to it, and its
+                    // next report puts it back where it was.
+                    if Date() >= kept.until {
+                        foldKeep.value = nil
+                    } else if !kept.sought, answerTops.value[kept.id] == nil {
+                        foldKeep.value?.sought = true
+                        proxy.scrollTo(kept.id, anchor: .top)
+                    }
+                }
                 if pendingFold.value, !following.value, height < geometry.value.height {
                     // The fold took height from above the answer: scroll up by as much.
                     pendingFold.value = false
@@ -467,8 +484,23 @@ struct TranscriptTimeline: View, Equatable {
             }
             .onChange(of: store.unloads) { renewOutOfSight() }
             .onChange(of: store.folded?.seq) {
-                pendingFold.value = true
                 letGo()
+                // Its work rows all go in one update, and AppKit's document can keep the height
+                // they had: at the end, the end is looked at soon (a glide doesn't put it off).
+                // Above it, the answer row on screen stays where it is, however the answer grows
+                // meanwhile; with none on screen, the view goes up by the height the fold took.
+                let move = FoldMove(following: following.value, answerTops: answerTops.value, visible: visibleHeight.value)
+                pendingFold.value = move == .byHeight
+                switch move {
+                case .checkEnd:
+                    // A pin of its own: an earlier check's isn't this one's.
+                    endPinned.value = false
+                    checkBlank(soon: true)
+                case .keep(let id, let top):
+                    foldKeep.value = (id, top, Date() + Self.landing, false)
+                case .byHeight:
+                    break
+                }
             }
             .onChange(of: store.loadingEarlier) { _, loading in
                 // The earlier conversation is in (and laid out next): what's on screen stays.
@@ -653,6 +685,7 @@ struct TranscriptTimeline: View, Equatable {
         }
         guard blankCheck.value.task == nil else { return }
         let (store, seen, tops, remounts, remountedAt, shift, following, blankCheck) = (store, seen, rowTops, remounts, remountedAt, shift, following, blankCheck)
+        let endPinned = endPinned
         let rebuild = rebuild
         blankCheck.value.task = Task { @MainActor in
             while blankCheck.value.due.timeIntervalSinceNow > 0 {
@@ -666,16 +699,34 @@ struct TranscriptTimeline: View, Equatable {
             let frames = shift.frames
             let drawn = shift.drawn
             let unseen = (frames.map { $0.content.height < 1 || !$0.content.intersects($0.visible) } ?? false) || drawn == 0
+            // Or partly blank: the view's bottom past the rows' end (SwiftUI's height), on a
+            // document AppKit still sizes as it was before rows went (a turn's work folding away).
+            let past = !unseen && shift.past(end: height, slack: Self.atBottom)
             // By what's drawn, not by which rows reported: a new chat, or a turn showing only its
             // tool rows, has no message or answer on screen and is fine. SwiftUI's offset can run
             // past its height while AppKit's view is drawn, so it isn't asked.
-            guard unseen else {
+            guard unseen || past else {
+                endPinned.value = false
                 if remounts.value > 0 {
                     KoreLog.named("sessions").write("blank-recovered", ["cli": store.providerName])
                     remounts.value = 0
                 }
                 return
             }
+            // First, at once and natively, the view's bottom onto the rows' end; looked at again
+            // soon, and built again only when it's still past it then.
+            if past, !endPinned.value {
+                KoreLog.named("sessions").write(
+                    "blank-end",
+                    [
+                        "cli": store.providerName, "end": String(Int(height)), "following": following.value ? "yes" : "no",
+                        "ak_height": frames.map { String(Int($0.content.height)) }, "ak_bottom": frames.map { String(Int($0.visible.maxY)) },
+                    ])
+                endPinned.value = shift.pinEnd(at: height)
+                checkBlank(soon: true)
+                return
+            }
+            endPinned.value = false
             KoreLog.named("sessions").write(
                 "blank",
                 [
@@ -866,6 +917,7 @@ struct TranscriptTimeline: View, Equatable {
         let sticky = sticky
         let (tops, answerTops, hold) = (rowTops, answerTops, widthHold)
         let (anchor, readerMoved, geometry, position, nudge, shift, visible) = (anchor, readerMoved, geometry, position, nudge, shift, visibleHeight)
+        let foldKeep = foldKeep
         let (following, opened) = (following, openMessages)
         let scroll = scroll
         // Each row's new frame, and the reader's place kept as the width changes (`WidthHold`).
@@ -918,6 +970,19 @@ struct TranscriptTimeline: View, Equatable {
         actions.answerMoved = { id, top in
             answerTops.value[id] = top
             moved(id, top)
+            // Kept through a fold above it: back where it was, in the same pass.
+            if let kept = foldKeep.value, kept.id == id, let top, !shift.zoomAdjusting {
+                if Date() >= kept.until {
+                    foldKeep.value = nil
+                } else if abs(top - kept.top) > 0.5 {
+                    let dy = top - kept.top
+                    geometry.value.offset += dy
+                    if !shift(dy) {
+                        scroll(position, geometry.value.offset)
+                        nudge.value &+= 1
+                    }
+                }
+            }
             // Back on screen after turns went in above: on by what the move missed.
             guard !shift.zoomAdjusting, let top, let kept = anchor.value, kept.id == id, kept.placed, abs(top) < visible.value else { return }
             anchor.value = nil
@@ -945,6 +1010,27 @@ extension TranscriptTimeline {
     /// One timeline per store: a chat view drawn again with new action closures doesn't draw it
     /// again.
     nonisolated static func == (a: Self, b: Self) -> Bool { a.store === b.store }
+}
+
+/// What a turn folding does to the view: its work rows all go in one update.
+enum FoldMove: Equatable {
+    /// Following the end: it's looked at soon for rows ending above the view's bottom.
+    case checkEnd
+    /// Above the end: this answer row stays at this top (from the top of the visible area). It's
+    /// the one starting lowest above the visible area's bottom: the answer the reader is at.
+    case keep(id: String, top: CGFloat)
+    /// No answer row there: the view goes up by the height the fold took.
+    case byHeight
+
+    init(following: Bool, answerTops: [String: CGFloat], visible: CGFloat) {
+        if following {
+            self = .checkEnd
+        } else if let row = answerTops.filter({ $0.value < visible }).max(by: { $0.value < $1.value }) {
+            self = .keep(id: row.key, top: row.value)
+        } else {
+            self = .byHeight
+        }
+    }
 }
 
 /// A new width (a window's edge or a sash dragged) wraps the rows anew and the lazy stack

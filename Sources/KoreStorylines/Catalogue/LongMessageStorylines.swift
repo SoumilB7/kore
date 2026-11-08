@@ -288,3 +288,155 @@ private struct RebuildAndExpect: Step {
         }
     }
 }
+
+/// A turn's work, thirty tool calls (taller than the window), folds away when it finishes, under a
+/// short answer: the content's height drops at once, and AppKit's document can keep the old one.
+/// Held at the answer until the storyline lets the turn finish.
+class FoldShrinks: ChatStoryline {
+    override class var isFamily: Bool { self == FoldShrinks.self }
+    override class var tags: Set<Tag> { [.chat] }
+    /// Two paragraphs: a streaming answer shows up to its last blank line, so the first is on
+    /// screen before the turn finishes, and the second joins it as it does.
+    /// A few lines tall, so its top is still on screen from 120 pt above the end.
+    static let answer = "The work is done:\n\n- the first part\n- the second part\n- the third part\n- the fourth part\n\nThat is all."
+    override class var script: CLIScript {
+        let work: [Beat] = (1...30).map { .tool(name: "Bash", detail: "step \($0)", output: "line one\nline two\nline three") }
+        return CLIScript(turns: [[.startTurn] + work + [.stream(.answer, answer), .wait(.release), .finishTurn(.completed)]])
+    }
+
+    /// The work's rows all shown, under the live fold, taller than the view.
+    static func workShown() -> Expect {
+        Expect("the work's rows shown, taller than the view", found: { story in
+            guard let transcript = try? story.activeChat().storyTranscript else { return nil }
+            let tools = transcript.entries.filter { $0.kind == .tool }
+            let scroll = transcript.scrollView
+            return "\(tools.filter { transcript.isBuilt($0.id) }.count) of \(tools.count) tool rows, document \(scroll?.documentView?.frame.height ?? 0), view \(scroll?.contentView.bounds.height ?? 0)"
+        }) { story in
+            let transcript = try story.activeChat().storyTranscript
+            guard let scroll = transcript.scrollView, let document = scroll.documentView else { return false }
+            return transcript.entries.filter { $0.kind == .tool }.allSatisfy { transcript.isBuilt($0.id) }
+                && document.frame.height > scroll.contentView.bounds.height * 1.5
+        }
+    }
+
+    /// Turns read in before it.
+    static let earlier = 4
+
+    /// Before the turn finishes, and after.
+    var before: [any Step] { [] }
+    var after: [any Step] { [ExpectRowsEnd()] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            // Earlier turns: the content stays taller than the view once the work folds.
+            ReplayTurns((1...Self.earlier).map { ("Earlier \($0)", PressesOutsideText.long($0)) }),
+            Send("Do the work"),
+            Expect("the answer in, the work above it") { story in
+                try story.activeChat().storyTranscript.entries.contains { $0.kind == .answer && $0.text == Self.answer }
+            },
+            WaitIdle(),
+            Self.workShown(),
+        ] + before + [Snapshot("before-release"), Release(), TurnFinished(1), Snapshot("after-finish")] + after
+    }
+}
+
+/// Followed, finishing after the send's glide: the view on the rows' end, drawn, nothing blank
+/// under them.
+final class FoldAtEndDrawn: FoldShrinks {
+    override var before: [any Step] { [AfterGlide(after: true), Scroll(.answer(turn: Self.earlier + 1), to: .bottom), WaitIdle()] }
+}
+
+/// Followed, finishing within the send's glide (which holds layout's pin off): the same.
+final class FoldInGlideDrawn: FoldShrinks {
+    override var before: [any Step] { [Scroll(.answer(turn: Self.earlier + 1), to: .bottom), WaitIdle(), AfterGlide(after: false)] }
+}
+
+/// Read from 120 pt above the end: the answer stays where it was on screen.
+final class FoldKeepsAnswer: FoldShrinks {
+    override var before: [any Step] { [Scroll(.answer(turn: Self.earlier + 1), to: .bottom), Scroll(.answer(turn: Self.earlier + 1), to: .by(-120)), WaitIdle(), AnswerHeld(note: true)] }
+    override var after: [any Step] { [AnswerHeld(note: false)] }
+}
+
+/// The view's bottom on the rows' end within a second of the fold, drawn, and still so once the
+/// app settles: the answer, the last row, wholly in view, below it no more than the end's own
+/// padding (40 pt) and the slack following allows (50 pt), and layers drawing in the view. Further
+/// down, or with nothing drawn, it's blank.
+private struct ExpectRowsEnd: Step {
+    var label: String { "Expect the view on the rows' end, nothing blank under them" }
+
+    func run(_ story: StoryContext) async throws {
+        let chat = try story.activeChat()
+        guard let answer = chat.storyTranscript.entries.last(where: { $0.kind == .answer }) else { throw StoryFailure.modelMissing("the answer") }
+        var seen = "no scroll view"
+        let check = { @MainActor () -> Bool in
+            guard let scroll = chat.storyTranscript.scrollView, let document = scroll.documentView else { return false }
+            let visible = document.convert(scroll.contentView.bounds, from: scroll.contentView)
+            seen = "document \(Int(document.frame.height)), visible \(Int(visible.minY))–\(Int(visible.maxY))"
+            guard let row = StoryElement(StoryID.Transcript.answer(answer.id))?.registeredView, row.window != nil else {
+                seen += ", the answer not built"
+                return false
+            }
+            let bottom = row.convert(row.bounds, to: document).maxY
+            let drawn = ExpectDrawnAtEnd.drawn(document, in: visible)
+            seen += ", the answer ends at \(Int(bottom)), \(drawn) layers drawn"
+            return bottom <= visible.maxY + 1 && visible.maxY - bottom <= 90 && drawn > 0
+        }
+        do {
+            try await story.until("the view on the rows' end", timeout: .seconds(1)) { check() }
+            try await story.idle()
+            guard check() else { throw StoryFailure.timedOut("") }
+        } catch StoryFailure.timedOut {
+            throw StoryFailure.expectation("the view's bottom on the rows' end (found \(seen))")
+        }
+    }
+}
+
+/// The send's glide (two seconds) over, or still under way.
+private struct AfterGlide: Step {
+    let after: Bool
+    var label: String { after ? "Wait for the send's glide to end" : "Expect the send's glide still under way" }
+
+    func run(_ story: StoryContext) async throws {
+        let transcript = try story.activeChat().storyTranscript
+        guard let sent = transcript.sentAt else { throw StoryFailure.modelMissing("the send") }
+        if after {
+            try await story.until("two seconds after the send", timeout: .seconds(3)) { Date() >= sent + 2.05 }
+        } else if Date() >= sent + 1.5 {
+            throw StoryFailure.other("the turn took \(Date().timeIntervalSince(sent)) s to reach its answer: no glide left")
+        }
+    }
+}
+
+/// The answer's top on screen noted, then held there (±2 pt) through the fold, once it settles.
+private struct AnswerHeld: Step {
+    let note: Bool
+    var label: String { note ? "Note the answer's top" : "Expect the answer's top where it was" }
+
+    final class Noted { var top: CGFloat? }
+
+    func run(_ story: StoryContext) async throws {
+        let chat = try story.activeChat()
+        guard let answer = chat.storyTranscript.entries.last(where: { $0.kind == .answer }) else { throw StoryFailure.modelMissing("the answer") }
+        // Its first glyph, where its layout puts it now, in window coordinates.
+        let top = { @MainActor () -> CGFloat? in chat.storyTranscript.textPoint(answer.id, [0], offset: 0)?.y }
+        let noted = story.stash(Noted.self) { .init() }
+        if note {
+            noted.top = try await story.wait("the answer on screen") { top() }
+            return
+        }
+        guard let was = noted.top else { throw StoryFailure.other("no answer top noted") }
+        try await story.idle()
+        var seen: CGFloat?
+        do {
+            try await story.until("the answer back where it was", timeout: .seconds(1)) {
+                seen = top()
+                return seen.map { abs($0 - was) <= 2 } ?? false
+            }
+            try await story.idle()
+            seen = top()
+            guard let now = seen, abs(now - was) <= 2 else { throw StoryFailure.timedOut("") }
+        } catch StoryFailure.timedOut {
+            throw StoryFailure.expectation("the answer's top at \(was) (found \(seen.map { "\($0)" } ?? "none"))")
+        }
+    }
+}

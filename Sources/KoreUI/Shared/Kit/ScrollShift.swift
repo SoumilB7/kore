@@ -192,6 +192,30 @@ final class ScrollShift: ObservableObject {
         return true
     }
 
+    /// The view's bottom on `end` (where the rows end, which AppKit's document can run past), in
+    /// one go and in the same pass, up or down only: a magnified page keeps its side. False when
+    /// it didn't move.
+    @discardableResult
+    func pinEnd(at end: CGFloat) -> Bool {
+        guard let scroll = scrollView, let document = scroll.documentView, document.isFlipped else { return false }
+        let clip = scroll.contentView
+        var place = clip.bounds
+        place.origin.y = end - place.height
+        let origin = clip.constrainBoundsRect(place).origin
+        guard abs(origin.y - clip.bounds.minY) > 0.5 else { return false }
+        clip.scroll(to: origin)
+        scroll.reflectScrolledClipView(clip)
+        return true
+    }
+
+    /// The view's bottom more than `slack` past `end`, where the content's rows end (taller than
+    /// the view): on a document AppKit still sizes as it was, or a clip run on past it, nothing
+    /// draws there.
+    func past(end: CGFloat, slack: CGFloat) -> Bool {
+        guard let frames, scrollView?.documentView?.isFlipped == true, end > frames.visible.height else { return false }
+        return frames.visible.maxY > end + slack
+    }
+
     /// The page is magnified (a pinch).
     var isMagnified: Bool { (scrollView?.magnification ?? 1) > 1.001 }
 
