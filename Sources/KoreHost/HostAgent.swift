@@ -29,7 +29,7 @@ extension HostDaemon {
         guard hc.arsenal != nil else { return nil }
         return KoreReach.Server(
             command: mcpCommand, arguments: ["mcp"], pathFolder: nil, instructions: HostServices.toolInstructions,
-            variables: ["KORE_AGENT_SOCKET": paths.agentSocket.path, KoreReach.chatVariable: hc.id])
+            variables: ["KORE_AGENT_SOCKET": paths.agentSocket.path, KoreReach.chatVariable: hc.id], approved: true)
     }
 
     /// A message from the Mac, with the chat's tier there: kept, and a CLI given the other (the

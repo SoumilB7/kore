@@ -295,6 +295,8 @@ extension HostDaemon {
             return client.send(.result(.init(id: "chat.follow:" + request.chatId, ok: false, code: .goneChat, message: "No such chat on this box.")))
         }
         let fresh = hc.stream.isEmpty
+        // Its CLI starts with the tier the Mac has for it (1.6), not again at its first message.
+        if fresh, !hc.cliRunning { arsenalSaid(request.arsenal, hc) }
         client.catchUpStarts(hc.id, log: hc.stream.id)
         hc.chat?.automatic = false
         Task { [weak self, weak client] in

@@ -114,6 +114,24 @@ struct HostToolTests {
         #expect(made.backends[2].options.agentPass == nil && made.backends[2].notes.isEmpty && hc.arsenal == nil)
     }
 
+    @Test func aNewChatsCLIStartsWithItsTier() async throws {
+        let made = Made()
+        let (rig, grant, hc) = try rig(made)
+        defer { rig.finish() }
+        let client = try await StreamClient(rig, grant: grant)
+        defer { client.close() }
+        // The first follow starts the CLI, with the tier it carries: its first message doesn't
+        // start it again.
+        client.send(ChatFollow(chatId: hc.id, after: nil, log: nil, arsenal: "own"))
+        try await until { made.backends.count == 1 }
+        #expect(made.backends[0].options.agentServer != nil)
+        #expect(try await send(client, hc, "one", arsenal: "own").ok)
+        #expect(made.backends.count == 1)
+        let codex = KoreReach.codexArguments(try #require(made.backends[0].options.agentServer))
+        #expect(codex.contains(#"mcp_servers.kore_app.default_tools_approval_mode="approve""#))
+        #expect(!KoreReach.codexArguments().contains { $0.contains("approval_mode") })
+    }
+
     /// A tool call from `kore-host mcp`, as its CLI's environment names the chat.
     nonisolated func ask(_ tool: String, chat: String, pass: String, socket: String) async -> (ok: Bool, text: String) {
         await Task.detached {

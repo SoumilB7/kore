@@ -15,11 +15,15 @@ package struct ChatFollow: Codable, Sendable, Equatable {
     package var chatId: String
     package var after: Int?
     package var log: String?
+    /// 1.6: the chat's Arsenal tier, as with a message (`ChatCall.arsenal`): a chat whose CLI
+    /// starts for this follow starts with it.
+    package var arsenal: String?
 
-    package init(chatId: String, after: Int?, log: String?) {
+    package init(chatId: String, after: Int?, log: String?, arsenal: String? = nil) {
         self.chatId = chatId
         self.after = after
         self.log = log
+        self.arsenal = arsenal
     }
 }
 

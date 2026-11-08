@@ -129,7 +129,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     // MARK: From the box
 
-    package var following: ChatFollow? { chatId.map { ChatFollow(chatId: $0, after: seq, log: log) } }
+    package var following: ChatFollow? { chatId.map { ChatFollow(chatId: $0, after: seq, log: log, arsenal: arsenal()) } }
 
     package func streamed(_ frame: ChatEvents) {
         guard let chatId, !closed else { return }

@@ -80,6 +80,8 @@ struct AgentBoxTests {
         let chats = try #require((try JSONSerialization.jsonObject(with: Data(listed.text.utf8)) as? [String: Any])?["chats"] as? [[String: Any]])
         #expect(Set(chats.compactMap { $0["id"] as? String }) == [rig.boxChat.id.uuidString, rig.macChat.id.uuidString])
         #expect(chats.first { $0["own"] as? Bool == true }?["id"] as? String == rig.boxChat.id.uuidString)
+        // A box chat's folder is the box's: its name and the path there.
+        #expect(chats.first { $0["own"] as? Bool == true }?["folder"] as? String == rig.connection.alias + ":/home/me/app")
 
         // Above Read: refused in the agent's terms, whatever another chat has.
         let options = await rig.call("kore_options")

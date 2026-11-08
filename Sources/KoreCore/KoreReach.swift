@@ -51,13 +51,18 @@ public enum KoreReach {
         public var instructions: String
         /// The CLI's variables besides the pass (the socket; on a box, the chat's id).
         public var variables: [String: String]
+        /// Its tools run without the CLI asking first: Kore decides each call by the chat's tier.
+        /// (Claude's are always allowed; Codex asks outside Full access, the only mode the Mac's
+        /// Codex chats have Arsenal in, and a box's Codex chats have it in any mode.)
+        public var approved: Bool
 
-        public init(command: URL?, arguments: [String], pathFolder: String?, instructions: String, variables: [String: String]) {
+        public init(command: URL?, arguments: [String], pathFolder: String?, instructions: String, variables: [String: String], approved: Bool = false) {
             self.command = command
             self.arguments = arguments
             self.pathFolder = pathFolder
             self.instructions = instructions
             self.variables = variables
+            self.approved = approved
         }
     }
 
@@ -120,7 +125,7 @@ public enum KoreReach {
             "-c", "mcp_servers.\(Self.server).env_vars=[\(names)]",
             // kore_wait holds a call up to 300 s.
             "-c", "mcp_servers.\(Self.server).tool_timeout_sec=330",
-        ]
+        ] + (server.approved ? ["-c", #"mcp_servers.\#(Self.server).default_tools_approval_mode="approve""#] : [])
     }
 
     /// A TOML basic string: JSON's escapes are TOML's.

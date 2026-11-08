@@ -62,7 +62,8 @@ enum AgentReads {
         let mode = chat.provider.modes.first { $0.id == chat.controls.mode }
         let folder = workspace?.folder ?? chat.folder
         return AgentChat(
-            id: id, short: short(id), title: title(chat.title), provider: chat.provider.id, folder: LinkSnapshot.homeRelative(folder.path),
+            id: id, short: short(id), title: title(chat.title), provider: chat.provider.id,
+            folder: workspace?.boxFolder ?? LinkSnapshot.homeRelative(folder.path),
             window: folder.lastPathComponent, state: state(chat), mode: chat.controls.mode, modeLabel: mode?.label,
             planOn: chat.provider.planToggle != nil ? chat.controls.planMode : nil, model: chat.controls.currentModel?.name,
             queued: chat.queuedCount, cards: LinkSnapshot.cards(chat).count, own: id == own ? true : nil)
@@ -160,7 +161,7 @@ enum AgentReads {
         let (sessions, more) = LinkSnapshot.history(workspace, query: query, archived: archived, offset: offset)
         let format = ISO8601DateFormatter()
         return AgentHistory(
-            folder: LinkSnapshot.homeRelative(workspace.folder.path),
+            folder: workspace.boxFolder ?? LinkSnapshot.homeRelative(workspace.folder.path),
             sessions: sessions.map {
                 AgentSession(
                     id: $0.id, provider: $0.provider, title: title($0.title),

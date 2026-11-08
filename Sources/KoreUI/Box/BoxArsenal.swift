@@ -29,6 +29,9 @@ extension Workspace {
         }
     }
 
+    /// A box window's folder as an agent reads it: the box and its path there ("mybox:~/app").
+    package var boxFolder: String? { box.map { $0.alias + ":" + $0.shownFolder } }
+
     /// The models a box window's chats pick from: the box's own lists.
     func boxModels(_ provider: String) -> [ModelOption]? { box?.connection.models(provider) }
 }
