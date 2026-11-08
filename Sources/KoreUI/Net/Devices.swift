@@ -125,6 +125,8 @@ package final class Devices {
     func openedPopup() {
         popupOpen = true
         holdBoxes()
+        // The owner is looking: a box whose upgrade failed tries again.
+        upgrades?.retryFailed()
     }
 
     func closedPopup() {

@@ -39,7 +39,11 @@ enum NetLiveness {
             _ = try? migration.repair(directory: .shared)
             await MainActor.run { BoxList.shared.reload() }
         }
-        wake = LinkWake(center: NSWorkspace.shared.notificationCenter, name: NSWorkspace.didWakeNotification)
+        wake = LinkWake(center: NSWorkspace.shared.notificationCenter, name: NSWorkspace.didWakeNotification) { why in
+            HostConnection.probeAll(why)
+            // Woken: a box whose upgrade failed tries again.
+            BoxUpgrades.shared.retryFailed()
+        }
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { HostConnection.probeAll("activate") }
         })

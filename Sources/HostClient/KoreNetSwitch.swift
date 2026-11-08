@@ -289,7 +289,11 @@ package final class KoreNetSwitch: NetRouter {
 
     // MARK: The IPN bus
 
-    package func using(_ connection: HostConnection, _ inUse: Bool) { hold(connection.alias, inUse) }
+    package func using(_ connection: HostConnection, _ inUse: Bool) {
+        hold(connection.alias, inUse)
+        // A window or a link opening on a box is a fresh reach: a failed upgrade tries again.
+        if inUse { upgrades?.retryFailed(connection.alias) }
+    }
 
     /// The Devices popup (step 7) or a box window holds the bus while visible.
     package func hold(_ key: String, _ held: Bool) {

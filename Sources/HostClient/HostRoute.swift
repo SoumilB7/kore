@@ -130,6 +130,7 @@ package final class PathChanges {
     package init(wait: Duration = .seconds(1), fire: @escaping @MainActor () -> Void = {
         HostConnection.networkChanged()
         KoreNetSwitch.shared?.phonesLook?()
+        KoreNetSwitch.shared?.upgrades?.retryFailed()
     }) {
         self.wait = wait
         self.fire = fire

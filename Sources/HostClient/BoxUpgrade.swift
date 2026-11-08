@@ -129,6 +129,12 @@ package final class BoxUpgrades {
     nonisolated package static let shownFor: Duration = .seconds(5)
     /// A failed box tries again by itself no sooner than this.
     nonisolated package static let retryAfter: TimeInterval = 30
+    /// A failed automatic upgrade tries again after these waits, one `kore-host upgrade` each,
+    /// then only on an event (the Devices popup, a wake, a network change, a window or link).
+    nonisolated package static let retryWaits: [Duration] = [.seconds(60), .seconds(300), .seconds(900)]
+    /// Automatic runs, and each failed box's retries so far and the one waiting.
+    @ObservationIgnored private var automatic: Set<String> = []
+    @ObservationIgnored private var retries: [String: (count: Int, wait: Task<Void, Never>?)] = [:]
 
     private struct Mark {
         var state: String
@@ -171,6 +177,35 @@ package final class BoxUpgrades {
         _ = begin(key, net: net, auto: true)
     }
 
+    /// A failed automatic upgrade's next try, while it has some left (bounded: never polls).
+    private func retryLater(_ key: String) {
+        let count = retries[key]?.count ?? 0
+        guard count < Self.retryWaits.count else { return }
+        retries[key]?.wait?.cancel()
+        let wait = Self.retryWaits[count]
+        let task = Task { [weak self, sleep] in
+            await sleep(wait)
+            guard !Task.isCancelled, let self else { return }
+            self.retries[key]?.wait = nil
+            guard let net = self.net(), net.on, net.state.reaches, self.needs(key), self.running(key) == nil else { return }
+            self.started += 1
+            _ = self.begin(key, net: net, auto: true)
+        }
+        retries[key] = (count + 1, task)
+    }
+
+    /// Something says it's worth another look (the Devices popup opened, the Mac woke, the
+    /// network changed): every box whose upgrade failed tries again (`retryAfter` apart).
+    package func retryFailed() {
+        for (key, mark) in tried where mark.failed { reached(key, fresh: true) }
+    }
+
+    /// The same for one box (its window or link opened), only when its upgrade failed.
+    package func retryFailed(_ key: String) {
+        let key = current(key)
+        if tried[key]?.failed == true { reached(key, fresh: true) }
+    }
+
     /// KoreNet chose a tailnet that reaches boxes: every SSH box upgrades now (U-b).
     package func switchedOn() {
         for alias in boxes() { reached(alias, fresh: true) }
@@ -199,6 +234,7 @@ package final class BoxUpgrades {
     }
 
     private func begin(_ key: String, net: KoreNetSwitch, auto: Bool) -> BoxNetJoin {
+        if auto { automatic.insert(key) } else { automatic.remove(key) }
         let join = BoxNetJoin(key: key, name: NodeNames.name(key))
         let runner = BoxNetJoinRun(connection: link(key), net: net, directory: book, shell: shell, auto: auto, openURL: openURL, sleep: sleep, want: want)
         adopt(join, runner)
@@ -231,6 +267,13 @@ package final class BoxUpgrades {
         }
         let joined = join.ending == .done || join.ending == .relayed
         tried[key] = Mark(state: state(key), at: now(), failed: !joined)
+        let auto = automatic.remove(join.key) != nil || automatic.remove(key) != nil
+        if joined {
+            retries[key]?.wait?.cancel()
+            retries[key] = nil
+        } else if auto, join.ending != .working {
+            retryLater(key)
+        }
         HostLog.note(key, "korenet upgrade", joined ? "joined" : (join.line ?? "cancelled"))
         // Cancelled under way: the row says nothing of it.
         if join.ending == .working { joins[key] = nil }
