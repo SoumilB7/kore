@@ -2,6 +2,12 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
+## [0.3.6] - 2026-11-21
+
+### Added
+- Tables get a Copy button in their corner while you hover; it copies what selecting the table
+  copies, and takes no room.
+
 ## [0.3.5] - 2026-11-21
 
 ### Added
@@ -11,8 +17,6 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
   chats, and see their images, diffs and earlier messages.
 - Phone: select part of a message, answer, code block or table cell; Message… opens the menu.
 - ⌘+ and ⌘− scale the whole window, file explorer included.
-- Tables get a Copy button in their corner while you hover; it copies what selecting the table
-  copies, and takes no room.
 - `kore send` reaches a closed chat in its folder: it reopens the chat, then sends.
 - Arsenal can answer another chat's Auto asks card: Run once or Always allow, from a chat at Auto
   with Act unlimited or above. Removing the working folder, a home or system path stays yours.
