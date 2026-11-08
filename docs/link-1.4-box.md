@@ -284,15 +284,18 @@ and never sees the new messages.
   given is refused there, and goes nowhere.
 - `agent.call {id, chatId, tool, args}`, box to client, full grants only: kore-host passes the
   call to the full grant that follows the chat, else the last full grant to connect. With none,
-  the answer is "Kore isn't connected to <box> right now"; a link that ends, or 30 s with no
-  answer (330 s for `kore_wait`, 75 s for `kore_fork`), ends the call so too.
+  the answer is "Kore isn't connected to <box> right now"; a link that ends, or no answer in as
+  long as a chat on the Mac waits for that command (`AgentTools.answerWait`: 10 s, a fork 75 s,
+  an open 30 s, a fetch or a reply 120 s, a wait its `timeout` + 15 s) and 20 s for the link,
+  ends the call so too ("Kore didn't answer in time.", as `kore mcp` says it).
 - `agent.result {id, ok, code?, text}`, client to box: `text` is what the agent reads, the
   command's data as JSON or why not. `code` is the agent channel's (`denied`, `tier`, `limit`,
   `no_chat`, …). The box takes an answer only from the connection the call went to.
 - The Mac answers a call only for its own tab of that chat on that box (`no_chat` otherwise), and
   only at that chat's tier: off is `denied`, a tool above it is `tier`. Its limits are that
   chat's, counted with everything else it does: 30 commands a minute, 10 messages a minute, 10 new
-  chats an hour and 6 of them open, wherever they opened.
+  chats an hour and 6 of them open, wherever they opened; 4 calls in flight at once, as a Mac
+  chat's process holds 4 connections.
 
 
 ## Link 1.7: a box's files

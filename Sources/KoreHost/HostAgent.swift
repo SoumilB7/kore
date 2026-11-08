@@ -1,3 +1,4 @@
+import AgentTools
 import Foundation
 import KoreCore
 import LinkProtocol
@@ -84,11 +85,11 @@ extension HostDaemon {
         toolSerial += 1
         let id = "a\(toolSerial)"
         let timer = DispatchWorkItem { [weak self] in
-            MainActor.assumeIsolated { self?.answer(id, BoxToolResult(id: "", ok: false, text: "Kore didn't answer in time.")) }
+            MainActor.assumeIsolated { self?.answer(id, BoxToolResult(id: "", ok: false, text: AgentTools.noAnswerLine)) }
         }
         toolCalls[id] = HostToolCall(client: client, socket: socket, timer: timer)
         client.sendRaw(BoxTools.encode(BoxToolCall(id: id, chatId: hc.id, tool: ask.tool, args: ask.args)))
-        DispatchQueue.main.asyncAfter(deadline: .now() + BoxTools.timeout(ask.tool), execute: timer)
+        DispatchQueue.main.asyncAfter(deadline: .now() + HostToolServer.wait(ask.tool, ask.args), execute: timer)
     }
 
     /// The Mac that follows the chat, else the last full grant to connect.

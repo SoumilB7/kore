@@ -1,3 +1,4 @@
+import AgentTools
 import Foundation
 
 /// Drive's commands: `kore new`, `send`, `stop`, `tab`, `answer`, `close`, on chats at or below this chat's mode.
@@ -44,13 +45,12 @@ enum Drive {
             if let model = o.model { args["model"] = model }
             if p.count > 1 { args["text"] = p[1] }
             // The CLI makes the fork: it can take a moment.
-            client.timeout(60)
+            client.timeout(AgentTools.answerWait("chat.fork"))
             data = try client.run("chat.fork", args)
         case "wait":
-            let seconds = min(o.timeout ?? 300, 300)
-            client.timeout(seconds + 15)
             var args: Object = o.ask.map { ["ask": $0] } ?? ["chat": p[0]]
             if let t = o.timeout { args["timeout"] = t }
+            client.timeout(AgentTools.answerWait("chat.wait", args))
             data = try client.run("chat.wait", args)
             if o.json { return Reads.printJSON(data) }
             if o.ask != nil {
@@ -71,10 +71,10 @@ enum Drive {
         case "reply":
             var args: Object = ["ask": p[0], "text": p[1]]
             if p.count > 2 { args["path"] = p[2] }
-            client.timeout(120)
+            client.timeout(AgentTools.answerWait("chat.reply"))
             data = try client.run("chat.reply", args)
         case "fetch":
-            client.timeout(120)
+            client.timeout(AgentTools.answerWait("file.fetch"))
             data = try client.run("file.fetch", ["path": p[0]])
             if o.json { return Reads.printJSON(data) }
             return Reads.say(Reads.str(data["message"]))
@@ -84,6 +84,7 @@ enum Drive {
         case "open":
             var args: Object = ["session": p[0]]
             if let folder = o.folder { args["folder"] = folder }
+            client.timeout(AgentTools.answerWait("chat.open"))
             data = try client.run("chat.open", args)
         default:
             var args: Object = ["chat": p[0], "card": p[1]]

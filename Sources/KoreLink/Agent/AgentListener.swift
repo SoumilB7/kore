@@ -1,3 +1,4 @@
+import AgentTools
 import Darwin
 import Foundation
 import LinkProtocol
@@ -100,7 +101,8 @@ final class AgentListener: @unchecked Sendable {
 /// process, so one process can't hold every place or keep Kore busy by reconnecting.
 package final class AgentSlots: @unchecked Sendable {
     static let total = 16
-    package static let perProcess = 4
+    /// A box chat's calls in flight are held to the same (`AgentChannel.boxCall`).
+    package static let perProcess = AgentTools.callsAtOnce
     static let connectsPerMinute = 30
     /// Budgets kept before they're all let go (each `kore` is a process of its own).
     private static let budgetsMax = 1024

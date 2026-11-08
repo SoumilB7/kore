@@ -26,10 +26,18 @@ package enum HostToolServer {
         }
         let given = (try? JSONSerialization.data(withJSONObject: arguments)).flatMap { try? JSONValue.parse($0) }
         let ask = BoxToolAsk(chatId: chat, pass: pass, tool: tool.name, args: given)
-        guard let data = exchange(BoxTools.encode(ask), at: socket, wait: BoxTools.timeout(tool.name) + 5),
+        guard let data = exchange(BoxTools.encode(ask), at: socket, wait: wait(tool.name, given) + 5),
             let result = try? JSONDecoder().decode(BoxToolResult.self, from: data)
         else { return MCPStdio.failure("kore-host isn't running, or didn't answer.") }
         return result.ok ? MCPStdio.success(result.text) : MCPStdio.failure(result.text)
+    }
+
+    /// How long kore-host waits for the Mac's answer to a call: as long as a chat on the Mac waits
+    /// (`AgentTools.answerWait`, a wait's own `timeout` included), and the link's margin.
+    package static func wait(_ tool: String, _ args: JSONValue?) -> TimeInterval {
+        let command = AgentTools.tool(tool, box: true)?.command ?? ""
+        let given = (try? args?.encoded()).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? AgentTools.Object ?? [:]
+        return TimeInterval(AgentTools.answerWait(command, given) + AgentTools.linkMargin)
     }
 
     /// One frame out and one back on a Unix socket, blocking, `wait` seconds at most for the answer.

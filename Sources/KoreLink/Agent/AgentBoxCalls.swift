@@ -36,12 +36,7 @@ package enum AgentBoxCalls {
 
     /// The channel's line as the agent reads it: the command's data, or why not.
     static func result(_ line: Data, id: String) -> BoxToolResult {
-        let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] ?? [:]
-        if object["type"] as? String == "result", object["ok"] as? Bool == true {
-            return BoxToolResult(id: id, ok: true, text: AgentTools.text(object["data"] as? [String: Any] ?? [:]))
-        }
-        let code = object["code"] as? String ?? AgentCode.refused.rawValue
-        let off = [AgentCode.denied.rawValue, AgentCode.stopped.rawValue].contains(code)
-        return BoxToolResult(id: id, ok: false, code: code, text: off ? AgentTools.offLine(box: true) : object["message"] as? String ?? "Kore refused.")
+        let said = AgentTools.answer((try? JSONSerialization.jsonObject(with: line)) as? [String: Any] ?? [:], box: true)
+        return BoxToolResult(id: id, ok: said.ok, code: said.code, text: said.text)
     }
 }

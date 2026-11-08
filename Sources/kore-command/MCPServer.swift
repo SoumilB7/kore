@@ -34,10 +34,8 @@ enum MCPServer {
         let args = AgentTools.arguments(tool, arguments)
         do {
             let client = try AgentClient()
-            // A wait holds the answer until the chat's turn ends.
-            if tool.command == "chat.wait" { client.timeout(min(max(args["timeout"] as? Int ?? 300, 1), 300) + 15) }
-            // The CLI makes a fork: it can take a moment.
-            if tool.command == "chat.fork" { client.timeout(60) }
+            // As long as a box chat's call waits, less its link: a wait, a fork, a file.
+            client.timeout(AgentTools.answerWait(tool.command, args))
             // Kore checks the tier too: this only says it in the agent's terms.
             let allowed = client.welcome["commands"] as? [String] ?? []
             if !allowed.contains(tool.command) {
@@ -47,7 +45,10 @@ enum MCPServer {
         } catch .unreachable {
             return MCPStdio.failure(unreachableLine)
         } catch .refused(let code, let message) {
-            return MCPStdio.failure(code == "denied" && inChat ? AgentTools.offLine() : message)
+            // As a box chat's call says it (`AgentTools.answer`).
+            return MCPStdio.failure(AgentTools.answer(["code": code, "message": message], box: false, inChat: inChat).text)
+        } catch .timedOut {
+            return MCPStdio.failure(AgentTools.noAnswerLine)
         } catch {
             return MCPStdio.failure("Kore closed the connection.")
         }

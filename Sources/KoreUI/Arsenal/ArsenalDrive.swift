@@ -192,7 +192,7 @@ extension Workspace {
     package func arsenalOpenFork(_ chat: Chat, _ start: ForkStart, draft: String, model: String?, message: Bool) -> Result<Chat, ArsenalRefusal> {
         var launch: String?
         if let model {
-            let known = chat.controls.models.isEmpty ? ArsenalModels.seen[chat.provider.id] ?? [] : chat.controls.models
+            let known = chat.controls.models.isEmpty ? arsenalModels(chat.provider.id, caller: chat) : chat.controls.models
             switch ArsenalModels.find(model, in: known, cli: chat.provider.name) {
             case .success(let option): launch = option.id
             case .failure(let refusal): return .failure(refusal)
@@ -266,6 +266,8 @@ extension Workspace {
     /// tab of its own in front, its mode no freer than the caller's (as `chat.new`'s), the whole
     /// conversation carried by Kore's handoff, and the tab carrying on in it. Its Arsenal off.
     package func arsenalForkAcross(_ chat: Chat, to provider: String, model: String?, under caller: Chat) async -> Result<Chat, ArsenalRefusal> {
+        // Import carries a history file on this Mac: a box's chats aren't, so none opens there for it.
+        if let box { return .failure(.init("A chat on \(NodeNames.name(box.alias)) forks into its own CLI only: leave out provider.")) }
         guard let session = chat.sessionId else { return .failure(.init("Nothing to fork yet: it hasn't started.")) }
         guard !chat.status.isRunning else { return .failure(.init("It's working: fork it into \(Registry.provider(provider)?.name ?? provider) once it's idle.")) }
         let fresh: Chat

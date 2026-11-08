@@ -11,6 +11,19 @@ extension Workspace {
         return .box(alias: box.alias, path: box.shownFolder)
     }
 
+    /// Whether `place` is this window's folder: this Mac's with its links followed, or a box's as
+    /// it names it (its path there, or as the window was opened with).
+    package func arsenalIsFolder(_ place: FilePlace) -> Bool {
+        switch (place, box) {
+        case (.mac(let path), nil):
+            return ArsenalFetch.real(path) == ArsenalFetch.real(folder.path)
+        case (.box(let alias, let path), let box?):
+            return box.alias == alias && [box.shownFolder, box.folder].map(ArsenalFetch.normalized).contains(ArsenalFetch.normalized(path))
+        default:
+            return false
+        }
+    }
+
     /// The asker's inbox, inside its window's folder.
     package var arsenalInbox: FilePlace {
         var place = arsenalPlace

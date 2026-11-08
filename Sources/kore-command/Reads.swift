@@ -39,6 +39,8 @@ enum Reads {
             return fail("What's at Kore's socket isn't the Kore this came with.", code: 5)
         } catch .refused(let code, let message) {
             return fail(message, code: ["denied", "mismatch", "tier", "stopped", "version", "rate_limited", "not_own"].contains(code) ? 5 : 1)
+        } catch .timedOut {
+            return fail(AgentTools.noAnswerLine, code: 1)
         } catch {
             return fail("Kore closed the connection.", code: 1)
         }

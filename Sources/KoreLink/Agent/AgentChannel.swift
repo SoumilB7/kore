@@ -1,3 +1,4 @@
+import AgentTools
 import AppKit
 import Darwin
 import Foundation
@@ -168,7 +169,7 @@ package final class AgentChannel {
 
     /// What a connection turned away on the queue is told. Made once: this path is what a process
     /// reconnecting in a loop keeps hitting.
-    private nonisolated static let tooMany = encode(AgentBye(code: .rateLimited, message: "Too many connections to Kore from this process, or at once.")) + Data([0x0A])
+    private nonisolated static let tooMany = encode(AgentBye(code: .rateLimited, message: AgentTools.tooManyLine)) + Data([0x0A])
     private nonisolated static let unknownProcess = encode(AgentBye(code: .mismatch, message: "Kore couldn't tell which process this is.")) + Data([0x0A])
 
     /// Says why, as far as the socket's buffer takes it without waiting, and closes.
@@ -1089,25 +1090,35 @@ package final class AgentChannel {
     }
 
     /// The window a history read or an open is for: the caller's own chat's, or with Act unlimited
-    /// that of any folder a Kore window on this Mac has open (the owner, 2026-11-15). A caller
-    /// outside Kore's chats has no folder of its own.
+    /// that of any folder a Kore window has open (the owner, 2026-11-15). A caller outside Kore's
+    /// chats has no folder of its own.
     private func window(_ args: AgentArgs, _ client: Client, _ id: String) -> Workspace? {
         guard let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }), let workspace = AgentReads.workspace(of: own) else {
             fail(client, id, .noWindow, "Past chats can be read only from a chat in Kore, for its own folder.")
             return nil
         }
         guard let folder = args.folder else { return workspace }
-        let wanted = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath).standardizedFileURL.path
-        if wanted == workspace.folder.standardizedFileURL.path { return workspace }
+        let named = Self.windows(named: folder, from: workspace)
+        if named.contains(where: { $0 === workspace }) { return workspace }
         guard tier(client) >= .drive else {
             fail(client, id, .noWindow, "Past chats can be read only for this chat's own folder: other folders need Act unlimited.")
             return nil
         }
-        guard let other = AgentReads.workspaces().first(where: { $0.boxFolder == nil && $0.folder.standardizedFileURL.path == wanted }) else {
+        guard let other = named.first else {
             fail(client, id, .noWindow, "No Kore window has that folder open.")
             return nil
         }
         return other
+    }
+
+    /// The open windows `folder` names, as a chat in `home` names one, the same on the Mac and on a
+    /// box: a path on the chat's own device (under its folder when relative), `device:path`, or the
+    /// folder as `kore_list_chats` shows it.
+    static func windows(named folder: String, from home: Workspace) -> [Workspace] {
+        let open = AgentReads.workspaces()
+        let listed = open.filter { ($0.boxFolder ?? LinkSnapshot.homeRelative($0.folder.path)) == folder }
+        guard case .success(let place) = ArsenalFetch.place(folder, base: home.arsenalPlace, names: Workspace.arsenalBoxNames()) else { return listed }
+        return open.filter { $0.arsenalIsFolder(place) } + listed
     }
 
     /// A past chat opened as History opens it (`Workspace.arsenalOpen`), in its folder's window, in
@@ -1242,6 +1253,10 @@ package final class AgentChannel {
     /// command's result (or refusal) would be. Its lines go nowhere else.
     func boxCall(chat: String, _ name: String, _ args: [String: Any]) async -> Data {
         await withCheckedContinuation { (done: CheckedContinuation<Data, Never>) in
+            // As many at once as a chat on the Mac holds connections (`AgentSlots.perProcess`).
+            guard clients.values.filter({ $0.connection == nil && $0.chat == chat }).count < AgentSlots.perProcess else {
+                return done.resume(returning: Self.encode(AgentBye(code: .rateLimited, message: AgentTools.tooManyLine)))
+            }
             let token = UUID()
             var answered = false
             let client = Client(token: token, chat: chat) { [weak self] line in
@@ -1258,6 +1273,17 @@ package final class AgentChannel {
             // A result to come (a wait, a fork) holds its client; one that never comes isn't left
             // waiting when the channel closes.
             if !answered, clients[token] == nil { client.finish(after: Self.encode(AgentBye(code: .stopped, message: Self.message(.stopped)))) }
+            // kore-host gives up after this: let go then, as a Mac caller's connection closes at its
+            // timeout, so a result that never comes doesn't hold one of its places.
+            guard !answered else { return }
+            let seconds = AgentTools.answerWait(name, args) + AgentTools.linkMargin
+            DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(seconds)) { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self, self.clients[token] != nil else { return }
+                    client.finish(after: Self.encode(AgentBye(code: .refused, message: AgentTools.noAnswerLine)))
+                    self.followsChanged()
+                }
+            }
         }
     }
 
