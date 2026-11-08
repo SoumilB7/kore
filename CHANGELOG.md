@@ -2,6 +2,28 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
+## [0.3.2] - 2026-11-17
+
+### Added
+- Move a Claude login between your Mac and a box from the account popup: ⋯ › Move to the box, and
+  Move back here. A login is moved, never copied: the box checks the file it got, and only then
+  is the Mac's copy deleted. Nothing is run on a login while two copies exist.
+- The same login on your Mac and a box shows an amber point, with Keep here or Keep on the box.
+  The copy that refreshed last is kept.
+- Arsenal: at Act unlimited, a chat can ask another chat a question and get its reply, or fetch a
+  file from it, without you in between. Asks and fetches are rate-limited, and secret files are
+  refused.
+- Phone: a new look across every screen, with landscape and accessibility support. A chat's background
+  agents and commands show as symbols on its row.
+
+### Fixed
+- Box chats get Kore's tools whatever their Arsenal tier. The tools act once Arsenal is on.
+- The message ticks on a chat's right edge light the message you're reading, in chats full of
+  messages from other chats and after a compaction.
+- Box links and terminals no longer mix up connections after one closes, and a closing link's
+  goodbye reaches a client that's still sending.
+- Phone: leaving KoreNet is logged, and its tailnet sign-in is kept across updates.
+
 ## [0.3.1] - 2026-11-17
 
 ### Fixed
