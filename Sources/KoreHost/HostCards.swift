@@ -102,9 +102,10 @@ enum HostMeta {
             modeIds: (chat?.controls.availableModes ?? hc.provider.modes).map(\.id), allowedModeIds: allowed.sorted(),
             model: chat?.controls.currentModel?.name ?? hc.record.modelId, queued: chat?.queuedCount ?? 0, running: chat?.isBusy ?? false,
             cards: cards(hc, raise: raise), can: .init(send: !(chat?.accountRestartPending ?? false), stop: chat?.isWorking ?? false), commands: Array(commands))
-        // 1.10: a replica says where it lives; a chat being moved, that it is. Neither takes a message.
-        if hc.isReplica, var owner = hc.record.owner {
-            owner.followed = hc.followedByOthers
+        // 1.10: a replica says where it lives; a chat that has moved before (gen > 0) says its gen,
+        // so a client can release it at the right one; a chat being moved, that it is.
+        if var owner = hc.record.owner, hc.isReplica || owner.gen > 0 {
+            if hc.isReplica { owner.followed = hc.followedByOthers }
             made.owner = owner
         }
         if hc.isFrozen { made.moving = true }
