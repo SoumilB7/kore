@@ -1,5 +1,6 @@
 import AppKit
 import IOKit.ps
+import KoreCore
 import Observation
 
 /// Stay awake (caffeinated mode): while on, Kore keeps the Mac from idle sleep so agents keep
@@ -107,7 +108,7 @@ final class StayAwake {
     /// under a storyline host, and keep nothing in the owner's defaults.
     static func start() {
         guard current == nil else { return }
-        let dev = StoryHost.installed || ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("KORE_") }
+        let dev = StoryHost.installed || KoreReach.isDevRun(ProcessInfo.processInfo.environment)
         let awake =
             StoryHost.installed
             ? StayAwake(hold: RecordedHold(), defaults: nil)

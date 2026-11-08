@@ -69,6 +69,12 @@ public enum KoreReach {
     /// The pass and a test's socket go by name (`env_vars`), never on a command line.
     public static let forwarded = ["KORE_AGENT_PASS", "KORE_AGENT_SOCKET"]
 
+    /// A dev run has a `KORE_` hook in its environment. The agent channel's variables aren't
+    /// hooks: every chat's shell has them, so a Kore started from one is still the owner's.
+    public static func isDevRun(_ environment: [String: String]) -> Bool {
+        environment.keys.contains { $0.hasPrefix("KORE_") && !forwarded.contains($0) }
+    }
+
     /// `codex app-server`'s: config overrides for this process only.
     public static func codexArguments() -> [String] {
         guard let helper, let path = tomlString(helper.path) else { return [] }

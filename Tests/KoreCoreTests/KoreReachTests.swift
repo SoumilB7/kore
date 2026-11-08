@@ -31,4 +31,11 @@ struct KoreReachTests {
         #expect(KoreReach.tomlString("/a b/Kore.app/kore") == #""/a b/Kore.app/kore""#)
         #expect(KoreReach.tomlString(#"a"b\c"#) == #""a\"b\\c""#)
     }
+
+    /// A Kore started from a chat's shell carries its pass and socket: still the owner's run.
+    @Test func theAgentChannelsVariablesArentDevHooks() {
+        #expect(!KoreReach.isDevRun(["KORE_AGENT_PASS": "p", "KORE_AGENT_SOCKET": "/s", "PATH": "/bin"]))
+        #expect(KoreReach.isDevRun(["KORE_AGENT_PASS": "p", "KORE_OPEN": "/f"]))
+        #expect(!KoreReach.isDevRun([:]))
+    }
 }

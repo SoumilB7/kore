@@ -1225,6 +1225,7 @@ package final class Workspace {
     /// Temporary folders and dev runs (any KORE_ hook) leave nothing behind: agents' scratch
     /// folders would otherwise pile up in the shared defaults.
     static func persists(_ folder: URL) -> Bool {
+        if let storyLaunch { return !KoreReach.isDevRun(storyLaunch) }
         let path = folder.standardizedFileURL.path
         let temporary = ["/private/tmp/", "/tmp/", "/private/var/folders/", "/var/folders/", NSTemporaryDirectory()]
         if temporary.contains(where: { path.hasPrefix($0) }) { return false }
@@ -1232,7 +1233,11 @@ package final class Workspace {
     }
 
     /// Read once: the environment is copied at each read.
-    private static let devRun = ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("KORE_") }
+    private static let devRun = KoreReach.isDevRun(ProcessInfo.processInfo.environment)
+
+    /// A storyline's stand-in for the owner's launch: the environment Kore started with, and its
+    /// folder taken as a real one (the gate's hooks and scratch folders would keep nothing).
+    package static var storyLaunch: [String: String]?
 
     private static func tab(_ saved: Saved.Tab, in folder: URL) -> ChatTab {
         let tab = ChatTab()

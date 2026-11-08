@@ -358,3 +358,34 @@ enum StripCheck {
         return count - (0..<count).count { frames(story, $0 + 1).map { inside($0.tab, $0.strip) } ?? false }
     }
 }
+
+/// A Kore started from a chat's shell (an install an agent ran: its pass in the environment) is
+/// still the owner's: a folder window holding one chat, closed and opened again, comes back with
+/// that chat, not an empty New tab.
+final class WindowReopenOneChat: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    private var session: String?
+
+    override func steps() -> [any Step] {
+        [
+            Do("Kore started from a chat's shell") { _ in
+                Workspace.storyLaunch = ["KORE_AGENT_PASS": "story-pass", "KORE_AGENT_SOCKET": "/tmp/kore-story.sock"]
+            }
+        ] + super.steps() + [
+            Send("Say OK"), TurnFinished(1),
+            Do("Note the chat's session") { [self] story in session = try story.activeChat().listedId },
+            Expect("one tab, the chat") { [self] story in story.app.workspace?.tabs.count == 1 && session != nil },
+            Do("Close the window") { story in story.window?.close() },
+            Expect("the window closed") { story in story.app.workspace?.window?.isVisible != true },
+            OpenFolder(),
+            Expect("the one tab back with the chat, not a New tab", found: { story in
+                story.app.workspace.map { $0.tabs.map(\.title).joined(separator: ", ") }
+            }) { [self] story in
+                guard let workspace = story.app.workspace, workspace.window?.isVisible == true else { return false }
+                let tabs = workspace.tabs
+                guard tabs.count == 1, let chat = tabs[0].chat else { return false }
+                return chat.listedId == session && chat.providerID == (story.variant?.provider ?? "claude")
+            },
+        ]
+    }
+}

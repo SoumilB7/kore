@@ -1,3 +1,4 @@
+import KoreCore
 import Observation
 import SwiftUI
 
@@ -145,7 +146,7 @@ struct ModeMemory {
     /// Dev runs (any KORE_ hook) and storylines start where a fresh install does, and leave
     /// the owner's choice alone.
     @MainActor static var shared: ModeMemory {
-        let dev = StoryHost.installed || ProcessInfo.processInfo.environment.keys.contains { $0.hasPrefix("KORE_") }
+        let dev = StoryHost.installed || KoreReach.isDevRun(ProcessInfo.processInfo.environment)
         return ModeMemory(defaults: dev ? nil : .standard)
     }
 

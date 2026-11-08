@@ -120,6 +120,7 @@ final class Runner {
             }
         }
         Self.forgetSaved(folder)
+        Workspace.storyLaunch = nil
         // An earlier storyline's usage readings would put the usage mark in this one's composer.
         StoryUsageCue.reset()
         let context = StoryContext(name: name, flags: flags, folder: folder, outputs: out, waits: waits)
