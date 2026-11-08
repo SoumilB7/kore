@@ -129,12 +129,10 @@ private struct MarkdownCodeBlock: View {
 }
 
 /// Copy just below a block at its right edge, shown on hover, in a row kept for it as under a
-/// message, so it covers none of the block: a code block's and a table's. With `option`, an
-/// ⌥-click copies that text instead (a table's Markdown).
+/// message, so it covers none of the block: a code block's and a table's.
 private struct CopyBelow<Block: View>: View {
     let id: StoryID
     let text: () -> String
-    var option: (() -> String)?
     @ViewBuilder let block: Block
     @StateObject private var hovered = Local(false)
     @StateObject private var copied = Local(false)
@@ -148,7 +146,7 @@ private struct CopyBelow<Block: View>: View {
             HStack(spacing: 0) {
                 if hovered.value {
                     IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy") {
-                        copy(NSApp.currentEvent?.modifierFlags.contains(.option) == true ? option ?? text : text)
+                        copy(text)
                     }
                     .storyID(id.part(.copy))
                     .padding(.trailing, past.value)
@@ -165,7 +163,6 @@ private struct CopyBelow<Block: View>: View {
         // The copy button is built only on hover.
         .accessibilityActions {
             Button("Copy") { copy(text) }
-            if let option { Button("Copy as Markdown") { copy(option) } }
         }
     }
 
@@ -343,8 +340,8 @@ private struct MarkdownListView: View {
 
 /// A table: 1pt rules around every cell (the grid's spacing over a rule-coloured ground), bold
 /// centred header, and sideways scrolling when wider than the column. Copy below it at its right
-/// edge on hover, as under a code block, takes the whole table as a selection of it copies
-/// (its cells split by tabs, a row a line); ⌥-click takes it as Markdown.
+/// edge on hover, as under a code block, takes exactly what dragging across all of it copies
+/// (`copyText(markdown: false)`: the selection's own plain-text `Clip.block`, cells split by tabs).
 private struct MarkdownTableView: View {
     let table: MarkdownTable
     let path: [Int]
@@ -352,8 +349,7 @@ private struct MarkdownTableView: View {
     private var columns: Int { max(table.header.count, table.rows.map(\.count).max() ?? 0) }
 
     var body: some View {
-        CopyBelow(id: StoryID.Transcript.table(path), text: { [table] in table.copyText(markdown: false) },
-            option: { [table] in table.copyText(markdown: true) }) { grid }
+        CopyBelow(id: StoryID.Transcript.table(path), text: { [table] in table.copyText(markdown: false) }) { grid }
             // Rows as tall as their text: cells fill their row, not the height on offer.
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)

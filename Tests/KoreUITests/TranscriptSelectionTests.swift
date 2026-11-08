@@ -199,7 +199,19 @@ struct TranscriptSelectionTests {
         #expect(copy(from: at([4, 2, 0], 0), to: at([4, 2, 1], 3)) == "Name\tKind\nbeta\ttwo")
     }
 
-    /// A table's Copy takes what selecting all of it copies; ⌥ its Markdown.
+    /// A table's Copy is, byte for byte, what dragging across all of it copies: the transcript's
+    /// own selection path (`SelectionCopy.markdownText`, plain text) on a rich table.
+    @Test func aTablesCopyIsWhatDraggingAcrossItCopies() throws {
+        let source = "Before.\n\n| Key | `code` | Link |\n|---|---|---|\n| **bold** | *it* | [site](https://example.com) |\n| x |  | ~~old~~ |\n\nAfter."
+        let blocks = MarkdownParser.parse(source[...], base: 0, zoom: 1)
+        guard case .table(let table) = blocks[1].kind else { Issue.record("no table"); return }
+        // A drag from the table's first cell to the start of the next block, as the transcript copies it.
+        let dragged = SelectionCopy.markdownText(source[...], Clip(lo: at([1, 0, 0], 0), hi: at([2], 0), plainText: true))
+        #expect(table.copyText(markdown: false) == dragged)
+        #expect(dragged.contains("\t"))
+    }
+
+    /// A table's Copy takes what selecting all of it copies (tabbed rows).
     @Test func aTablesCopyIsItsWholeSelection() throws {
         let blocks = MarkdownParser.parse(Self.reply[...], base: 0, zoom: 1)
         guard case .table(let table) = blocks[4].kind else { Issue.record("no table"); return }

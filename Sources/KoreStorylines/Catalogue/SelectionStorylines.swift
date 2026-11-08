@@ -105,8 +105,7 @@ final class SelectWordsAndParagraphs: ChatStoryline {
 }
 
 /// A table copies whole two ways: a drag across it, as tabbed rows under its header; and its
-/// Copy, shown below it at its right edge on hover as under a code block, the same text, or
-/// with ⌥ its Markdown.
+/// Copy, shown below it at its right edge on hover as under a code block, the same text.
 final class TableCopy: ChatStoryline {
     static let reply = """
         Totals so far:
@@ -119,7 +118,6 @@ final class TableCopy: ChatStoryline {
         Done counting.
         """
     static let tabbed = "Name\tQty\nalpha\t3\nbeta\t12"
-    static let markdown = "| Name | Qty |\n|---|---|\n| alpha | 3 |\n| beta | 12 |"
     static let table = StoryID.Transcript.table([1])
 
     override class var tags: Set<Tag> { [.chat] }
@@ -142,13 +140,8 @@ final class TableCopy: ChatStoryline {
             Snapshot("table-copy"),
             Do("clear the pasteboard") { _ in StoryTranscript.clearCopied() },
             Click(.id(Self.table.part(.copy))),
-            Expect("Copy to take the whole table, as a selection of it copies", found: { _ in StoryTranscript.copied }) { _ in
+            Expect("Copy to take the whole table, as a drag across it copies", found: { _ in StoryTranscript.copied }) { _ in
                 StoryTranscript.copied == Self.tabbed
-            },
-            Do("clear the pasteboard") { _ in StoryTranscript.clearCopied() },
-            Click(.id(Self.table.part(.copy)), modifiers: .option),
-            Expect("⌥-Copy to take it as Markdown", found: { _ in StoryTranscript.copied }) { _ in
-                StoryTranscript.copied == Self.markdown
             },
         ]
     }
