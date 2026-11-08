@@ -29,7 +29,7 @@ enum Reads {
             case "history": try history(client, options)
             case "options": try Own.options(client, options)
             case "fast", "compact", "rename", "model", "effort", "mode": try Own.set(name, client, options)
-            case "new", "fork", "send", "stop", "tab", "answer", "wait": try Drive.run(name, client, options)
+            case "new", "fork", "send", "stop", "tab", "answer", "wait", "open": try Drive.run(name, client, options)
             default: return fail(usage, code: 2)
             }
             return 0
@@ -236,7 +236,8 @@ enum Reads {
         let provider = width(sessions, "provider")
         for s in sessions {
             let when = (s["updated"] as? String).flatMap(parse.date(from:)).map(show.string(from:)) ?? ""
-            say("\(pad(when, 12))  \(pad(str(s["provider"]), provider))  \(str(s["title"]))" + (s["open"] as? Bool == true ? "  (open)" : ""))
+            // The session's start, for `kore open`.
+            say("\(pad(when, 12))  \(String(str(s["id"]).prefix(8)))  \(pad(str(s["provider"]), provider))  \(str(s["title"]))" + (s["open"] as? Bool == true ? "  (open)" : ""))
         }
         if data["more"] as? Bool == true { say("…") }
     }

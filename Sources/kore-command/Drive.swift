@@ -7,7 +7,7 @@ enum Drive {
     static let usage = [
         "new": "[--claude|--codex] [--model M] [--mode X] [\"message\"]", "send": "<chat> \"message\"", "stop": "<chat>", "tab": "<chat>",
         "fork": "<chat> [--at <message>] [--model M] [\"message\"]", "wait": "<chat> [--timeout s]",
-        "answer": "<chat> <card> <answer>... | <chat> <card> --deny",
+        "answer": "<chat> <card> <answer>... | <chat> <card> --deny", "open": "<session> [--folder F]",
     ]
 
     static func fits(_ name: String, _ o: Reads.Options) -> Bool {
@@ -17,7 +17,7 @@ enum Drive {
         case "fork": return (1...2).contains(n)
         case "wait": return n == 1
         case "send": return n == 2
-        case "stop", "tab": return n == 1
+        case "stop", "tab", "open": return n == 1
         default: return o.deny ? n == 2 : n >= 3
         }
     }
@@ -55,6 +55,10 @@ enum Drive {
         case "send": data = try client.run("chat.send", ["chat": p[0], "text": p[1]])
         case "stop": data = try client.run("chat.stop", ["chat": p[0]])
         case "tab": data = try client.run("tab.show", ["chat": p[0]])
+        case "open":
+            var args: Object = ["session": p[0]]
+            if let folder = o.folder { args["folder"] = folder }
+            data = try client.run("chat.open", args)
         default:
             var args: Object = ["chat": p[0], "card": p[1]]
             if o.deny { args["deny"] = true } else { args["answers"] = Array(p.dropFirst(2)) }

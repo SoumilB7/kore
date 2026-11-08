@@ -54,10 +54,12 @@ package struct AgentCommand: Sendable, Equatable {
     package static let stop = Self(name: "chat.stop", tier: .drive)
     package static let showTab = Self(name: "tab.show", tier: .drive)
     package static let answer = Self(name: "cards.answer", tier: .drive)
+    /// A past chat opened as History opens it: a new chat for the limits.
+    package static let open = Self(name: "chat.open", tier: .drive)
 
     package static let all: [Self] = [
         whoami, caps, chats, show, read, follow, unfollow, cards, history, wait, options, rename, model, effort, fast, mode, compact,
-        new, fork, send, stop, showTab, answer,
+        new, fork, send, stop, showTab, answer, open,
     ]
 
     /// Why `tier` may not run `name`; nil when it may.
@@ -116,7 +118,8 @@ package struct AgentArgs: Codable, Sendable, Equatable {
     /// Rows to read (`tx.read`, `tx.follow`), and the row to read back from.
     package var last: Int?
     package var before: String?
-    /// `history.list`: the folder asked for, which has to be the caller's own chat's.
+    /// `history.list` and `chat.open`: the folder asked for: the caller's own chat's, or with Act
+    /// unlimited any folder a Kore window on this Mac has open.
     package var folder: String?
     package var query: String?
     package var archived: Bool?
@@ -140,6 +143,8 @@ package struct AgentArgs: Codable, Sendable, Equatable {
     package var timeout: Int?
     /// `chat.new` from a chat on a box: `box` (its box and folder, the default) or `mac`.
     package var place: String?
+    /// `chat.open`: the past chat's session id, or the start of it only one has.
+    package var session: String?
 
     package init(
         chat: String? = nil, last: Int? = nil, before: String? = nil, folder: String? = nil, query: String? = nil,
@@ -155,6 +160,7 @@ package struct AgentArgs: Codable, Sendable, Equatable {
         self.at = nil
         self.timeout = nil
         self.place = nil
+        self.session = nil
         self.chat = chat
         self.last = last
         self.before = before

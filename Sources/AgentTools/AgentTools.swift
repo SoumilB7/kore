@@ -57,7 +57,7 @@ package enum AgentTools {
         Tool(
             name: "kore_history", command: "history.list", description: "A Kore window's past chats, newest first.",
             args: [
-                ("folder", "string", "The window's folder (default: this chat's window)."), ("query", "string", "Words the title holds."),
+                ("folder", "string", "The window's folder (default: this chat's window; another open folder's with Act unlimited)."), ("query", "string", "Words the title holds."),
                 ("archived", "boolean", "Archived chats instead."), ("offset", "integer", "Skip this many (pages of 50)."),
             ], required: []),
         Tool(
@@ -103,6 +103,11 @@ package enum AgentTools {
             name: "kore_send", command: "chat.send", description: "Send a message to another chat, as the user would type it, queued while it works. It shows who sent it. Only chats at this chat's mode or lower (Act unlimited).",
             args: [chatArg, ("text", "string", "The message.")], required: ["chat", "text"]),
         Tool(name: "kore_stop", command: "chat.stop", description: "Stop another chat's turn (Act unlimited).", args: [chatArg], required: ["chat"]),
+        Tool(
+            name: "kore_open_chat", command: "chat.open",
+            description: "Open a past chat (kore_history lists them) in a tab, in front, as History opens it; its tab if it's open already (Act unlimited).",
+            args: [("session", "string", "Its session id, or the start of it."), ("folder", "string", "Its folder (default: this chat's window).")],
+            required: ["session"]),
         Tool(name: "kore_show_tab", command: "tab.show", description: "Bring a chat's tab to the front (Act unlimited).", args: [chatArg], required: ["chat"]),
         Tool(
             name: "kore_answer", command: "cards.answer",
@@ -122,7 +127,7 @@ package enum AgentTools {
 
     /// The tier each command needs, lowest first: wire ids (`tierName` names them).
     package static func tierNeeded(_ command: String) -> String {
-        if ["chat.new", "chat.fork", "chat.send", "chat.stop", "tab.show", "cards.answer"].contains(command) { return "drive" }
+        if ["chat.new", "chat.fork", "chat.send", "chat.stop", "tab.show", "cards.answer", "chat.open"].contains(command) { return "drive" }
         if ownCommands.contains(command) { return "own" }
         return "watch"
     }

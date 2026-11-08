@@ -214,6 +214,8 @@ package final class Chat: Identifiable {
     /// waits for the chat to be able to have it (a Codex chat's mode, not known yet).
     @ObservationIgnored package var arsenalKept: String?
     @ObservationIgnored package var arsenalWaiting = false
+    /// Opened by an agent (Act unlimited's open): a kept tier isn't brought back for it.
+    @ObservationIgnored package var arsenalByAgent = false
 
     package var sessionId: String? { status.sessionId }
     /// The id the folder's history lists it under: its session's, or a fork's own before its

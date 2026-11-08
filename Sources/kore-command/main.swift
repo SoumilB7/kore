@@ -35,6 +35,8 @@ let usage = """
                                  send to another chat, queued while it works
            kore stop <chat>      stop its turn
            kore tab <chat>       bring its tab to the front
+           kore open <session> [--folder F]
+                                 open a past chat (kore history lists them) in front
            kore answer <chat> <card> <answer>... | --deny
                                  answer a question card, one answer per question
            kore whoami           who Kore sees calling, and its access
@@ -51,7 +53,7 @@ let usage = """
 let arguments = Array(CommandLine.arguments.dropFirst())
 let reads: Set = [
     "ls", "show", "log", "pending", "history", "whoami", "caps", "mcp", "options", "rename", "model", "effort", "fast", "mode", "compact", "new", "fork",
-    "send", "stop", "tab", "answer", "wait",
+    "send", "stop", "tab", "answer", "wait", "open",
 ]
 
 switch arguments.first {

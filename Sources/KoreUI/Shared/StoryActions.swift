@@ -336,6 +336,8 @@ extension Chat {
 }
 
 extension Workspace {
+    /// The History popover's reread of the folder's chats.
+    package func storyRefreshHistory() async { await refresh() }
     /// The tab asking before its close stops its turn, and whether its Yes (or a second ⌘W)
     /// would go yet: a double click's time after it asked.
     package var storyClosingTab: UUID? { tabs.first(where: asking)?.id }

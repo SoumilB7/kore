@@ -445,6 +445,8 @@ package final class AgentChannel {
             followsChanged()
             send(client, AgentResult<AgentEmpty>(id: id, ok: true))
             return chat.id.uuidString
+        case AgentCommand.open.name:
+            return openChat(args, client, id)
         case AgentCommand.history.name:
             guard let workspace = window(args, client, id) else { return nil }
             let data = AgentReads.history(workspace, query: args.query, archived: args.archived ?? false, offset: args.offset ?? 0)
@@ -801,21 +803,48 @@ package final class AgentChannel {
         return nil
     }
 
-    /// The window a history read is for: the caller's own chat's, and no other. A caller outside
-    /// Kore's chats has no folder of its own.
+    /// The window a history read or an open is for: the caller's own chat's, or with Act unlimited
+    /// that of any folder a Kore window on this Mac has open (the owner, 2026-11-15). A caller
+    /// outside Kore's chats has no folder of its own.
     private func window(_ args: AgentArgs, _ client: Client, _ id: String) -> Workspace? {
         guard let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }), let workspace = AgentReads.workspace(of: own) else {
             fail(client, id, .noWindow, "Past chats can be read only from a chat in Kore, for its own folder.")
             return nil
         }
-        if let folder = args.folder {
-            let wanted = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath).standardizedFileURL.path
-            guard wanted == workspace.folder.standardizedFileURL.path else {
-                fail(client, id, .noWindow, "Past chats can be read only for this chat's own folder.")
-                return nil
-            }
+        guard let folder = args.folder else { return workspace }
+        let wanted = URL(fileURLWithPath: (folder as NSString).expandingTildeInPath).standardizedFileURL.path
+        if wanted == workspace.folder.standardizedFileURL.path { return workspace }
+        guard tier(client) >= .drive else {
+            fail(client, id, .noWindow, "Past chats can be read only for this chat's own folder: other folders need Act unlimited.")
+            return nil
         }
-        return workspace
+        guard let other = AgentReads.workspaces().first(where: { $0.boxFolder == nil && $0.folder.standardizedFileURL.path == wanted }) else {
+            fail(client, id, .noWindow, "No Kore window has that folder open.")
+            return nil
+        }
+        return other
+    }
+
+    /// A past chat opened as History opens it (`Workspace.arsenalOpen`), in its folder's window, in
+    /// front: a new chat for the limits when it wasn't open already.
+    private func openChat(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
+        guard let session = args.session, !session.isEmpty, session.utf8.count <= 128 else {
+            fail(client, id, .invalid, "Name the past chat: its session id, as kore history shows it.")
+            return nil
+        }
+        guard let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }), let window = window(args, client, id) else { return nil }
+        guard roomForNew(client, id) else { return nil }
+        switch window.arsenalOpen(session: session, under: own) {
+        case .failure(let refusal):
+            fail(client, id, .refused, refusal.message)
+            return nil
+        case .success(let (chat, opened)):
+            if opened { spentNew(chat, client) }
+            let chatId = chat.id.uuidString
+            let message = opened ? "Opened “\(AgentReads.title(chat.title))”." : "It was open: in front."
+            send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chatId, message: message, short: AgentReads.short(chatId))))
+            return chatId
+        }
     }
 
     // MARK: Following

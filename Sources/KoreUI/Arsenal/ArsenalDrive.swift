@@ -167,6 +167,42 @@ extension Workspace {
         return boxModels(provider) ?? ArsenalModels.seen[provider] ?? []
     }
 
+    /// A past chat of this window's, opened as a click in History opens it: its tab in front if it's
+    /// open already, else a tab of its own. `session` is its id, or the start of it only one has.
+    /// Opened, its mode is capped as a new chat's is (no freer than the caller's), and its Arsenal
+    /// stays off whatever it had: a tier is the user's to give it back. A box's chats are its own.
+    package func arsenalOpen(session: String, under caller: Chat) -> Result<(chat: Chat, opened: Bool), ArsenalRefusal> {
+        guard box == nil else { return .failure(.init("A box's past chats open from its window's History.")) }
+        let wanted = session.trimmingCharacters(in: .whitespaces).lowercased()
+        let found = chats.filter { $0.id.lowercased() == wanted || (wanted.count >= 6 && $0.id.lowercased().hasPrefix(wanted)) }
+        guard let summary = found.first(where: { $0.id.lowercased() == wanted }) ?? (found.count == 1 ? found.first : nil) else {
+            return .failure(.init(found.isEmpty ? "No past chat in \(folder.lastPathComponent) has that id." : "Several past chats start with that id: give more of it."))
+        }
+        if paired != nil, boxRowPlace(summary.id) != nil { return .failure(.init("That chat is on the box: open it from History.")) }
+        if let tab = tabs.first(where: { $0.chat?.sessionId == summary.id && $0.agent == nil }), let chat = tab.chat {
+            select(tab)
+            return .success((chat, false))
+        }
+        let provider = Registry.provider(for: summary.agent)
+        let rank = caller.arsenalRank
+        let cap = { (mode: String) in Chat.noFreer(mode, unreviewed: false, than: rank.id, unreviewed: rank.unreviewed) }
+        // As a new chat's: Codex's Read only isn't in the menu, but a chat can be put in it here.
+        let capped = provider.modes.filter { $0.listed || $0.id == CodexModes.readOnly }.filter { cap($0.id) }
+        guard !capped.isEmpty else {
+            return .failure(.init("Only you can open a \(provider.name) chat from this one: its lowest mode does more on its own than \(caller.controls.activeMode.label)."))
+        }
+        open(summary)
+        guard let chat = tabs.first(where: { $0.chat?.sessionId == summary.id && $0.agent == nil })?.chat else {
+            return .failure(.init("Kore couldn't open that chat."))
+        }
+        chat.arsenalByAgent = true
+        let opened = chat.arsenalRank
+        if !Chat.noFreer(opened.id, unreviewed: opened.unreviewed, than: rank.id, unreviewed: rank.unreviewed), let mode = capped.max(by: { Chat.modeLevel($0.id) < Chat.modeLevel($1.id) }) {
+            chat.setMode(mode.id, remember: false)
+        }
+        return .success((chat, true))
+    }
+
     /// The chat's tab to the front, as a click on it.
     package func arsenalShow(_ chat: Chat) -> Bool {
         guard let tab = tab(of: chat) else { return false }

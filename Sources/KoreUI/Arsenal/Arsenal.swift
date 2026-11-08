@@ -124,7 +124,7 @@ package final class Arsenal {
     /// switch is on and it can have it now. A Codex chat whose mode isn't Full access yet waits for it.
     package func restore(_ chat: Chat) {
         chat.arsenalWaiting = false
-        guard !chat.services.onBox, chat.arsenal == nil, let tier = ArsenalMemory.tier(chat), tier.built, allowed else { return }
+        guard !chat.services.onBox, !chat.arsenalByAgent, chat.arsenal == nil, let tier = ArsenalMemory.tier(chat), tier.built, allowed else { return }
         chat.arsenalKept = ArsenalMemory.key(chat)
         guard Self.unavailable(chat) == nil else {
             chat.arsenalWaiting = true
