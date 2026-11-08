@@ -81,16 +81,21 @@ extension Notification.Name {
 }
 
 /// The Mac woke (`NSWorkspace.didWakeNotification` in Kore): every link in use is probed, so
-/// one that died while the Mac slept is noticed at once instead of at the next command.
+/// one that died while the Mac slept is noticed at once instead of at the next command; the
+/// phones' listener looks again, and a box whose upgrade failed tries again.
 @MainActor
 package final class LinkWake {
     private let center: NotificationCenter
     private var observer: NSObjectProtocol?
 
-    package init(center: NotificationCenter, name: Notification.Name, probe: @escaping @MainActor (String) -> Void = { why in
+    /// What a wake does in Kore.
+    package static func woke(_ why: String) {
         HostConnection.probeAll(why)
         KoreNetSwitch.shared?.phonesLook?()
-    }) {
+        KoreNetSwitch.shared?.upgrades?.retryFailed()
+    }
+
+    package init(center: NotificationCenter, name: Notification.Name, probe: @escaping @MainActor (String) -> Void = { LinkWake.woke($0) }) {
         self.center = center
         observer = center.addObserver(forName: name, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { probe("wake") }

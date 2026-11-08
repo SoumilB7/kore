@@ -237,6 +237,115 @@ struct KoreNetSystemTests {
         }
     }
 
+    // MARK: The listener heals (2026-11-15)
+
+    /// KoreNet off and on with a phone allowed: the switch's choice and the bus's first status
+    /// each look; the two binds once refused each other and the Mac kept no port. (The phone app
+    /// is closed meanwhile: a phone told `bye refused` stays "Not allowed" until reopened, a phone
+    /// gap of its own, not this one.)
+    @Test func koreNetToggledWithAPhoneAllowedEndsListening() async throws {
+        try await play("KoreNet off and on, phone allowed · I8 I11") { w in
+            await w.koreNetOn()
+            await w.plus()
+            let pixel = w.phone("Pixel 9")
+            await w.joinPhone(pixel)
+            await w.step("the phone app closes", .event("phone app closed")) { pixel.quit() }
+            await w.step("KoreNet off", .subject("KoreNet off"), until: { !w.mac.macNet.listening }) { Devices.shared.setOn(false) }
+            await w.step("KoreNet on again", .koreNetOn, until: { w.mac.macNet.listening }) { Devices.shared.setOn(true) }
+            let binds = w.net.listens(w.mac.ip)
+            await w.step("the phone app opens", .event("phone app opened"), until: { pixel.rows.first?.glyph == "●" }) { pixel.restart() }
+            #expect(w.mac.macNet.listening && w.net.listens(w.mac.ip) == binds)
+            await w.expectSettled(boxes: [], phones: [pixel])
+        }
+    }
+
+    /// Kore restarts and its first bind is refused (Tailscale re-adding the address): the retry
+    /// a second later binds, and the phone comes back with no window and no click.
+    @Test func aRefusedFirstBindHeals() async throws {
+        try await play("Mac restart, first bind refused · I8 I5") { w in
+            await w.koreNetOn()
+            await w.plus()
+            let pixel = w.phone("Pixel 9")
+            await w.joinPhone(pixel)
+            // Refused at launch's looks and the first retries (Kore looks once or twice at launch).
+            w.net.refuseListens(w.mac.ip, 3)
+            await w.step("Kore restarts, its first bind refused", .event("Mac restart, bind refused"), until: {
+                w.mac.macNet.listening && pixel.rows.first?.glyph == "●"
+            }) { w.mac.restart() }
+            let traced = w.mac.traced
+            #expect(traced.contains { $0.hasSuffix("macnet failed bind-EADDRNOTAVAIL") }, "\(traced.suffix(20))")
+            await w.expectSettled(boxes: [], phones: [pixel])
+        }
+    }
+
+    /// Binds refused past every retry: the listener waits (no poll), and the Mac waking, then a
+    /// network change, each bring it back.
+    @Test func aListenerPastItsRetriesComesBackOnWakeAndNetworkChange() async throws {
+        try await play("listener waits, wake and path change · I5 I15 I16") { w in
+            await w.koreNetOn()
+            await w.plus()
+            let pixel = w.phone("Pixel 9")
+            await w.joinPhone(pixel)
+            let ip = w.mac.ip
+            @MainActor func exhaust() async {
+                let waits = w.mac.traced.filter { $0.hasSuffix("macnet waits") }.count
+                w.net.refuseListens(ip, 1000)
+                w.net.setState(ip, .stopped)
+                w.net.setState(ip, .running)
+                let waited = await w.settle(budget: .seconds(400)) {
+                    w.mac.traced.filter { $0.hasSuffix("macnet waits") }.count > waits && !w.mac.macNet.listening && !w.mac.macNet.retrying
+                }
+                let traced = w.mac.traced
+                #expect(waited, "\(traced.suffix(20))")
+                w.net.refuseListens(ip, 0)
+            }
+            await exhaust()
+            await w.step("the Mac wakes", .event("wake"), until: { w.mac.macNet.listening && pixel.rows.first?.glyph == "●" }) { w.mac.wakeUp() }
+            await exhaust()
+            await w.step("the network changes", .event("network change"), until: { w.mac.macNet.listening && pixel.rows.first?.glyph == "●" }) {
+                w.mac.networkChanged()
+            }
+            await w.expectSettled(boxes: [], phones: [pixel])
+        }
+    }
+
+    /// The owner's Mac this morning: the phone was allowed while mybox was SSH-only, an older Kore
+    /// enrolled mybox without catching it up, and Kore restarted with no window. The box is
+    /// dialled once for its push and the phone gets in there; a restart after that dials nothing.
+    @Test func macRestartReachesABoxOwedAPushWithNoWindow() async throws {
+        try await play("Mac restart, box owed a push, no window · I2 I8") { w in
+            await w.koreNetOn()
+            await w.plus()
+            let pixel = w.phone("Pixel 9")
+            await w.joinPhone(pixel)
+            // An older Kore: no catch-up on a box's link-up. Set up and enrolled with no invariant
+            // checks (the break is the state this scenario starts from).
+            HostConnection.devicesCatchUp = nil
+            let box = try w.box("mybox")
+            w.mac.addSSHBox(box)
+            w.mac.openWindow(box)
+            _ = await w.settle { w.mac.link(box)?.isOnline == true }
+            w.mac.closeWindow(box)
+            let enrolled = await w.settle(budget: .seconds(120)) {
+                box.netOn && box.device.map { w.mac.directory.all[$0.uuidString.lowercased()]?.enrolled == true } == true
+            }
+            #expect(enrolled, "mybox never enrolled")
+            #expect(!box.devices.contains { $0.id == pixel.device }, "mybox was caught up before the restart")
+            let reaches = { @MainActor in w.mac.traced.filter { $0.contains("s reach ") }.count }
+            let before = reaches()
+            await w.step("Kore restarts, no window", .event("Mac restart"), until: {
+                box.devices.contains { $0.id == pixel.device } && box.device.map { pixel.state(of: $0) == .up } == true
+            }) { w.mac.restart() }
+            let once = reaches()
+            let lines = w.mac.traced.filter { $0.contains("s reach ") }
+            #expect(once == before + 1, "\(lines)")
+            await w.step("Kore restarts again", .event("Mac restart"), until: { pixel.rows.allSatisfy { $0.glyph == "●" } }) { w.mac.restart() }
+            let after = reaches()
+            #expect(after == before + 1, "a caught-up box was dialled again")
+            await w.expectSettled(boxes: [box], phones: [pixel])
+        }
+    }
+
     // MARK: More devices
 
     @Test func twoPhones() async throws {

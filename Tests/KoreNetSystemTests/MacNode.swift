@@ -64,6 +64,13 @@ final class MacNode {
     private(set) var windows: [String: HostConnection] = [:]
     /// The Devices popup is open (it holds the bus).
     private(set) var popupOpen = false
+    /// The Mac's wake and network changes, made as `NetLiveness` and `NetworkWatch` make them
+    /// (their default hooks), on a center and a path of the test's own.
+    let wakeCenter = NotificationCenter()
+    static let woke = Notification.Name("KNSWoke")
+    private var wake: LinkWake?
+    private var paths: PathChanges?
+    private var interfaces = 0
 
     init(root: URL, net: SharedTailnet, pulse: Pulse, clock: VirtualClock) {
         self.root = root
@@ -165,7 +172,16 @@ final class MacNode {
             }
         }
         MacNet.shared = macNet
-        macNet.changed = { _ in pulse.beat() }
+        macNet.changed = { [weak self] what in
+            self?.trace("macnet \(what)")
+            pulse.beat()
+        }
+        switcher.schedule = macNet.schedule
+        wake = LinkWake(center: wakeCenter, name: Self.woke)
+        let paths = PathChanges(wait: .seconds(1))
+        paths.sleep = clock.sleep
+        paths.observe(.init(satisfied: true, interfaces: ["en0"]))
+        self.paths = paths
         auditWatch = NetAudit.watch { [weak self] line in
             self?.audits.append(line)
             self?.trace("audit " + line)
@@ -210,7 +226,18 @@ final class MacNode {
         launch()
     }
 
+    /// The Mac wakes from sleep.
+    func wakeUp() { wakeCenter.post(name: Self.woke, object: nil) }
+
+    /// Its network path changes (Wi-Fi to another Wi-Fi).
+    func networkChanged() {
+        interfaces += 1
+        paths?.observe(.init(satisfied: true, interfaces: ["en\(interfaces)"]))
+    }
+
     func quit() {
+        wake = nil
+        paths = nil
         net.cut(ip)
         for (key, connection) in windows {
             while connection.inUse { connection.release() }

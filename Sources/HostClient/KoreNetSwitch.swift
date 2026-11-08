@@ -212,6 +212,7 @@ package final class KoreNetSwitch: NetRouter {
         generation += 1
         let mine = generation
         state = .choosing
+        busRetry = 0
         holders = Set(connections().filter(\.inUse).map(\.alias))
         if global { HostConnection.net = self }
         Task.detached {
@@ -276,6 +277,7 @@ package final class KoreNetSwitch: NetRouter {
         if global, HostConnection.net === self { HostConnection.net = nil }
         bus?.cancel()
         bus = nil
+        cancelBusRetry()
         tailnet = nil
         status = nil
         env = nil
@@ -297,27 +299,71 @@ package final class KoreNetSwitch: NetRouter {
 
     /// The Devices popup (step 7) or a box window holds the bus while visible.
     package func hold(_ key: String, _ held: Bool) {
+        // A first holder: a bus that ends by itself is held again from the first step.
+        if held, holders.isEmpty { busRetry = 0 }
         if held { holders.insert(key) } else { holders.remove(key) }
         if holders.isEmpty {
             bus?.cancel()
             bus = nil
+            cancelBusRetry()
         } else {
             holdBus()
         }
     }
 
-    private func holdBus() {
+    /// A bus that ended by itself while held (Tailscale restarted, its LocalAPI went away) is
+    /// held again after each of these; past them, the next hold does it (the phones' listener
+    /// looks, and so holds, on wake, a network change and its own retries). Never a poll.
+    package static let busRetrySteps: [TimeInterval] = [1, 5, 30, 120]
+    @ObservationIgnored private var busRetry = 0
+    @ObservationIgnored private var busRetryCancel: (() -> Void)?
+    /// Runs `work` after `seconds` (tests: virtual time); the closure it gives back cancels.
+    @ObservationIgnored package var schedule: @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> () -> Void = { seconds, work in
+        let item = DispatchWorkItem { MainActor.assumeIsolated { work() } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: item)
+        return { item.cancel() }
+    }
+    /// Buses held so far (tests).
+    @ObservationIgnored package private(set) var busesHeld = 0
+
+    private func holdBus(again: Bool = false) {
         guard bus == nil, let tailnet else { return }
+        cancelBusRetry()
+        busesHeld += 1
         let events = tailnet.events()
+        let mine = generation
         bus = Task { [weak self] in
+            var first = true
             for await event in events {
                 guard let self, !Task.isCancelled else { return }
                 self.heard(event)
+                // Held again after it ended: Tailscale may have restarted under the listener,
+                // which looks again (once; cheap while it listens).
+                if first, again { self.phonesLook?() }
+                first = false
             }
             // A cancelled bus's tail runs after a newer one may be held: that one's handle stays.
-            guard !Task.isCancelled else { return }
-            self?.bus = nil
+            guard !Task.isCancelled, let self else { return }
+            self.bus = nil
+            self.busEnded(mine)
         }
+    }
+
+    private func busEnded(_ mine: Int) {
+        guard mine == generation, !holders.isEmpty, tailnet != nil, busRetry < Self.busRetrySteps.count else { return }
+        let seconds = Self.busRetrySteps[busRetry]
+        busRetry += 1
+        HostLog.note("korenet", "bus ended", "retry-\(Int(seconds))s")
+        busRetryCancel = schedule(seconds) { [weak self] in
+            guard let self, self.generation == mine, !self.holders.isEmpty else { return }
+            self.busRetryCancel = nil
+            self.holdBus(again: true)
+        }
+    }
+
+    private func cancelBusRetry() {
+        busRetryCancel?()
+        busRetryCancel = nil
     }
 
     /// Reads the tailnet's status once, off the main actor (about 2 ms over LocalAPI): when

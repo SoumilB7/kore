@@ -33,6 +33,10 @@ final class SharedTailnet: Sendable {
         var handoffs: [Int32] = []
         /// Where dials to this box go (set by the box rig).
         var greet: (@Sendable (_ fd: Int32, _ remote: String) -> Bool)?
+        /// Binds made, and binds still to be refused (`EADDRNOTAVAIL`, as while Tailscale re-adds
+        /// an address).
+        var listens = 0
+        var refuseListens = 0
         var os: String { kind == .mac ? "macOS" : kind == .box ? "linux" : "android" }
         var online: Bool { state == .running }
     }
@@ -140,14 +144,44 @@ final class SharedTailnet: Sendable {
         pulse()
     }
 
+    /// A Mac's bind. The port is one per address, as a real one: while an earlier listener still
+    /// holds its end (not closed yet), a second bind is refused (`EADDRINUSE`).
     func listen(_ ip: String) throws -> [TailnetListenSocket] {
         guard let me = node(ip), me.kind == .mac else { return [] }
         guard me.state == .running else { throw TailnetError.notRunning(me.state) }
+        let refused = state.withLock { s -> Int32? in
+            s.nodes[ip]?.listens += 1
+            if let n = s.nodes[ip]?.refuseListens, n > 0 {
+                s.nodes[ip]?.refuseListens = n - 1
+                return EADDRNOTAVAIL
+            }
+            // Ends whose listener closed go; one still held keeps the port.
+            let held = s.nodes[ip]?.handoffs ?? []
+            let dead = held.filter { !Self.peerOpen($0) }
+            for fd in dead { Sockets.closeFD(fd) }
+            s.nodes[ip]?.handoffs = held.filter { !dead.contains($0) }
+            return dead.count < held.count ? EADDRINUSE : nil
+        }
+        defer { pulse() }
+        if let refused { throw SocketError.failed("bind \(me.bindIP):47470", refused) }
         let (ours, theirs) = try Sockets.pair()
         state.withLock { $0.nodes[ip]?.handoffs.append(ours) }
-        pulse()
         return [.handoff(theirs)]
     }
+
+    /// The far end of a socketpair is still open: its acks read away, an EOF says it closed.
+    static func peerOpen(_ fd: Int32) -> Bool {
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while true {
+            let n = recv(fd, &buffer, buffer.count, Int32(MSG_DONTWAIT))
+            if n > 0 { continue }
+            return n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+        }
+    }
+
+    /// The next `count` binds on `ip` are refused.
+    func refuseListens(_ ip: String, _ count: Int) { update(ip) { $0.refuseListens = count } }
+    func listens(_ ip: String) -> Int { node(ip)?.listens ?? 0 }
 
     /// A connected loopback TCP pair: (dialler's end, listener's end).
     static func tcpPair() throws -> (Int32, Int32) {

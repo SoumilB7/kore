@@ -252,16 +252,33 @@ package final class MacNet {
     package var device: UUID? { shared.withLock { $0.identity?.device } }
 
     /// Looks again (KoreNet switched, Tailscale's state changed, a phone allowed or removed, the
-    /// window opened or closed): binds what the rule and Tailscale say, or closes.
+    /// window opened or closed, the Mac woke, the network changed): binds what the rule and
+    /// Tailscale say, or closes. An event: a failed look's retries start again from the first.
     package func refresh() {
+        retryStep = 0
+        clashLooked = false
+        cancelRetry()
+        look()
+    }
+
+    private func look() {
         generation += 1
         let mine = generation
         host.hold(Self.busKey, !allowedPhones().isEmpty || addOpen)
         guard let tailnet = host.tailnet, Self.listens(on: true, running: true, phones: allowedPhones().count, addOpen: addOpen) else {
+            cancelRetry()
             // No port, but pushes still need who this Mac is (a revoke owed to a box).
             learnIdentity()
             return close()
         }
+        // One look at a time: two binds at once refused each other (the second hit the first's
+        // sockets, the first was stale by then and closed them: no port at all, 2026-11-15). A
+        // look asked for meanwhile runs once this one has settled.
+        guard !looking else {
+            lookAgain = true
+            return
+        }
+        looking = true
         let name = host.macName
         shared.withLock { $0.macName = name }
         let had = bound
@@ -269,73 +286,205 @@ package final class MacNet {
         let reader = host.identityReader()
         let foreground = foreground
         background { [weak self] in
-            let status = try? tailnet.status()
-            let want = status.flatMap { try? MacNet.addresses($0) } ?? []
-            var made: [TailnetListenSocket]?
-            var problem: String?
-            var clash = false
-            if !want.isEmpty, !(listening && want == had) {
-                do {
-                    let sockets = try tailnet.listen(port: MacNet.port)
-                    try MacNet.check(sockets, within: want)
-                    made = sockets
-                } catch {
-                    problem = "\(error)"
-                    clash = MacNet.addressInUse(error)
-                }
-            }
+            let found = MacNet.bind(tailnet, had: had, listening: listening)
             let identity = try? reader?()
-            let found = (status, want, made, problem, identity, clash)
             _ = self
             foreground { [weak self] in
                 guard let self else {
-                    for socket in made ?? [] { Sockets.closeFD(socket.fd) }
+                    for socket in found.made ?? [] { Sockets.closeFD(socket.fd) }
                     return
                 }
-                self.settle(mine, status: found.0, want: found.1, made: found.2, problem: found.3, identity: found.4, clash: found.5)
+                self.looking = false
+                self.settle(mine, found, identity: identity)
+                if self.lookAgain {
+                    self.lookAgain = false
+                    self.look()
+                }
             }
         }
     }
 
-    private func settle(
-        _ mine: Int, status: TailnetStatus?, want: [String], made: [TailnetListenSocket]?, problem: String?,
-        identity: (device: UUID, signer: any IdentitySigner)?, clash: Bool = false
-    ) {
+    /// A look's bind is under way off the main actor; another was asked for meanwhile.
+    private var looking = false
+    private var lookAgain = false
+
+    /// What one look found (off the main actor): Tailscale's status, the addresses to bind, the
+    /// sockets made, and why not (one word, `cause`).
+    struct Found {
+        var status: TailnetStatus?
+        var want: [String] = []
+        var made: [TailnetListenSocket]?
+        var problem: String?
+        /// The bind was refused because the port is held (by this Mac's own sockets, still closing).
+        var clash = false
+    }
+
+    /// Reads Tailscale's status and binds its addresses, unless they're bound already. A status
+    /// that can't be read, a running node with no address, a bind refused, or a socket on an
+    /// address not its own is a problem (retried); a node not running is not (its bus says when).
+    nonisolated static func bind(_ tailnet: any Tailnet, had: [String], listening: Bool) -> Found {
+        var found = Found()
+        do {
+            let status = try tailnet.status()
+            found.status = status
+            found.want = try addresses(status)
+            if status.backendState == .running, found.want.isEmpty { found.problem = "tailscale-no-address" }
+        } catch {
+            found.problem = "status-" + cause(error)
+            return found
+        }
+        guard found.problem == nil, !found.want.isEmpty, !(listening && found.want == had) else { return found }
+        do {
+            let sockets = try tailnet.listen(port: port)
+            try check(sockets, within: found.want)
+            found.made = sockets
+        } catch {
+            found.problem = cause(error)
+            found.clash = addressInUse(error)
+        }
+        return found
+    }
+
+    private func settle(_ mine: Int, _ found: Found, identity: (device: UUID, signer: any IdentitySigner)?) {
         guard mine == generation else {
-            for socket in made ?? [] { Sockets.closeFD(socket.fd) }
+            for socket in found.made ?? [] { Sockets.closeFD(socket.fd) }
             return
         }
         let knew = device != nil
-        defer { if !knew, device != nil { catchUpBoxes() } }
+        defer { if !knew, device != nil { identityLearned() } }
         shared.withLock {
-            $0.selfNode = status?.selfNode
-            $0.ownUser = status?.selfNode?.owner
+            // An unreadable status keeps what was known: handshakes under way still need it.
+            if let status = found.status {
+                $0.selfNode = status.selfNode
+                $0.ownUser = status.selfNode?.owner
+            }
             if let identity { $0.identity = (identity.device, identity.signer.publicKey) }
         }
         if let identity { signer = identity.signer }
-        guard !want.isEmpty else { return close() }
-        if let problem { HostLog.note("korenet", "listen failed", problem) }
-        guard let made else {
-            guard problem != nil else { return }
-            if listener == nil { return close() }
-            // The new addresses overlap the ones held (Tailscale added an address): our own
-            // sockets hold the port. Let them go, then bind afresh with nothing held.
-            if clash {
+        if let problem = found.problem {
+            HostLog.note("korenet", "listen failed", problem)
+            changed?("failed " + problem)
+            // The port is held: by this Mac's own sockets when the addresses moved under them (or a
+            // close still under way). They go, and once they're gone it looks again, once.
+            if found.clash, !clashLooked {
+                clashLooked = true
                 close()
-                return refresh()
+                return afterClosing { [weak self] in self?.look() }
             }
-            // Any other failure: the working listener stays.
-            changed?("kept")
-            return
+            // Any other failure: a working listener stays, and the look comes again later.
+            if listener != nil { changed?("kept") }
+            return retryLater(problem)
         }
+        guard !found.want.isEmpty else {
+            // Tailscale isn't running: no port, and nothing to retry (its bus says when it runs).
+            cancelRetry()
+            return close()
+        }
+        retryStep = 0
+        clashLooked = false
+        cancelRetry()
+        // Listening on these addresses already.
+        guard let made = found.made else { return }
         close()
         let listener = NetListener(sockets: made, limiter: limiter)
         self.listener = listener
-        bound = want
+        bound = found.want
         binds += 1
         for socket in made { watch(socket, listener) }
-        HostLog.note("korenet", "listening", want.joined(separator: ","))
+        HostLog.note("korenet", "listening", found.want.joined(separator: ","))
         changed?("listening")
+    }
+
+    // MARK: A look that failed
+
+    /// After a look that wanted the port and got none, the next looks come after these; then it
+    /// waits for an event (Tailscale's bus, wake, a network change, the Devices popup, a phone
+    /// allowed), each of which starts them again. Never a poll.
+    nonisolated package static let retrySteps: [TimeInterval] = [1, 5, 30, 120]
+    /// The next retry's step.
+    private var retryStep = 0
+    private var retryCancel: (() -> Void)?
+    /// A clash (the port held) was looked at again once since the last event or bind.
+    private var clashLooked = false
+    /// A retry is waiting (tests).
+    package var retrying: Bool { retryCancel != nil }
+    /// The descriptors of sockets let go and not closed yet (their sources close them).
+    private let closing = DispatchGroup()
+
+    private func retryLater(_ problem: String) {
+        cancelRetry()
+        guard retryStep < Self.retrySteps.count else {
+            HostLog.note("korenet", "listen waits", problem)
+            changed?("waits")
+            return
+        }
+        let seconds = Self.retrySteps[retryStep]
+        retryStep += 1
+        retryCancel = schedule(seconds) { [weak self] in
+            guard let self else { return }
+            self.retryCancel = nil
+            self.clashLooked = false
+            self.look()
+        }
+    }
+
+    private func cancelRetry() {
+        retryCancel?()
+        retryCancel = nil
+    }
+
+    /// Runs `work` once every socket let go is closed.
+    private func afterClosing(_ work: @escaping @MainActor () -> Void) {
+        closing.notify(queue: .main) { MainActor.assumeIsolated { work() } }
+    }
+
+    /// The identity was read for the first time: every box linked now is caught up, and every
+    /// enrolled box that owes a push is dialled once for it (at launch no window holds a link,
+    /// and a box allowed a phone before it was caught up would wait for one).
+    private func identityLearned() {
+        catchUpBoxes()
+        if pushDevices == nil { reachOwed() }
+    }
+
+    /// A failure in one word for hosts.log (`bind-EADDRNOTAVAIL`, `tailscale-Stopped`,
+    /// `status-localapi-http-503`): never empty, never a sentence (a log that keeps only
+    /// one-word reasons keeps it).
+    nonisolated package static func cause(_ error: any Error) -> String {
+        let text: String =
+            switch error {
+            case SocketError.failed(let what, let code): (what.split(separator: " ").first.map(String.init) ?? "socket") + "-" + errnoName(code)
+            case SocketError.wildcard: "wildcard-address"
+            case SocketError.badAddress: "not-own-address"
+            case SocketError.closed: "closed"
+            case SocketError.timedOut: "timed-out"
+            case SocketError.notThisUser: "not-this-user"
+            case TailnetError.unavailable: "localapi-unavailable"
+            case TailnetError.unauthorized: "localapi-unauthorized"
+            case TailnetError.http(let code): "localapi-http-\(code)"
+            case TailnetError.malformed: "localapi-malformed"
+            case TailnetError.notTailnet: "not-tailnet"
+            case TailnetError.sidecar: "sidecar"
+            case TailnetError.notRunning(let state): "tailscale-\(state.rawValue)"
+            default: "\(type(of: error))-\((error as NSError).code)"
+            }
+        return word(text)
+    }
+
+    /// `text` with anything but letters, digits and `-_.:` made `-`, at most 48 long; `unknown` when empty.
+    nonisolated static func word(_ text: String) -> String {
+        let allowed = Set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.:")
+        let kept = String(text.map { allowed.contains($0) ? $0 : "-" }.prefix(48))
+        return kept.trimmingCharacters(in: CharacterSet(charactersIn: "-")).isEmpty ? "unknown" : kept
+    }
+
+    /// An errno's name (`EADDRNOTAVAIL`), or `errno-<n>`.
+    nonisolated static func errnoName(_ code: Int32) -> String {
+        let names: [Int32: String] = [
+            EADDRINUSE: "EADDRINUSE", EADDRNOTAVAIL: "EADDRNOTAVAIL", EACCES: "EACCES", EPERM: "EPERM", EINVAL: "EINVAL", ENOBUFS: "ENOBUFS",
+            EMFILE: "EMFILE", ENFILE: "ENFILE", ECONNREFUSED: "ECONNREFUSED", ENETDOWN: "ENETDOWN", ENETUNREACH: "ENETUNREACH",
+            EHOSTUNREACH: "EHOSTUNREACH", EAFNOSUPPORT: "EAFNOSUPPORT", ENOTCONN: "ENOTCONN", ETIMEDOUT: "ETIMEDOUT", EBADF: "EBADF",
+        ]
+        return names[code] ?? "errno-\(code)"
     }
 
     /// Every TCP socket the tailnet bound is on one of this node's tailnet addresses.
@@ -378,6 +527,9 @@ package final class MacNet {
     /// KoreNet went off: the port, every phone and every handshake go.
     package func stop() {
         generation += 1
+        lookAgain = false
+        cancelRetry()
+        retryStep = 0
         for held in reaching.values { held.release() }
         reaching = [:]
         host.hold(Self.busKey, false)
@@ -416,7 +568,7 @@ package final class MacNet {
                     // The sidecar's handoff socket at its end (the helper died), or the listener
                     // itself failing: a source left readable would fire forever.
                     source?.cancel()
-                    return broke("\(error)")
+                    return broke(MacNet.cause(error))
                 }
                 // The limiter turned it away (closed): the next one may be waiting.
                 guard let next else { continue }
@@ -425,7 +577,14 @@ package final class MacNet {
                 if case .handoff = socket { return }
             }
         }
-        source.setCancelHandler { @Sendable in Sockets.closeFD(socket.fd) }
+        // Its descriptor closes here, after the source let go of it: a bind waiting on the port
+        // (`afterClosing`) runs once every one has.
+        let closing = closing
+        closing.enter()
+        source.setCancelHandler { @Sendable in
+            Sockets.closeFD(socket.fd)
+            closing.leave()
+        }
         sources.append(source)
         source.resume()
     }
@@ -442,12 +601,15 @@ package final class MacNet {
         return code == EAGAIN || code == EWOULDBLOCK || code == EINTR || code == ECONNABORTED
     }
 
-    /// A listening socket stopped working: the port closes, and opens again at the next look
-    /// (Tailscale's state, the switch, the Devices popup).
+    /// A listening socket stopped working: the port closes, and opens again by the retries (or
+    /// any event before them).
     private func listenerBroke(_ why: String) {
         guard listener != nil else { return }
         HostLog.note("korenet", "listener broke", why)
+        changed?("broke " + why)
         close()
+        retryStep = 0
+        retryLater(why)
     }
 
     // MARK: Connections
@@ -544,7 +706,7 @@ package final class MacNet {
                 guard let identity, self.device == nil else { return }
                 self.signer = identity.signer
                 self.shared.withLock { $0.identity = (identity.device, identity.signer.publicKey) }
-                self.catchUpBoxes()
+                self.identityLearned()
             }
         }
     }
@@ -711,9 +873,10 @@ package final class MacNet {
         return { connection.release() }
     }
 
-    /// The phones changed: every enrolled box that hasn't taken the change is held until it
-    /// answers (dialled now when its link is down; kept up when its last holder is letting go),
-    /// so the box holds it before a phone tries it (S1: a box set up first, then a phone, no window).
+    /// The phones changed, or this Mac's identity was first read (launch): every enrolled box
+    /// that hasn't taken the change is held until it answers (dialled now when its link is down;
+    /// kept up when its last holder is letting go), so the box holds it before a phone tries it
+    /// (S1: a box set up first, then a phone, no window; a box an older Kore never caught up).
     private func reachOwed() {
         guard let (_, rev, me) = issued() else { return }
         for entry in host.directory.all.values where entry.enrolled && entry.on && reaching[entry.device] == nil {
