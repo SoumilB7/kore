@@ -221,7 +221,7 @@ final class FileCarries {
         Task { [weak self] in
             let outcome = await carry.run()
             job.carry = nil
-            job.journal = carry.journal
+            job.journal = self?.renamed(carry.journal) ?? carry.journal
             await self?.ended(job, outcome, bytes: carry.bytes)
         }
     }
@@ -363,6 +363,38 @@ final class FileCarries {
         sleepWatch.append(center.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { FileCarries.shared.woke() }
         })
+    }
+
+    // MARK: A box rekeyed to its KoreNet id
+
+    /// Aliases whose stores moved to a KoreNet id: a run that ends after the move keeps the id.
+    @ObservationIgnored private var renames: [String: String] = [:]
+
+    private func renamed(_ journal: CarryJournal) -> CarryJournal {
+        renames.reduce(journal) { $0.rekeyed($1.key, $1.value) }
+    }
+
+    private func mentions(_ job: Job, _ alias: String) -> Bool { job.journal.rekeyed(alias, "\u{0}") != job.journal }
+
+    /// The box's stores are about to move: its carries stop where they are (their checkpoints,
+    /// written now, move with the rest).
+    func rekeying(_ alias: String) {
+        for job in jobs.values where mentions(job, alias) {
+            job.wait?.cancel()
+            job.carry?.interrupt()
+        }
+    }
+
+    /// They moved (`old` == `new`: they didn't): each carry reaching the box goes on under the
+    /// box's id, holding its link by that key.
+    func rekeyed(_ old: String, _ new: String) {
+        if old != new { renames[old] = new }
+        for job in jobs.values where mentions(job, old) {
+            letGo(job)
+            job.boxes = [:]
+            job.journal = job.journal.rekeyed(old, new)
+            if job.carry == nil, !job.waiting, job.journal.state == .running { later(job) }
+        }
     }
 
     func slept() {

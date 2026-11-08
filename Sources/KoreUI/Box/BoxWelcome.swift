@@ -66,7 +66,7 @@ struct WelcomeSwitcher: View {
             HStack(spacing: Space.xxs) {
                 segment("This Mac", key: "mac", on: state.place == nil, dot: nil) { state.show(nil) }
                 ForEach(list.boxes) { box in
-                    segment(box.alias, key: box.alias, on: state.place == box.alias, dot: box.dotState) { state.show(box.alias) }
+                    segment(NodeNames.name(box.alias), key: box.alias, on: state.place == box.alias, dot: box.dotState) { state.show(box.alias) }
                         .background(BoxAnchor { [anchors] view in anchors.value[box.alias] = view })
                         .koreContextMenu("box-row") { menu(box) }
                 }
@@ -112,7 +112,7 @@ struct WelcomeSwitcher: View {
         }
         items.append(OptionItem("Check again") { Task { await BoxList.shared.act(.tryAgain, on: box.alias) } })
         items.append(.rule)
-        items.append(OptionItem("Remove", destructive: true, children: [OptionItem("Forget \(box.alias) on this Mac", destructive: true) {
+        items.append(OptionItem("Remove", destructive: true, children: [OptionItem("Forget \(NodeNames.name(box.alias)) on this Mac", destructive: true) {
             BoxList.shared.remove(box.alias)
             state.removed(box.alias)
         }]))

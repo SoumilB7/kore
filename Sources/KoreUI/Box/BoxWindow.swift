@@ -481,6 +481,12 @@ struct BoxWindow: View {
     var body: some View {
         if let folder = place.folder {
             FolderWindow(box: BoxBinding(alias: place.alias, folder: folder))
+                // The box's stores moved to its KoreNet id: the window opens again under it.
+                .onReceive(NotificationCenter.default.publisher(for: .koreNodeRekeyed)) { note in
+                    guard let old = note.userInfo?["old"] as? String, let new = note.userInfo?["new"] as? String, old != new, place.alias == old
+                    else { return }
+                    place.alias = new
+                }
         } else {
             Color.clear.onAppear { dismiss() }
         }

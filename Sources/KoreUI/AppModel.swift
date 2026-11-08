@@ -56,6 +56,7 @@ package final class AppModel {
         OptionsMenu.install()
         AttachPanel.install()
         accounts.watch()
+        NetLiveness.start()
     }
 
     /// Opens (or focuses) a folder's window, the way a folder from outside the app is.
