@@ -42,6 +42,13 @@ GO="${KORE_GO:-/opt/homebrew/bin/go}"
 if [[ -x "$GO" ]]; then
     t0=$SECONDS
     if (cd tailnet/go && GOPROXY=off "$GO" test ./... >"$log.go" 2>&1); then say "✔ tailnet shim go tests ($((SECONDS - t0))s)"; else bad "tailnet shim go tests"; tail -5 "$log.go"; fi
+    # Two real tsnet nodes (in-process control and DERP) dial and accept, built with the shim's
+    # own ts_omit tags: a feature left out that a phone's link needs fails here, not on a phone.
+    t0=$SECONDS
+    tags=$(grep -o 'tags="[^"]*"' scripts/build-tailnet.sh | cut -d'"' -f2)
+    if (cd tailnet/go && GOPROXY=off "$GO" test -tags "$tags,kore_live" -run TestLiveDialAndAccept -count=1 . >"$log.live" 2>&1); then
+        say "✔ tsnet dial and accept with the shim's tags ($((SECONDS - t0))s)"
+    else bad "tsnet dial and accept with the shim's tags"; tail -8 "$log.live"; fi
 else
     say "· tailnet shim go tests skipped (no go)"
 fi

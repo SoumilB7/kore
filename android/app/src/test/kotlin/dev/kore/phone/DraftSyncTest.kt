@@ -159,4 +159,24 @@ class DraftSyncTest {
         t.remote("two", null, now)
         assertEquals(listOf("one", "two"), byText)
     }
+
+    /** The owner's 2 s: a message typed with pauses under 2 s is said once while typing, then at Send. */
+    @Test fun aMessageTypedWithShortPausesIsSaidOnceThenAtSend() {
+        val words = "fix the flaky switch test and land the phone logs branch today please".split(" ")
+        var text = ""
+        for (w in words) {
+            for (c in "$w ") {
+                text += c
+                type(text)
+                advance(180)
+            }
+            advance(1_500)   // a pause between words, under 2 s
+        }
+        advance(SETTLE_MS)
+        assertEquals(listOf(text), sent)
+        d.sent(now)
+        assertEquals(2, sent.size)
+        assertEquals("", sent.last())
+    }
+
 }

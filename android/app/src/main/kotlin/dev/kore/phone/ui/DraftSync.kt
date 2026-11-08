@@ -105,7 +105,13 @@ class DraftSync(private val send: (String) -> Unit, private val show: (String) -
 
     companion object {
         /** Typing rests this long before the draft is said (8 drafts/s is the link's cap). */
-        const val SETTLE_MS = 600L
+        /**
+         * Typing is said this long after it rests (the owner's choice, 2026-11-17): a 120-character
+         * message typed with pauses under 2 s goes in 2 messages (its text, then the clear on
+         * Send), about 2.8 bytes a character, where 600 ms sent 12 to 14 (about 19). Send and
+         * leaving the chat still say it at once.
+         */
+        const val SETTLE_MS = 2_000L
         /** After typing here, the device's changes wait this long. */
         const val QUIET_MS = 2_000L
         private const val RECENT_MAX = 8
