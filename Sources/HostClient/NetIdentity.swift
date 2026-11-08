@@ -90,8 +90,15 @@ package struct MacIdentity: Sendable {
         self.signer = signer
     }
 
+    /// One maker at a time: two first uses at once (the listener's read off the main actor, a box's
+    /// enroll, a phone's card) each found no key and wrote their own, and the one that lost kept
+    /// signing with a key no longer stored, so every phone's welcome failed its proof.
+    private static let making = NSLock()
+
     /// Off the main actor: the Keychain may block.
     package static func loadOrCreate(secrets: any NetSecrets, defaults: UserDefaults) throws -> MacIdentity {
+        making.lock()
+        defer { making.unlock() }
         let signer: SoftwareIdentity
         if let raw = try secrets.read(identityAccount) {
             signer = try SoftwareIdentity(raw: raw)
@@ -111,6 +118,8 @@ package struct MacIdentity: Sendable {
 
     /// `kore-tailnet`'s 32-byte state key, made on first use.
     package static func tailnetKey(secrets: any NetSecrets) throws -> Data {
+        making.lock()
+        defer { making.unlock() }
         if let key = try secrets.read(tailnetAccount), key.count == 32 { return key }
         let key = secureRandom(32)
         try secrets.write(key, tailnetAccount)
