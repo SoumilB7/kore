@@ -34,7 +34,7 @@ extension Chat {
     /// A chip for the file named `name` shows a picture (a thumbnail, or a video's or SVG's
     /// poster once made): the composer's, or a sent message's.
     package func storyChipShowsPicture(_ name: String, sent: Bool = false) -> Bool {
-        let chips = sent ? transcript.entries.flatMap(\.attachments) : attachments
+        let chips = sent ? transcript.entries.flatMap { transcript.chips($0) } : attachments
         return chips.contains { $0.name == name && $0.showsPicture }
     }
 

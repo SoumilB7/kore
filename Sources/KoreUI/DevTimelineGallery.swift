@@ -47,6 +47,7 @@ enum DevTimelineGallery {
         var actions = TranscriptActions()
         actions.toggleTurn = { store.toggle(turn: $0) }
         actions.toggle = { store.toggle($0) }
+        actions.chips = { store.chips($0) }
         actions.folder = folder
         return actions
     }

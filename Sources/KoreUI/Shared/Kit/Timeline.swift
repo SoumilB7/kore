@@ -265,23 +265,9 @@ private struct ClippedText: View {
     }
 }
 
-/// A permission mode as the transcript marks it (look.md §8): its label, icon and rung colour,
-/// copied from the provider's `ModeOption` when the change happened.
-struct ModeMark: Equatable, Sendable {
-    let id: String
-    let label: String
-    let svg: String
-    let iconSize: CGFloat
+extension ModeMark {
     /// nil for a neutral mode.
-    let tint: Color?
-
-    init(_ option: ModeOption) {
-        id = option.id
-        label = option.label
-        svg = option.icon
-        iconSize = option.iconSize
-        tint = option.tint
-    }
+    var tint: Color? { rung?.color }
 
     @MainActor func icon(_ glyph: CGFloat) -> some View {
         let size = glyph * iconSize / 16 * Zoom.shared.scale

@@ -10,126 +10,253 @@ import src
 /// SwiftUI redraws only the rows that changed. Views see only `sections`, `tail` and `folded`.
 @MainActor @Observable
 package final class TranscriptStore {
-    package struct Entry: Identifiable, Equatable {
-        /// `divider`: a quiet line across the transcript ("Conversation compacted · 14:32",
-        /// "Forked from …"), off the timeline.
-        /// `mode`: a permission mode change (look.md §8): the user's is a divider between turns,
-        /// the agent's (with `modeLead`) an item on its turn's timeline.
-        /// `summary`: what a compaction left (Claude), under its divider, off the timeline.
-        package enum Kind: Equatable { case user, answer, thinking, plan, tool, agent, notice, peer, divider, mode, summary }
+    /// The entries, turns and agents the rows are built from.
+    package let log = TranscriptLog()
 
-        package let id = UUID()
-        package var kind: Kind
-        package var text: String
-        package var toolName: String?
-        var toolId: String?
-        /// A tool's full input (the IN box), its header text, and the file it works on.
-        package var input: String?
-        package var summary: String?
-        package var path: String?
-        package var result: String?
-        package var done = false
-        package var isError = false
-        var attachments: [Attachment] = []
-        /// Who sent a `.peer` message.
-        var from: String?
-        /// Files an edit tool changed.
-        package var changes: [FileChange] = []
-        /// Set for `.agent`: the sub-agent this card stands for.
-        package var agent: AgentInfo?
-        /// The turn the entry belongs to; nil for the user's own message.
-        package var turn: String?
-        /// Thinking: when it began, and how long it took once the next block started.
-        var startedAt: Date?
-        var duration: TimeInterval?
-        /// A tool that only reads, searches or lists (grouped into "Explored N").
-        package var readOnly = false
-        /// A tool call cut off by Stop: no output, a muted dot.
-        package var stopped = false
-        /// `.mode`: the mode it became (or, for "Left", the one left), and the agent's words
-        /// before it ("Entered", "Plan approved ·", "Left"); nil words: the user's divider.
-        var mode: ModeMark?
-        var modeLead: String?
-        /// A user's divider: the mode before this run of changes (back on it, the divider goes).
-        var modeFrom: String?
-        /// A notice with a warning dot (a mode the CLI refused).
-        var warning = false
-        /// A user message the CLI took into a running turn (look.md §10): it doesn't open a section.
-        package var inTurn = false
-        /// A user's or peer's message's id in its CLI's history (where a fork or a rollback finds
-        /// it); for one sent in this run, the id Kore sent it with. `forkSource` on a fork's
-        /// "Forked from" line.
-        var source: String?
-        /// Kore's own row, in no CLI's history: it can't be read back (`unloadPoint`).
-        var local = false
+    init() {
+        log.view = self
+        log.agentShapes = AgentShape.allCases.count
+    }
 
-        package static func == (a: Self, b: Self) -> Bool {
-            a.id == b.id && a.kind == b.kind && a.text == b.text && a.result == b.result && a.done == b.done
-                && a.isError == b.isError && a.stopped == b.stopped && a.toolName == b.toolName && a.from == b.from
-                && a.mode == b.mode && a.modeLead == b.modeLead && a.warning == b.warning
-                && a.changes == b.changes && a.agent == b.agent && a.input == b.input && a.summary == b.summary
-                && a.duration == b.duration && a.attachments.map(\.id) == b.attachments.map(\.id)
+    // MARK: The log's state and calls, as the store's
+
+    package typealias Entry = TranscriptLog.Entry
+    package typealias AgentInfo = TranscriptLog.AgentInfo
+    package typealias Outcome = TranscriptLog.Outcome
+    package typealias Turn = TranscriptLog.Turn
+    private(set) var sentAt: Date? {
+        get { log.sentAt }
+        _modify { yield &log.sentAt }
+    }
+    private(set) var pendingSendSince: Date? {
+        get { log.pendingSendSince }
+        _modify { yield &log.pendingSendSince }
+    }
+    private var parkedAgents: [String: AgentInfo] {
+        get { log.parkedAgents }
+        _modify { yield &log.parkedAgents }
+    }
+    private var keptLanes: Set<String> {
+        get { log.keptLanes }
+        _modify { yield &log.keptLanes }
+    }
+    private var touchesDirty: Bool {
+        get { log.touchesDirty }
+        _modify { yield &log.touchesDirty }
+    }
+    private var lastAnswerTurn: String? {
+        get { log.lastAnswerTurn }
+        _modify { yield &log.lastAnswerTurn }
+    }
+    private var turnFirst: [String: UUID] {
+        get { log.turnFirst }
+        _modify { yield &log.turnFirst }
+    }
+    private var refusedTurns: [String] {
+        get { log.refusedTurns }
+        _modify { yield &log.refusedTurns }
+    }
+    private var pendingApprovals: [String: Bool] {
+        get { log.pendingApprovals }
+        _modify { yield &log.pendingApprovals }
+    }
+    private var compactingSince: Date? {
+        get { log.compactingSince }
+        _modify { yield &log.compactingSince }
+    }
+    private var connection: Connection {
+        get { log.connection }
+        _modify { yield &log.connection }
+    }
+    private var compactingAt: Int? {
+        get { log.compactingAt }
+        _modify { yield &log.compactingAt }
+    }
+    private var latestTurn: String? {
+        get { log.latestTurn }
+        _modify { yield &log.latestTurn }
+    }
+    private var retryDismissed: String? {
+        get { log.retryDismissed }
+        _modify { yield &log.retryDismissed }
+    }
+    package private(set) var entries: [Entry] {
+        get { log.entries }
+        _modify { yield &log.entries }
+    }
+    private var position: [UUID: Int] {
+        get { log.position }
+        _modify { yield &log.position }
+    }
+    func index(of id: UUID) -> Int? { log.index(of: id) }
+    private var turns: [String: Turn] {
+        get { log.turns }
+        _modify { yield &log.turns }
+    }
+    private var current: String? {
+        get { log.current }
+        _modify { yield &log.current }
+    }
+    private var liveTurn: String? {
+        get { log.liveTurn }
+        _modify { yield &log.liveTurn }
+    }
+    private var liveSendSince: Date? {
+        get { log.liveSendSince }
+        _modify { yield &log.liveSendSince }
+    }
+    private var blocks: [String: UUID] {
+        get { log.blocks }
+        _modify { yield &log.blocks }
+    }
+    private var tools: [String: UUID] {
+        get { log.tools }
+        _modify { yield &log.tools }
+    }
+    private var lanes: [String: [Entry]] {
+        get { log.lanes }
+        _modify { yield &log.lanes }
+    }
+    private var laneTools: [String: (agent: String, index: Int)] {
+        get { log.laneTools }
+        _modify { yield &log.laneTools }
+    }
+    private var agentCards: [String: UUID] {
+        get { log.agentCards }
+        _modify { yield &log.agentCards }
+    }
+    private var batching: Bool {
+        get { log.batching }
+        _modify { yield &log.batching }
+    }
+    var providerName: String {
+        get { log.providerName }
+        _modify { yield &log.providerName }
+    }
+    private var laneAgents: [String: (parent: String, entry: UUID)] {
+        get { log.laneAgents }
+        _modify { yield &log.laneAgents }
+    }
+    private var agentOrder: [String] {
+        get { log.agentOrder }
+        _modify { yield &log.agentOrder }
+    }
+    private var loadedAgents: Set<String> {
+        get { log.loadedAgents }
+        _modify { yield &log.loadedAgents }
+    }
+    private var loadingHistory: Bool {
+        get { log.loadingHistory }
+        _modify { yield &log.loadingHistory }
+    }
+    private var workedBefore: TimeInterval {
+        get { log.workedBefore }
+        _modify { yield &log.workedBefore }
+    }
+    var turnIsOpen: Bool { log.turnIsOpen }
+    private func endUnfinishedAgents(from first: Int = 0) { log.endUnfinishedAgents(from: first) }
+    func compacting(_ on: Bool, at point: Int? = nil) { log.compacting(on, at: point) }
+    var connectionWord: String? { log.connectionWord }
+    var workRunning: Bool { log.workRunning }
+    func connected(_ state: Connection) { log.connected(state) }
+    private var turnShowsSpinner: Bool { log.turnShowsSpinner }
+    func compacted(at date: Date, auto: Bool? = nil) { log.compacted(at: date, auto: auto) }
+    func compactionFailed(_ reason: String) { log.compactionFailed(reason) }
+    func compactionSummary(_ text: String, title: String? = nil) { log.compactionSummary(text, title: title) }
+    func forkedFrom(_ title: String) { log.forkedFrom(title) }
+    func continued(_ text: String, help: String) { log.continued(text, help: help) }
+    func carriedFrom(_ text: String, help: String) { log.carriedFrom(text, help: help) }
+    static let forkSource = TranscriptLog.forkSource
+    static let compactionRow = TranscriptLog.compactionRow
+    private static let time = TranscriptLog.time
+    func turnStarted(_ id: String, at date: Date = Date()) { log.turnStarted(id, at: date) }
+    func finalAnswer(block: String) { log.finalAnswer(block: block) }
+    func turnFinished(_ id: String?, _ outcome: Outcome, duration: TimeInterval? = nil, at date: Date = Date(), preserving observed: Set<String> = []) { log.turnFinished(id, outcome, duration: duration, at: date, preserving: observed) }
+    func turnChanges(_ id: String, _ changes: [FileChange]) { log.turnChanges(id, changes) }
+    func changes(ofTurn id: String) -> [FileChange] { log.changes(ofTurn: id) }
+    var latestTurnSlept: Bool { log.latestTurnSlept }
+    func agentAsked(_ approval: String, agent: String) { log.agentAsked(approval, agent: agent) }
+    func approvalAsked(_ approval: String, question: Bool) { log.approvalAsked(approval, question: question) }
+    func approvalSettled(_ approval: String) { log.approvalSettled(approval) }
+    var workedFor: TimeInterval { log.workedFor }
+    func agentID(forCard key: String) -> String? { log.agentID(forCard: key) }
+    func keepLane(of id: String) { log.keepLane(of: id) }
+    func needsHistory(_ id: String) -> Bool { log.needsHistory(id) }
+    func lane(_ id: String) -> [Entry] { log.lane(id) }
+    package func agent(_ id: String) -> AgentInfo? { log.agent(id) }
+    func user(_ text: String, attachments: [SentAttachment], source: String? = nil) { log.user(text, attachments: attachments, source: source) }
+    func peer(from: String, text: String, turn: String?, source: String? = nil) { log.peer(from: from, text: text, turn: turn, source: source) }
+    typealias TextKind = TranscriptLog.TextKind
+    func text(_ block: String, _ kind: TextKind, _ text: String, agent: String? = nil) { log.text(block, kind, text, agent: agent) }
+    func toolStarted( id: String, name: String, detail: String, input: String? = nil, summary: String? = nil, path: String? = nil, readOnly: Bool = false, agent: String? = nil ) { log.toolStarted(id: id, name: name, detail: detail, input: input, summary: summary, path: path, readOnly: readOnly, agent: agent) }
+    func toolOutput(id: String, _ text: String) { log.toolOutput(id: id, text) }
+    func toolFinished(id: String, output: String?, isError: Bool) { log.toolFinished(id: id, output: output, isError: isError) }
+    func toolStopped(id: String) { log.toolStopped(id: id) }
+    func fileChanged(tool id: String, _ changes: [FileChange]) { log.fileChanged(tool: id, changes) }
+    private var queued: [(id: String, entry: Entry)] {
+        get { log.queued }
+        _modify { yield &log.queued }
+    }
+    func messageQueued(id: String, text: String, attachments: [SentAttachment]) { log.messageQueued(id: id, text: text, attachments: attachments) }
+    func queuedMessage(id: String, _ delivery: QueuedDelivery) { log.queuedMessage(id: id, delivery) }
+    var provider: ProviderDescriptor? {
+        get { log.provider }
+        _modify { yield &log.provider }
+    }
+    private var permissionsMode: String? {
+        get { log.permissionsMode }
+        _modify { yield &log.permissionsMode }
+    }
+    private var planOn: Bool {
+        get { log.planOn }
+        _modify { yield &log.planOn }
+    }
+    private func option(_ id: String) -> ModeOption? { log.option(id) }
+    func modeChanged(_ change: ModeChange) { log.modeChanged(change) }
+    func planModeChanged(_ change: PlanModeChange) { log.planModeChanged(change) }
+    private func refused(asked: String, kept: String) { log.refused(asked: asked, kept: kept) }
+    func notice(_ text: String, isError: Bool) { log.notice(text, isError: isError) }
+    func freeAgentIndex() -> Int { log.freeAgentIndex() }
+    func agentSpawned( id: String, name: String, type: String?, model: String? = nil, prompt: String? = nil, background: Bool = false, tool: String?, parent: String? = nil, at date: Date = Date() ) { log.agentSpawned(id: id, name: name, type: type, model: model, prompt: prompt, background: background, tool: tool, parent: parent, at: date) }
+    func agentProgress( id: String, tokens: Int?, tools count: Int?, lastTool: String?, duration: TimeInterval?, approximate: Bool = false ) { log.agentProgress(id: id, tokens: tokens, tools: count, lastTool: lastTool, duration: duration, approximate: approximate) }
+    func agentFinished(id: String, status: AgentInfo.Status, result: String?, at date: Date = Date()) { log.agentFinished(id: id, status: status, result: result, at: date) }
+    func agentResumed(id: String, at date: Date = Date()) { log.agentResumed(id: id, at: date) }
+    func agentBackgrounded(id: String) { log.agentBackgrounded(id: id) }
+    func actionDenied() { log.actionDenied() }
+    func refused(_ id: String, _ refusal: Refusal) { log.refused(id, refusal) }
+    func prompt(of turn: String) -> String? { log.prompt(of: turn) }
+    var retryableTurn: String? { log.retryableTurn }
+    private func changed(turn id: String?) { log.changed(turn: id) }
+    private func turnIndex(_ id: String?) -> Int? { log.turnIndex(id) }
+    private func cardIndex(_ agent: String) -> Int? { log.cardIndex(agent) }
+    private func update(tool id: String, files: Bool = true, _ change: (inout Entry) -> Void) { log.update(tool: id, files: files, change) }
+
+    func apply(_ event: ChatEvent) { log.apply(event) }
+    func apply(_ event: ChatEvent, preserving observed: Set<String>) { log.apply(event, preserving: observed) }
+
+    // MARK: Chips
+
+    /// Each user message's file chips, by its entry: made as the message comes in, so a chip
+    /// keeps its identity (and its decoded picture) for as long as its row.
+    @ObservationIgnored private var chipsByEntry: [UUID: [Attachment]] = [:]
+
+    func chips(_ entry: Entry) -> [Attachment] { chipsByEntry[entry.id] ?? [] }
+
+    package func chips(_ files: [SentAttachment], for entry: UUID, from earlier: UUID?) {
+        if let earlier, let made = chipsByEntry.removeValue(forKey: earlier) {
+            chipsByEntry[entry] = made
+        } else {
+            chipsByEntry[entry] = files.map(Self.chip)
         }
     }
 
-    package struct AgentInfo: Equatable {
-        typealias Status = AgentAvatar.Status
-        package let id: String
-        /// Spawn order in the chat: picks the agent's mark.
-        let index: Int
-        package var name: String
-        var type: String?
-        var model: String?
-        /// What it was asked to do.
-        var prompt: String?
-        /// The agent that spawned it; nil for the chat's own agent.
-        var parent: String?
-        /// A background agent: a Claude one's commands aren't on stdout; a Codex child thread
-        /// outlived its parent's turn.
-        var background = false
-        var status = Status.running
-        /// Approvals it's waiting on the user for.
-        var waiting = 0
-        var startedAt: Date
-        var duration: TimeInterval?
-        var tokens: Int?
-        /// `tokens` were read from its transcript, not reported: "~239k".
-        var approximate = false
-        var tools = 0
-        var lastTool: String?
-        var result: String?
-    }
+    package func dropChips(_ entry: UUID) { chipsByEntry[entry] = nil }
 
-    /// `authFailed`: the CLI's login was refused, in its own words. `slept`: it failed while the
-    /// Mac slept, the CLI's line kept for the hover.
-    package enum Outcome: Equatable { case completed, interrupted, failed(String), authFailed(String), slept(String) }
+    package func agentsChanged() { agentsVersion &+= 1 }
 
-    package struct Turn {
-        package let id: String
-        package var startedAt: Date
-        package var duration: TimeInterval?
-        package var finished = false
-        package var outcome = Outcome.completed
-        /// Where the answer starts (Codex's first final-answer text). Unset, it's found when
-        /// the turn finishes: the text after the turn's last piece of work.
-        var answerFrom: UUID?
-        /// When the answer began, for the fold's label while the answer still streams.
-        var workEnded: Date?
-        var changes: [FileChange] = []
-        /// The fold's open state once the user has set it; until then it's open while the turn
-        /// works and closed once its answer starts.
-        var open = false
-        var touched = false
-        var denied = 0
-        /// What the live fold row last said ("Running Bash…"); it stays until the next state.
-        var liveLabel: String?
-        /// The mode it started in, and the one the agent last switched to during it.
-        var startMode: String?
-        var endMode: String?
-        /// The entry before it began: where it shows when it has none of its own.
-        var after: UUID?
-        /// The model's safeguards refused it (a failed turn).
-        var refusal: Refusal?
+    static func chip(_ a: SentAttachment) -> Attachment {
+        if let url = a.url, FileManager.default.fileExists(atPath: url.path) { return Attachment(url: url) }
+        return Attachment(name: a.name, kind: a.kind, imageData: a.image)
     }
 
     /// One drawn row.
@@ -291,16 +418,20 @@ package final class TranscriptStore {
     }
 
     private(set) var sections: [SectionModel] = []
+
     /// Changes whenever any row does, so the view can follow the end.
     private(set) var tail = 0
+
     /// Changes whenever any agent's own work or details do (the map and agent tabs follow it;
     /// a closed card's lane isn't in `sections`).
     private(set) var agentsVersion = 0
+
     /// What the Agents button shows; changes only when an agent comes or goes or changes state.
     var agentSummary: AgentSummary {
         access(keyPath: \.agentSummary)
         return storedSummary
     }
+
     @ObservationIgnored private var storedSummary = AgentSummary()
 
     /// Stored first, then announced. Observers hear of a change before it's made, and SwiftUI
@@ -357,37 +488,41 @@ package final class TranscriptStore {
         var background = false
         var id: String { info.id }
     }
+
     /// Bumped when a turn folds by itself, so the view can keep the answer where it was.
     private(set) var folded: (turn: String, answer: String, seq: Int)?
+
     /// User turns before the shown window: the "Load earlier turns" row shows while any are.
     private(set) var hiddenTurns = 0
+
     /// Every user message of the chat, loaded or not.
     private(set) var messageMarks: [MessageMark] = []
+
     /// The ones not loaded, oldest first.
     private(set) var earlierMarks: [EarlierMessage] = []
+
     var pendingMessage: (query: String, until: Date)?
+
     /// What a storyline presses on the scroller, once it's on screen.
     @ObservationIgnored package var storyRail: (jump: (Int) -> Void, hover: (Int?) -> Void, current: () -> Int?)?
+
     /// Conversation before what the CLI's history shows (before a compaction): once the shown
     /// turns are all in view, the top row loads it.
     private(set) var earlierAvailable = false
+
     private(set) var loadingEarlier = false
+
     /// The files the latest turn changed, by path (`turnChanges()`).
     private(set) var fileTouches: [String: FileTouch] = [:]
 
-    /// When the user last sent a message (live, not replayed): the view glides to the end for
-    /// 2s after it, as the extension does.
-    @ObservationIgnored private(set) var sentAt: Date?
-    /// Local delivery is waiting for the CLI to acknowledge a real turn. Never replayed.
-    @ObservationIgnored private(set) var pendingSendSince: Date?
-
-    func sending(_ on: Bool, at date: Date = Date()) {
+    package func sending(_ on: Bool, at date: Date = Date()) {
         guard !batching, on != (pendingSendSince != nil) else { return }
         pendingSendSince = on ? date : nil
         // Starting a send also suppresses an unfinished historical turn's spinner, which
         // can live in an earlier section than the new message.
         changed(at: turnIndex(current) ?? entries.count - 1)
     }
+
     /// Where the reader was when the chat's view went away (a tab switch past the kept chats),
     /// to come back to: the message or answer row nearest the top and how far below its top the
     /// top is, or the end. Opened folds and rows stay in this store, so they need no saving.
@@ -405,30 +540,43 @@ package final class TranscriptStore {
     /// last `openTurns` (T3 Code's paging); "Load earlier turns" moves it up. A send never moves
     /// it, so nothing above the reader goes away.
     @ObservationIgnored private var windowStart: UUID?
+
     @ObservationIgnored private var windowPlaced = false
+
     static let openTurns = 10
+
     /// The user turns a chat keeps in memory; older ones are read back from its CLI's history
     /// when the reader goes up to them (`unloadPoint`, `unload`).
     static let keptTurns = 15
+
     /// Turns of this chat left memory and haven't all come back.
     @ObservationIgnored private var hasUnloaded = false
+
     var mayHaveLeft: Bool { hasUnloaded }
+
     /// Whether the reader is at the end, nothing moving the view: set by the timeline while it's
     /// up. Gone, `savedScroll` says.
     @ObservationIgnored var readerAtEnd: (() -> Bool)?
+
     /// Which view those are.
     @ObservationIgnored var readerView: ObjectIdentifier?
+
     /// The timeline's views showing this chat (a tab's, a board tile's), its covered window aside.
     /// On screen, turns never leave but the unbuilt ones as it opens: rows going from above change
     /// what the lazy stack estimates of all the rest, and can leave the view past its rows with
     /// nothing drawn.
     @ObservationIgnored var viewsOnScreen = 0
+
     /// Its tab is the one shown, in a window nothing shows.
     @ObservationIgnored var covered = false
+
     var isOnScreen: Bool { viewsOnScreen > 0 && !covered }
+
     /// Takes the view to the end, as it shows again after turns left.
     @ObservationIgnored var backAtEnd: (() -> Void)?
+
     @ObservationIgnored private var leftUnseen = false
+
     /// Changes when turns leave.
     private(set) var unloads = 0
 
@@ -438,21 +586,19 @@ package final class TranscriptStore {
         leftUnseen = false
         DispatchQueue.main.async { [weak self] in self?.backAtEnd?() }
     }
+
     /// Until then nothing leaves: a page just read in, or a message searched for, is what its
     /// reader is on the way to.
     @ObservationIgnored private var staysUntil = Date.distantPast
+
     private static let readInStays: TimeInterval = 2
+
     /// What a turn that left memory knew beyond its CLI's history, by its id and its message's
     /// (one CLI's turn ids last, the other's message ids do), for when it's read back.
     @ObservationIgnored private var leftTurns: [String: LeftTurn] = [:]
+
     /// The time the turns that left took, still in `workedBefore`: reading them back doesn't add it twice.
     @ObservationIgnored private var leftWork: TimeInterval = 0
-    /// Cards of agents whose turns left memory: the map still lists them.
-    @ObservationIgnored private var parkedAgents: [String: AgentInfo] = [:]
-    /// Agents whose own work was looked at: it stays when their turn leaves (an agent tab may show it).
-    @ObservationIgnored private var keptLanes: Set<String> = []
-    /// The changes last read, for a modal open on a turn that left memory.
-    @ObservationIgnored private var changesRead: (turn: String, changes: [FileChange])?
 
     private struct LeftTurn {
         let duration: TimeInterval?
@@ -463,26 +609,22 @@ package final class TranscriptStore {
         let startMode: String?
         let endMode: String?
     }
+
     /// The lowest entry index changed since the last rebuild: sections from the one holding it
     /// are built again, the ones above are kept. nil: nothing changed.
     @ObservationIgnored private var dirtyFrom: Int?
+
     /// Where each of `sections` starts in `entries`.
     @ObservationIgnored private var sectionStarts: [Int] = []
-    /// The latest turn's tools changed, so `fileTouches` is due again.
-    @ObservationIgnored private var touchesDirty = false
-    /// The newest finished turn with an answer: its final answer's actions always show.
-    @ObservationIgnored private var lastAnswerTurn: String?
+
     /// Final answers' actions, by row id, filled while a rebuild lays out turns.
     @ObservationIgnored private var answerActions: [String: MessageActions] = [:]
-    /// Each turn's first entry. A turn can span sections (a message sent while it ran lands in
-    /// the middle of it), so a change to the turn marks from here.
-    @ObservationIgnored private var turnFirst: [String: UUID] = [:]
-    /// Turns that failed before they wrote anything (a refused login, a plan's limit, a sleep):
-    /// their notice shows after the entry before them.
-    @ObservationIgnored private var refusedTurns: [String] = []
+
     /// Changes waiting to be drawn: streamed deltas are drawn once per `drawInterval`.
     @ObservationIgnored private var drawScheduled = false
+
     static let drawInterval: TimeInterval = 1.0 / 30
+
     /// No one sees it (a tab under another, a covered or minimised window): its rows still
     /// follow the stream, a couple of times a second, and catch up at once when it shows.
     static let hiddenDrawInterval: TimeInterval = 0.5
@@ -495,65 +637,26 @@ package final class TranscriptStore {
             rebuild()
         }
     }
-    /// Pending approvals of this chat: id → it's a question (AskUserQuestion, Codex user input).
-    @ObservationIgnored private var pendingApprovals: [String: Bool] = [:]
-    /// A compaction is running, since when (the live row says "Compacting…"), and the point it
-    /// was started at when Kore started it by itself (auto-compact).
-    @ObservationIgnored private var compactingSince: Date?
-    /// The running turn's connection, said on its spinner while it isn't fine.
-    @ObservationIgnored private var connection = Connection.ok
-    @ObservationIgnored private var compactingAt: Int?
-    /// The most recently started turn, for `turnChanges()`.
-    @ObservationIgnored private var latestTurn: String?
-    @ObservationIgnored private var retryDismissed: String?
 
-    @ObservationIgnored package private(set) var entries: [Entry] = []
     /// The transcript's one text selection.
     @ObservationIgnored lazy var selection = TranscriptSelection(store: self)
+
     /// Scrolls the timeline to a row by its id: set by the timeline for storylines only
     /// (`StoryTranscript.show`).
     @ObservationIgnored var storyScroll: ((String) -> Void)?
+
     @ObservationIgnored var storyRebuild: (() -> Void)?
+
     @ObservationIgnored var storyScrollView: (() -> NSScrollView?)?
-    @ObservationIgnored private var position: [UUID: Int] = [:]
-    /// An entry's place in the chat (its index in `entries`); nil once it has gone.
-    func index(of id: UUID) -> Int? { position[id] }
-    @ObservationIgnored private var turns: [String: Turn] = [:]
-    @ObservationIgnored private var current: String?
-    /// Only a live acknowledgement may create the otherwise empty working row.
-    @ObservationIgnored private var liveTurn: String?
-    @ObservationIgnored private var liveSendSince: Date?
-    @ObservationIgnored private var blocks: [String: UUID] = [:]
-    @ObservationIgnored private var tools: [String: UUID] = [:]
-    /// Each sub-agent's own entries, keyed by agent id.
-    @ObservationIgnored private var lanes: [String: [Entry]] = [:]
-    @ObservationIgnored private var laneTools: [String: (agent: String, index: Int)] = [:]
-    @ObservationIgnored private var agentCards: [String: UUID] = [:]
+
     /// Opened file rows and agent cards (entry ids), and files inside a multi-file row
     /// ("id/path"). Kept in memory only: a reopened chat starts closed.
     @ObservationIgnored private var openKeys: Set<String> = []
-    @ObservationIgnored private var batching = false
+
     @ObservationIgnored private var foldSeq = 0
 
-    /// For notices: "Claude exited (1)".
-    @ObservationIgnored var providerName = "The CLI"
     /// The chat's id for the logs, once it has one.
     @ObservationIgnored var chatID: (() -> String?)?
-    /// Cards of agents spawned by other sub-agents, in their parent's lane.
-    @ObservationIgnored private var laneAgents: [String: (parent: String, entry: UUID)] = [:]
-    /// Every agent id in spawn order.
-    @ObservationIgnored private var agentOrder: [String] = []
-    /// Agents whose history has been loaded (once is enough).
-    @ObservationIgnored private var loadedAgents: Set<String> = []
-    @ObservationIgnored private var loadingHistory = false
-    /// Pending approvals asked for by sub-agents: approval id → agent id.
-    @ObservationIgnored private var askedBy: [String: String] = [:]
-    /// When the chat's first turn began, and the time its finished turns took.
-    @ObservationIgnored private var workedBefore: TimeInterval = 0
-
-    var turnIsOpen: Bool { current.map { turns[$0]?.finished == false } ?? false }
-
-    // MARK: Batches
 
     /// Applies many changes as one update (a replayed session). Replayed turns start folded.
     func batch(_ changes: () -> Void) {
@@ -569,7 +672,7 @@ package final class TranscriptStore {
     }
 
     /// A past session's history, before anything else: it opens on its last `openTurns` turns.
-    func replay(_ events: [ChatEvent]) {
+    package func replay(_ events: [ChatEvent]) {
         batch {
             events.forEach(apply)
             // A past compaction that never finished isn't still running.
@@ -577,18 +680,6 @@ package final class TranscriptStore {
             compactingAt = nil
             endUnfinishedAgents()
             placeWindow()
-        }
-    }
-
-    /// A past session's agents ended with its CLI. One the transcript never saw finish (a
-    /// background agent whose turn completed without it) shows as stopped, not running, and so
-    /// do its open calls and child agents, unless its own files say it still runs (another
-    /// client's): the backend runs it on (`agentResumed`). A stopped turn's agents are closed
-    /// by `turnFinished`. `from`: the first of the agents to look at, in spawn order.
-    private func endUnfinishedAgents(from first: Int = 0) {
-        for id in agentOrder[min(first, agentOrder.count)...] where agent(id)?.status == .running {
-            updateAgent(id) { $0.status = .stopped }
-            stopLane(id)
         }
     }
 
@@ -611,7 +702,7 @@ package final class TranscriptStore {
     /// The user turns the store holds, shown or not.
     var userTurns: Int { entries.count { $0.kind == .user } }
 
-    private func countHidden() {
+    package func countHidden() {
         let hidden = entries[..<windowStartIndex].count { $0.kind == .user }
         if hidden != hiddenTurns { hiddenTurns = hidden }
     }
@@ -664,8 +755,6 @@ package final class TranscriptStore {
         rebuild()
         updateMarks()
     }
-
-    // MARK: Unloading
 
     /// A message a turn starts at, as its CLI's history knows it.
     private static func startsTurn(_ entry: Entry) -> Bool {
@@ -752,6 +841,7 @@ package final class TranscriptStore {
             turnFirst[id] = nil
         }
         entries.removeFirst(cut)
+        for id in goneIDs { chipsByEntry[id] = nil }
         position = Dictionary(uniqueKeysWithValues: entries.indices.map { (entries[$0].id, $0) })
         tools = tools.filter { !goneIDs.contains($0.value) }
         blocks = blocks.filter { block in
@@ -900,98 +990,9 @@ package final class TranscriptStore {
         return (entries[at].text, answer)
     }
 
-    func earlierHistory(_ available: Bool) {
+    package func earlierHistory(_ available: Bool) {
         earlierAvailable = available
     }
-
-    /// A compaction is running: the live row says "Compacting…" (look §9), the running turn's
-    /// or, when no turn shows one, a row of its own at the end, where its divider lands. `point`:
-    /// Kore started it at the chat's auto-compact point.
-    func compacting(_ on: Bool, at point: Int? = nil) {
-        guard (compactingSince != nil) != on else { return }
-        compactingSince = on ? Date() : nil
-        compactingAt = on ? point : nil
-        changed(turn: turnShowsSpinner ? current : nil)
-    }
-
-    /// What the running turn's spinner says of its connection; nil when fine.
-    var connectionWord: String? { connection.word }
-
-    /// The running turn has a tool or an agent at work: a quiet CLI is busy, not stalled.
-    var workRunning: Bool {
-        guard let current else { return false }
-        return entries.suffix(400).contains { $0.turn == current && (($0.kind == .tool && !$0.done) || $0.agent?.status == .running) }
-    }
-
-    /// The running turn's connection: its spinner says "Offline · …", "Connection unstable · …"
-    /// or "No response · …" while it isn't fine, and goes back to its own word once it is.
-    func connected(_ state: Connection) {
-        guard state != connection else { return }
-        connection = state
-        changed(turn: turnShowsSpinner ? current : nil)
-    }
-
-    /// The running turn draws its spinner: it has rows (a compaction's own turn has none).
-    private var turnShowsSpinner: Bool { turnIsOpen && current.flatMap { turnFirst[$0] } != nil }
-
-    /// "Conversation compacted · 14:32" above the summary that follows, in place of the live row.
-    /// The divider names who started it: "Conversation compacted · 14:32" (the user, or not
-    /// known), "Compacted automatically · 14:32" (the CLI), "Compacted at 80% · 14:32" (Kore, at
-    /// the chat's point).
-    func compacted(at date: Date, auto: Bool? = nil) {
-        let cause =
-            if let point = compactingAt { "Compacted at \(point)%" }
-            else { auto == true ? "Compacted automatically" : "Conversation compacted" }
-        compacting(false)
-        append(Entry(kind: .divider, text: cause + " · " + Self.time.string(from: date)))
-    }
-
-    /// "Couldn't compact: …", one line, in place of the live row.
-    func compactionFailed(_ reason: String) {
-        compacting(false)
-        notice("Couldn't compact: " + (reason.split(whereSeparator: \.isNewline).first.map(String.init) ?? reason), isError: true)
-    }
-
-    /// What the compaction kept (Claude's summary), under its divider.
-    func compactionSummary(_ text: String, title: String? = nil) {
-        var entry = Entry(kind: .summary, text: text)
-        entry.result = title
-        append(entry)
-    }
-
-    /// After a fork's history: "Forked from "Refactor theme tokens"".
-    func forkedFrom(_ title: String) {
-        var entry = Entry(kind: .divider, text: "Forked from \u{201C}\(title)\u{201D}", source: Self.forkSource)
-        entry.local = true
-        append(entry)
-    }
-
-    /// After an imported chat's carried part: "Continued in Codex · gpt-6-luna · 24 Oct". The
-    /// fork's line, so it reads and behaves as one.
-    func continued(_ text: String, help: String) {
-        var entry = Entry(kind: .divider, text: text, source: Self.forkSource)
-        entry.result = help
-        append(entry)
-    }
-
-    /// Above an imported chat's oldest carried turn, when older ones weren't carried and no
-    /// summary of theirs was: "Carried to Codex from here", what was left out in its help.
-    func carriedFrom(_ text: String, help: String) {
-        var entry = Entry(kind: .divider, text: text)
-        entry.result = help
-        append(entry)
-    }
-
-    static let forkSource = "fork"
-    /// The turn id of a compaction's own live row.
-    static let compactionRow = "compaction"
-
-    private static let time: DateFormatter = {
-        let f = DateFormatter()
-        f.timeStyle = .short
-        f.dateStyle = .none
-        return f
-    }()
 
     /// Twenty more user turns above the window.
     func loadEarlier() {
@@ -1008,99 +1009,6 @@ package final class TranscriptStore {
         rebuild()
     }
 
-    // MARK: Turns
-
-    func turnStarted(_ id: String, at date: Date = Date()) {
-        if !batching {
-            // The former current turn may have a cached spinner in an older section.
-            if let current, current != id { mark(turnIndex(current)) }
-            if let latestTurn, latestTurn != id { mark(turnIndex(latestTurn)) }
-            liveTurn = id
-            liveSendSince = pendingSendSince
-            sending(false)
-        }
-        turns[id] = Turn(id: id, startedAt: date, startMode: effectiveMode, after: entries.last?.id)
-        current = id
-        latestTurn = id
-        touchesDirty = true
-        changed(at: entries.count - 1)
-    }
-
-    /// Codex: the final answer has begun, so the work above it folds now.
-    func finalAnswer(block: String) {
-        guard let entry = blocks[block], let turn = entries[position[entry]!].turn, turns[turn]?.answerFrom == nil
-        else { return }
-        turns[turn]?.answerFrom = entry
-        turns[turn]?.workEnded = Date()
-        announceFold(turn)
-        changed(turn: turn)
-    }
-
-    func turnFinished(_ id: String?, _ outcome: Outcome, duration: TimeInterval? = nil, at date: Date = Date(), preserving observed: Set<String> = []) {
-        if !batching {
-            connection = .ok
-            sending(false)
-        }
-        guard let id = id ?? current, var turn = turns[id] else { return }
-        endThinking()
-        // A page of earlier history read in says nothing of what's waiting now.
-        if !batching {
-            settleAll()
-            pendingApprovals.removeAll()
-        }
-        // Its text has stopped streaming; after a stop, calls and agents the CLI never closed
-        // (Codex sends nothing more for them) end as stopped. Replayed turns too.
-        let interrupted = outcome == .interrupted
-        let abandoned = outcome != .completed
-        var answered = false
-        for i in (turnIndex(id) ?? entries.count)..<entries.count where entries[i].turn == id {
-            switch entries[i].kind {
-            case .answer:
-                entries[i].done = true
-                answered = true
-            case .tool where abandoned && !entries[i].done:
-                entries[i].done = true
-                entries[i].stopped = true
-            case .agent where interrupted && entries[i].agent?.status == .running
-                && entries[i].agent.map({ !observed.contains($0.id) }) == true:
-                entries[i].agent?.status = .stopped
-                // Live, it ran until now; a replayed one has no true end, so its meter says "stopped".
-                if !batching, entries[i].agent?.duration == nil, let start = entries[i].agent?.startedAt {
-                    entries[i].agent?.duration = date.timeIntervalSince(start)
-                }
-                if let agent = entries[i].agent?.id { stopLane(agent, at: batching ? nil : date, preserving: observed) }
-            default:
-                break
-            }
-        }
-        turn.finished = true
-        // A replayed turn's outcome isn't announced again (replay never showed it), except a
-        // stop, so a stopped turn reads the same as it did live ("· Interrupted").
-        turn.outcome = batching && outcome != .interrupted ? .completed : outcome
-        // A replayed turn without the CLI's own measure has none: it reads "N previous messages".
-        turn.duration = duration ?? (batching ? nil : date.timeIntervalSince(turn.startedAt))
-        let hadAnswer = turn.answerFrom != nil
-        turns[id] = turn
-        if answered, lastAnswerTurn != id {
-            // The older answer's actions stop showing always: its section is built again.
-            if let old = lastAnswerTurn { mark(turnIndex(old)) }
-            lastAnswerTurn = id
-        }
-        if current == id { current = nil }
-        if liveTurn == id { (liveTurn, liveSendSince) = (nil, nil) }
-        if !turnIsOpen, let held = heldModeChange {
-            heldModeChange = nil
-            userChanged(from: held.from, to: held.to)
-        }
-        workedBefore += turn.duration ?? 0
-        if !hadAnswer { announceFold(id) }
-        switch turn.outcome {
-        case .authFailed, .slept, .failed: if turnFirst[id] == nil { refusedTurns.append(id) }
-        case .completed, .interrupted: break
-        }
-        changed(turn: id)
-    }
-
     /// The files a turn changed (the git snapshot, or what the CLI reported), for its summary.
     /// The turn that ended on its plan's limit, and when the chat continues (with the message set
     /// to go then, if one is); shown after its notice until it continues or is cancelled.
@@ -1111,24 +1019,6 @@ package final class TranscriptStore {
         continuation = turn.flatMap { turn in at.map { (turn, $0, sends) } }
         if let old { changed(turn: old) }
         if let turn, turn != old { changed(turn: turn) }
-    }
-
-    func turnChanges(_ id: String, _ changes: [FileChange]) {
-        turns[id]?.changes = changes
-        touchesDirty = true
-        changed(turn: id)
-    }
-
-    func changes(ofTurn id: String) -> [FileChange] {
-        guard let turn = turns[id] else { return changesRead?.turn == id ? changesRead?.changes ?? [] : [] }
-        changesRead = (id, turn.changes)
-        return turn.changes
-    }
-
-    /// The latest turn ended because the Mac slept (the link's Continue).
-    var latestTurnSlept: Bool {
-        guard let id = latestTurn, let turn = turns[id], case .slept = turn.outcome else { return false }
-        return true
     }
 
     /// Why the latest turn failed, or the chat's last word was an error; nil when it didn't (a
@@ -1211,8 +1101,6 @@ package final class TranscriptStore {
     }
 
     private static var realPaths: [String: String] = [:]
-
-    // MARK: The agent map
 
     /// The agent map's three groups (by state), parents before children. Running: every running
     /// agent of both kinds, and every failed one, which is never folded away, in spawn order,
@@ -1297,61 +1185,6 @@ package final class TranscriptStore {
             failed: infos.filter { $0.status == .failed }.map(\.id))
     }
 
-    /// Claude frames a sub-agent's report with a first line of its own; the report is the rest.
-    private static func handBack(_ output: String) -> String {
-        guard output.hasPrefix("[Subagent hand-back]"), let newline = output.firstIndex(of: "\n") else { return output }
-        return String(output[output.index(after: newline)...]).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    // MARK: Waiting agents
-
-    /// A sub-agent asked the user for something.
-    func agentAsked(_ approval: String, agent: String) {
-        askedBy[approval] = agent
-        updateAgent(agent) { $0.waiting += 1 }
-    }
-
-    /// The CLI waits on the user: the live fold row says so, and the spinner hides.
-    func approvalAsked(_ approval: String, question: Bool) {
-        pendingApprovals[approval] = question
-        changed(turn: current)
-    }
-
-    /// The question was answered or withdrawn.
-    func approvalSettled(_ approval: String) {
-        if pendingApprovals.removeValue(forKey: approval) != nil { changed(turn: current) }
-        guard let agent = askedBy.removeValue(forKey: approval) else { return }
-        updateAgent(agent) { $0.waiting = max(0, $0.waiting - 1) }
-    }
-
-    private func settleAll() {
-        for approval in Array(askedBy.keys) { approvalSettled(approval) }
-    }
-
-    /// Time spent working across the chat's turns, the running one included.
-    var workedFor: TimeInterval {
-        let running = current.flatMap { turns[$0] }.map { Date().timeIntervalSince($0.startedAt) } ?? 0
-        return workedBefore + running
-    }
-
-    // MARK: Loading an agent's past
-
-    /// The agent a card key ("entry id") stands for, if it's an agent's card.
-    func agentID(forCard key: String) -> String? {
-        guard let id = UUID(uuidString: key) else { return nil }
-        if let i = position[id], let agent = entries[i].agent { return agent.id }
-        return laneAgents.first { $0.value.entry == id }?.key
-    }
-
-    /// Its own work was opened: it's kept when its turn leaves memory.
-    func keepLane(of id: String) { keptLanes.insert(id) }
-
-    /// An agent whose own work isn't here yet: from a replayed chat, or a Codex child.
-    func needsHistory(_ id: String) -> Bool {
-        guard let info = agent(id), info.status != .running, !loadedAgents.contains(id) else { return false }
-        return (lanes[id] ?? []).isEmpty
-    }
-
     /// Replaces an agent's own work with its whole history (`ChatBackend.agentHistory`).
     func replaceLane(of id: String, with events: [ChatEvent]) {
         loadedAgents.insert(id)
@@ -1382,402 +1215,12 @@ package final class TranscriptStore {
         return last == result ? nil : result
     }
 
-    func lane(_ id: String) -> [Entry] { lanes[id] ?? [] }
-
-    /// A sub-agent's card details, for an approval it asks for.
-    package func agent(_ id: String) -> AgentInfo? {
-        if let card = agentCards[id], let i = position[card] { return entries[i].agent }
-        if let (parent, card) = laneAgents[id], let found = lanes[parent]?.first(where: { $0.id == card })?.agent { return found }
-        return parkedAgents[id]
-    }
-
-    // MARK: Content
-
-    func user(_ text: String, attachments: [Attachment], source: String? = nil) {
-        if let latestTurn { retryDismissed = latestTurn; mark(turnIndex(latestTurn)) }
-        if !batching { sentAt = Date() }
-        var entry = Entry(kind: .user, text: text, attachments: attachments)
-        entry.source = source
-        append(entry)
-        // Sending is drawn at once (the view scrolls to it).
-        if !batching { rebuild() }
-    }
-
-    /// A peer's message, placed where its turn began.
-    func peer(from: String, text: String, turn: String?, source: String? = nil) {
-        var entry = Entry(kind: .peer, text: text, from: from)
-        entry.turn = turn
-        entry.source = source
-        if let turn, let first = entries.firstIndex(where: { $0.turn == turn }) {
-            insert(entry, at: first)
-        } else {
-            append(entry)
-        }
-    }
-
-    enum TextKind { case answer, thinking, plan }
-
-    /// Appends to a text block, starting it if the id is new.
-    func text(_ block: String, _ kind: TextKind, _ text: String, agent: String? = nil) {
-        let kind: Entry.Kind = switch kind {
-        case .answer: .answer
-        case .thinking: .thinking
-        case .plan: .plan
-        }
-        if let agent {
-            laneText(agent: agent, block: block, kind: kind, text: text)
-            return
-        }
-        if let id = blocks[block], let i = position[id] {
-            entries[i].text += text
-            changed(at: i)
-        } else {
-            endThinking()
-            endAnswer()
-            var entry = Entry(kind: kind, text: text)
-            entry.turn = current
-            if kind == .thinking { entry.startedAt = Date() }
-            blocks[block] = entry.id
-            append(entry)
-        }
-    }
-
-    func toolStarted(
-        id: String, name: String, detail: String, input: String? = nil, summary: String? = nil, path: String? = nil,
-        readOnly: Bool = false, agent: String? = nil
-    ) {
-        var entry = Entry(kind: .tool, text: detail, toolName: name, toolId: id)
-        entry.readOnly = readOnly
-        // Most commands' input is their detail; keep one copy.
-        entry.input = input == detail ? nil : input
-        entry.summary = summary
-        entry.path = path
-        if agent == nil {
-            endThinking()
-            endAnswer()
-        }
-        if let agent {
-            laneAppend(agent: agent, entry)
-            laneTools[id] = (agent, lanes[agent]!.count - 1)
-            if !loadingHistory, let card = agentCards[agent], let i = position[card], entries[i].agent != nil {
-                entries[i].agent!.tools += 1
-                entries[i].agent!.lastTool = name
-            }
-            touchesDirty = true
-            changed(at: cardIndex(agent))
-            return
-        }
-        entry.turn = current
-        tools[id] = entry.id
-        append(entry)
-    }
-
-    func toolOutput(id: String, _ text: String) {
-        update(tool: id, files: false) { $0.result = ($0.result ?? "") + text }
-    }
-
-    /// `output` nil keeps what streamed. On an agent's spawning call (Claude's foreground Agent
-    /// tool) the output is the agent's report, which becomes its result.
-    func toolFinished(id: String, output: String?, isError: Bool) {
-        if let card = tools[id], let i = position[card], entries[i].agent != nil {
-            if entries[i].agent!.result == nil, let output { entries[i].agent!.result = Self.handBack(output) }
-            changed(at: i)
-            return
-        }
-        update(tool: id) {
-            if let output { $0.result = output }
-            $0.done = true
-            $0.isError = isError
-        }
-    }
-
-    /// An agent's open calls end as stopped, and its own agents with them. `date`: when, for the
-    /// stopped agents' time (nil leaves it unknown, as for a replayed session).
-    private func stopLane(_ agent: String, at date: Date? = nil, preserving observed: Set<String> = []) {
-        guard var lane = lanes[agent] else { return }
-        for i in lane.indices {
-            if lane[i].kind == .tool, !lane[i].done {
-                lane[i].done = true
-                lane[i].stopped = true
-            }
-            if lane[i].agent?.status == .running, lane[i].agent.map({ !observed.contains($0.id) }) == true {
-                lane[i].agent?.status = .stopped
-                if let date, lane[i].agent?.duration == nil, let start = lane[i].agent?.startedAt {
-                    lane[i].agent?.duration = date.timeIntervalSince(start)
-                }
-                if let child = lane[i].agent?.id { stopLane(child, at: date, preserving: observed) }
-            }
-        }
-        lanes[agent] = lane
-        agentsVersion &+= 1
-    }
-
-    /// The turn was stopped while the call ran; what it printed before stays.
-    func toolStopped(id: String) {
-        update(tool: id) {
-            $0.done = true
-            $0.isError = false
-            $0.stopped = true
-        }
-    }
-
-    func fileChanged(tool id: String, _ changes: [FileChange]) {
-        update(tool: id) { $0.changes = changes }
-    }
-
-    // MARK: Queued messages (look.md §10)
-
-    /// Sent while a turn runs, in order, by Kore's id.
-    @ObservationIgnored private var queued: [(id: String, entry: Entry)] = []
-
     /// The owner's messages with text, oldest first, the waiting ones last: what ↑ in an empty
     /// composer brings back (`ComposerView.recall`).
     var sentMessages: [String] {
         ((hasUnloaded ? earlierMarks.map(\.text) : []) + entries.lazy.filter { $0.kind == .user }.map(\.text) + queued.map(\.entry.text))
             .filter { !$0.allSatisfy(\.isWhitespace) }
     }
-
-    func messageQueued(id: String, text: String, attachments: [Attachment]) {
-        queued.append((id, Entry(kind: .user, text: text, attachments: attachments)))
-        changed(at: entries.count - 1)
-    }
-
-    /// Where a waiting message went: into the running turn after `after`, as the next turn's
-    /// message, or nowhere (its text is back in the composer).
-    func queuedMessage(id: String, _ delivery: QueuedDelivery) {
-        guard let i = queued.firstIndex(where: { $0.id == id }) else { return }
-        var entry = queued.remove(at: i).entry
-        switch delivery {
-        case .inTurn(let after):
-            entry.inTurn = true
-            entry.turn = current
-            let anchor = after.flatMap { tools[$0] ?? blocks[$0] }.flatMap { position[$0] }
-            if let anchor, anchor + 1 < entries.count {
-                insert(entry, at: anchor + 1)
-            } else {
-                append(entry)
-            }
-        case .nextTurn:
-            // Sent with Kore's id, which the CLI keeps (or its backend maps): a rollback finds it by it.
-            user(entry.text, attachments: entry.attachments, source: id)
-        case .dropped:
-            changed(at: entries.count - 1)
-        }
-    }
-
-    // MARK: Mode changes (look.md §8)
-
-    /// The provider, for its modes' names, icons and colours.
-    @ObservationIgnored var provider: ProviderDescriptor?
-    @ObservationIgnored private var permissionsMode: String?
-    @ObservationIgnored private var planOn = false
-    /// A change the user made while a turn ran: it shows when the turn ends, between turns.
-    @ObservationIgnored private var heldModeChange: (from: String, to: String)?
-
-    /// The mode shown: a plan toggle that's on (Codex), else the permissions mode.
-    private var effectiveMode: String? { planOn ? provider?.planToggle?.id ?? permissionsMode : permissionsMode }
-
-    private func option(_ id: String) -> ModeOption? {
-        provider?.modes.first { $0.id == id } ?? provider?.planToggle.flatMap { $0.id == id ? $0 : nil }
-    }
-
-    func modeChanged(_ change: ModeChange) {
-        let before = effectiveMode
-        permissionsMode = change.mode
-        if change.source == .refused {
-            if let asked = change.previous { refused(asked: asked, kept: change.mode) }
-            return
-        }
-        // A new chat's first turn opens before the CLI reports its mode: that's the mode the
-        // turn started in.
-        if change.previous == nil || change.source == .session, let current, turns[current]?.startMode == nil {
-            turns[current]?.startMode = effectiveMode
-        }
-        // The first mode a chat learns isn't a change.
-        guard change.previous != nil else { return }
-        marked(change.source, from: before ?? change.previous, to: effectiveMode)
-    }
-
-    /// Codex's plan toggle, beside its permissions modes.
-    func planModeChanged(_ change: PlanModeChange) {
-        let before = effectiveMode
-        planOn = change.on
-        guard change.source != .refused else { return }
-        marked(change.source, from: before, to: effectiveMode)
-    }
-
-    private func marked(_ source: ModeSource, from: String?, to: String?) {
-        guard let to, from != to else { return }
-        switch source {
-        case .session, .refused:
-            break
-        case .user:
-            if let from { userChanged(from: from, to: to) }
-        case .agent(let cause, let agent):
-            agentChanged(cause, from: from, to: to, agent: agent)
-        }
-    }
-
-    /// Between turns: one divider for a run of changes, gone when it comes back to where it was.
-    private func userChanged(from: String, to: String) {
-        if turnIsOpen {
-            let start = heldModeChange?.from ?? from
-            heldModeChange = start == to ? nil : (start, to)
-            return
-        }
-        guard let option = option(to) else { return }
-        if let last = entries.indices.last, entries[last].kind == .mode, entries[last].modeLead == nil {
-            if entries[last].modeFrom == to {
-                position[entries[last].id] = nil
-                entries.removeLast()
-                changed(at: entries.count)
-            } else {
-                entries[last].mode = ModeMark(option)
-                entries[last].text = option.label
-                changed(at: last)
-            }
-            return
-        }
-        var entry = Entry(kind: .mode, text: option.label)
-        entry.mode = ModeMark(option)
-        entry.modeFrom = from
-        append(entry)
-    }
-
-    /// One of the agent's steps, on its turn's line (or its card's, for a sub-agent).
-    private func agentChanged(_ cause: ModeCause, from: String?, to: String, agent: AgentID) {
-        let (lead, shown): (String, String) =
-            switch cause {
-            case .enteredPlanMode: ("Entered", to)
-            case .planApproved: ("Plan approved ·", to)
-            case .other: option(to)?.rung == nil && from != nil ? ("Left", from!) : ("Entered", to)
-            }
-        guard let option = option(shown) else { return }
-        var entry = Entry(kind: .mode, text: "\(lead) \(option.label)")
-        entry.mode = ModeMark(option)
-        entry.modeLead = lead
-        if let sub = agent.sub {
-            laneAppend(agent: sub, entry)
-            changed(at: cardIndex(sub))
-            return
-        }
-        entry.turn = current
-        if let current { turns[current]?.endMode = to }
-        append(entry)
-    }
-
-    /// "Couldn't switch to Auto · staying on Manual".
-    private func refused(asked: String, kept: String) {
-        guard let asked = option(asked), let kept = option(kept) else { return }
-        var entry = Entry(kind: .notice, text: "Couldn't switch to \(asked.label) · staying on \(kept.label)")
-        entry.warning = true
-        entry.local = !batching
-        entry.turn = current
-        append(entry)
-    }
-
-    func notice(_ text: String, isError: Bool) {
-        var entry = Entry(kind: .notice, text: text, isError: isError)
-        entry.turn = current
-        entry.local = !batching
-        append(entry)
-    }
-
-    // MARK: Sub-agents
-
-    /// A new agent's mark index: the next in spawn order, moved on to the first whose shape no running
-    /// agent of this chat has, so two live agents never share a shape (with more than eight live,
-    /// shapes repeat). Finished agents' shapes are free again; an agent keeps its index for life.
-    func freeAgentIndex() -> Int {
-        let base = agentCards.count + laneAgents.count + parkedAgents.count
-        let count = AgentShape.allCases.count
-        let live = Set(agentOrder.compactMap { agent($0) }.filter { $0.status == .running }.map { $0.index % count })
-        let step = (0..<count).first { !live.contains((base + $0) % count) } ?? 0
-        return base + step
-    }
-
-    func agentSpawned(
-        id: String, name: String, type: String?, model: String? = nil, prompt: String? = nil, background: Bool = false,
-        tool: String?, parent: String? = nil, at date: Date = Date()
-    ) {
-        var entry = Entry(kind: .agent, text: name, toolId: tool)
-        entry.agent = AgentInfo(
-            id: id, index: freeAgentIndex(), name: name, type: type, model: model, prompt: prompt,
-            parent: parent, background: background, startedAt: date)
-        // One read back from history stays in its place.
-        if !agentOrder.contains(id) { agentOrder.append(id) }
-        lanes[id] = lanes[id] ?? []
-        if let parent {
-            // A sub-agent's own agent: a card in its parent's lane, on the call that spawned it.
-            if let tool, let (_, index) = laneTools[tool], lanes[parent]?.indices.contains(index) == true {
-                lanes[parent]![index] = entry
-                laneTools[tool] = nil
-            } else {
-                laneAppend(agent: parent, entry)
-            }
-            laneAgents[id] = (parent, entry.id)
-            changed(at: cardIndex(parent))
-            return
-        }
-        entry.turn = current
-        agentCards[id] = entry.id
-        // The spawning tool call becomes the card.
-        if let tool, let existing = tools[tool], let i = position[existing] {
-            entry.turn = entries[i].turn
-            entries[i] = entry
-            position[entry.id] = i
-            position[existing] = nil
-            if let turn = entry.turn, turnFirst[turn] == existing { turnFirst[turn] = entry.id }
-            tools[tool] = entry.id
-            touchesDirty = true
-            changed(at: i)
-        } else {
-            append(entry)
-        }
-    }
-
-    func agentProgress(
-        id: String, tokens: Int?, tools count: Int?, lastTool: String?, duration: TimeInterval?, approximate: Bool = false
-    ) {
-        updateAgent(id) {
-            if let tokens {
-                $0.tokens = tokens
-                $0.approximate = approximate
-            }
-            if let count { $0.tools = count }
-            if let lastTool { $0.lastTool = lastTool }
-            if let duration { $0.duration = duration }
-        }
-    }
-
-    func agentFinished(id: String, status: AgentInfo.Status, result: String?, at date: Date = Date()) {
-        // It can come twice (Claude background agents): the second carries the result.
-        updateAgent(id) {
-            $0.status = status
-            if let result { $0.result = result }
-            // A replayed agent has no timing of its own unless the CLI gave one.
-            if $0.duration == nil, !self.batching { $0.duration = date.timeIntervalSince($0.startedAt) }
-        }
-    }
-
-    /// It runs again: its clock carries on from where it ended, and its result stays until the
-    /// next one.
-    func agentResumed(id: String, at date: Date = Date()) {
-        guard let info = agent(id), info.status != .running else { return }
-        updateAgent(id) {
-            $0.status = .running
-            if let duration = $0.duration { $0.startedAt = date.addingTimeInterval(-duration) }
-            $0.duration = nil
-        }
-    }
-
-    /// It outlived the turn that spawned it: it runs on in the background.
-    func agentBackgrounded(id: String) {
-        guard let info = agent(id), !info.background else { return }
-        updateAgent(id) { $0.background = true }
-    }
-
-    // MARK: Opening and closing
 
     func toggle(turn id: String) {
         guard var turn = turns[id] else { return }
@@ -1803,15 +1246,7 @@ package final class TranscriptStore {
         turn.touched ? turn.open : !turn.finished && turn.answerFrom == nil
     }
 
-    /// The user denied an action in the current turn (counted on its fold line).
-    func actionDenied() {
-        guard let current else { return }
-        turns[current]?.denied += 1
-    }
-
-    // MARK: Building rows
-
-    private func rebuild() {
+    package func rebuild() {
         let signpost = RebuildStats.signposter.beginInterval("TranscriptRebuild")
         let began = DispatchTime.now().uptimeNanoseconds
         defer {
@@ -1928,8 +1363,6 @@ package final class TranscriptStore {
         turnIsOpen ? entries.last(where: { ($0.kind == .user && !$0.inTurn) || $0.kind == .peer })?.id : nil
     }
 
-    // MARK: Test seams
-
     /// The window's sections built from the entries as they are now, none kept: what the
     /// incremental rebuild has to equal (phase 12's `TranscriptRebuildTests`).
     func sectionsFromScratch() -> [Section] {
@@ -1943,7 +1376,7 @@ package final class TranscriptStore {
     func drawNow() { rebuild() }
 
     /// Everything is built again on the next rebuild (the window moved, or entries shifted).
-    private func invalidateAll() {
+    package func invalidateAll() {
         sectionStarts = []
         if LinkTaps.on { linkDirtyFrom = 0 }
         touchesDirty = true
@@ -2044,24 +1477,6 @@ package final class TranscriptStore {
                 .agent(index: $0.index, name: $0.name, status: $0.status, waiting: $0.waiting > 0, background: $0.background)
             }
         }
-    }
-
-    /// The answer block in progress ends when another block or a tool starts: it's no longer
-    /// streaming, so all of it shows.
-    private func endAnswer() {
-        guard let last = entries.indices.last, entries[last].kind == .answer, !entries[last].done else { return }
-        entries[last].done = true
-        mark(last)
-    }
-
-    /// The thinking block in progress ends when anything else starts.
-    private func endThinking() {
-        guard let last = entries.indices.last, entries[last].kind == .thinking, entries[last].duration == nil,
-            let start = entries[last].startedAt
-        else { return }
-        entries[last].duration = Date().timeIntervalSince(start)
-        entries[last].done = true
-        mark(last)
     }
 
     /// A turn. While it works, a live fold row (look.md §12) heads its work, open, saying what's
@@ -2211,27 +1626,6 @@ package final class TranscriptStore {
         return .entry(settled)
     }
 
-    /// The model's safeguards refused the turn: its notice offers the ways on.
-    func refused(_ id: String, _ refusal: Refusal) { turns[id]?.refusal = refusal }
-
-    /// The message that started a turn: the last of the user's before the turn's first entry.
-    func prompt(of turn: String) -> String? {
-        guard let first = entries.firstIndex(where: { $0.turn == turn }) ?? turns[turn]?.after.flatMap({ after in
-            entries.firstIndex { $0.id == after }.map { $0 + 1 }
-        }) else { return nil }
-        return entries[..<min(first, entries.count)].last { $0.kind == .user }?.text
-    }
-
-    /// The latest failed/interrupted attempt can be resumed until another message starts.
-    var retryableTurn: String? {
-        guard !turnIsOpen, pendingSendSince == nil, let latestTurn, latestTurn != retryDismissed,
-              let turn = turns[latestTurn], turn.finished else { return nil }
-        switch turn.outcome {
-        case .interrupted, .failed: return latestTurn
-        case .completed, .authFailed, .slept: return nil
-        }
-    }
-
     /// The outcome notice and the files-changed line, under the answer and never folded.
     private func trailer(_ turn: Turn, folded: Bool, into rows: inout [Row]) {
         let retry = retryableTurn == turn.id
@@ -2305,13 +1699,11 @@ package final class TranscriptStore {
         }
     }
 
-    // MARK: Plumbing
-
     /// Draws the change: at once for a batch's end or a user's action, else at most once per
     /// `drawInterval`, so a fast stream of deltas costs one rebuild per frame, not one per token.
     /// `index` is the entry that changed; nil when it's not known (everything shown is built
     /// again).
-    private func changed(at index: Int? = nil) {
+    package func changed(at index: Int? = nil) {
         mark(index)
         guard !batching, !drawScheduled else { return }
         drawScheduled = true
@@ -2322,7 +1714,7 @@ package final class TranscriptStore {
         }
     }
 
-    private func mark(_ index: Int?) {
+    package func mark(_ index: Int?) {
         let i = max(index ?? 0, 0)
         dirtyFrom = min(dirtyFrom ?? i, i)
         if LinkTaps.on { linkDirtyFrom = min(linkDirtyFrom ?? i, i) }
@@ -2334,102 +1726,7 @@ package final class TranscriptStore {
     /// A turn as it stands, for the local link.
     package func linkTurn(_ id: String) -> Turn? { turns[id] }
 
-    /// A change to a turn: its rows are laid out together.
-    private func changed(turn id: String?) {
-        changed(at: turnIndex(id))
-    }
-
-    /// The turn's first entry, or the last entry for a turn with none yet; nil for no turn.
-    private func turnIndex(_ id: String?) -> Int? {
-        guard let id else { return entries.count - 1 }
-        return turnFirst[id].flatMap { position[$0] } ?? (current == id ? entries.count - 1 : nil)
-    }
-
-    /// The chat's own card an agent's work shows in: its card, or its parent's, up to the one
-    /// on the transcript.
-    private func cardIndex(_ agent: String) -> Int? {
-        var id = agent
-        while true {
-            if let card = agentCards[id], let i = position[card] { return i }
-            guard let parent = laneAgents[id]?.parent else { return nil }
-            id = parent
-        }
-    }
-
-    private func append(_ entry: Entry) {
-        position[entry.id] = entries.count
-        entries.append(entry)
-        if let turn = entry.turn, turnFirst[turn] == nil { turnFirst[turn] = entry.id }
-        changed(at: entries.count - 1)
-    }
-
-    private func insert(_ entry: Entry, at index: Int) {
-        entries.insert(entry, at: index)
-        for i in index..<entries.count { position[entries[i].id] = i }
-        if let turn = entry.turn, turnFirst[turn].flatMap({ position[$0] }).map({ index <= $0 }) ?? true {
-            turnFirst[turn] = entry.id
-        }
-        invalidateAll()
-        countHidden()
-        changed()
-    }
-
-    private func update(tool id: String, files: Bool = true, _ change: (inout Entry) -> Void) {
-        let at: Int?
-        if let (agent, index) = laneTools[id] {
-            if lanes[agent]?.indices.contains(index) == true { change(&lanes[agent]![index]) }
-            agentsVersion &+= 1
-            at = cardIndex(agent)
-        } else if let entry = tools[id], let i = position[entry] {
-            change(&entries[i])
-            at = i
-        } else {
-            return
-        }
-        if files { touchesDirty = true }
-        changed(at: at)
-    }
-
-    private func updateAgent(_ id: String, _ change: (inout AgentInfo) -> Void) {
-        agentsVersion &+= 1
-        if let card = agentCards[id], let i = position[card], entries[i].agent != nil {
-            change(&entries[i].agent!)
-            changed(at: i)
-            return
-        } else if let (parent, card) = laneAgents[id], let i = lanes[parent]?.firstIndex(where: { $0.id == card }),
-            lanes[parent]![i].agent != nil
-        {
-            change(&lanes[parent]![i].agent!)
-        } else if parkedAgents[id] != nil {
-            change(&parkedAgents[id]!)
-        } else {
-            return
-        }
-        changed(at: cardIndex(id))
-    }
-
-    private func laneAppend(agent: String, _ entry: Entry) {
-        lanes[agent, default: []].append(entry)
-        agentsVersion &+= 1
-        touchesDirty = true
-    }
-
-    private func laneText(agent: String, block: String, kind: Entry.Kind, text: String) {
-        let key = "\(agent)/\(block)"
-        if let id = blocks[key], let i = lanes[agent]?.firstIndex(where: { $0.id == id }) {
-            lanes[agent]![i].text += text
-            agentsVersion &+= 1
-        } else {
-            // A sub-agent's text isn't drawn as it streams (Claude's comes whole anyway).
-            var entry = Entry(kind: kind, text: text)
-            entry.done = true
-            blocks[key] = entry.id
-            laneAppend(agent: agent, entry)
-        }
-        changed(at: cardIndex(agent))
-    }
-
-    private func announceFold(_ turn: String) {
+    package func announceFold(_ turn: String) {
         guard !batching, let t = turns[turn] else { return }
         let answer = t.answerFrom?.uuidString ?? "rule-\(turn)"
         foldSeq += 1
@@ -2445,3 +1742,5 @@ extension StoryTranscript {
         }
     }
 }
+
+extension TranscriptStore: TranscriptLogView {}

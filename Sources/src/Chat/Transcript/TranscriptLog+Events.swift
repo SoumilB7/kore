@@ -1,16 +1,14 @@
-import AppKit
 import Foundation
-import src
 
 /// The transcript's side of `ChatEvent`: content, turns and sub-agents. Session, control and
 /// approval events belong to other stores and pass through untouched.
-extension TranscriptStore {
-    func apply(_ event: ChatEvent) { apply(event, preserving: []) }
+extension TranscriptLog {
+    package func apply(_ event: ChatEvent) { apply(event, preserving: []) }
 
-    func apply(_ event: ChatEvent, preserving observed: Set<String>) {
+    package func apply(_ event: ChatEvent, preserving observed: Set<String>) {
         switch event {
         case .replayed(let events):
-            replay(events)
+            view?.replay(events)
 
         case .turnStarted(let id, _, let at):
             turnStarted(id, at: at)
@@ -30,7 +28,7 @@ extension TranscriptStore {
             turnChanges(id, changes)
 
         case .userMessage(let text, let attachments, let id):
-            user(text, attachments: attachments.map(Self.attachment), source: id)
+            user(text, attachments: attachments, source: id)
         case .peerMessage(let from, let text, let turn, let id):
             peer(from: from, text: text, turn: turn, source: id)
         case .text(let block, let kind, let text, let agent):
@@ -106,11 +104,11 @@ extension TranscriptStore {
         case .compactionSummary(let text):
             compactionSummary(text)
         case .messageQueued(let id, let text, let attachments):
-            messageQueued(id: id, text: text, attachments: attachments.map(Self.attachment))
+            messageQueued(id: id, text: text, attachments: attachments)
         case .queuedMessage(let id, let delivery):
             queuedMessage(id: id, delivery)
         case .earlierHistory(let available):
-            earlierHistory(available)
+            view?.earlierHistory(available)
         case .historyReplaced:
             break  // Chat builds a new store from it
 
@@ -127,11 +125,6 @@ extension TranscriptStore {
     private static func seconds(_ d: Duration) -> TimeInterval {
         let (s, atto) = d.components
         return TimeInterval(s) + TimeInterval(atto) / 1e18
-    }
-
-    private static func attachment(_ a: SentAttachment) -> Attachment {
-        if let url = a.url, FileManager.default.fileExists(atPath: url.path) { return Attachment(url: url) }
-        return Attachment(name: a.name, kind: a.kind, imageData: a.image)
     }
 }
 

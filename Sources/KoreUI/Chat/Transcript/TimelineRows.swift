@@ -18,6 +18,8 @@ struct TranscriptActions {
     /// Opens or closes a tool body, thinking, a file inside an edit ("id/path"), or an agent.
     var toggle: (String) -> Void = { _ in }
     var openImage: (Attachment) -> Void = { _ in }
+    /// A user message's file chips (`TranscriptStore.chips`).
+    var chips: (TranscriptStore.Entry) -> [Attachment] = { _ in [] }
     var viewChanges: (String) -> Void = { _ in }
     var stopAgent: (String) -> Void = { _ in }
     /// Opens a sub-agent in its own tab.
@@ -604,7 +606,7 @@ struct MessageHeader: View {
         VStack(alignment: .leading, spacing: Space.md) {
             if !entry.attachments.isEmpty && place == .row {
                 HStack(spacing: Space.md) {
-                    ForEach(entry.attachments) { attachment in
+                    ForEach(actions.chips(entry)) { attachment in
                         AttachmentChip(attachment: attachment, open: { actions.openImage(attachment) })
                             .koreContextMenu("attachment") { MediaMenu.items(.init(attachment), openInKore: Self.openInKore(attachment, actions)) }
                             .storyID(StoryID.Transcript.attachment(attachment.name))

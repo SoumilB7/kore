@@ -467,8 +467,9 @@ final class LinkFilesAndCommands: ChatStoryline {
             Expect("taken", found: { _ in client.result("files").map { "\($0)" } }) { _ in client.result("files")?.ok == true },
             TurnFinished(2),
             Expect("the message holds the image and the file") { story in
-                let entry = try story.activeChat().transcript.entries.last { $0.kind == .user && $0.text == "Both files" }
-                let kinds = entry?.linkAttachments.map(\.linkKind) ?? []
+                let transcript = try story.activeChat().transcript
+                let entry = transcript.entries.last { $0.kind == .user && $0.text == "Both files" }
+                let kinds = entry.map { transcript.linkAttachments($0) }?.map(\.linkKind) ?? []
                 return kinds == [.image, .text]
             },
             Do("read the image back as a thumbnail, and a ref the chat doesn't hold") { story in

@@ -4,8 +4,8 @@ import KoreCore
 import Observation
 import src
 
-/// One conversation with a CLI. It owns the backend and hands each `ChatEvent` to the stores,
-/// one per feature: the transcript, approvals, controls (mode, model, commands), status and
+/// One conversation with a CLI. Its engine (`ChatEngine`) runs the backend; it hands each
+/// `ChatEvent` to the stores, one per feature: the transcript, approvals, controls (mode, model, commands), status and
 /// context (how full it is, compacting). Views
 /// read the store they show, so a streamed token re-renders the transcript alone and typing
 /// re-renders the composer alone. The composer's draft and attachments live here, sent and
@@ -49,11 +49,9 @@ package final class Chat: Identifiable {
     @ObservationIgnored var launchEffort: String?
     @ObservationIgnored var launchFastMode: Bool?
 
-    @ObservationIgnored private var backend: (any ChatBackend)?
-    @ObservationIgnored private var pump: Task<Void, Never>?
-    /// The latest send: each waits for the one before to reach the CLI, so a message sent while
-    /// the CLI is still starting can't overtake the first.
-    @ObservationIgnored private var sending: Task<Void, Never>?
+    /// The backend, its events' pump and the send chain.
+    @ObservationIgnored private let engine: ChatEngine
+    private var backend: (any ChatBackend)? { engine.backend }
     @ObservationIgnored private let resume: SessionSummary?
     /// A fork the CLI makes when it starts (Codex) or on its first message (Claude).
     @ObservationIgnored let fork: ForkPoint?
@@ -132,14 +130,12 @@ package final class Chat: Identifiable {
     /// next turn boundary, so it runs as the new account.
     @ObservationIgnored private var relaunchDue = false
     @ObservationIgnored private var stoppedForAccount = false
-    /// Every asynchronous send/start belongs to one transport lifetime. Cancelling the last
-    /// task alone cannot stop earlier tasks waiting in the send chain.
-    @ObservationIgnored private var workEpoch: UInt64 = 0
+    private var workEpoch: UInt64 { engine.workEpoch }
     package private(set) var accountRestartPending = false
     /// An account switch or sign-out stopped its work: its tab shows ⚠ until the next send.
     private(set) var interruptedByAccount = false
 
-    private func currentWork(_ epoch: UInt64) -> Bool { !closed && workEpoch == epoch }
+    private func currentWork(_ epoch: UInt64) -> Bool { engine.currentWork(epoch) }
     /// The turn running now, and when it began: a failure is the sleep's when the Mac slept since.
     @ObservationIgnored private var turnBegan: (id: TurnID, at: Date)?
     /// Stay awake's continuation after the plan's limit (`LimitContinuation`).
@@ -161,9 +157,10 @@ package final class Chat: Identifiable {
     init(
         provider: ProviderDescriptor, folder: URL, resume session: SessionSummary? = nil, fork: ForkPoint? = nil,
         forkedFrom: String? = nil, imported: ImportedHistory? = nil, modeMemory: ModeMemory = .shared,
-        compactMemory: AutoCompactMemory = .shared
+        compactMemory: AutoCompactMemory = .shared, services: any ChatServices = AppChatServices.shared
     ) {
         self.provider = provider
+        engine = ChatEngine(provider: provider, services: services)
         self.folder = folder
         resume = session
         self.fork = fork
@@ -190,6 +187,16 @@ package final class Chat: Identifiable {
         AccountStore.shared.register(self)
         StayAwake.register(self)
         ownPopups()
+        if let imported = self.imported {
+            // An imported chat's carried part is read before its own history shows.
+            engine.beforeHistory = { [weak self] in
+                let events = await imported.events()
+                return {
+                    self?.importedEvents = events
+                    self?.engine.beforeHistory = nil
+                }
+            }
+        }
     }
 
     /// What its CLI, and what runs under it, names this chat by on Kore's agent channel.
@@ -392,15 +399,7 @@ package final class Chat: Identifiable {
         }
     }
 
-    private static func isReplay(_ event: ChatEvent) -> Bool {
-        if case .replayed = event { return true }
-        return false
-    }
-
-    private static func isCorrection(_ event: ChatEvent) -> Bool {
-        if case .historyReplaced = event { return true }
-        return false
-    }
+    private static func isReplay(_ event: ChatEvent) -> Bool { ChatEngine.isReplay(event) }
 
     private func fail(_ message: String) {
         // No history is coming.
@@ -428,86 +427,31 @@ package final class Chat: Identifiable {
         }
     }
 
-    /// The CLI's start under way, its retries included, and the work it's for: whatever needs
-    /// the CLI meanwhile waits on this one (an account's change starts work of its own).
-    @ObservationIgnored private var launching: (epoch: UInt64, task: Task<Error?, Never>)?
-
     /// Waits before each start again of a CLI that wouldn't start. A storyline sets them shorter.
-    package static let startRetries = HostSetting<[Duration]>([.seconds(2), .seconds(5), .seconds(10)])
+    package static let startRetries = ChatEngine.startRetries
 
-    /// Starts the CLI; one that won't (being updated, just removed, ending at once) is tried
-    /// again a few times (`startRetries`) before it's given up on, and the chat says why once,
-    /// at the first. Nil once it's up, else the last failure; the next call tries again.
+    /// Starts the CLI (`ChatEngine.launch`), saying once, at the first failure, that it tries again.
     private func launchCLI() async -> Error? {
-        let epoch = workEpoch
-        if let launching, launching.epoch == epoch { return await launching.task.value }
-        let backend = connect()
-        let task = Task { [weak self] () -> Error? in
-            let retries = Self.startRetries.value
-            var waits = retries[...]
-            while true {
-                do {
-                    try await backend.start()
-                    return nil
-                } catch {
-                    guard let self, self.currentWork(epoch), Self.retriable(error), let wait = waits.popFirst() else { return error }
-                    if waits.count == retries.count - 1 {
-                        self.dispatch(.notice("Couldn't start \(self.provider.name): \(Self.reason(error)). Trying again…"))
-                    }
-                    try? await Task.sleep(for: wait)
-                    if Task.isCancelled || !self.currentWork(epoch) { return CancellationError() }
-                }
-            }
+        await engine.launch(connect) { [weak self] error in
+            guard let self else { return }
+            self.dispatch(.notice("Couldn't start \(self.provider.name): \(Self.reason(error)). Trying again…"))
         }
-        launching = (epoch, task)
-        let error = await task.value
-        if launching?.epoch == epoch { launching = nil }
-        return error
-    }
-
-    /// A start that may work a moment later: not one the CLI refused (it would again), one
-    /// cancelled, or one held by an account's change.
-    private static func retriable(_ error: Error) -> Bool {
-        !["refused", "stopping", "cancelled"].contains(SessionLog.cause(error))
     }
 
     /// The backend, made on first use with the chat's current settings.
     private func connect() -> any ChatBackend {
-        if let backend { return backend }
-        let make: (BackendOptions) -> any ChatBackend
-        if let seam = StorylineSeams.backend {
-            let id = provider.id
-            make = { seam(id, $0) }
-        } else {
-            make = FeedBackend.enabled ? FeedBackend.init : provider.makeBackend
-        }
-        var options = BackendOptions(
-            folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode,
-            model: launchModel, effort: launchEffort, fork: fork, forkTitle: fork == nil ? nil : status.name)
-        options.fastMode = launchFastMode
-        options.agentPass = agentPass
-        let cli = provider.id
-        options.planWindows = { UsageCues.shared.take(cli, snapshot: $0) }
-        if let imported {
-            options.hiddenRows = Set(imported.record.written)
-            options.instructions = imported.record.instructions.map { URL(fileURLWithPath: $0) }
-        }
-        let backend = make(options)
-        self.backend = backend
-        pump = Task {
-            for await event in backend.events {
-                guard !Task.isCancelled, !closed else { break }
-                let epoch = workEpoch
-                // An imported chat's carried part is read before its own history shows.
-                if let imported, importedEvents == nil, Self.isReplay(event) || Self.isCorrection(event) {
-                    let events = await imported.events()
-                    guard currentWork(epoch), !Task.isCancelled else { continue }
-                    importedEvents = events
-                }
-                self.dispatch(event)
+        engine.connect({
+            var options = BackendOptions(
+                folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode,
+                model: launchModel, effort: launchEffort, fork: fork, forkTitle: fork == nil ? nil : status.name)
+            options.fastMode = launchFastMode
+            options.agentPass = agentPass
+            if let imported {
+                options.hiddenRows = Set(imported.record.written)
+                options.instructions = imported.record.instructions.map { URL(fileURLWithPath: $0) }
             }
-        }
-        return backend
+            return options
+        }) { [self] event in self.dispatch(event) }
     }
 
     /// Opens the usage popup and reads the account's limits once, through this chat's CLI.
@@ -602,16 +546,12 @@ package final class Chat: Identifiable {
     private func relaunchIfDue() {
         guard relaunchDue, !holdsCLI, let backend else { return }
         relaunchDue = false
-        workEpoch &+= 1
-        let epoch = workEpoch
-        let previous = sending
+        let epoch = engine.newWork()
+        let previous = engine.sending
         previous?.cancel()
         transcript.sending(false)
         for id in waitingOrder.reversed() { dispatch(.queuedMessage(id: id, .dropped)) }
-        sending = Task {
-            guard currentWork(epoch), !Task.isCancelled else { return }
-            await previous?.value
-            guard currentWork(epoch), !Task.isCancelled else { return }
+        engine.chain(after: previous, epoch) { [self] in
             await backend.relaunch(reason: "account changed")
             guard currentWork(epoch), !Task.isCancelled else { return }
             try? await backend.start()
@@ -782,10 +722,9 @@ package final class Chat: Identifiable {
         guard !closed, let backend else { return }
         let clearingWork = clearingWork || accountRestartPending
         if clearingWork { accountRestartPending = true }
-        workEpoch &+= 1
-        let epoch = workEpoch
+        let epoch = engine.newWork()
         relaunchDue = false
-        sending?.cancel()
+        engine.cancelSending()
         transcript.sending(false)
         waitingForNetwork = false
         // Messages queued in the old process die with it, unseen: back to the composer, at
@@ -793,8 +732,7 @@ package final class Chat: Identifiable {
         for id in waitingOrder.reversed() { dispatch(.queuedMessage(id: id, .dropped)) }
         if status.isRunning { dispatch(.turnFinished(nil, .interrupted, duration: nil)) }
         status.setRunning(false)
-        sending = Task {
-            guard currentWork(epoch), !Task.isCancelled else { return }
+        engine.chain(after: nil, epoch) { [self] in
             if clearingWork {
                 guard await backend.relaunchAfterAccountChange() else { return }
             } else {
@@ -860,16 +798,12 @@ package final class Chat: Identifiable {
         if let networkObserver { NotificationCenter.default.removeObserver(networkObserver) }
         networkObserver = nil
         closed = true
+        engine.close()
         transcript.sending(false)
-        workEpoch &+= 1
-        sending?.cancel()
         waitingForNetwork = false
         endWatch()
         cancelContinue()
-        pump?.cancel()
-        let backend = backend
-        self.backend = nil
-        Task { await backend?.close() }
+        engine.shutDown()
         Arsenal.shared.closed(self)
         AgentTaps.closed?(self)
     }
@@ -1038,11 +972,7 @@ package final class Chat: Identifiable {
         if queued == nil { transcript.sending(true) }
         startWatchdog()
         let backend = connect()
-        let previous = sending
-        sending = Task {
-            guard currentWork(epoch), !Task.isCancelled else { return }
-            await previous?.value
-            guard currentWork(epoch), !Task.isCancelled else { return }
+        engine.chain(after: engine.sending, epoch) { [self] in
             do {
                 if let error = await launchCLI() {
                     guard currentWork(epoch), !Task.isCancelled else { return }
@@ -1266,14 +1196,14 @@ package final class Chat: Identifiable {
         guard isBusy || waitingForNetwork || transcript.pendingSendSince != nil else { return }
         if context.compacting { stoppingCompaction = true }
         if transcript.pendingSendSince != nil {
-            sending?.cancel()
+            engine.cancelSending()
             transcript.sending(false)
         }
         // Not sent yet: there's no turn to interrupt, only the wait.
         if waitingForNetwork {
             // The cancelled network wait clears running and records why nothing was sent.
             // Keep that transition together so observers cannot see idle before the notice.
-            sending?.cancel()
+            engine.cancelSending()
             return
         }
         continueAfterCompaction = false
@@ -1483,6 +1413,7 @@ package final class Chat: Identifiable {
         // A message taken into a running turn isn't a turn's start: cutting there would cut the
         // turn in half (Claude), or take the whole turn (Codex).
         guard entry.kind == .peer || (entry.kind == .user && !entry.inTurn) else { return }
+        let files = transcript.chips(entry)
         rollingBack = true
         Task {
             // A running turn ends first, as Stop ends it (at most 5 s: `stopFallback`).
@@ -1499,7 +1430,7 @@ package final class Chat: Identifiable {
                 replaceHistory(left.events)
                 dispatch(.earlierHistory(left.more))
                 dispatch(.notice("Rolled back. Files not changed."))
-                if giveBack { giveBackToComposer(entry.text, Self.reattach(entry.attachments)) }
+                if giveBack { giveBackToComposer(entry.text, Self.reattach(files)) }
             } catch {
                 fail("Couldn't roll back: \(Self.reason(error))")
             }
@@ -1867,7 +1798,7 @@ extension Chat {
     /// `DumpRows` write, so replays compare across builds.
     package func dumpLines() -> [String] {
         transcript.entries.map { e in
-            let files = e.attachments.map { "\($0.name):\($0.kind):\($0.thumbnail != nil)" }.joined(separator: ",")
+            let files = transcript.chips(e).map { "\($0.name):\($0.kind):\($0.thumbnail != nil)" }.joined(separator: ",")
             // Kinds keep their earlier names, so dumps compare across builds.
             let kind = e.kind == .answer ? "assistant" : "\(e.kind)"
             return [kind, e.toolName ?? "", e.text, e.result ?? "", "\(e.done)", "\(e.isError)", files, e.from ?? ""]

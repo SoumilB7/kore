@@ -942,6 +942,7 @@ struct AgentTimelineRows: View {
         let chat = chat
         var actions = TranscriptActions()
         actions.toggle = { chat.transcript.toggle($0) }
+        actions.chips = { chat.transcript.chips($0) }
         actions.stopAgent = { chat.stopAgent($0) }
         actions.folder = chat.folder
         return actions

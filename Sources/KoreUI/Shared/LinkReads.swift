@@ -46,9 +46,9 @@ extension ControlsStore {
     package var linkCommands: [SlashCommand] { commands }
 }
 
-extension TranscriptStore.Entry {
+extension TranscriptStore {
     /// A user message's files.
-    package var linkAttachments: [Attachment] { attachments }
+    package func linkAttachments(_ entry: Entry) -> [Attachment] { chips(entry) }
 }
 
 extension Attachment {

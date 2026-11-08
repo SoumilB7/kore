@@ -605,7 +605,7 @@ package final class LinkHost {
         for (index, entry) in zip(window.indices, window) {
             let key = entry.id.uuidString
             let stale = index >= from || made[key] == nil
-            if stale { made[key] = LinkSnapshot.entry(entry, folder: chat.folder) }
+            if stale { made[key] = LinkSnapshot.entry(entry, folder: chat.folder, chips: chat.transcript.linkAttachments(entry)) }
             if sub.fresh || stale || !sub.known.contains(key), let wire = made[key] { out.append(wire) }
         }
         cache[id] = (epoch, made)

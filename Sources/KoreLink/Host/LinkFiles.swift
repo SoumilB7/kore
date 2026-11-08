@@ -42,9 +42,9 @@ enum LinkFiles {
         let parts = ref.split(separator: "/")
         guard parts.count == 2, let index = Int(parts[1]),
             let entry = chat.transcript.entries.first(where: { $0.id.uuidString == parts[0] }),
-            entry.linkAttachments.indices.contains(index)
+            chat.transcript.linkAttachments(entry).indices.contains(index)
         else { return .failure(.init(.deniedRef, "That isn't an attachment in this chat.")) }
-        let attachment = entry.linkAttachments[index]
+        let attachment = chat.transcript.linkAttachments(entry)[index]
         let bytes: Data?
         if let url = attachment.linkURL {
             let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0

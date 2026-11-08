@@ -1,4 +1,5 @@
 import AppKit
+import src
 import SwiftUI
 
 /// A sub-agent's identity: its shape (given in spawn order) in the accent blue, on a faint halo
@@ -6,7 +7,7 @@ import SwiftUI
 /// its colour: a turning arc while running, an amber point while it waits for the user, a red
 /// point once failed, and a faded shape once stopped. The chat's own agent keeps its logo.
 struct AgentAvatar: View {
-    enum Status: Equatable { case running, finished, failed, stopped }
+    typealias Status = TranscriptLog.AgentInfo.Status
 
     /// Where it's drawn: shape size, halo (0 for none), box. In the title row's stack (`title`)
     /// it has no status points: the Agents button's corner point is the one cue.

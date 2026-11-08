@@ -354,7 +354,7 @@ enum LinkSnapshot {
 
     // MARK: Transcript
 
-    static func entry(_ e: TranscriptStore.Entry, folder: URL) -> LinkEntry {
+    static func entry(_ e: TranscriptStore.Entry, folder: URL, chips: [Attachment]) -> LinkEntry {
         let kind: LinkEntry.Kind =
             switch e.kind {
             case .user: .user
@@ -386,7 +386,7 @@ enum LinkSnapshot {
             stopped: e.stopped, inTurn: e.inTurn, tool: tool,
             changes: e.changes.isEmpty ? nil : e.changes.map { .init(path: relative($0.path, to: folder), added: $0.added, removed: $0.removed) },
             agent: e.agent.map { .init(id: $0.id, name: $0.name, status: $0.statusName) },
-            attachments: e.linkAttachments.isEmpty ? nil : e.linkAttachments.enumerated().map { i, a in
+            attachments: chips.isEmpty ? nil : chips.enumerated().map { i, a in
                 LinkAttachment(ref: attachmentRef(entryId: e.id.uuidString, index: i), name: a.name, kind: attachmentKind(a.linkKind))
             })
     }

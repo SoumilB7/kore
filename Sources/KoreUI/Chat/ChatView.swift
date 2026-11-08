@@ -379,6 +379,7 @@ extension TranscriptActions {
     @MainActor static func board(_ chat: Chat, workspace: Workspace) -> TranscriptActions {
         var actions = TranscriptActions()
         actions.toggleTurn = { chat.transcript.toggle(turn: $0) }
+        actions.chips = { chat.transcript.chips($0) }
         actions.retry = { chat.retryStalled() }
         actions.retryTurn = { chat.retryTurn($0) }
         actions.fallback = { $0.fallback(in: chat.controls.models) }
