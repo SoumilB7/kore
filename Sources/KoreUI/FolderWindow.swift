@@ -19,6 +19,12 @@ struct FolderWindow: View {
         _workspace = StateObject(wrappedValue: Local(Workspace.forWindow(folder, restore: !DevSnapshot.singleTab)))
     }
 
+    /// A folder on a box: the same window, its chats run through the link.
+    init(box: BoxBinding) {
+        folder = box.folderURL
+        _workspace = StateObject(wrappedValue: Local(Workspace.forBox(box)))
+    }
+
     var body: some View {
         GeometryReader { geometry in
             let workspace = workspace.value

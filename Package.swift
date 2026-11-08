@@ -33,7 +33,7 @@ let package = Package(
         // The app's views and the stores they show, over `src`; `Kore` is its launcher. Other
         // targets in this package reach its `package` declarations.
         .target(
-            name: "KoreUI", dependencies: ["src", "KoreCore", .product(name: "SwiftTerm", package: "SwiftTerm")],
+            name: "KoreUI", dependencies: ["src", "HostClient", "KoreCore", .product(name: "SwiftTerm", package: "SwiftTerm")],
             // mermaid.js for the diagram preview: bundled, so it never loads from the network.
             resources: [.copy("Resources/mermaid.min.js")], swiftSettings: releaseForSize),
         // The local link (`z-docs/link-protocol.md`): a companion app on the same Mac, allowed by

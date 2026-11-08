@@ -411,13 +411,17 @@ struct TabBar: View {
                 }
                 .storyID(StoryID.Titlebar.newtab)
             Spacer(minLength: Space.xl)
-            Text(workspace.folder.lastPathComponent)
-                .font(Chrome.label)
-                .foregroundStyle(Theme.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .layoutPriority(-1)
-                .help(workspace.folder.path)
+            if let box = workspace.box {
+                BoxCue(box: box)
+            } else {
+                Text(workspace.folder.lastPathComponent)
+                    .font(Chrome.label)
+                    .foregroundStyle(Theme.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .layoutPriority(-1)
+                    .help(workspace.folder.path)
+            }
             if let chat = workspace.activeTab.chat {
                 AgentsButton(chat: chat, height: tabHeight).storyID(StoryID.Titlebar.agents, press: chat.agentMap.toggle)
                 CommandsButton(chat: chat, height: tabHeight)

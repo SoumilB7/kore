@@ -63,6 +63,8 @@ package final class Workspace {
     package internal(set) var tabGroups = TabGroups()
     /// The local link's mark while a companion is linked; nil otherwise.
     package var linkMark: LinkMark?
+    /// A window whose chats live on a box (`BoxBinding`); nil for a folder on this Mac.
+    @ObservationIgnored let box: BoxBinding?
     /// The group whose popup is open, and whether its name field takes the keys.
     package internal(set) var groupEdit: TabGroupEdit?
     /// The folder's window, once it's on screen (a storyline host sizes and snapshots it). Its
@@ -104,15 +106,26 @@ package final class Workspace {
         return workspace
     }
 
+    /// A box folder's workspace while its window is open, else a new one with the box's tabs.
+    static func forBox(_ box: BoxBinding) -> Workspace {
+        if let workspace = open[box.key], !workspace.isClosed { return workspace }
+        let workspace = Workspace(folder: box.folderURL, restore: false, box: box)
+        open[box.key] = workspace
+        box.workspace = workspace
+        box.windowOpened()
+        return workspace
+    }
+
     private func windowClosed() {
         if let closer { NotificationCenter.default.removeObserver(closer) }
         closer = nil
         if let activation { NotificationCenter.default.removeObserver(activation) }
         activation = nil
         SessionLog.shared.window("closed", folder: folder, tabs: tabs.count)
-        AppModel.shared?.rememberClosedWorkspace(folder: folder, snapshot: persistenceSnapshot())
+        if box == nil { AppModel.shared?.rememberClosedWorkspace(folder: folder, snapshot: persistenceSnapshot()) }
         closeAll()
-        let key = folder.standardizedFileURL.path
+        box?.windowClosed()
+        let key = box?.key ?? folder.standardizedFileURL.path
         if Self.open[key] === self { Self.open[key] = nil }
     }
     private(set) var activeID: UUID {
@@ -166,8 +179,9 @@ package final class Workspace {
     /// (a chat opened before the lists came isn't closed for being missing from them).
     @ObservationIgnored private var restoredChats: Set<ObjectIdentifier> = []
 
-    init(folder: URL, restore: Bool = true) {
+    init(folder: URL, restore: Bool = true, box: BoxBinding? = nil) {
         self.folder = folder
+        self.box = box
         identity = FolderIdentity(folder)
         terminals = TerminalPanel(folder: folder)
         let pending = Self.pendingRestores.removeValue(forKey: folder.standardizedFileURL.path)
@@ -175,7 +189,7 @@ package final class Workspace {
         drafts = saved?.drafts ?? [:]
         closedTabs = Array((saved?.closed ?? []).suffix(20))
         let savedTabs = saved?.tabs ?? []
-        var restored = savedTabs.map { Self.tab($0, in: folder) }
+        var restored = box?.openTabs() ?? savedTabs.map { Self.tab($0, in: folder) }
         var groups = TabGroups()
         for group in saved?.groups ?? [] { groups.add(group) }
         for (tab, savedTab) in zip(restored, savedTabs) where savedTab.group != nil { groups.set(tab.id, to: savedTab.group) }
@@ -201,6 +215,7 @@ package final class Workspace {
         // Restored file tabs follow the disk too.
         if tabs.contains(where: { $0.file != nil }) { _ = filesStore() }
         // Coming back to Kore checks the folder is still where it was (one lookup, no polling).
+        guard box == nil else { return }
         activation = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
         ) { [weak self] _ in MainActor.assumeIsolated { self?.followFolder() } }
@@ -227,7 +242,7 @@ package final class Workspace {
     }
 
     func start(_ provider: Provider, in tab: ChatTab) {
-        tab.chat = Chat(provider: provider, folder: folder)
+        tab.chat = box?.newChat(provider) ?? Chat(provider: provider, folder: folder)
     }
 
     /// Starts a chat of the provider with that id ("claude", "codex") in the active tab, or a new
@@ -404,11 +419,12 @@ package final class Workspace {
             let chats = board.orderedChats
             board.close()
             returnToStrip(chats, after: tab, select: false)
-        } else if remember {
+        } else if remember, box == nil {
             rememberClosed(tab, at: index)
         }
         if tab.agent == nil, let chat = tab.chat {
             for agentTab in tabs where agentTab.chat === chat && agentTab.agent != nil { remove(agentTab) }
+            box?.tabClosed(chat)
         }
         remove(tab, at: tabs.firstIndex(where: { $0.id == tab.id }) ?? index)
         save()
@@ -794,7 +810,9 @@ package final class Workspace {
     /// Chats with work a quit would end: a turn or an agent running, or a background command
     /// (or an armed scheduled job) live.
     package var workingChats: Int {
-        (tabs.filter { $0.agent == nil }.compactMap(\.chat) + tabs.flatMap { $0.board?.orderedChats ?? [] })
+        // A box's chats run on there: quitting here doesn't stop them.
+        guard box == nil else { return 0 }
+        return (tabs.filter { $0.agent == nil }.compactMap(\.chat) + tabs.flatMap { $0.board?.orderedChats ?? [] })
             .filter { $0.isWorking || $0.commands.summary.total > 0 }.count
     }
 
@@ -846,7 +864,7 @@ package final class Workspace {
     private static let explorerKey = "explorer"
 
     private func saveExplorer() {
-        guard Self.persists(folder) else { return }
+        guard box == nil, Self.persists(folder) else { return }
         UserDefaults.standard.set(
             try? JSONEncoder().encode(ExplorerState(open: explorerOpen, width: explorerWidth)),
             forKey: Self.key(Self.explorerKey, folder))
@@ -869,6 +887,11 @@ package final class Workspace {
     }
 
     private func load() async {
+        // A box's history isn't read from here yet.
+        guard box == nil else {
+            loaded = true
+            return
+        }
         let folder = folder
         // The folder's earlier paths too: a renamed folder's chats stay under its old path.
         let earlier = earlierFolders
@@ -1073,13 +1096,13 @@ package final class Workspace {
     func persistNow() {
         saveGeneration += 1
         saveQueued = false
-        guard !isClosed, Self.persists(folder) else { return }
+        guard !isClosed, box == nil, Self.persists(folder) else { return }
         UserDefaults.standard.set(try? JSONEncoder().encode(persistenceSnapshot()), forKey: Self.key(Self.savedKey, folder))
     }
 
     /// Saves this folder's tabs, once for a burst of changes.
     func save() {
-        guard !isClosed, Self.persists(folder), !saveQueued else { return }
+        guard !isClosed, box == nil, Self.persists(folder), !saveQueued else { return }
         saveQueued = true
         let generation = saveGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
@@ -1336,7 +1359,7 @@ extension Workspace {
     /// A new chat of the provider on a board.
     func startChat(_ provider: Provider, on boardTab: ChatTab, section: UUID?, slot: UUID?, drop: BoardDrop? = nil) {
         guard let board = boardTab.board else { return }
-        place(Chat(provider: provider, folder: folder), on: board, section: section, slot: slot, drop: drop)
+        place(box?.newChat(provider) ?? Chat(provider: provider, folder: folder), on: board, section: section, slot: slot, drop: drop)
         save()
     }
 
@@ -1413,7 +1436,7 @@ extension Workspace {
     /// once it's gone it says so (Locate…). Runs on the explorer's root event, a root that
     /// can't be read, and Kore coming to the front.
     func followFolder() {
-        guard !isClosed else { return }
+        guard !isClosed, box == nil else { return }
         guard let now = identity.current() else {
             if !FileManager.default.fileExists(atPath: folder.path) { folderLost = true }
             return

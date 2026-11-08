@@ -12,7 +12,9 @@ extension Workspace {
     /// Whether the command does anything here (the menu item's enabled state).
     package func can(_ command: WorkspaceCommand) -> Bool {
         switch command {
-        case .newTab, .newBoard, .closeTab, .nextTab, .previousTab, .moveTabRight, .moveTabLeft, .goToFile, .toggleExplorer, .search, .reloadTab, .reload: true
+        case .newTab, .newBoard, .closeTab, .nextTab, .previousTab, .moveTabRight, .moveTabLeft: true
+        // A box's files aren't read from here yet, and its chats reload from the box.
+        case .goToFile, .toggleExplorer, .search, .reloadTab, .reload: box == nil
         case .reopenClosedTab: canReopenClosedTab
         case .stop: activeTab.chat?.isBusy == true
         case .save, .goToLine: activeFile?.isText == true
