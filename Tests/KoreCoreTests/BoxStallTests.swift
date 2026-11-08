@@ -41,14 +41,17 @@ struct BoxStallTests {
         #expect(!tree.ignored("repo/keep.log"))
         #expect(tree.ignored("repo/projects/p3/secret.txt"))
         #expect(!tree.ignored("repo/projects/p3/public.txt"))
-        #expect(!tree.ignored("repo/.venv/lib/site-packages/pkg7/out/next.js"))
+        // .venv is skipped by default, whatever the file says.
+        #expect(tree.ignored("repo/.venv/lib/site-packages/pkg7/out/next.js"))
         #expect(tree.ignored("repo/.git/config"))
 
         // A changed `.gitignore` is read again, folders' verdicts with it.
         try "*.py\n".write(to: root.appendingPathComponent("repo/.gitignore"), atomically: true, encoding: .utf8)
         tree.forget("repo/.gitignore")
         #expect(tree.ignored(paths[0]))
-        #expect(!tree.ignored("repo/build/out.bin"))
+        #expect(!tree.ignored("repo/projects/p3/secret.txt"))
+        // build/ stays skipped by default.
+        #expect(tree.ignored("repo/build/out.bin"))
     }
 
     @Test func theCLIsTempFolder() throws {
