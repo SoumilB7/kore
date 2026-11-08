@@ -152,7 +152,7 @@ public struct TextFile: Sendable {
     }
 
     /// Tabs or spaces, from the file's own indented lines; 4 spaces when it has none.
-    static func detectIndent(_ text: String) -> Indent {
+    public static func detectIndent(_ text: String) -> Indent {
         var tabs = 0
         var spaces = 0
         var widths: [Int: Int] = [:]

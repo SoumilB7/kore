@@ -2,7 +2,7 @@ import AppKit
 import HostClient
 import SwiftUI
 
-/// What the Boxes panel and the box popup share: a box's one line with its action, and the Add a
+/// What the Welcome's box view and the box popup share: a box's one line with its action, and the Add a
 /// box… field.
 
 /// A box's one line, and its action after a dot ("Stopped on mybox · Start"). Copy puts the
@@ -67,4 +67,57 @@ struct BoxAliasField: View {
             .onExitCommand(perform: cancel)
             .onAppear { focused = true }
     }
+}
+
+/// A box's status: connected (filled, green), offline (filled, dim), not set up (a ring), not
+/// asked yet (a faint ring).
+struct StatusDot: View {
+    enum State { case connected, offline, notSetUp, unknown }
+    let state: State
+
+    var body: some View {
+        let size = Size.statusPoint
+        Group {
+            switch state {
+            case .connected: Circle().fill(Theme.success)
+            case .offline: Circle().fill(Theme.tertiary)
+            case .notSetUp: Circle().strokeBorder(Theme.tertiary, lineWidth: Stroke.hairline * 1.5)
+            case .unknown: Circle().strokeBorder(Theme.border, lineWidth: Stroke.hairline * 1.5)
+            }
+        }
+        .frame(width: size, height: size)
+        .accessibilityLabel(Text(label))
+    }
+
+    private var label: String {
+        switch state {
+        case .connected: "Connected"
+        case .offline: "Offline"
+        case .notSetUp: "Not set up"
+        case .unknown: "Not checked"
+        }
+    }
+}
+
+/// A folder's pairing with a Mac folder, while it's checked, asked or refused.
+struct BoxPairing: Equatable {
+    enum State: Equatable {
+        /// The Mac folder, as shown.
+        case checking(String)
+        case ask(String, HostSync.Start, URL)
+        case failed(String)
+    }
+
+    let place: BoxPlace
+    let state: State
+
+    var line: String {
+        switch state {
+        case .checking(let mac): "Checking \(mac)…"
+        case .ask(let question, _, _): question
+        case .failed(let why): why
+        }
+    }
+
+    var failed: Bool { if case .failed = state { true } else { false } }
 }

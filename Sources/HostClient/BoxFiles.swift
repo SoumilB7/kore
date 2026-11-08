@@ -12,6 +12,12 @@ package struct BoxListing: Sendable, Equatable {
     package var entries: [FileEntry]
     /// The box stopped at its cap: there's more in the folder than these.
     package var more: Bool
+
+    package init(path: String, entries: [FileEntry], more: Bool) {
+        self.path = path
+        self.entries = entries
+        self.more = more
+    }
 }
 
 /// A file as `fs.read` found it.
@@ -22,6 +28,15 @@ package struct BoxFileRead: Sendable, Equatable {
     package var text: String?
     package var image: Data?
     package var truncated: Bool
+
+    package init(path: String, kind: FileReadKind, size: Int64, text: String?, image: Data?, truncated: Bool) {
+        self.path = path
+        self.kind = kind
+        self.size = size
+        self.text = text
+        self.image = image
+        self.truncated = truncated
+    }
 }
 
 /// What lists and reads a box's files: the link, or a test's stand-in.

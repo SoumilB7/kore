@@ -271,7 +271,7 @@ struct HeaderButton: View {
 }
 
 /// Nothing for the first moments, then a spinner (look §3).
-private struct DelayedSpinner: View {
+struct DelayedSpinner: View {
     @StateObject private var shown = Local(false)
 
     var body: some View {
@@ -286,7 +286,7 @@ private struct DelayedSpinner: View {
     }
 }
 
-private struct ExplorerState: View {
+struct ExplorerState: View {
     let message: String
     let color: Color
     let button: String
@@ -394,7 +394,7 @@ private struct TreeList: View, Equatable {
 }
 
 /// 1pt lines at each ancestor's chevron centre, one path a colour.
-private struct TreeGuides: Shape {
+struct TreeGuides: Shape {
     let depth: Int
     /// All the lines but this one.
     var except: Int?

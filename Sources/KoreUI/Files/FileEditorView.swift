@@ -1,4 +1,5 @@
 import AppKit
+import LinkProtocol
 import KoreCore
 import SwiftUI
 
@@ -16,6 +17,8 @@ struct FileEditorView: View {
     var body: some View {
         VStack(spacing: 0) {
             PathRow(document: document, workspace: workspace, menu: crumbMenu.value) { changes.value = $0 } openMenu: { target in
+                // A box file's folders aren't on this Mac: its path row only shows where it is.
+                guard document.box == nil else { return }
                 crumbMenu.value = crumbMenu.value?.anchor == target.anchor ? nil : target
             }
             Rule()
@@ -82,11 +85,23 @@ struct FileEditorView: View {
                             .padding(.leading, Size.Editor.findMargin)
                     }
                 }
+            // A box's image, read over the link.
+            case .image where document.boxImage != nil:
+                if let image = document.boxImage {
+                    Image(nsImage: image).resizable().interpolation(.high).aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: image.size.width, maxHeight: image.size.height)
+                        .padding(Space.xl)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            case .image where document.box != nil, .binary where document.box != nil:
+                FileState(symbol: "doc", title: "This file is binary.", line: "Kore shows text files and images.", buttons: [])
             // Images and binary files go to their renderers; this shows only if one can't take them.
             case .image, .binary:
                 FileState(
                     symbol: "doc", title: "This file is binary.", line: "Kore shows text files and images.",
                     buttons: [("Open with Default App", openDefault), ("Reveal in Finder", reveal)])
+            case .tooLarge(let bytes) where document.box != nil:
+                FileState(symbol: "photo", title: "\(document.name) is \(Self.size(bytes)).", line: "Too large to show from the box.", buttons: [])
             case .tooLarge(let bytes):
                 FileState(
                     symbol: "doc", title: "\(document.name) is \(Self.size(bytes)).",
@@ -312,7 +327,10 @@ private struct StatusRow: View {
     var body: some View {
         HStack(spacing: Space.xl) {
             Spacer(minLength: 0)
-            if document.readOnly { StatusText("Read-only") }
+            if document.readOnly {
+                // A box file past what the box sends: the first part shows.
+                StatusText(document.boxCut.map { "Read-only · first \(FileEditorView.size(LinkFiles.readMax)) of \(FileEditorView.size(Int($0)))" } ?? "Read-only")
+            }
             let caret = document.caret
             StatusItem(
                 title: "Ln \(caret.line), Col \(caret.column)" + (caret.selected > 0 ? " (\(caret.selected) selected)" : ""),

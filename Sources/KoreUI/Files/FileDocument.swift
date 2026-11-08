@@ -1,4 +1,5 @@
 import AppKit
+import HostClient
 import KoreCore
 import Observation
 
@@ -80,6 +81,30 @@ final class FileDocument: Identifiable {
     let id = UUID()
     var name: String { url.lastPathComponent }
 
+    /// A file on a box (`BoxFiles`): read over the link, read-only. `url` is its stand-in under the
+    /// box window's folder, for the path row; nothing on this Mac is read or written there.
+    @ObservationIgnored private(set) var box: BoxFile?
+    /// A box image's picture, once read.
+    private(set) var boxImage: NSImage?
+    /// The box sent only the first part of the file: its whole size.
+    private(set) var boxCut: Int64?
+
+    struct BoxFile {
+        let path: String
+        let read: @MainActor (String) async -> Result<BoxFileRead, HostRefusal>
+        var reading = false
+    }
+
+    init(box path: String, standIn: URL, read: @escaping @MainActor (String) async -> Result<BoxFileRead, HostRefusal>) {
+        autoSave = .shared
+        url = standIn
+        box = BoxFile(path: path, read: read)
+        let language = Language.of(standIn)
+        self.language = language
+        wrap = Self.wraps(language)
+        readOnly = true
+    }
+
     init(url: URL, autoSave: FileAutoSave = .shared) {
         self.autoSave = autoSave
         // The real path, as the watcher, the tree and other tabs see it.
@@ -121,6 +146,7 @@ final class FileDocument: Identifiable {
     }
 
     func load() {
+        if box != nil { return loadFromBox() }
         cancelAutoSave()
         loaded = true
         // One read: the text and the bytes an auto-save compares the disk with.
@@ -132,9 +158,52 @@ final class FileDocument: Identifiable {
         }
     }
 
+    /// Reads the box's file again (a turn ended): text in place, the caret kept as near as it can be.
+    func reloadFromBox() {
+        guard box != nil, loaded, isText else { return }
+        loadFromBox()
+    }
+
+    private func loadFromBox() {
+        guard var box, !box.reading else { return }
+        box.reading = true
+        self.box = box
+        Task { [weak self] in
+            let result = await box.read(box.path)
+            guard let self else { return }
+            self.box?.reading = false
+            self.loaded = true
+            self.boxCut = nil
+            switch result {
+            case .failure(let why):
+                self.file = TextFile(content: .unreadable(why.message))
+            case .success(let read):
+                switch read.kind {
+                case .text:
+                    let text = read.text ?? ""
+                    let crlf = text.contains("\r\n")
+                    let normal = crlf ? text.replacingOccurrences(of: "\r\n", with: "\n") : text
+                    if case .text(let shown) = self.file.content, shown == normal { return }
+                    self.file = TextFile(content: .text(normal), lineEnding: crlf ? .crlf : .lf, indent: TextFile.detectIndent(normal))
+                    if read.truncated { self.boxCut = read.size }
+                    self.setText(normal)
+                case .image:
+                    if let data = read.image, let image = NSImage(data: data) {
+                        self.boxImage = image
+                        self.file = TextFile(content: .image)
+                    } else {
+                        self.file = TextFile(content: .tooLarge(Int(read.size)))
+                    }
+                case .binary, .unknown:
+                    self.file = TextFile(content: .binary)
+                }
+            }
+        }
+    }
+
     /// Opens a file over the size limit as plain, read-only text.
     func openAnyway() {
-        guard case .tooLarge = file.content, let data = try? Data(contentsOf: url) else { return }
+        guard box == nil, case .tooLarge = file.content, let data = try? Data(contentsOf: url) else { return }
         readOnly = true
         language = .plain
         wrap = false

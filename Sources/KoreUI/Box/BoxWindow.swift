@@ -47,6 +47,19 @@ final class BoxBinding {
     /// folder. Nothing on this Mac is read or written there.
     var folderURL: URL { URL(fileURLWithPath: "/" + alias + "/" + folder.replacingOccurrences(of: "~", with: "home")) }
 
+    /// The folder's files as the window's explorer shows them (made when it first shows).
+    private(set) lazy var files: BoxExplorerStore = {
+        filesMade = true
+        return BoxExplorerStore(root: folder, source: connection)
+    }()
+    private(set) var filesMade = false
+
+    /// A box path's stand-in under `folderURL`, for a file tab's path row.
+    func standIn(_ path: String) -> URL {
+        let inside = path.hasPrefix(folder + "/") ? String(path.dropFirst(folder.count)) : "/" + BoxFolder.lastPart(path)
+        return URL(fileURLWithPath: folderURL.standardizedFileURL.path + inside)
+    }
+
     /// The window's workspace, for the chats the box opens in this folder meanwhile.
     weak var workspace: Workspace?
     /// Chats whose tabs closed here: never adopted again, even before the box confirms.
@@ -305,8 +318,11 @@ final class BoxChatServices: ChatServices {
     func arsenalFollowMode(_ chat: Chat) { app.arsenalFollowMode(chat) }
     func tap(_ chat: Chat, _ event: ChatEvent) {
         app.tap(chat, event)
-        // A turn may have changed files on a box that can't watch its copy.
-        if case .turnFinished = event { binding?.sync?.refresh() }
+        // A turn may have changed files on a box that can't watch its copy, and in its explorer.
+        if case .turnFinished = event {
+            binding?.sync?.refresh()
+            binding?.workspace?.boxTurnEnded()
+        }
     }
     func log(_ name: String, _ fields: KeyValuePairs<String, String?>) { app.log(name, fields) }
     var timeReplay: Bool { app.timeReplay }

@@ -2,7 +2,7 @@ import AppKit
 import HostClient
 import SwiftUI
 
-/// Add folder…'s field under a box, shared by the Boxes panel and the box popup: a path (there's
+/// Add folder…'s field under a box, in the box popup: a path (there's
 /// no Finder for a box) with one line under it. A folder already on the box is added to what it
 /// serves and handed to `added`; nothing opens. Esc or `close` puts the row back.
 struct BoxAddFolderField: View {

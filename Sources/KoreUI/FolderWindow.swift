@@ -48,10 +48,12 @@ struct FolderWindow: View {
                 }
                 .zIndex(1)
                 HStack(spacing: 0) {
-                    if docked, workspace.showsBoxes {
-                        // The boxes; a box's window shows only them (never the Mac's disk for it).
-                        BoxesPanel(workspace: workspace).frame(width: workspace.explorerWidth)
-                        Rectangle().fill(Theme.border).frame(width: Stroke.hairline)
+                    if docked, let box = workspace.box {
+                        // The box folder's files, read over the link (never the Mac's disk for it).
+                        BoxExplorer(workspace: workspace, box: box, floating: false).frame(width: workspace.explorerWidth)
+                        ExplorerSash(width: Binding(get: { workspace.explorerWidth }, set: { workspace.explorerWidth = $0 })) { held in
+                            heldContent.value = held ? content : nil
+                        }
                     } else if docked, let store = workspace.files {
                         ExplorerSidebar(workspace: workspace, store: store, floating: false)
                             .frame(width: workspace.explorerWidth)
@@ -82,12 +84,18 @@ struct FolderWindow: View {
                 }
                 // Below 700 wide the sidebar floats over the content; a click outside closes it.
                 .overlay(alignment: .leading) {
-                    if workspace.explorerOpen, floating, workspace.showsBoxes {
+                    if workspace.explorerOpen, floating, let box = workspace.box {
                         ZStack(alignment: .leading) {
                             Color.clear.contentShape(Rectangle()).onTapGesture { workspace.explorerOpen = false }
-                            BoxesPanel(workspace: workspace)
+                            BoxExplorer(workspace: workspace, box: box, floating: true)
                                 .frame(width: min(Layout.Explorer.width, geometry.size.width - Layout.Explorer.overlayMargin))
-                                .background(Theme.background)
+                                .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: Radius.panel, topTrailingRadius: Radius.panel))
+                                .overlay(
+                                    UnevenRoundedRectangle(bottomTrailingRadius: Radius.panel, topTrailingRadius: Radius.panel)
+                                        .strokeBorder(Theme.border, lineWidth: Stroke.hairline)
+                                )
+                                .shadow(color: Elevation.floating.color, radius: Elevation.floating.radius, y: Elevation.floating.y)  // lint:allow the one shadow (Elevation.floating)
+                                .onExitCommand { workspace.explorerOpen = false }
                         }
                     } else if workspace.explorerOpen, floating, let store = workspace.files {
                         ZStack(alignment: .leading) {

@@ -162,9 +162,6 @@ package final class Workspace {
     var explorerWidth = Layout.Explorer.width {
         didSet { saveExplorer() }
     }
-    /// The left panel shows Boxes: a box's window, whose folder isn't on this Mac. A window's kind
-    /// is fixed when it opens; a window on this Mac's folder never shows boxes.
-    var showsBoxes: Bool { box != nil }
     /// The title row's box button: a box's window only.
     var hasBoxButton: Bool { box != nil }
     /// ⌘P: files, or go to line (⌃G).
@@ -215,7 +212,7 @@ package final class Workspace {
             explorerWidth = explorer.width
             explorerOpen = explorer.open
         }
-        // A box's window opens on its panel: the boxes, its folder lit.
+        // A box's window opens on its panel: the box folder's files.
         if box != nil { explorerOpen = true }
         bindTabs(previous: [])
         trimDrafts()
