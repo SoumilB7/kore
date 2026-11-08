@@ -42,9 +42,7 @@ public enum CLIProfiles {
 
     static var directory: URL {
         if let root = root.value { return root }
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Kore/accounts")
+        return KoreFolders.support.appendingPathComponent("accounts")
     }
 
     private static let state = Locked<Saved?>(nil)

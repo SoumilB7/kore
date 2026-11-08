@@ -1,0 +1,93 @@
+import Foundation
+import Testing
+
+@testable import HostClient
+@testable import KoreCore
+@testable import KoreLink
+
+/// Kore's folders come from `KoreFolders` alone: the owner's Kore keeps today's paths, and any
+/// other process (a test, a storyline host, KoreBench, a renamed binary) never the owner's.
+@Suite struct KoreFoldersTests {
+    let home = URL(fileURLWithPath: "/Users/someone", isDirectory: true)
+    var bases: KoreFolders.Bases { KoreFolders.Bases(home: home) }
+    let scratch = URL(fileURLWithPath: "/private/tmp/scratch", isDirectory: true)
+
+    @Test func ownerKeepsTodaysPaths() {
+        for domain in ["dev.kore.Kore", "Kore", "kore-host"] {
+            let places = KoreFolders.places(domain: domain, testing: false, bases: bases, scratch: scratch)
+            #expect(places.support.path == "/Users/someone/Library/Application Support/Kore")
+            #expect(places.logs.path == "/Users/someone/Library/Logs/Kore")
+            #expect(places.caches.path == "/Users/someone/Library/Caches/Kore")
+            #expect(KoreFolders.allowed(places, domain: domain, testing: false, bases: bases))
+        }
+    }
+
+    @Test func everyOtherDomainKeepsItsOwn() {
+        let owner = KoreFolders.owner(bases)
+        for domain in ["kore-storylines", "KoreBench", "Kore-exp", "dev.kore.Kore.test", "kore-cli", "swiftpm-testing-helper"] {
+            let places = KoreFolders.places(domain: domain, testing: false, bases: bases, scratch: scratch)
+            #expect(places.support.path == "/Users/someone/Library/Application Support/Kore-\(domain)")
+            #expect(places.logs.path == "/Users/someone/Library/Logs/Kore-\(domain)")
+            #expect(!places.touches(owner))
+            #expect(KoreFolders.allowed(places, domain: domain, testing: false, bases: bases))
+        }
+        // A test process, whatever its domain: a scratch folder of its own.
+        let test = KoreFolders.places(domain: "Kore", testing: true, bases: bases, scratch: scratch, pid: 42)
+        #expect(test == KoreFolders.Places(under: scratch.appendingPathComponent("kore-data-42")))
+    }
+
+    @Test func onlyTheOwnerMayResolveToTheOwnersFolders() {
+        let owner = KoreFolders.owner(bases)
+        var inside = KoreFolders.Places(under: scratch)
+        inside.caches = owner.support.appendingPathComponent("hosts")
+        for (domain, testing) in [("kore-storylines", false), ("KoreBench", false), ("Kore", true), ("dev.kore.Kore", true)] {
+            #expect(!KoreFolders.allowed(owner, domain: domain, testing: testing, bases: bases))
+            #expect(!KoreFolders.allowed(inside, domain: domain, testing: testing, bases: bases))
+        }
+        // `Kore-x` beside `Kore` is not inside it.
+        let beside = KoreFolders.places(domain: "x", testing: false, bases: bases, scratch: scratch)
+        #expect(KoreFolders.allowed(beside, domain: "x", testing: false, bases: bases))
+    }
+
+    @Test func keychainServiceIsTheOwnersOnly() {
+        #expect(KeychainSecrets.service(domain: "dev.kore.Kore", owner: true) == "dev.kore.korenet")
+        #expect(KeychainSecrets.service(domain: "kore-storylines", owner: false) == "dev.kore.korenet.kore-storylines")
+    }
+
+    /// Every path provider, as this (non-Kore) process resolves it: none is in the owner's folders.
+    @Test @MainActor func noProviderPointsAtTheOwnersFolders() {
+        #expect(!KoreFolders.isOwner)
+        let owner = KoreFolders.owner()
+        let real = [owner.support, owner.logs, owner.caches].map(\.standardizedFileURL.path)
+        func outside(_ url: URL?, _ what: String) {
+            guard let path = url?.standardizedFileURL.path else { return }
+            #expect(!real.contains { path == $0 || path.hasPrefix($0 + "/") }, "\(what): \(path)")
+        }
+        #expect(!KoreFolders.current.touches(owner))
+        outside(KoreFolders.support, "KoreFolders.support")
+        outside(KoreFolders.logs, "KoreFolders.logs")
+        outside(KoreFolders.caches, "KoreFolders.caches")
+        outside(HostCache.root(), "HostCache.root")
+        outside(NodeMigration.standardRoot(), "NodeMigration.standardRoot")
+        outside(NodeMigration().root, "NodeMigration")
+        outside(CarryJournals.standard.directory, "CarryJournals.standard")
+        outside(BoxHostBuild(version: nil, commit: nil, builtFrom: nil).support, "BoxHostBuild.support")
+        outside(NetEnvironment.standard().support, "NetEnvironment.standard")
+        outside(LinkHost.defaultDirectory, "LinkHost.defaultDirectory")
+        outside(KoreReach.defaultDirectory, "KoreReach.defaultDirectory")
+        outside(AgentChannel.directory, "AgentChannel.directory")
+        outside(KoreReach.socket.map { URL(fileURLWithPath: $0) }, "KoreReach.socket")
+        outside(TurnChangeLog.file(for: home), "TurnChangeLog")
+        outside(HandoffRecords.directory, "HandoffRecords")
+        outside(CLIProfiles.directory, "CLIProfiles")
+        let usage = UsagePaths.standard
+        outside(usage.support, "UsagePaths.support")
+        outside(usage.caches, "UsagePaths.caches")
+        outside(usage.logs, "UsagePaths.logs")
+        outside(KoreLog.folder, "KoreLog")
+        // A chat this process launched is told of its own agent socket, never `kore`'s default.
+        #expect(KoreReach.socket != nil)
+        #expect(KeychainSecrets.service != "dev.kore.korenet")
+        #expect(KeychainSecrets().service != "dev.kore.korenet")
+    }
+}

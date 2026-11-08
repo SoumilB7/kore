@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 
 /// kore-host built on this Mac, from the source this Kore was built from, the first time a box
 /// needs one: a Linux box's with Swift's static Linux SDK (the "Linux kit": swiftly, the pinned
@@ -41,7 +42,7 @@ package struct BoxHostBuild: Sendable {
 
     package init(
         run: @escaping Runner = BoxHostBuild.system, home: URL = FileManager.default.homeDirectoryForCurrentUser,
-        support: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Kore"),
+        support: URL = KoreFolders.support,
         toolchains: [URL]? = nil, version: String?, commit: String?, builtFrom: URL?
     ) {
         self.run = run

@@ -290,14 +290,11 @@ public struct UsagePaths: Sendable {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let claude = env["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) } ?? home.appendingPathComponent(".claude")
         let codex = env["CODEX_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: $0) } ?? home.appendingPathComponent(".codex")
-        let files = FileManager.default
-        let support = files.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? home.appendingPathComponent("Library/Application Support")
-        let caches = files.urls(for: .cachesDirectory, in: .userDomainMask).first ?? home.appendingPathComponent("Library/Caches")
         let testing = KoreLog.keepsNothing
         return UsagePaths(
-            support: testing ? nil : support.appendingPathComponent("Kore/usage"),
-            caches: testing ? nil : caches.appendingPathComponent("Kore/usage"),
+            support: testing ? nil : KoreFolders.support.appendingPathComponent("usage"),
+            caches: testing ? nil : KoreFolders.caches.appendingPathComponent("usage"),
             claudeProjects: claude.appendingPathComponent("projects"), codexSessions: codex.appendingPathComponent("sessions"),
-            logs: testing ? nil : home.appendingPathComponent("Library/Logs/Kore"))
+            logs: testing ? nil : KoreFolders.logs)
     }()
 }

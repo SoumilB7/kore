@@ -67,11 +67,8 @@ package final class LinkHost {
             run: LinkRun.allow(name: name, requirement: requirement, key: (text as String?) ?? "", fullControl: fullControl), directory: directory)
     }
 
-    /// `~/Library/Application Support/Kore/link`.
-    package static var defaultDirectory: URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Kore", isDirectory: true).appendingPathComponent("link", isDirectory: true)
-    }
+    /// `~/Library/Application Support/Kore/link` (`KoreFolders`).
+    package static var defaultDirectory: URL { KoreFolders.support.appendingPathComponent("link", isDirectory: true) }
 
     private init(run: LinkRun, directory: URL, feed: LinkFeed = .shared) throws {
         self.run = run

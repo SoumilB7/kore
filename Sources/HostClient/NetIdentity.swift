@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 import KoreTrust
 import Security
 import Synchronization
@@ -14,8 +15,14 @@ package protocol NetSecrets: Sendable {
 /// Generic passwords under one service, this device only, readable after the first unlock (a
 /// Mac woken in the night reconnects without a prompt).
 package struct KeychainSecrets: NetSecrets {
-    package static let service = "dev.kore.korenet"
+    /// The owner's Kore's service; any other process keeps its own (`dev.kore.korenet.<domain>`),
+    /// so it never reads or writes the owner's identity.
+    package static let service = service(domain: KoreFolders.domain, owner: KoreFolders.isOwner)
     package let service: String
+
+    package static func service(domain: String, owner: Bool) -> String {
+        owner ? "dev.kore.korenet" : "dev.kore.korenet." + domain
+    }
 
     package init(service: String = KeychainSecrets.service) { self.service = service }
 

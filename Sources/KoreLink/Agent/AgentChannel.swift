@@ -16,10 +16,8 @@ package final class AgentChannel {
     /// The channel open now; nil while closed.
     package private(set) static var current: AgentChannel?
 
-    /// `~/Library/Application Support/Kore/agent`; tests and storylines use their own.
-    package static var directory: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Kore", isDirectory: true).appendingPathComponent("agent", isDirectory: true)
-    {
+    /// `~/Library/Application Support/Kore/agent` (`KoreFolders`); tests and storylines use their own.
+    package static var directory: URL = KoreReach.defaultDirectory {
         // Chats launched from now on are told of a socket other than the default (`KoreReach`).
         didSet { KoreReach.socket = directory.appendingPathComponent(socketName).path }
     }

@@ -1,6 +1,7 @@
 import Foundation
 
-/// Kore's own diagnostic logs, one file per name in `~/Library/Logs/Kore` (`agents.log`, …).
+/// Kore's own diagnostic logs, one file per name in `~/Library/Logs/Kore` (`KoreFolders.logs`:
+/// `agents.log`, …).
 /// One line per event: an ISO timestamp, a tab, the event's name, then space-separated
 /// `key=value` pairs (a value with spaces or quotes is quoted):
 ///
@@ -72,13 +73,13 @@ public final class KoreLog: @unchecked Sendable {
     private static let lock = NSLock()
     nonisolated(unsafe) private static var logs: [String: KoreLog] = [:]
 
-    private static let folder: URL? = {
+    static let folder: URL? = {
         let env = ProcessInfo.processInfo.environment
         if let path = env["KORE_LOG_DIR"] {
             return ["", "0", "off", "no"].contains(path.lowercased()) ? nil : URL(fileURLWithPath: path)
         }
         if keepsNothing { return nil }
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Kore")
+        return KoreFolders.logs
     }()
 
     /// A test run or a storyline host: it keeps nothing in the owner's folders unless told where.

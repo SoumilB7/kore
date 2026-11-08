@@ -86,9 +86,13 @@ public enum KoreReach {
         claudeArguments(server) + ["--append-system-prompt", instructions(with: other, server)]
     }
 
-    /// The agent socket when Kore uses one other than `kore`'s default (a storyline's): the CLI's
-    /// shell and its `kore mcp` are told of it.
-    nonisolated(unsafe) public static var socket: String?
+    /// The agent socket's folder unless a host sets another: `agent` in Kore's (`KoreFolders`).
+    package static var defaultDirectory: URL { KoreFolders.support.appendingPathComponent("agent", isDirectory: true) }
+
+    /// The agent socket when Kore uses one other than `kore`'s default (a storyline's, or any
+    /// process but the owner's Kore): the CLI's shell and its `kore mcp` are told of it.
+    nonisolated(unsafe) public static var socket: String? =
+        KoreFolders.isOwner ? nil : defaultDirectory.appendingPathComponent("kore.sock").path
 
     /// A chat's variables: its pass, and the socket when it isn't the default.
     public static func variables(pass: String) -> [String: String] {

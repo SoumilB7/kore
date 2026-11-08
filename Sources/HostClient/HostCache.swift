@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 import LinkProtocol
 import src
 
@@ -13,10 +14,8 @@ package final class HostCache: Sendable {
     package let root: URL
     private let queue = DispatchQueue(label: "kore.host.cache")
 
-    package static func root() -> URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appendingPathComponent("Kore/hosts", isDirectory: true)
-    }
+    /// `~/Library/Application Support/Kore/hosts` (`KoreFolders`).
+    package static func root() -> URL { KoreFolders.support.appendingPathComponent("hosts", isDirectory: true) }
 
     package init(alias: String, root: URL = HostCache.root()) {
         // A KoreNet node's copy is under `nodes/<id>` beside `hosts/` (where `NodeMigration`

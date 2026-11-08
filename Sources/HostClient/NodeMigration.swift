@@ -49,9 +49,8 @@ package struct NodeMigration {
     /// Told after each step's work, before the journal marks it (tests stop here, as a crash would).
     package var afterStep: (Step) throws -> Void = { _ in }
 
-    package static func standardRoot() -> URL {
-        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("Kore", isDirectory: true)
-    }
+    /// `~/Library/Application Support/Kore` (`KoreFolders`).
+    package static func standardRoot() -> URL { KoreFolders.support }
 
     package init(root: URL = NodeMigration.standardRoot(), defaults: UserDefaults = .standard) {
         self.root = root

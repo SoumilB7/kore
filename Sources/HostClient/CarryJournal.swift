@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 import Synchronization
 
 // A carry's checkpoint: one small JSON file per transfer under
@@ -84,10 +85,8 @@ package struct CarryJournals: Sendable {
 
     package init(directory: URL) { self.directory = directory }
 
-    /// `~/Library/Application Support/Kore/transfers`.
-    package static let standard = CarryJournals(
-        directory: FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Kore/transfers", isDirectory: true))
+    /// `~/Library/Application Support/Kore/transfers` (`KoreFolders`).
+    package static var standard: CarryJournals { CarryJournals(directory: KoreFolders.support.appendingPathComponent("transfers", isDirectory: true)) }
 
     package func url(_ id: UUID) -> URL { directory.appendingPathComponent(id.uuidString.lowercased() + ".json") }
 

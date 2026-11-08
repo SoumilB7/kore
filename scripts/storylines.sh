@@ -10,8 +10,9 @@
 #
 # Each run gets a folder of its own ($TMPDIR/kore-storylines/<time>, or --out) for its scratch
 # folders, report.json / report.txt, event logs, dumps and failure snapshots. The app's settings
-# live in the `kore-storylines` defaults domain, emptied first, so the owner's Kore settings are
-# never read or written. Chats talk to the scripted CLI unless --cli process (recorded cassettes,
+# live in the `kore-storylines` defaults domain, emptied first, and its Application Support, Logs
+# and Caches in <out>/kore-data (`KoreFolders`), so the owner's Kore settings and folders are never
+# read or written. Chats talk to the scripted CLI unless --cli process (recorded cassettes,
 # played by kore-fake-cli) or --live <model> says otherwise; the run's Claude store and Codex home
 # are kept in its folder. The --replay sessions are read where they were made.
 #

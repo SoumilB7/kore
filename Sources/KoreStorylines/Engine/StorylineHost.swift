@@ -1,4 +1,5 @@
 import AppKit
+import KoreCore
 import KoreLink
 import KoreUI
 
@@ -17,8 +18,11 @@ package enum StorylineHost {
 
     /// Called by `kore-storylines` before `KoreApp.main()`, with the process's arguments.
     package static func install(arguments: [String]) {
-        AgentGrants.install()
         let options = Options(arguments)
+        // Before anything reads them: the run's own Application Support, Logs and Caches, never
+        // the owner's (the app's launch work prunes, migrates and forgets in them).
+        KoreFolders.place(options.folders)
+        AgentGrants.install()
         if options.list {
             for story in Runner.discover() {
                 let tags = story.tags.map(\.name).sorted().joined(separator: ",")
@@ -93,6 +97,9 @@ package enum StorylineHost {
             }
             flags.realKeys = flags.realKeys && flags.realInput
         }
+
+        /// The run's Kore folders: `<out>/kore-data/{support,logs,caches}`.
+        var folders: KoreFolders.Places { KoreFolders.Places(under: out.appendingPathComponent("kore-data", isDirectory: true)) }
     }
 }
 
