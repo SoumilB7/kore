@@ -167,6 +167,7 @@ package final class KoreNetSwitch: NetRouter {
     /// Bumped each time it turns on or off (a box's upgrade tries once per run of KoreNet).
     @ObservationIgnored package private(set) var generation = 0
     @ObservationIgnored private var reading = false
+    @ObservationIgnored private var readAgain = false
     /// A join sheet's ears: what each box says on KoreNet, and how its enroll ended.
     @ObservationIgnored private var nodeWatchers: [String: @MainActor (NetNodeWire.Node) -> Void] = [:]
     @ObservationIgnored private var enrollWatchers: [String: @MainActor (Bool) -> Void] = [:]
@@ -457,13 +458,25 @@ package final class KoreNetSwitch: NetRouter {
     /// KoreNet chooses its tailnet, and when the Devices popup or the Welcome opens. Never on a
     /// timer; a read under way takes the next ask too.
     package func readStatus() {
-        guard let tailnet, !reading else { return }
+        guard let tailnet else { return }
+        // Asked again while a read is out: that read may have been taken before what the caller
+        // knows changed, so one more follows it (however many asked meanwhile).
+        guard !reading else {
+            readAgain = true
+            return
+        }
         reading = true
         let mine = generation
         Task.detached {
             let read = try? tailnet.status()
             await MainActor.run {
                 self.reading = false
+                defer {
+                    if self.readAgain {
+                        self.readAgain = false
+                        self.readStatus()
+                    }
+                }
                 guard self.generation == mine, self.env != nil, let read else { return }
                 if read != self.status { self.status = read }
                 // A read is as good as the bus: Tailscale stopped or signed out shows without one.
