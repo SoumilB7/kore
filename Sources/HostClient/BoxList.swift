@@ -162,9 +162,15 @@ package final class BoxList {
 
     /// Add a box…: listed from now on, answered or not. An alias is a name from the SSH config,
     /// never an option (`-…`).
-    package func add(_ alias: String) {
-        let alias = alias.trimmingCharacters(in: .whitespaces)
-        guard SyncBox.validAlias(alias) else { return }
+    /// What's typed as an SSH alias, trimmed; nil when it can't be one. The panel, the popup and
+    /// sync all check with `SyncBox.validAlias` (letters, digits, `._-`, never an option).
+    package static func alias(_ typed: String) -> String? {
+        let alias = typed.trimmingCharacters(in: .whitespaces)
+        return SyncBox.validAlias(alias) ? alias : nil
+    }
+
+    package func add(_ typed: String) {
+        guard let alias = Self.alias(typed) else { return }
         if !listed.contains(alias) { defaults?.set(listed + [alias], forKey: Self.listedKey) }
         if box(alias) == nil { boxes.append(Box(alias: alias)) }
     }

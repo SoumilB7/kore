@@ -642,6 +642,8 @@ package final class HostDaemon {
             case .signedOut?: "\(provider) isn't signed in."
             case nil: "Couldn't read \(provider)'s account."
             }
-        return .init(id: id, ok: reading != nil, message: message)
+        var result = LinkMessage.Result(id: id, ok: reading != nil, message: message)
+        if case .signedIn? = reading { result.signedIn = true } else if case .signedOut? = reading { result.signedIn = false }
+        return result
     }
 }

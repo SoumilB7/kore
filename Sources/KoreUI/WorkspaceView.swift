@@ -1,3 +1,4 @@
+import HostClient
 import KoreCore
 import Observation
 import src
@@ -381,9 +382,12 @@ struct TabBar: View {
         let strip = strip(layout)
         HStack(spacing: Size.tabGap) {
             ExplorerButton(workspace: workspace, size: tabHeight).storyID(StoryID.Titlebar.explorer)
-            BoxButton(workspace: workspace, size: tabHeight)
+            // The box button once there's a box (the Boxes panel adds the first), and in a box's window.
+            let boxButton = workspace.box != nil || !BoxList.shared.boxes.isEmpty
+            if boxButton { BoxButton(workspace: workspace, size: tabHeight) }
             if let explorerDock {
-                Color.clear.frame(width: max(0, explorerDock + Space.md - leadingInset - 2 * tabHeight - 3 * Size.tabGap), height: 0)
+                let buttons: CGFloat = boxButton ? 2 : 1
+                Color.clear.frame(width: max(0, explorerDock + Space.md - leadingInset - buttons * tabHeight - (buttons + 1) * Size.tabGap), height: 0)
             }
             HStack(spacing: Size.tabGap) {
                 if strip.name > 0 {

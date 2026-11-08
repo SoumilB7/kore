@@ -2,9 +2,10 @@ import AppKit
 import HostClient
 import SwiftUI
 
-/// The title row's box button, beside the panel button in every window (the new window's too):
-/// a click opens the box popup under it. In a box's window it also carries that box's one cue: a
-/// point while it's offline or its sync has something to say, the line itself on hover.
+/// The title row's box button, beside the panel button once there's a box (the Boxes panel adds
+/// the first): a click opens the box popup under it. In a box's window it also carries that box's
+/// one cue: an accent point while online, a grey one while it's offline or its sync has something
+/// to say, the line itself on hover.
 struct BoxButton: View {
     /// The window's workspace; nil in the new window, which has no folder.
     let workspace: Workspace?
@@ -27,9 +28,11 @@ struct BoxButton: View {
                 .frame(width: size, height: size)
                 .background(lit ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
                 .overlay(alignment: .topTrailing) {
-                    if let cue, cue.marked {
+                    // A box's window: its one quiet cue. Accent while it's online, grey with
+                    // something to say (offline, a sync line).
+                    if let cue {
                         Circle()
-                            .fill(Theme.secondary)
+                            .fill(cue.marked ? Theme.secondary : Theme.accent)
                             .frame(width: Size.statusPoint, height: Size.statusPoint)
                             .padding(Size.avatarCutout)
                             .background(Theme.background, in: Circle())
@@ -288,30 +291,23 @@ struct BoxPopup: View {
         ]
         // The box's one line (BoxList's note), with its action (Set up, Start, Update) when it has one.
         if let note = box?.note {
-            pieces.append(.view("status", AnyView(HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
-                line(note.line, tint: Theme.tertiary).fixedSize(horizontal: false, vertical: true)
-                if let action = note.action {
-                    Button(action.title) { Task { await list.act(action, on: alias) } }
-                        .buttonStyle(.plain)
-                        .font(Chrome.label)
-                        .foregroundStyle(Theme.accent)
-                        .fixedSize()
-                        .padding(.trailing, Space.sm)
-                }
-            })))
+            pieces.append(.view("status", AnyView(BoxNoteLine(note: note, alias: alias).padding(.horizontal, Space.sm).padding(.vertical, Space.xs))))
         }
         let here = workspace.map(\.givesWay) ?? window.value
         for folder in box?.folders ?? [] {
             let id = "folder:" + folder.path
             let place = BoxPlace(alias: alias, folder: folder.path)
             let shown = lit.value == id
+            // A folder missing on the box is dim, and neither lights nor opens.
+            let missing = folder.missing == true
             pieces.append(.item(Item(
-                id: id, story: StoryID.Boxes.folder(folder.path), click: { lit.value = id }, enter: { openFolder(place) },
+                id: id, story: StoryID.Boxes.folder(folder.path), click: { if !missing { lit.value = id } }, enter: { if !missing { openFolder(place) } },
                 label: AnyView(HStack(spacing: Space.sm) {
-                    Image(systemName: "folder").font(Chrome.caption).foregroundStyle(Theme.secondary).frame(width: Size.Box.lead)
-                    Text(folder.name).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1).help(folder.path)
+                    Image(systemName: "folder").font(Chrome.caption).foregroundStyle(missing ? Theme.tertiary : Theme.secondary).frame(width: Size.Box.lead)
+                    Text(folder.name).font(Chrome.label).foregroundStyle(missing ? Theme.tertiary : Theme.text).lineLimit(1)
+                        .help(missing ? "Missing on \(alias): \(folder.path)" : folder.path)
                     Spacer(minLength: 0)
-                    BoxFolderGlyphs(place: place, here: here).opacity(shown ? 1 : 0).allowsHitTesting(shown)
+                    BoxFolderGlyphs(place: place, here: here).opacity(shown && !missing ? 1 : 0).allowsHitTesting(shown && !missing)
                 }))))
         }
         if box?.status == .ready {
@@ -358,14 +354,7 @@ struct BoxPopup: View {
 
     /// Add a box…: the field; the SSH hosts it could be follow as rows.
     private func boxField(_ text: String) -> some View {
-        TextField("", text: Binding(get: { text }, set: { typed.value = $0 }), prompt: Text("SSH alias").foregroundStyle(Theme.tertiary))
-            .textFieldStyle(.plain)
-            .font(Chrome.label)
-            .focused($typing)
-            .fieldWell(focused: typing)
-            .onSubmit { addBox(text) }
-            .onExitCommand { typed.value = nil }
-            .onAppear { typing = true }
+        BoxAliasField(text: Binding(get: { text }, set: { typed.value = $0 }), add: addBox) { typed.value = nil }
             .padding(.vertical, Space.xxs)
             .storyID(StoryID.Boxes.field)
     }
@@ -442,9 +431,8 @@ struct BoxPopup: View {
         connection.release()
     }
 
-    private func addBox(_ alias: String) {
-        let alias = alias.trimmingCharacters(in: .whitespaces)
-        guard !alias.isEmpty, !alias.contains(" ") else { return }
+    private func addBox(_ typed: String) {
+        guard let alias = BoxList.alias(typed) else { return }
         list.add(alias)
         show(alias)
     }

@@ -19,10 +19,13 @@ package final class BoxAccounts {
     package struct Line: Equatable, Sendable {
         /// What the box last said of the login ("Signed in as …", "… isn't signed in.").
         package var said: String?
+        /// Signed in, as the box said it; nil until it says.
+        package var signedIn: Bool?
         package var step = Step.idle
 
-        package init(said: String? = nil, step: Step = .idle) {
+        package init(said: String? = nil, signedIn: Bool? = nil, step: Step = .idle) {
             self.said = said
+            self.signedIn = signedIn
             self.step = step
         }
     }
@@ -39,6 +42,7 @@ package final class BoxAccounts {
         var line = lines[key] ?? Line()
         if key == Self.gitHub, let on = connection.ghSignedIn {
             line.said = on ? "Signed in" : "Not signed in"
+            line.signedIn = on
             // Signed in while the page was up: done.
             if on, case .waiting = line.step { line.step = .idle }
         }
@@ -56,7 +60,10 @@ package final class BoxAccounts {
     /// Who the CLI on the box is signed in as.
     package func refresh(_ provider: String) async {
         let result = await connection.command { HostWire.refresh(id: $0, provider: provider) }
-        set(provider) { $0.said = result.message ?? (result.ok ? nil : "Couldn't read the login on \(alias)") }
+        set(provider) {
+            $0.said = result.message ?? (result.ok ? nil : "Couldn't read the login on \(alias)")
+            $0.signedIn = result.signedIn
+        }
     }
 
     package func signIn(_ provider: String) {
@@ -72,6 +79,7 @@ package final class BoxAccounts {
             let done = await connection.later(result.id + HostWire.doneSuffix)
             set(provider) {
                 $0.said = done.message ?? $0.said
+                $0.signedIn = done.signedIn ?? $0.signedIn
                 $0.step = done.ok ? .idle : .failed(done.message ?? "Couldn't sign in on \(alias)")
             }
         }

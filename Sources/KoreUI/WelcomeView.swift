@@ -1,4 +1,5 @@
 import AppKit
+import HostClient
 import SwiftUI
 
 /// Open Folder… and the recent folders: ↑ ↓ light one (as the pointer does) and Return opens it.
@@ -81,7 +82,7 @@ struct WelcomeView: View {
         .fixedSize(horizontal: false, vertical: true)
         // The box button, where a folder window's title row has it: after the traffic lights.
         .overlay(alignment: .topLeading) {
-            BoxButton(workspace: nil, size: Size.Box.welcomeButton)
+            Group { if !BoxList.shared.boxes.isEmpty { BoxButton(workspace: nil, size: Size.Box.welcomeButton) } }
                 .padding(.leading, Size.Box.welcomeInset)
                 .padding(.top, Space.xs)
                 .ignoresSafeArea(.container, edges: .top)

@@ -34,6 +34,8 @@ private struct BoxAccountLine: View {
     let takesPaste: Bool
     let signIn: () -> Void
     @StateObject private var code = Local("")
+    @StateObject private var copied = Local(false)
+    @FocusState private var typing: Bool
 
     var body: some View {
         let line = accounts.line(key)
@@ -44,7 +46,7 @@ private struct BoxAccountLine: View {
                 Spacer(minLength: Space.sm)
                 switch line.step {
                 // Signed in already: nothing to press.
-                case .idle where line.said?.hasPrefix("Signed in") == true: EmptyView()
+                case .idle where line.signedIn == true: EmptyView()
                 case .idle, .failed: Button("Sign in", action: signIn).smallButton()
                 case .starting: ProgressView().controlSize(.small)
                 case .waiting, .submitting: Button("Cancel") { accounts.cancel(key) }.smallButton()
@@ -55,17 +57,24 @@ private struct BoxAccountLine: View {
                     if let url = page.url { Button("Open page") { NSWorkspace.shared.open(url) }.smallButton(prominent: true) }
                     if let device = page.code {
                         Text(device).font(TextStyle.code).foregroundStyle(Theme.text).textSelection(.enabled)
-                        Button("Copy") {
+                        Button(copied.value ? "Copied" : "Copy") {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(device, forType: .string)
+                            copied.value = true
+                            Task {
+                                try? await Task.sleep(for: .seconds(1.5))
+                                copied.value = false
+                            }
                         }
                         .smallButton()
                     }
                     if takesPaste {
                         TextField("", text: $code.value, prompt: Text("Code from the page").foregroundStyle(Theme.tertiary))
                             .textFieldStyle(.plain)
-                            .fieldWell(focused: false)
+                            .focused($typing)
+                            .fieldWell(focused: typing)
                             .onSubmit(submit)
+                            .onAppear { typing = true }
                         Button("Sign in", action: submit).smallButton(prominent: true).disabled(code.value.isEmpty)
                     }
                 }

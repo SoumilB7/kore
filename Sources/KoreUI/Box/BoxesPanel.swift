@@ -28,7 +28,6 @@ struct BoxesPanel: View {
     @StateObject private var selected = Local<BoxPlace?>(nil)
     /// Add a box…'s field.
     @StateObject private var addingBox = Local<String?>(nil)
-    @FocusState private var fieldFocused: Bool
 
     init(workspace: Workspace) {
         self.workspace = workspace
@@ -84,7 +83,7 @@ struct BoxesPanel: View {
     }
 
     @ViewBuilder private func inside(_ box: BoxList.Box) -> some View {
-        if let note = box.note { noteLine(note, alias: box.alias) }
+        if let note = box.note { BoxNoteLine(note: note, alias: box.alias).padding(.leading, Space.xl + Space.md).padding(.vertical, Space.xs) }
         ForEach(box.folders, id: \.self) { folder in
             let here = workspace.box?.alias == box.alias && workspace.box?.folder == folder.path
             let place = BoxPlace(alias: box.alias, folder: folder.path)
@@ -104,22 +103,6 @@ struct BoxesPanel: View {
             .disabled(missing)
         }
         if box.status == .ready { addFolder(box.alias) }
-    }
-
-    /// The box's one line, and its action after a dot ("Not set up on mybox · Set up").
-    private func noteLine(_ note: BoxList.Note, alias: String) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
-            Text(note.line).foregroundStyle(Theme.tertiary).lineLimit(2)
-            if let action = note.action {
-                Text("·").foregroundStyle(Theme.tertiary)
-                Button(action.title) { Task { await list.act(action, on: alias) } }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.accent)
-                    .fixedSize()
-            }
-        }
-        .font(Chrome.caption)
-        .padding(.leading, Space.xl + Space.md).padding(.vertical, Space.xs)
     }
 
     @ViewBuilder private func addFolder(_ alias: String) -> some View {
@@ -142,7 +125,7 @@ struct BoxesPanel: View {
     @ViewBuilder private var addBox: some View {
         if let typed = addingBox.value {
             VStack(alignment: .leading, spacing: 0) {
-                field(Binding(get: { typed }, set: { addingBox.value = $0 }), prompt: "SSH alias") { submitBox(typed) } cancel: { addingBox.value = nil }
+                BoxAliasField(text: Binding(get: { typed }, set: { addingBox.value = $0 }), add: submitBox) { addingBox.value = nil }
                     .padding(.vertical, Space.xs)
                 ForEach(list.suggestions(typed).prefix(6), id: \.self) { alias in
                     row(indent: 1) { submitBox(alias) } label: {
@@ -162,27 +145,9 @@ struct BoxesPanel: View {
     }
 
     private func row<Label: View>(indent: Int, lit: Bool = false, action: @escaping () -> Void, @ViewBuilder label: () -> Label) -> some View {
-        Button(action: action) {
-            HStack(spacing: Space.sm) { label() }
-                .padding(.leading, Space.sm + CGFloat(indent) * (Space.xl + Space.xs))
-                .padding(.trailing, Space.sm)
-                .frame(maxWidth: .infinity, minHeight: Size.Tree.row, alignment: .leading)
-                .background(lit ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
-                .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+        PanelRow(indent: indent, lit: lit, action: action, label: label())
     }
 
-    private func field(_ text: Binding<String>, prompt: String, submit: @escaping () -> Void, cancel: @escaping () -> Void) -> some View {
-        TextField("", text: text, prompt: Text(prompt).foregroundStyle(Theme.tertiary))
-            .textFieldStyle(.plain)
-            .font(Chrome.label)
-            .focused($fieldFocused)
-            .fieldWell(focused: fieldFocused)
-            .onSubmit(submit)
-            .onExitCommand(perform: cancel)
-            .onAppear { fieldFocused = true }
-    }
 
     // MARK: Acts
 
@@ -196,9 +161,8 @@ struct BoxesPanel: View {
         Task { await list.probe(alias) }
     }
 
-    private func submitBox(_ alias: String) {
-        let alias = alias.trimmingCharacters(in: .whitespaces)
-        guard !alias.isEmpty else { return }
+    private func submitBox(_ typed: String) {
+        guard let alias = BoxList.alias(typed) else { return }
         list.add(alias)
         addingBox.value = nil
         if !open.value.contains(alias) { toggle(alias) }
@@ -232,5 +196,28 @@ struct StatusDot: View {
         case .notSetUp: "Not set up"
         case .unknown: "Not checked"
         }
+    }
+}
+
+/// A row of the Boxes panel: lit when picked, filled while the pointer is on it, as the explorer's.
+private struct PanelRow<Label: View>: View {
+    let indent: Int
+    let lit: Bool
+    let action: () -> Void
+    let label: Label
+    @StateObject private var hovered = Local(false)
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: Space.sm) { label }
+                .padding(.leading, Space.sm + CGFloat(indent) * (Space.xl + Space.xs))
+                .padding(.trailing, Space.sm)
+                .frame(maxWidth: .infinity, minHeight: Size.Tree.row, alignment: .leading)
+                .background(lit ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
+                .hoverFill(hovered.value && !lit, Theme.Row.selected(.surface), radius: Radius.control)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovered.value = $0 }
     }
 }

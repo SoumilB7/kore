@@ -138,9 +138,13 @@ package enum LinkMessage: Sendable, Equatable {
         /// Set on `auth.gh`'s result (1.4): the page to open and the one-time code to type there.
         package var url: String?
         package var authCode: String?
+        /// Set on `account.refresh`'s and a sign-in's results (1.5, a box): whether the CLI is
+        /// signed in there.
+        package var signedIn: Bool?
         package init(
             id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, chatId: String? = nil, windowId: String? = nil,
-            blobId: String? = nil, tabId: String? = nil, folders: [Folder]? = nil, url: String? = nil, authCode: String? = nil
+            blobId: String? = nil, tabId: String? = nil, folders: [Folder]? = nil, url: String? = nil, authCode: String? = nil,
+            signedIn: Bool? = nil
         ) {
             self.id = id
             self.ok = ok
@@ -153,6 +157,7 @@ package enum LinkMessage: Sendable, Equatable {
             self.folders = folders
             self.url = url
             self.authCode = authCode
+            self.signedIn = signedIn
         }
     }
 
@@ -256,7 +261,7 @@ extension LinkMessage: Codable {
         case t, nonce, proto, client, proof, commands, epoch, host, providers, policy, caps, reason, rev, windows, chats, removed, chatId, last,
             count, txRev, entries, turns, hasEarlier, upserts, order, id, entryId, field, offset, text, total, cardId, cmd, ok, code,
             message, windowId, aid, open, recent, op, item, key, turn, uploadId, name, mime, size, sha256, index, data, ref, variant, blobId,
-            mac, clis, control, query, archived, sessions, more, turnId, path, hunks, tabId, grant, folders, ghSignedIn, url, authCode
+            mac, clis, control, query, archived, sessions, more, turnId, path, hunks, tabId, grant, folders, ghSignedIn, url, authCode, signedIn
     }
 
     package init(from decoder: any Decoder) throws {
@@ -320,7 +325,7 @@ extension LinkMessage: Codable {
                 .init(
                     id: try d(.id), ok: try d(.ok), code: try o(.code), message: try o(.message), chatId: try o(.chatId), windowId: try o(.windowId),
                     blobId: try o(.blobId), tabId: try o(.tabId), folders: try o(.folders), url: try o(.url),
-                    authCode: try o(.authCode)))
+                    authCode: try o(.authCode), signedIn: try o(.signedIn)))
         case "attn.state": self = .attnState(aid: try d(.aid), open: try d(.open), recent: try d(.recent))
         case "attn.event": self = .attnEvent(aid: try d(.aid), op: try d(.op), item: try o(.item), key: try o(.key), turn: try o(.turn))
         default: self = .unknown(t)
@@ -462,6 +467,7 @@ extension LinkMessage: Codable {
             try c.encodeIfPresent(r.folders, forKey: .folders)
             try c.encodeIfPresent(r.url, forKey: .url)
             try c.encodeIfPresent(r.authCode, forKey: .authCode)
+            try c.encodeIfPresent(r.signedIn, forKey: .signedIn)
         case .attnState(let aid, let open, let recent):
             try c.encode(aid, forKey: .aid)
             try c.encode(open, forKey: .open)
