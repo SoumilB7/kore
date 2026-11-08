@@ -77,6 +77,8 @@ public enum KoreReach {
             "-c", "mcp_servers.\(server).command=\(path)",
             "-c", #"mcp_servers.\#(server).args=["mcp"]"#,
             "-c", "mcp_servers.\(server).env_vars=[\(names)]",
+            // kore_wait holds a call up to 300 s.
+            "-c", "mcp_servers.\(server).tool_timeout_sec=330",
         ]
     }
 

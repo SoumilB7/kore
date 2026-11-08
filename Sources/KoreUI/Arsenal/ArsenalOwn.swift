@@ -118,9 +118,13 @@ extension Chat {
 
     /// `name`: a model's id or name, as the picker lists it.
     package func arsenalModel(_ name: String) -> Result<String, ArsenalRefusal> {
-        guard !controls.models.isEmpty else { return .failure(.init("Kore doesn't have this CLI's models yet. Try again after its first turn.")) }
-        guard let option = ArsenalModels.match(name, in: controls.models) else {
-            return .failure(.init("This chat offers: " + controls.models.map(\.id).joined(separator: ", ")))
+        // The chat's own list (a Codex chat's, Codex's), else its CLI's as last listed in this run.
+        let models = controls.models.isEmpty ? ArsenalModels.seen[provider.id] ?? [] : controls.models
+        guard !models.isEmpty else { return .failure(.init("Kore doesn't have this CLI's models yet. Try again after its first turn.")) }
+        let option: ModelOption
+        switch ArsenalModels.find(name, in: models, cli: "This chat") {
+        case .success(let found): option = found
+        case .failure(let refusal): return .failure(refusal)
         }
         guard option.id != controls.modelId else { return .success("Already \(option.name).") }
         setModel(option)

@@ -45,8 +45,10 @@ package final class AgentChannel {
     /// Drive's limits per caller: messages a minute, new chats an hour, and the chats it made
     /// that are open now.
     static let sendsPerMinute = 10
-    static let newPerHour = 3
-    static let madeOpen = 4
+    static let newPerHour = 10
+    static let madeOpen = 6
+    /// The longest a `chat.wait` holds, in seconds.
+    static let waitMax = 300
     private var sendBudgets: [String: RateLimiter] = [:]
     private var newBudgets: [String: RateLimiter] = [:]
     private var made: [String: NSHashTable<Chat>] = [:]
@@ -62,6 +64,14 @@ package final class AgentChannel {
         var named = false
         var chat: String?
         var follows: [String: Follow] = [:]
+        /// `chat.wait`s, by the chat waited on.
+        var waits: [String: Wait] = [:]
+
+        struct Wait {
+            /// The command's id, which its result carries.
+            let id: String
+            let token = UUID()
+        }
 
         struct Follow {
             /// The `tx.follow` command's id, which its events carry.
@@ -166,12 +176,13 @@ package final class AgentChannel {
             client.connection.finish(after: Self.encode(AgentBye(code: .stopped, message: "Kore access is off for this caller.")))
             clients[key] = nil
         }
-        for client in clients.values where !client.follows.isEmpty {
+        for client in clients.values where !client.follows.isEmpty || !client.waits.isEmpty {
             let readable = Set(AgentReads.readable(own: client.chat).map(\.id.uuidString))
             for (chatId, follow) in client.follows where !readable.contains(chatId) {
                 send(client, AgentEvent(id: follow.id, chat: chatId, event: "gone"))
                 client.follows[chatId] = nil
             }
+            endWaits(client, keeping: readable)
         }
         followsChanged()
     }
@@ -185,6 +196,7 @@ package final class AgentChannel {
                 send(client, AgentEvent(id: follow.id, chat: chatId, event: "gone"))
                 client.follows[chatId] = nil
             }
+            endWaits(client, keeping: Set(open.keys))
         }
         AgentGrants.prune(open: Set(open.keys))
         for client in clients.values where client.named {
@@ -250,14 +262,14 @@ package final class AgentChannel {
 
     private func dropped(_ token: UUID) {
         guard let client = clients.removeValue(forKey: token) else { return }
-        if !client.follows.isEmpty { followsChanged() }
+        if !client.follows.isEmpty || !client.waits.isEmpty { followsChanged() }
     }
 
     private func refuse(_ client: Client, _ code: AgentCode, _ message: String) {
         clients[client.token] = nil
         client.connection.finish(after: Self.encode(AgentBye(code: code, message: message)))
         log("agent-refused", client, ["caller": client.callerClass, "chat": client.chat, "code": code.rawValue])
-        if !client.follows.isEmpty { followsChanged() }
+        if !client.follows.isEmpty || !client.waits.isEmpty { followsChanged() }
     }
 
     /// Writes a log line a caller caused, while its budget lasts: after that one line a minute
@@ -450,17 +462,24 @@ package final class AgentChannel {
             return chat.id.uuidString
         case AgentCommand.new.name:
             return newChat(args, client, id)
+        case AgentCommand.fork.name:
+            return forkChat(args, client, id)
+        case AgentCommand.wait.name:
+            return wait(args, client, id)
         case AgentCommand.send.name:
             guard let chat = other(args, client, id) else { return nil }
             guard let text = args.text, text.utf8.count <= Self.textMax else {
                 fail(client, id, .invalid, "Say the message, \(Self.textMax / 1024) KiB at most.")
                 return chat.id.uuidString
             }
-            guard sendBudgets[client.key, default: RateLimiter(limit: Self.sendsPerMinute, per: 60)].take() else {
-                fail(client, id, .limit, "\(Self.sendsPerMinute) messages a minute at most.")
+            if let free = sendBudgets[client.key, default: RateLimiter(limit: Self.sendsPerMinute, per: 60)].nextFree() {
+                fail(client, id, .limit, "\(Self.sendsPerMinute) messages a minute at most: " + Self.freesUp(free))
                 return chat.id.uuidString
             }
-            done(chat.arsenalSend(text, from: callerName(client)), chat, client, id)
+            // Spent only by a message the chat takes.
+            let outcome = chat.arsenalSend(text, from: callerName(client))
+            if case .success = outcome { _ = sendBudgets[client.key, default: RateLimiter(limit: Self.sendsPerMinute, per: 60)].take() }
+            done(outcome, chat, client, id)
             return chat.id.uuidString
         case AgentCommand.stop.name:
             guard let chat = other(args, client, id) else { return nil }
@@ -539,21 +558,9 @@ package final class AgentChannel {
             fail(client, id, .noWindow, "Only a chat in Kore opens chats, in its own window.")
             return nil
         }
-        let mine = made[client.key, default: .weakObjects()]
-        made[client.key] = mine
-        let open = AgentReads.chatsByID()
-        guard mine.allObjects.filter({ open[$0.id.uuidString] != nil }).count < Self.madeOpen else {
-            fail(client, id, .limit, "\(Self.madeOpen) chats this one opened are open: close one first.")
-            return nil
-        }
+        guard roomForNew(client, id) else { return nil }
         if let text = args.text, text.utf8.count > Self.textMax {
             fail(client, id, .invalid, "A message can be \(Self.textMax / 1024) KiB at most.")
-            return nil
-        }
-        // Spent only by a chat that opens: a mode refused costs nothing.
-        var budget = newBudgets[client.key, default: RateLimiter(limit: Self.newPerHour, per: 3600)]
-        guard budget.take() else {
-            fail(client, id, .limit, "\(Self.newPerHour) new chats an hour at most.")
             return nil
         }
         switch window.arsenalNewChat(provider: args.provider ?? own.provider.id, model: args.model, mode: args.mode, under: own) {
@@ -561,8 +568,7 @@ package final class AgentChannel {
             fail(client, id, .refused, refusal.message)
             return nil
         case .success(let chat):
-            newBudgets[client.key] = budget
-            mine.add(chat)
+            spentNew(chat, client)
             var message = "Opened a \(chat.provider.name) chat."
             if let text = args.text, !text.isEmpty {
                 switch chat.arsenalSend(text, from: callerName(client)) {
@@ -573,6 +579,138 @@ package final class AgentChannel {
             let chatId = chat.id.uuidString
             send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chatId, message: message, short: AgentReads.short(chatId))))
             return chatId
+        }
+    }
+
+    /// Room for a chat it makes: fewer than `madeOpen` of them open, and `newPerHour` not spent.
+    /// Only a chat that opens spends it (`spentNew`).
+    private func roomForNew(_ client: Client, _ id: String) -> Bool {
+        let open = AgentReads.chatsByID()
+        let mine = made[client.key]?.allObjects.filter { open[$0.id.uuidString] != nil } ?? []
+        guard mine.count < Self.madeOpen else {
+            fail(client, id, .limit, "\(Self.madeOpen) chats this one opened are open: close one first.")
+            return false
+        }
+        if let free = newBudgets[client.key, default: RateLimiter(limit: Self.newPerHour, per: 3600)].nextFree() {
+            fail(client, id, .limit, "\(Self.newPerHour) new chats an hour at most: " + Self.freesUp(free))
+            return false
+        }
+        return true
+    }
+
+    private func spentNew(_ chat: Chat, _ client: Client) {
+        _ = newBudgets[client.key, default: RateLimiter(limit: Self.newPerHour, per: 3600)].take()
+        let mine = made[client.key, default: .weakObjects()]
+        made[client.key] = mine
+        mine.add(chat)
+    }
+
+    /// When the next one frees up, for a limit's refusal.
+    static func freesUp(_ date: Date, now: Date = Date()) -> String {
+        let minutes = max(1, Int((date.timeIntervalSince(now) / 60).rounded(.up)))
+        let at = date.formatted(date: .omitted, time: .shortened)
+        return minutes < 2 && date.timeIntervalSince(now) < 60
+            ? "the next frees up in \(max(1, Int(date.timeIntervalSince(now).rounded(.up)))) s (at \(at))."
+            : "the next frees up in \(minutes) min (at \(at))."
+    }
+
+    /// A fork of a chat it reaches (its own included), opened as the fork in a message's menu opens
+    /// one: in front, the conversation with it, in that chat's mode, Arsenal off. A new chat for the
+    /// limits. Where it starts is the CLI's to say, so it answers when the tab is open.
+    private func forkChat(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
+        guard let chat = changeable(args, client, id) else { return nil }
+        guard AgentReads.workspace(of: chat) != nil else {
+            fail(client, id, .noChat, "That chat has no window of its own (it's on a board).")
+            return chat.id.uuidString
+        }
+        guard roomForNew(client, id) else { return chat.id.uuidString }
+        if let text = args.text, text.utf8.count > Self.textMax {
+            fail(client, id, .invalid, "A message can be \(Self.textMax / 1024) KiB at most.")
+            return chat.id.uuidString
+        }
+        let at = args.at.map { String($0.prefix(4096)) }
+        Task { @MainActor [weak self, weak client] in
+            let start = await chat.arsenalForkStart(at: at)
+            // Its access, its reach and the limits again, after the wait for the CLI.
+            guard let self, let client, AgentChannel.current === self, self.tier(client) >= .drive else { return }
+            guard let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }), chat === own || chat.noFreer(than: own),
+                let window = AgentReads.workspace(of: chat)
+            else { return self.fail(client, id, .notOwn, "That chat's mode is above this one's: only you drive it.") }
+            guard self.roomForNew(client, id) else { return }
+            switch start {
+            case .failure(let refusal):
+                self.fail(client, id, .refused, refusal.message)
+            case .success(let (start, draft)):
+                let message = args.text.flatMap { $0.isEmpty ? nil : $0 }
+                switch window.arsenalOpenFork(chat, start, draft: draft, model: args.model, message: message != nil) {
+                case .failure(let refusal):
+                    self.fail(client, id, .refused, refusal.message)
+                case .success(let fork):
+                    self.spentNew(fork, client)
+                    var said = "Forked it."
+                    if let message {
+                        switch fork.arsenalSend(message, from: self.callerName(client)) {
+                        case .success: said += " Sent."
+                        case .failure(let refusal): said += " " + refusal.message
+                        }
+                    }
+                    let forkId = fork.id.uuidString
+                    self.send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: forkId, message: said, short: AgentReads.short(forkId))))
+                }
+            }
+        }
+        return chat.id.uuidString
+    }
+
+    // MARK: Waiting
+
+    /// Until the chat's turn ends or a card asks (or `timeout`, 300 s at most): its state and last
+    /// answer. Held by the follow taps, so nothing polls; only the command counts toward the limit.
+    private func wait(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
+        guard let chat = resolve(args.chat, client, id) else { return nil }
+        let chatId = chat.id.uuidString
+        guard chatId != client.chat else {
+            fail(client, id, .refused, "Not this chat: its turn is the one asking.")
+            return chatId
+        }
+        guard AgentReads.state(chat) == "working" else {
+            waited(client, id, chat, timedOut: false)
+            return chatId
+        }
+        guard client.waits[chatId] == nil else {
+            fail(client, id, .refused, "Already waiting on that chat.")
+            return chatId
+        }
+        let wait = Client.Wait(id: id)
+        client.waits[chatId] = wait
+        followsChanged()
+        let seconds = min(max(args.timeout ?? Self.waitMax, 1), Self.waitMax)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(seconds)) { [weak self, weak client] in
+            MainActor.assumeIsolated {
+                guard let self, let client, client.waits[chatId]?.token == wait.token else { return }
+                client.waits[chatId] = nil
+                if let chat = AgentReads.chatsByID()[chatId] {
+                    self.waited(client, id, chat, timedOut: true)
+                } else {
+                    self.fail(client, id, .noChat, "That chat closed.")
+                }
+                self.followsChanged()
+            }
+        }
+        return chatId
+    }
+
+    private func waited(_ client: Client, _ id: String, _ chat: Chat, timedOut: Bool) {
+        let answer = chat.transcript.entries.last { $0.kind == .answer }.flatMap { AgentReads.row($0, folder: chat.folder).text }
+        send(client, AgentResult(id: id, ok: true, data: AgentWaited(
+            chat: chat.id.uuidString, state: AgentReads.state(chat), answer: answer, cards: AgentReads.cards(chat).count, timedOut: timedOut)))
+    }
+
+    /// Waits on a chat no longer there, or no longer readable: answered so.
+    private func endWaits(_ client: Client, keeping readable: Set<String>) {
+        for (chatId, wait) in client.waits where !readable.contains(chatId) {
+            fail(client, wait.id, .noChat, "That chat closed, or can't be read now.")
+            client.waits[chatId] = nil
         }
     }
 
@@ -659,7 +797,7 @@ package final class AgentChannel {
 
     /// The taps are on exactly while some caller follows a chat.
     private func followsChanged() {
-        let following = AgentChannel.current === self && clients.values.contains { !$0.follows.isEmpty }
+        let following = AgentChannel.current === self && clients.values.contains { !$0.follows.isEmpty || !$0.waits.isEmpty }
         AgentTaps.on = following
         AgentTaps.event = following ? { chat, _ in AgentChannel.current?.noted(chat) } : nil
         if !following { dirty = [] }
@@ -667,7 +805,7 @@ package final class AgentChannel {
 
     private func noted(_ chat: Chat) {
         let id = chat.id.uuidString
-        guard clients.values.contains(where: { $0.follows[id] != nil }) else { return }
+        guard clients.values.contains(where: { $0.follows[id] != nil || $0.waits[id] != nil }) else { return }
         dirty.insert(id)
         guard !flushDue else { return }
         flushDue = true
@@ -685,6 +823,15 @@ package final class AgentChannel {
         guard AgentChannel.current === self, !dirty.isEmpty else { return }
         let ids = dirty
         dirty = []
+        // A wait ends when its chat's turn does, or a card asks.
+        let open = AgentReads.chatsByID()
+        for client in clients.values where !client.waits.isEmpty {
+            for chatId in ids {
+                guard let wait = client.waits[chatId], let chat = open[chatId], AgentReads.state(chat) != "working" else { continue }
+                client.waits[chatId] = nil
+                waited(client, wait.id, chat, timedOut: false)
+            }
+        }
         for client in clients.values where !client.follows.isEmpty {
             let readable = AgentReads.readable(own: client.chat)
             for chatId in ids {

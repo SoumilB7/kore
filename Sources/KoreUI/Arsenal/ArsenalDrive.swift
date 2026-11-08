@@ -59,7 +59,52 @@ extension Chat {
     }
 }
 
+extension Chat {
+    /// Where an agent's fork of this chat starts, as the fork on a message's or an answer's menu
+    /// makes it: at the user message `at` names (its row id, its text, or a part only it has), which
+    /// goes back to the fork's composer, or after the last answer.
+    package func arsenalForkStart(at ref: String?) async -> Result<(start: ForkStart, draft: String), ArsenalRefusal> {
+        let entries = transcript.entries
+        guard let ref, !ref.isEmpty else {
+            guard let last = entries.last(where: { $0.kind == .answer }) else { return .failure(.init("Nothing to fork yet: it hasn't answered.")) }
+            guard let start = await forkStart(after: last) else { return .failure(.init("Couldn't fork it: the chat says why.")) }
+            return .success((start, ""))
+        }
+        let messages = entries.filter { ($0.kind == .user || $0.kind == .peer) && !$0.inTurn }
+        let wanted = ref.lowercased()
+        let found = messages.first { $0.id.uuidString.lowercased() == wanted || $0.text.lowercased() == wanted }
+            ?? { let parts = messages.filter { $0.text.lowercased().contains(wanted) }; return parts.count == 1 ? parts[0] : nil }()
+        guard let entry = found else { return .failure(.init("No one message matches “\(ref.prefix(80))”: give its row id (kore log), or more of its text.")) }
+        guard let start = await forkStart(entry) else { return .failure(.init("Couldn't fork it: the chat says why.")) }
+        return .success((start, entry.kind == .user ? entry.text : ""))
+    }
+}
+
 extension Workspace {
+    /// A fork as a person opens one: a tab of its own right after the chat's, in front, in its mode
+    /// (so no freer than a caller that reaches it), the same model unless `model` names another it
+    /// lists, its Arsenal off. With `message`, the composer is left empty for it.
+    package func arsenalOpenFork(_ chat: Chat, _ start: ForkStart, draft: String, model: String?, message: Bool) -> Result<Chat, ArsenalRefusal> {
+        var launch: String?
+        if let model {
+            let known = chat.controls.models.isEmpty ? ArsenalModels.seen[chat.provider.id] ?? [] : chat.controls.models
+            switch ArsenalModels.find(model, in: known, cli: chat.provider.name) {
+            case .success(let option): launch = option.id
+            case .failure(let refusal): return .failure(refusal)
+            }
+        }
+        // An imported chat's fork from its start is written again by Kore and opens later, out of
+        // the limits' sight: the user's to make.
+        if case .fresh = start, chat.imported != nil {
+            return .failure(.init("This chat was imported: only you fork it from its start (its menu's Fork). Fork after a later message instead."))
+        }
+        guard let fork = fork(chat, start, text: message ? "" : draft) else {
+            return .failure(.init("Only you fork this chat from its start."))
+        }
+        if let launch { fork.launchModel = launch }
+        return .success(fork)
+    }
+
     /// A new chat as a person opens one: a tab of its own in front, the CLI picked, the model as
     /// the picker would launch it. Its mode is the CLI's usual one when that's no freer than the
     /// caller's, else the highest one that is, or `mode` when asked for and allowed. Its Arsenal is off.
@@ -96,10 +141,10 @@ extension Workspace {
                 ArsenalModels.fetch(provider.id, folder: folder)
                 return .failure(.init("Kore is still reading \(provider.name)'s models: ask again in a moment, or open it without a model."))
             }
-            guard let option = ArsenalModels.match(model, in: known) else {
-                return .failure(.init("\(provider.name) offers: " + known.map(\.id).joined(separator: ", ")))
+            switch ArsenalModels.find(model, in: known, cli: provider.name) {
+            case .success(let option): launch = option.id
+            case .failure(let refusal): return .failure(refusal)
             }
-            launch = option.id
         }
         guard start(provider: id, model: launch), let chat = activeTab.chat else { return .failure(.init("Kore couldn't open a chat.")) }
         if wanted == nil, !cap(chat.controls.mode) {
@@ -140,12 +185,24 @@ package enum ArsenalModels {
     /// A model by its id or name, as the CLI lists it, case, spaces, hyphens and underscores aside:
     /// "gpt 6 sol" is gpt-6-sol.
     package static func match(_ name: String, in models: [ModelOption]) -> ModelOption? {
-        let key = { (text: String) in text.lowercased().filter { !" -_".contains($0) } }
         let wanted = key(name)
         guard !wanted.isEmpty else { return nil }
         return models.first { $0.id.lowercased() == name.lowercased() || $0.name.lowercased() == name.lowercased() }
             ?? models.first { key($0.id) == wanted || key($0.name) == wanted }
     }
+
+    /// `match`, else the one model within one letter of it (a typo: "gpt 6.1 tera" is gpt-6.1-terra);
+    /// several that close, or none, is a refusal naming them.
+    package static func find(_ name: String, in models: [ModelOption], cli: String) -> Result<ModelOption, ArsenalRefusal> {
+        if let model = match(name, in: models) { return .success(model) }
+        let wanted = key(name)
+        let near = models.filter { key($0.id).isNear(wanted) || key($0.name).isNear(wanted) }
+        if near.count == 1 { return .success(near[0]) }
+        if near.count > 1 { return .failure(.init("“\(name.prefix(80))” is close to several: " + near.map(\.id).joined(separator: ", "))) }
+        return .failure(.init("\(cli) offers: " + models.map(\.id).joined(separator: ", ")))
+    }
+
+    static func key(_ text: String) -> String { text.lowercased().filter { !" -_".contains($0) } }
 
     /// Codex's models, read off the main thread once in a run; nothing for a CLI that can't list
     /// them without a chat, and nothing in a storyline (its CLIs are scripted). Given up after
@@ -182,4 +239,38 @@ package enum ArsenalModels {
     }
 
     static let patience = Duration.seconds(10)
+}
+
+extension String {
+    /// One letter added, dropped or changed away from `other` (not equal, and neither empty). A
+    /// change that touches a digit or a dot is never forgiven: gpt-5 isn't a typo of gpt-6.
+    func isNear(_ other: String) -> Bool {
+        let a = Array(self), b = Array(other)
+        guard !a.isEmpty, !b.isEmpty, a != b, abs(a.count - b.count) <= 1 else { return false }
+        let versioned = { (c: Character) in c.isNumber || c == "." }
+        var i = 0, j = 0, edits = 0
+        while i < a.count, j < b.count {
+            if a[i] == b[j] {
+                i += 1
+                j += 1
+                continue
+            }
+            edits += 1
+            if edits > 1 { return false }
+            if a.count > b.count {
+                if versioned(a[i]) { return false }
+                i += 1
+            } else if b.count > a.count {
+                if versioned(b[j]) { return false }
+                j += 1
+            } else {
+                if versioned(a[i]) || versioned(b[j]) { return false }
+                i += 1
+                j += 1
+            }
+        }
+        // What's left at the end is the one edit.
+        if a[i...].contains(where: versioned) || b[j...].contains(where: versioned) { return false }
+        return edits + (a.count - i) + (b.count - j) <= 1
+    }
 }

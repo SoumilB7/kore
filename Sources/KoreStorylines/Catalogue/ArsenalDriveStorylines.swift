@@ -222,8 +222,8 @@ final class ArsenalDrive: ChatStoryline {
             KoreAs(["send", "{x}", "hi"], a, "x's Plan doesn't lower it", status: 5, says: drive),
             KoreAs(["mode", "{x}", "plan"], a, "nor reach it for a mode", status: 5, says: drive),
         ]) + [
-            // Three new chats an hour.
-            KoreAs(["new"], a, "a fourth within the hour", status: 1, says: "3 new chats an hour"),
+            // Ten new chats an hour (the eleventh is `ArsenalReach`'s): a fourth opens.
+            KoreAs(["new"], a, "a fourth within the hour", expect: ["Opened a \(name) chat."]),
 
             // Off: nothing reaches anything.
             PickTier(role: "a", prefix: "Off"),

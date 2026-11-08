@@ -21,6 +21,17 @@ final class ArsenalReach: ChatStoryline {
             turns: [CLIScript.reply("Ready."), CLIScript.reply("Ready."), CLIScript.reply("Ready."), CLIScript.reply("Ready.")])
     }
 
+    /// Codex chats opened in a run: their own models, and their own reply.
+    static let codexScript = CLIScript(
+        start: [.event(.controlsLoaded(ChatControls(
+            models: [
+                ModelOption(id: "gpt-6-luna", name: "GPT-6 Luna", resolved: "gpt-6-luna", efforts: []),
+                ModelOption(id: "gpt-6.1-terra", name: "GPT-6.1 Terra", resolved: "gpt-6.1-terra", efforts: []),
+                ModelOption(id: "gpt-6.1-terry", name: "GPT-6.1 Terry", resolved: "gpt-6.1-terry", efforts: []),
+                ModelOption(id: "gpt-6-sol", name: "GPT-6 Sol", resolved: "gpt-6-sol", efforts: []),
+            ], model: "gpt-6-luna", effort: nil, commands: [])))],
+        turns: [CLIScript.reply("Codex here."), CLIScript.reply("Codex here."), CLIScript.reply("Codex here.")])
+
     static let initialize = #"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}}"#
 
     static func call(_ id: Int, _ tool: String, _ arguments: String) -> String {
@@ -52,6 +63,7 @@ final class ArsenalReach: ChatStoryline {
         let codex = variant == .codex
         let name = codex ? "Codex" : "Claude"
         return super.steps() + [
+            UseScript(Self.codexScript, for: "codex"),
             Do("a's chat, at a socket of this run's, Arsenal allowed, no chat on") { story in
                 let cast = AgentCast.of(story)
                 cast.directory = directory
@@ -96,7 +108,7 @@ final class ArsenalReach: ChatStoryline {
                 let tools = (AgentJSON.path(replies[2], "result", "tools") as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
                 let call = Self.text(replies[3])
                 return (AgentJSON.path(replies[1], "result", "instructions") as? String ?? "").contains("kore_new_chat")
-                    && tools.count == 19 && ["kore_new_chat", "kore_send", "kore_list_chats", "kore_read_chat", "kore_set_model"].allSatisfy(tools.contains)
+                    && tools.count == 21 && ["kore_new_chat", "kore_send", "kore_list_chats", "kore_read_chat", "kore_set_model"].allSatisfy(tools.contains)
                     && call.error && call.text.contains("Arsenal is off for this chat") && call.text.contains("⌥⌘K")
             },
 
@@ -130,6 +142,7 @@ final class ArsenalReach: ChatStoryline {
             },
             // The new chat in front has Arsenal off: no icon.
             ExpectElement(.id(StoryID.Titlebar.arsenal), .absent),
+            Do("b is that chat") { story in AgentCast.of(story).chats["b"] = try story.activeChat() },
         ] + (codex ? [] : [
             // Codex from Manual: none, as Read only reads any file without asking.
             mcp([Self.initialize, Self.call(2, "kore_new_chat", #"{"provider":"codex"}"#)], "no Codex chat from Manual") { replies in
@@ -148,13 +161,89 @@ final class ArsenalReach: ChatStoryline {
                 return shown.provider.id == "codex" && shown.controls.mode == "readOnly" && shown.noFreer(than: a) && shown.arsenal == nil
                     && Arsenal.unavailable(shown) != nil
             },
+            Do("x is that chat") { story in AgentCast.of(story).chats["x"] = try story.activeChat() },
             Do("the user puts a in Edit automatically") { story in try AgentCast.of(story).chat("a").storySetMode("acceptEdits") },
             mcp([Self.initialize, Self.call(2, "kore_new_chat", #"{"provider":"codex","mode":"readOnly"}"#)], "none from Edit automatically, Read only included") { replies in
                 let call = Self.text(replies[2])
                 return call.error && call.text.contains("Only you can")
             },
-        ]) + [
+            // Another chat's model: not one freer than a (x's Read only is above Edit automatically).
+            mcp([Self.initialize, Self.call(2, "kore_set_model", #"{"chat":"{x}","to":"gpt-6-luna"}"#)], "x is freer: its model isn't a's to set") { replies in
+                let call = Self.text(replies[2])
+                return call.error && call.text.contains("only you drive it")
+            },
+            Do("a in Auto again") { story in try AgentCast.of(story).chat("a").storySetMode("auto") },
+        ]) + reached(codex ? "b" : "x") + forks() + limits(spent: codex ? 3 : 4) + [
             Do("off again") { story in AgentCast.of(story).finish() },
+        ]
+    }
+
+    /// A reached Codex chat's model, from its own list, by a typo; its turn waited on.
+    private func reached(_ role: String) -> [any Step] {
+        [
+            mcp([Self.initialize, Self.call(2, "kore_set_model", #"{"chat":"{\#(role)}","to":"gpt 6.1 tera"}"#)], "\(role)'s model by a typo, from its Codex list") { replies in
+                let call = Self.text(replies[2])
+                return !call.error && call.text.contains("Model GPT-6.1 Terra.")
+            },
+            self.role(role, "\(role) on gpt-6.1-terra") { $0.storyModel == "gpt-6.1-terra" },
+            mcp([Self.initialize, Self.call(2, "kore_set_model", #"{"chat":"{\#(role)}","to":"gpt 6.1 terr"}"#)], "a typo two models are near: refused, naming both") { replies in
+                let call = Self.text(replies[2])
+                return call.error && call.text.contains("close to several: gpt-6.1-terra, gpt-6.1-terry")
+            },
+            mcp([Self.initialize, Self.call(2, "kore_set_model", #"{"chat":"{\#(role)}","to":"gpt 5 luna"}"#)], "a changed digit is no typo") { replies in
+                let call = Self.text(replies[2])
+                return call.error && call.text.contains("offers:")
+            },
+            mcp([Self.initialize, Self.call(2, "kore_set_model", #"{"chat":"{\#(role)}","to":"haiku"}"#)], "a model of another CLI: refused with Codex's list") { replies in
+                let call = Self.text(replies[2])
+                return call.error && call.text.contains("offers: gpt-6-luna, gpt-6.1-terra, gpt-6.1-terry, gpt-6-sol")
+            },
+            mcp(
+                [Self.initialize, Self.call(2, "kore_send", #"{"chat":"{\#(role)}","text":"hello there"}"#), Self.call(3, "kore_wait", #"{"chat":"{\#(role)}","timeout":30}"#)],
+                "a message, then a wait for its answer"
+            ) { replies in
+                let sent = Self.text(replies[2])
+                let wait = Self.text(replies[3])
+                let data = AgentJSON.objects(wait.text).first
+                return !sent.error && !wait.error && data?["state"] as? String == "idle" && data?["answer"] as? String == "Codex here."
+                    && data?["timedOut"] as? Bool == false
+            },
+        ]
+    }
+
+    /// a forked at its end, with a message, and before one of its messages, which goes back to the
+    /// fork's composer: each in front, carrying the conversation, in a's mode, Arsenal off.
+    private func forks() -> [any Step] {
+        [
+            mcp([Self.initialize, Self.call(2, "kore_fork", #"{"chat":".","text":"go on from here"}"#)], "a forked, with a message") { replies in
+                let call = Self.text(replies[2])
+                return !call.error && call.text.contains("Forked it. Sent.")
+            },
+            Expect("the fork in front, a's conversation in it, then the message; a's mode, Arsenal off", timeout: .seconds(15)) { story in
+                let fork = try story.activeChat()
+                let a = try AgentCast.of(story).chat("a")
+                let users = fork.rows.filter { $0.kind == "user" }.map(\.text)
+                return fork !== a && fork.arsenal == nil && fork.mode == a.mode && users.starts(with: ["hello", "next"]) && users.last == "go on from here"
+            },
+            KoreAs(["fork", ".", "--at", "next"], .chat("a"), "a forked before “next”", expect: ["Forked it."]),
+            Expect("that fork: the conversation before “next”, and “next” in its composer", timeout: .seconds(15)) { story in
+                let fork = try story.activeChat()
+                let users = fork.rows.filter { $0.kind == "user" }.map(\.text)
+                return fork !== (try AgentCast.of(story).chat("a")) && users == ["hello"] && fork.draft == "next" && fork.arsenal == nil
+            },
+        ]
+    }
+
+    /// Ten new chats an hour (forks count): each opened and closed until the eleventh, refused
+    /// with when the next frees up. `spent`: those already made.
+    private func limits(spent: Int) -> [any Step] {
+        (spent + 1...10).flatMap { n -> [any Step] in
+            [
+                KoreAs(["new"], .chat("a"), "new chat \(n) of the hour", expect: ["Opened a"]),
+                Do("close it") { story in story.app.workspace?.perform(.closeTab) },
+            ]
+        } + [
+            KoreAs(["new"], .chat("a"), "the eleventh in an hour: refused, with when", status: 1, says: "10 new chats an hour at most: the next frees up in"),
         ]
     }
 }

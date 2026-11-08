@@ -185,6 +185,13 @@ package struct RateLimiter: Sendable {
         self.window = window
     }
 
+    /// When the next one frees up, if there's no room at `now`; nil when there's room.
+    package func nextFree(at now: Date = Date()) -> Date? {
+        let live = times.filter { now.timeIntervalSince($0) < window }
+        guard live.count >= limit, let oldest = live.min() else { return nil }
+        return oldest.addingTimeInterval(window)
+    }
+
     /// Takes one if there's room at `now`.
     package mutating func take(at now: Date = Date()) -> Bool {
         times.removeAll { now.timeIntervalSince($0) >= window }

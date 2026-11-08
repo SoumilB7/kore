@@ -26,6 +26,10 @@ let usage = """
            kore compact          compact it, once this turn ends
            kore new [--claude|--codex] [--model M] [--mode X] ["message"]
                                  a new chat in this window, in front (Drive)
+           kore fork <chat> [--at <message>] [--model M] ["message"]
+                                 fork a chat (. for this one) into a tab in front (Drive)
+           kore wait <chat> [--timeout s]
+                                 until its turn ends or a card asks: its answer
            kore send <chat> "message"
                                  send to another chat, queued while it works
            kore stop <chat>      stop its turn
@@ -44,7 +48,10 @@ let usage = """
     """
 
 let arguments = Array(CommandLine.arguments.dropFirst())
-let reads: Set = ["ls", "show", "log", "pending", "history", "whoami", "caps", "mcp", "options", "rename", "model", "effort", "fast", "mode", "compact", "new", "send", "stop", "tab", "answer"]
+let reads: Set = [
+    "ls", "show", "log", "pending", "history", "whoami", "caps", "mcp", "options", "rename", "model", "effort", "fast", "mode", "compact", "new", "fork",
+    "send", "stop", "tab", "answer", "wait",
+]
 
 switch arguments.first {
 case "help", "-h", "--help":

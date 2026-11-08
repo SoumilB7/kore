@@ -28,7 +28,7 @@ enum Reads {
             case "history": try history(client, options)
             case "options": try Own.options(client, options)
             case "fast", "compact", "rename", "model", "effort", "mode": try Own.set(name, client, options)
-            case "new", "send", "stop", "tab", "answer": try Drive.run(name, client, options)
+            case "new", "fork", "send", "stop", "tab", "answer", "wait": try Drive.run(name, client, options)
             default: return fail(usage, code: 2)
             }
             return 0
@@ -60,6 +60,9 @@ enum Reads {
         var model: String?
         var mode: String?
         var deny = false
+        /// `fork --at`, `wait --timeout`.
+        var at: String?
+        var timeout: Int?
         var positional: [String] = []
         var problem: String?
 
@@ -87,6 +90,12 @@ enum Reads {
                     guard let m = rest.popFirst() else { problem = "--mode takes a mode"; return }
                     mode = m
                 case "--deny": deny = true
+                case "--at":
+                    guard let m = rest.popFirst() else { problem = "--at takes a message"; return }
+                    at = m
+                case "--timeout":
+                    guard let n = rest.popFirst().flatMap({ Int($0) }), n > 0 else { problem = "--timeout takes seconds"; return }
+                    timeout = n
                 default:
                     if arg.hasPrefix("-"), arg.count > 1 { problem = "unknown option \(arg)"; return }
                     positional.append(arg)

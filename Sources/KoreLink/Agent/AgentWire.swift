@@ -34,6 +34,8 @@ package struct AgentCommand: Sendable, Equatable {
     package static let unfollow = Self(name: "tx.unfollow", tier: .watch)
     package static let cards = Self(name: "cards.list", tier: .watch)
     package static let history = Self(name: "history.list", tier: .watch)
+    /// Until a chat's turn ends or a card asks: its answer and state.
+    package static let wait = Self(name: "chat.wait", tier: .watch)
 
     // Own: the caller's own chat. Each changes it as its composer would; a mode only downwards.
     package static let options = Self(name: "chat.options", tier: .own)
@@ -46,14 +48,16 @@ package struct AgentCommand: Sendable, Equatable {
 
     // Drive: the caller's window, at or below its own mode. Own's changes reach those chats too.
     package static let new = Self(name: "chat.new", tier: .drive)
+    /// A fork of a chat it reaches, in a tab of its own: a new chat for the limits.
+    package static let fork = Self(name: "chat.fork", tier: .drive)
     package static let send = Self(name: "chat.send", tier: .drive)
     package static let stop = Self(name: "chat.stop", tier: .drive)
     package static let showTab = Self(name: "tab.show", tier: .drive)
     package static let answer = Self(name: "cards.answer", tier: .drive)
 
     package static let all: [Self] = [
-        whoami, caps, chats, show, read, follow, unfollow, cards, history, options, rename, model, effort, fast, mode, compact,
-        new, send, stop, showTab, answer,
+        whoami, caps, chats, show, read, follow, unfollow, cards, history, wait, options, rename, model, effort, fast, mode, compact,
+        new, fork, send, stop, showTab, answer,
     ]
 
     /// Why `tier` may not run `name`; nil when it may.
@@ -130,6 +134,10 @@ package struct AgentArgs: Codable, Sendable, Equatable {
     package var card: String?
     package var answers: [String]?
     package var deny: Bool?
+    /// `chat.fork`: the user message to fork from (its row id, or its text or a part only it
+    /// has); none forks at the end. `chat.wait`: seconds to wait, 300 at most.
+    package var at: String?
+    package var timeout: Int?
 
     package init(
         chat: String? = nil, last: Int? = nil, before: String? = nil, folder: String? = nil, query: String? = nil,
@@ -142,6 +150,8 @@ package struct AgentArgs: Codable, Sendable, Equatable {
         self.card = nil
         self.answers = nil
         self.deny = nil
+        self.at = nil
+        self.timeout = nil
         self.chat = chat
         self.last = last
         self.before = before
@@ -347,6 +357,16 @@ package struct AgentOptions: Encodable, Sendable {
 }
 
 /// What a change did, in a line.
+/// `chat.wait`: how the chat stands when the wait ended, and its last answer.
+package struct AgentWaited: Encodable, Sendable {
+    package var chat: String
+    /// `idle`, `needs-you` (a card asks), `failed`, `stuck`, or `working` when it timed out.
+    package var state: String
+    package var answer: String?
+    package var cards: Int
+    package var timedOut: Bool
+}
+
 package struct AgentDone: Encodable, Sendable {
     package var chat: String
     package var message: String

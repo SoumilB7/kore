@@ -18,6 +18,8 @@ enum MCPServer {
     }
 
     static let chatArg = ("chat", "string", "The chat: its title (any part only it has), its short id, or . for this chat.")
+    /// Own's tools: this chat, or with Drive another chat it reaches.
+    static let ownChatArg = ("chat", "string", "Default: this chat. With Drive, another chat at or below this chat's mode (title, short id).")
 
     static let tools: [Tool] = [
         Tool(name: "kore_whoami", command: "agent.whoami", description: "Who Kore sees calling (this chat or an outside tool) and its Kore access tier.", args: [], required: []),
@@ -47,22 +49,23 @@ enum MCPServer {
             ], required: []),
         Tool(
             name: "kore_options", command: "chat.options",
-            description: "This chat's models, efforts and modes, and which modes it may lower to (Own access).", args: [], required: []),
-        Tool(name: "kore_rename", command: "chat.rename", description: "Rename this chat (Own access).", args: [("to", "string", "The new name.")], required: ["to"]),
+            description: "A chat's models, efforts and modes, and which modes it may lower to (Own access; another chat with Drive).", args: [ownChatArg], required: []),
+        Tool(name: "kore_rename", command: "chat.rename", description: "Rename this chat, or another with Drive (Own access).", args: [ownChatArg, ("to", "string", "The new name.")], required: ["to"]),
         Tool(
-            name: "kore_set_model", command: "chat.model", description: "Switch this chat's model to one kore_options lists (Own access).",
-            args: [("to", "string", "The model's id or name.")], required: ["to"]),
+            name: "kore_set_model", command: "chat.model",
+            description: "Switch a chat's model to one its CLI lists (kore_options): this chat (Own access), or another it reaches (Drive). A Codex chat takes Codex models.",
+            args: [ownChatArg, ("to", "string", "The model's id or name, written loosely (\"gpt 6 sol\"); a one-letter typo is forgiven when only one model is that close.")], required: ["to"]),
         Tool(
-            name: "kore_set_effort", command: "chat.effort", description: "Set this chat's effort to a level its model offers (Own access).",
-            args: [("to", "string", "The level.")], required: ["to"]),
+            name: "kore_set_effort", command: "chat.effort", description: "Set a chat's effort to a level its model offers: this chat (Own access), or another it reaches (Drive).",
+            args: [ownChatArg, ("to", "string", "The level.")], required: ["to"]),
         Tool(
-            name: "kore_set_fast", command: "chat.fast", description: "Turn this chat's fast mode on or off (Own access).",
-            args: [("on", "boolean", "On or off.")], required: ["on"]),
+            name: "kore_set_fast", command: "chat.fast", description: "Turn a chat's fast mode on or off: this chat (Own access), or another it reaches (Drive).",
+            args: [ownChatArg, ("on", "boolean", "On or off.")], required: ["on"]),
         Tool(
             name: "kore_lower_mode", command: "chat.mode",
-            description: "Lower this chat's mode, to one kore_options marks allowed. Only the user raises a mode (Own access).",
-            args: [("to", "string", "The mode's id or label.")], required: ["to"]),
-        Tool(name: "kore_compact", command: "chat.compact", description: "Compact this chat once the current turn ends (Own access).", args: [], required: []),
+            description: "Lower a chat's mode, to one kore_options marks allowed: this chat (Own access), or another it reaches (Drive). Only the user raises a mode.",
+            args: [ownChatArg, ("to", "string", "The mode's id or label.")], required: ["to"]),
+        Tool(name: "kore_compact", command: "chat.compact", description: "Compact this chat once the current turn ends, or another it reaches with Drive (Own access).", args: [ownChatArg], required: []),
         Tool(
             name: "kore_new_chat", command: "chat.new",
             description: "Open a new chat in a new Kore tab, in front, in this window, and send it a first message if given. Use when the user asks for another tab, chat or agent. It starts at this chat's mode or lower, with its own Arsenal off. Returns its short id for kore_send (Drive access).",
@@ -71,6 +74,18 @@ enum MCPServer {
                 ("model", "string", "A model the CLI lists, by id or name, written loosely (\"gpt 6 sol\" is gpt-6-sol). Default: the CLI's."),
                 ("mode", "string", "A mode at or below this chat's (default: the CLI's usual one, capped)."), ("text", "string", "The first message."),
             ], required: []),
+        Tool(
+            name: "kore_fork", command: "chat.fork",
+            description: "Fork a chat into a new Kore tab, in front, carrying its conversation (to a message with at, else all of it), in that chat's mode, its Arsenal off, and send it a message if given. Counts as a new chat (Drive access).",
+            args: [
+                ("chat", "string", "The chat to fork: . for this one, or another it reaches (title, short id)."),
+                ("at", "string", "Fork before this user message: its row id (kore_read_chat) or its text. Default: after the last answer."),
+                ("model", "string", "A model the chat's CLI lists (default: the chat's)."), ("text", "string", "A message to send the fork."),
+            ], required: ["chat"]),
+        Tool(
+            name: "kore_wait", command: "chat.wait",
+            description: "Wait until another chat's current turn ends, or a card asks the user: returns its state and last answer. Use after kore_send or kore_new_chat to get the reply (Watch access).",
+            args: [chatArg, ("timeout", "integer", "Seconds, 300 at most (default 300).")], required: ["chat"]),
         Tool(
             name: "kore_send", command: "chat.send", description: "Send a message to another chat, as the user would type it, queued while it works. It shows who sent it. Only chats at this chat's mode or lower (Drive access).",
             args: [chatArg, ("text", "string", "The message.")], required: ["chat", "text"]),
@@ -142,7 +157,7 @@ enum MCPServer {
 
     /// The tier each command needs, lowest first.
     static func tierNeeded(_ command: String) -> String {
-        if ["chat.new", "chat.send", "chat.stop", "tab.show", "cards.answer"].contains(command) { return "drive" }
+        if ["chat.new", "chat.fork", "chat.send", "chat.stop", "tab.show", "cards.answer"].contains(command) { return "drive" }
         if ownCommands.contains(command) { return "own" }
         return "watch"
     }
@@ -167,6 +182,10 @@ enum MCPServer {
         if ownCommands.contains(tool.command) { args["chat"] = args["chat"] ?? "." }
         do {
             let client = try AgentClient()
+            // A wait holds the answer until the chat's turn ends.
+            if tool.command == "chat.wait" { client.timeout(min(max(args["timeout"] as? Int ?? 300, 1), 300) + 15) }
+            // The CLI makes a fork: it can take a moment.
+            if tool.command == "chat.fork" { client.timeout(60) }
             // Kore checks the tier too: this only says it in the agent's terms.
             let allowed = client.welcome["commands"] as? [String] ?? []
             if !allowed.contains(tool.command) {

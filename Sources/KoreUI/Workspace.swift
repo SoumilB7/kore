@@ -281,7 +281,8 @@ package final class Workspace {
     /// A fork of `chat` from one of its user messages, in a new tab right after it: the history
     /// before that message, the message itself in the composer (not sent), the same mode, and
     /// "<title> (fork)" (the Claude Code extension's fork).
-    func fork(_ chat: Chat, _ start: ForkStart, text: String) {
+    @discardableResult
+    func fork(_ chat: Chat, _ start: ForkStart, text: String) -> Chat? {
         let title = "\(chat.title) (fork)"
         let fork: Chat
         switch start {
@@ -305,11 +306,12 @@ package final class Workspace {
             // turn its fork could start after).
             if let imported = chat.imported {
                 Task { await recarry(imported, from: chat, text: text, title: title) }
-                return
+                return nil
             }
             fork = Chat(provider: chat.provider, folder: folder)
         }
         open(fork, of: chat, text: text)
+        return fork
     }
 
     /// The fork of an imported chat from its first own message: the history kept with its
