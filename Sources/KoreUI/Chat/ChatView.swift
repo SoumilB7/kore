@@ -88,10 +88,9 @@ struct ChatView: View {
                                 kept.unloadOld()
                             }
                         }
-                        .onDisappear {
-                            kept.transcript.hidden = false
-                            kept.transcript.covered = false
-                        }
+                        // No view left on it here: it stays hidden (its window's tab switch says
+                        // when it shows), and it isn't covered.
+                        .onDisappear { kept.transcript.covered = false }
                         // The spinner's glyph takes the mode's colour, as the composer outline does.
                         .environment(\.spinnerTint, kept.controls.tint)
                         .environment(\.hiddenTab, !shown)

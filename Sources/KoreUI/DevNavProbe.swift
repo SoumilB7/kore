@@ -116,6 +116,23 @@ package enum DevNavProbe {
         return result
     }
 
+    /// One switch to the tab at `index`: its main-thread work (the change, then the window's
+    /// layout and drawing at once), and the time to the first of three still frames.
+    package static func switchTo(_ workspace: Workspace, index: Int) async -> (sync: Double, settled: Double?) {
+        guard let window = workspace.window, let content = window.contentView, workspace.tabs.indices.contains(index) else { return (0, nil) }
+        let (pacer, scroll) = start(window, workspace)
+        defer { pacer.stop() }
+        _ = await pacer.waitSettled(timeout: 5)
+        let began = CACurrentMediaTime()
+        workspace.select(workspace.tabs[index])
+        content.layoutSubtreeIfNeeded()
+        content.displayIfNeeded()
+        let sync = (CACurrentMediaTime() - began) * 1000
+        scroll.value = nil
+        let settled = await pacer.waitSettled(timeout: 10).map { ($0 - began) * 1000 }
+        return (sync, settled)
+    }
+
     /// The tab strip's own share of navigation, `rounds` times each: a switch to the next tab, a
     /// new tab, and closing it. Each is timed twice: its main-thread work (the change, then the
     /// window's layout and drawing at once), and to the first of three still frames.

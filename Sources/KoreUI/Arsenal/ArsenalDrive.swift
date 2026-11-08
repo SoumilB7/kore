@@ -198,6 +198,8 @@ extension Chat {
     private func scrollerMessage(_ back: Int) async -> Result<TranscriptLog.Entry, ArsenalRefusal> {
         let store = transcript
         if store.earlierAvailable, store.earlierMarks.isEmpty { await readEarlierMessages() }
+        // A chat nobody sees builds its rows only as it shows: its marks are counted from them.
+        store.catchUp()
         var marks = store.messageMarks
         guard back <= marks.count else {
             return .failure(.init(marks.isEmpty ? "It has no messages to fork at yet." : "It has \(marks.count) message(s): -1 to -\(marks.count)."))

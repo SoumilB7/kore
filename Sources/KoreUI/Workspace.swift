@@ -163,6 +163,17 @@ package final class Workspace {
             // the newly mounted page after layout.
             PinchZoom.selectTab(in: window, id: activeID, openTabs: tabs.map(\.id))
             if closing != nil { closing = nil }
+            markShown()
+        }
+    }
+
+    /// The chat this window shows is the only one of its tabs that draws while it streams: the
+    /// rest build their rows as they show (`TranscriptStore.unseen`), drawn or not under it.
+    private func markShown() {
+        let shown = activeTab.agent == nil ? activeTab.chat : nil
+        for tab in tabs where tab.agent == nil {
+            guard let chat = tab.chat else { continue }
+            chat.transcript.hidden = chat !== shown
         }
     }
     /// Every chat the CLIs have for this folder, newest first, archived ones flagged.

@@ -567,10 +567,22 @@ package final class TranscriptStore {
     /// On screen, turns never leave but the unbuilt ones as it opens: rows going from above change
     /// what the lazy stack estimates of all the rest, and can leave the view past its rows with
     /// nothing drawn.
-    @ObservationIgnored var viewsOnScreen = 0
+    @ObservationIgnored var viewsOnScreen = 0 {
+        didSet {
+            guard viewsOnScreen > oldValue else { return }
+            viewed = true
+            catchUp()
+        }
+    }
+
+    /// A view has shown it: from then on, with none on it, nobody sees it (a tab past the few a
+    /// window keeps drawn has no view at all, not a hidden one).
+    @ObservationIgnored private var viewed = false
 
     /// Its tab is the one shown, in a window nothing shows.
-    @ObservationIgnored var covered = false
+    @ObservationIgnored var covered = false {
+        didSet { if oldValue, !covered { catchUp() } }
+    }
 
     var isOnScreen: Bool { viewsOnScreen > 0 && !covered }
 
@@ -633,11 +645,19 @@ package final class TranscriptStore {
 
     /// Set by the chat's view: off screen, rebuilds slow to `hiddenDrawInterval`.
     @ObservationIgnored var hidden = false {
-        didSet {
-            guard oldValue, !hidden, drawScheduled else { return }
-            drawScheduled = false
-            rebuild()
-        }
+        didSet { if oldValue, !hidden { catchUp() } }
+    }
+
+    /// Nothing shows it: its tab hidden or not drawn at all, or its window covered, and no board
+    /// tile on it. Then a stream builds no rows (they're built once, as it shows); only what other
+    /// views read of it (its agents, the files its turn touched) follows, a couple of times a
+    /// second.
+    var unseen: Bool { (hidden || viewed) && !isOnScreen }
+
+    /// Shows again: what streamed meanwhile is built now, at once.
+    func catchUp() {
+        drawScheduled = false
+        rebuild()
     }
 
     /// The transcript's one text selection.
@@ -1251,15 +1271,19 @@ package final class TranscriptStore {
     package func rebuild() {
         let signpost = RebuildStats.signposter.beginInterval("TranscriptRebuild")
         let began = DispatchTime.now().uptimeNanoseconds
+        var built = false
         defer {
             RebuildStats.signposter.endInterval("TranscriptRebuild", signpost)
-            RebuildStats.shared.record(Double(DispatchTime.now().uptimeNanoseconds - began) / 1e6)
+            let ms = Double(DispatchTime.now().uptimeNanoseconds - began) / 1e6
+            RebuildStats.shared.record(ms)
+            if built, RebuildCount.on { RebuildCount.add(hidden: hidden, ms: ms) }
         }
         // Only the window is built (a long chat costs what its last turns cost), and of it only
         // the sections from the first change down; the ones above are kept as they are.
         let start = windowStartIndex
         let whole = sectionStarts.first != start
         guard whole || dirtyFrom != nil else { return }
+        built = true
         let from = whole ? start : max(dirtyFrom ?? entries.count, start)
         dirtyFrom = nil
         // A turn's sections are built together: from its first.
@@ -1712,11 +1736,24 @@ package final class TranscriptStore {
         mark(index)
         guard !batching, !drawScheduled else { return }
         drawScheduled = true
-        DispatchQueue.main.asyncAfter(deadline: .now() + (hidden ? Self.hiddenDrawInterval : Self.drawInterval)) { [weak self] in
-            guard let self else { return }
-            drawScheduled = false
-            rebuild()
+        DispatchQueue.main.asyncAfter(deadline: .now() + (unseen ? Self.hiddenDrawInterval : Self.drawInterval)) { [weak self] in
+            self?.drawChange()
         }
+    }
+
+    /// The scheduled draw: rows for a chat that shows; for one nobody sees, only its summary.
+    func drawChange() {
+        drawScheduled = false
+        if unseen { refreshSummary() } else { rebuild() }
+    }
+
+    /// What's read of a chat nobody sees: its agents (tab cues) and the files its turn touched.
+    private func refreshSummary() {
+        publish(summarizeAgents())
+        guard touchesDirty else { return }
+        touchesDirty = false
+        let touches = touchedFiles()
+        if touches != fileTouches { fileTouches = touches }
     }
 
     package func mark(_ index: Int?) {
@@ -1752,3 +1789,20 @@ extension StoryTranscript {
 }
 
 extension TranscriptStore: TranscriptLogView {}
+
+/// What rebuilds cost, by whether their chat showed: counted only while a storyline measures
+/// (`on`), so the rest of the time it's one flag read.
+@MainActor
+package enum RebuildCount {
+    package static var on = false
+    package private(set) static var shown = 0
+    package private(set) static var hidden = 0
+    package private(set) static var shownMs = 0.0
+    package private(set) static var hiddenMs = 0.0
+
+    static func add(hidden: Bool, ms: Double) {
+        if hidden { Self.hidden += 1; hiddenMs += ms } else { shown += 1; shownMs += ms }
+    }
+
+    package static func reset() { shown = 0; hidden = 0; shownMs = 0; hiddenMs = 0 }
+}
