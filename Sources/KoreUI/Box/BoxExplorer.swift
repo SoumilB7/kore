@@ -349,7 +349,7 @@ private struct BoxTreeRow: View {
         .animation(Motion.fade, value: drop)
         .padding(.horizontal, Size.Tree.rowInset)
         .background(alignment: .leading) {
-            if row.depth > 0 { TreeGuides(depth: row.depth).fill(Theme.Tree.guide).allowsHitTesting(false) }
+            if row.depth > 0 { TreeGuides(depth: row.depth, tree: TreeMetrics()).fill(Theme.Tree.guide).allowsHitTesting(false) }
         }
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }

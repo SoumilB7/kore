@@ -54,7 +54,7 @@ extension Layout {
 }
 
 extension Chrome {
-    static let glyphMedia = Font.system(size: 28)
+    static var glyphMedia: Font { .kore(28) }
 }
 
 extension TextStyle {

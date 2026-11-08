@@ -6,6 +6,7 @@ import Testing
 /// The tab strip's layout from its width: names, then first letters with the active name before
 /// them, then a strip that scrolls with `»N`, marks alone only where one tab with letters won't
 /// fit; what's in view as it scrolls, and how far to scroll to bring a tab into view.
+@MainActor
 struct TabStripTests {
     @Test func fewTabsShowTheirNamesAtFullWidth() {
         let strip = TabStrip(count: 3, width: 3 * (Size.tabMaxWidth + Size.tabGap))

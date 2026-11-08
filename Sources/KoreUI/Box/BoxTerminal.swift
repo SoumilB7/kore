@@ -35,7 +35,7 @@ final class BoxTerminalShell: NSObject, TerminalSession, TerminalViewDelegate {
         // Typed into the fresh prompt, never run: one line only (a newline would run it).
         self.draft = draft.flatMap { $0.contains(where: \.isNewline) ? nil : $0 }
         title = Self.names[connection.alias] ?? "shell"
-        view = TerminalView(frame: .zero, font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular), options: start)
+        view = TerminalView(frame: .zero, font: TerminalShell.font, options: start)
         super.init()
         view.terminalDelegate = self
         TerminalShell.style(view)

@@ -3,8 +3,8 @@ import SwiftUI
 // The sidebar's Search (phase 10 look §3).
 
 extension Size {
-    static let searchField: CGFloat = 28
-    static let filterField: CGFloat = 26
+    @MainActor static var searchField: CGFloat { Zoom.pt(28) }
+    @MainActor static var filterField: CGFloat { Zoom.pt(26) }
 }
 
 extension Layout {

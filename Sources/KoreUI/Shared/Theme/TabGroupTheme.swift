@@ -33,21 +33,21 @@ extension Theme {
 
 extension Size {
     enum TabGroup {
-        static let chipHeight: CGFloat = 22
-        static let chipPadding: CGFloat = 9
+        @MainActor static var chipHeight: CGFloat { Zoom.pt(22) }
+        @MainActor static var chipPadding: CGFloat { Zoom.pt(9) }
         /// An unnamed group's chip, or an open one's while tabs show letters: its dot alone.
-        static let dotChip: CGFloat = 22
-        static let dot: CGFloat = 8
-        static let point: CGFloat = 6
+        @MainActor static var dotChip: CGFloat { Zoom.pt(22) }
+        @MainActor static var dot: CGFloat { Zoom.pt(8) }
+        @MainActor static var point: CGFloat { Zoom.pt(6) }
         static let line: CGFloat = 2
         /// Inset of the line from the run's ends.
         static let lineInset: CGFloat = 4
-        static let swatch: CGFloat = 16
+        @MainActor static var swatch: CGFloat { Zoom.pt(16) }
         /// Room round a swatch for the ring on the group's own colour.
         static let swatchRing: CGFloat = 3
-        static let popupWidth: CGFloat = 250
+        @MainActor static var popupWidth: CGFloat { Zoom.pt(250) }
         /// The popup's name field.
-        static let field: CGFloat = 28
+        @MainActor static var field: CGFloat { Zoom.pt(28) }
         /// How long a held tab rests on another's middle before the drop would group them.
         static let dwell: Duration = .milliseconds(300)
     }

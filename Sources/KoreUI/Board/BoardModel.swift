@@ -5,7 +5,7 @@ import src
 /// The board's sizes storylines check against.
 package enum BoardMetrics {
     package static let chip = Size.Board.chip
-    package static let tileHeader = Size.Board.tileHeader
+    @MainActor package static var tileHeader: CGFloat { Size.Board.tileHeader }
     package static let liveFull = Size.Board.liveFull
 }
 

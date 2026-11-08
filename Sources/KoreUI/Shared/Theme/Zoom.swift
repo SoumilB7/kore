@@ -2,8 +2,10 @@ import AppKit
 import Observation
 import SwiftUI
 
-/// App-wide text zoom (⌘= / ⌘- / ⌘0), remembered across launches. Views read it through
-/// `Font.kore`, so SwiftUI re-renders them when it changes.
+/// App-wide zoom (⌘= / ⌘- / ⌘0), remembered across launches (one level for every window). The
+/// whole window follows it, the way a browser's ⌘+ does: chat, chrome, explorer, Devices, file
+/// tabs, the terminal, popups. Views read it through `Font.kore` and `Zoom.pt`, so SwiftUI lays
+/// out again once when it changes, never per frame.
 @MainActor @Observable
 final class Zoom {
     static let shared = Zoom()
@@ -40,6 +42,21 @@ final class Zoom {
         persist(value)
         return true
     }
+
+    /// `length` (a size at 100%) at the zoom: fonts and the sizes that hold text (row heights,
+    /// icon boxes, popup widths) read this, so they scale together.
+    nonisolated static func pt(_ length: CGFloat, scale: CGFloat) -> CGFloat { length * scale }
+    nonisolated static func pt(_ size: CGSize, scale: CGFloat) -> CGSize { CGSize(width: size.width * scale, height: size.height * scale) }
+    static func pt(_ length: CGFloat) -> CGFloat { pt(length, scale: shared.scale) }
+    static func pt(_ size: CGSize) -> CGSize { pt(size, scale: shared.scale) }
+
+    /// The title row's height: the title bar's own (40 in full screen), grown by what the zoom
+    /// adds to a tab so taller tabs still fit; never lower than the bar, whose traffic lights stay.
+    nonisolated static func titleRow(bar: CGFloat, scale: CGFloat) -> CGFloat { bar + max(0, tabBase * (scale - 1)) }
+    /// A tab's height at 100% (`Size.tab`).
+    nonisolated static let tabBase: CGFloat = 30
+    /// The terminal's font (the system mono) at 100%.
+    nonisolated static let terminalBase: CGFloat = 12
 
     private func set(_ value: CGFloat) {
         guard value.isFinite else { return }

@@ -85,89 +85,91 @@ enum Layout {
     }
 }
 
-/// Fixed element sizes.
+/// Element sizes. The `@MainActor` ones hold text and follow the window's zoom (`Zoom.pt`);
+/// the `let`s stay put.
 enum Size {
-    static let titleRow: CGFloat = 40
-    static let titleRowMin: CGFloat = 28
+    /// The title row: 40, grown by what the zoom adds to its tabs (`Zoom.titleRow`).
+    @MainActor static var titleRow: CGFloat { Zoom.titleRow(bar: 40, scale: Zoom.shared.scale) }
+    @MainActor static var titleRowMin: CGFloat { Zoom.pt(28) }
     static let trafficLights: CGFloat = 82
     static let trafficLightsFullScreen: CGFloat = 10
-    static let tab: CGFloat = 30
+    @MainActor static var tab: CGFloat { Zoom.pt(Zoom.tabBase) }
     /// A tab at its narrowest: its mark and its ×.
-    static let tabMinWidth: CGFloat = 48
-    static let tabMaxWidth: CGFloat = 220
+    @MainActor static var tabMinWidth: CGFloat { Zoom.pt(48) }
+    @MainActor static var tabMaxWidth: CGFloat { Zoom.pt(220) }
     /// The least room a tab's title gets in the strip: four or five characters at 13pt, a cut
     /// name's ellipsis among them (`TabTitle.room`).
-    static let tabTitleMin: CGFloat = 44
+    @MainActor static var tabTitleMin: CGFloat { Zoom.pt(44) }
     /// Narrower than this, tabs show their names' first letters, clipped, and the active one's
     /// name shows before them, at most `tabNameMax` wide (and a quarter of the room). Here the
     /// active tab's name, ended before its ×, has `tabTitleMin`.
-    static let tabNamed: CGFloat = 106
+    @MainActor static var tabNamed: CGFloat { Zoom.pt(106) }
     /// The narrowest a tab with its first letters gets, `tabTitleMin` for them: past it the strip
     /// scrolls, and only a strip too narrow for one such tab shows marks alone.
-    static let tabLetters: CGFloat = 80
+    @MainActor static var tabLetters: CGFloat { Zoom.pt(80) }
     /// An × shown over a title's end (on hover, or on a tab showing letters): the title fades
     /// out before it, clear for its last `tabTitleClear`.
-    static let tabTitleFade: CGFloat = 10
-    static let tabTitleClear: CGFloat = 14
-    static let tabNameMax: CGFloat = 160
+    @MainActor static var tabTitleFade: CGFloat { Zoom.pt(10) }
+    @MainActor static var tabTitleClear: CGFloat { Zoom.pt(14) }
+    @MainActor static var tabNameMax: CGFloat { Zoom.pt(160) }
     /// `»N` after a strip that scrolls.
-    static let tabOverflow: CGFloat = 36
+    @MainActor static var tabOverflow: CGFloat { Zoom.pt(36) }
     /// The soft edge of the strip on a side with tabs past it.
     static let tabFade: CGFloat = 20
     /// A tab asking before its close stops a turn: the question and its Yes and No.
-    static let tabAsking: CGFloat = 200
+    @MainActor static var tabAsking: CGFloat { Zoom.pt(200) }
     static let tabGap: CGFloat = 4
     /// A tab drag starts after this much movement, so clicks and double clicks stay clicks.
     static let tabDragStart: CGFloat = 4
     /// The least a control takes clicks across, however small it's drawn (WCAG 2.5.8).
     static let hitTarget: CGFloat = 24
-    static let iconButton: CGFloat = 28
-    static let iconButtonSmall: CGFloat = 26
+    @MainActor static var iconButton: CGFloat { Zoom.pt(28) }
+    @MainActor static var iconButtonSmall: CGFloat { Zoom.pt(26) }
     /// `SubtleButtonStyle(small:)`: a capsule button inside a row.
-    static let smallButton: CGFloat = 20
-    static let closeGlyph: CGFloat = 18
-    static let slashGlyph: CGFloat = 16
+    @MainActor static var smallButton: CGFloat { Zoom.pt(20) }
+    @MainActor static var closeGlyph: CGFloat { Zoom.pt(18) }
+    @MainActor static var slashGlyph: CGFloat { Zoom.pt(16) }
     static let slashStroke: CGFloat = 1.2
     /// The / menu's drawn / and $ boxes, the optical size of its rows' 12pt glyphs.
-    static let sigilBox: CGFloat = 12
+    @MainActor static var sigilBox: CGFloat { Zoom.pt(12) }
     static let slashLine: CGFloat = 1.4
-    static let thumb: CGFloat = 44
-    static let chip: CGFloat = 30
-    static let chipNameMax: CGFloat = 180
-    static let logoTab: CGFloat = 14
-    static let logoRow: CGFloat = 13
+    @MainActor static var thumb: CGFloat { Zoom.pt(44) }
+    @MainActor static var chip: CGFloat { Zoom.pt(30) }
+    @MainActor static var chipNameMax: CGFloat { Zoom.pt(180) }
+    @MainActor static var logoTab: CGFloat { Zoom.pt(14) }
+    @MainActor static var logoRow: CGFloat { Zoom.pt(13) }
     static let logoPicker: CGFloat = 16
-    static let spinner: CGFloat = 14
+    @MainActor static var spinner: CGFloat { Zoom.pt(14) }
     /// The amber point on a background-only chat's ">_" mark while an approval waits.
     static let backgroundPromptPoint: CGFloat = 6
     /// The ground's ring round that point, so it reads apart from an orange ">_".
     static let backgroundPromptRing: CGFloat = 1.5
     /// The empty chat's "Import a chat" line, the picker's search line, and its rows (as high as
     /// a usage reset's), seven of them before the list scrolls; a row's running spinner.
-    static let importLine: CGFloat = 22
-    static let importRow: CGFloat = 26
+    @MainActor static var importLine: CGFloat { Zoom.pt(22) }
+    @MainActor static var importRow: CGFloat { Zoom.pt(26) }
     static let importRowsShown = 7
-    static let importSpinner: CGFloat = 10
+    @MainActor static var importSpinner: CGFloat { Zoom.pt(10) }
     static let dot: CGFloat = 6
     static let swatch: CGFloat = 12
     static let swatchButton = CGSize(width: 24, height: 28)
     static let swatchRing: CGFloat = 1.5
     static let swatchRingInset: CGFloat = 3
-    static let zoomLabel = CGSize(width: 44, height: 28)
-    static let divider = CGSize(width: 1, height: 18)
+    @MainActor static var zoomLabel: CGSize { Zoom.pt(CGSize(width: 44, height: 28)) }
+    @MainActor static var divider: CGSize { Zoom.pt(CGSize(width: 1, height: 18)) }
     static let dropZone: CGFloat = 56
     static let dropDash: [CGFloat] = [4, 3]
-    static let menuMax: CGFloat = 260
+    @MainActor static var menuMax: CGFloat { Zoom.pt(260) }
     /// `»N`'s list: eight 28pt rows and half of the next, under `menuMax`, so it shows there are
     /// more to scroll to.
-    static let hiddenTabsMax: CGFloat = 244
+    @MainActor static var hiddenTabsMax: CGFloat { Zoom.pt(244) }
     /// The / menu: five 28pt rows and half of the next, so it shows there are more to scroll to.
-    static let slashMenuMax: CGFloat = 158
+    @MainActor static var slashMenuMax: CGFloat { Zoom.pt(158) }
     /// A message waiting for the limit's reset, quoted in its notice: at most this wide.
-    static let sendsQuote: CGFloat = 240
+    @MainActor static var sendsQuote: CGFloat { Zoom.pt(240) }
     /// The ring of dots around the send-at-reset arrow (the wait, a dot a twelfth of it).
-    static let resetRing: CGFloat = 20
-    static let resetRingDot: CGFloat = 2.4
+    @MainActor static var resetRing: CGFloat { Zoom.pt(20) }
+    @MainActor static var resetRingDot: CGFloat { Zoom.pt(2.4) }
     static let resetRingDots = 12
     /// Each arm of a corner mark, from the outer corner along either edge: at most this…
     static let cornerMark: CGFloat = 20
@@ -175,7 +177,7 @@ enum Size {
     static let cornerMarkShare: CGFloat = 0.3
     /// …and at least the corner's arc plus this much straight edge.
     static let cornerMarkMinStraight: CGFloat = 2
-    static let planScrollMax: CGFloat = 320
+    @MainActor static var planScrollMax: CGFloat { Zoom.pt(320) }
     static let chipBadge = CGSize(width: 5, height: -5)
     /// The remove badge (15 across, 5 past its chip's corner) takes clicks 24 across: back over
     /// its own chip, and 3 short of the next one, `Space.md` on.
@@ -243,19 +245,19 @@ extension EnvironmentValues {
 extension Size {
     enum Picker {
         /// A family row; a mode row.
-        static let row: CGFloat = 28
+        @MainActor static var row: CGFloat { Zoom.pt(28) }
         /// A version chip.
-        static let chip: CGFloat = 24
+        @MainActor static var chip: CGFloat { Zoom.pt(24) }
         /// A sign-in method with its hint under it; a form picker's choice.
-        static let method: CGFloat = 36
+        @MainActor static var method: CGFloat { Zoom.pt(36) }
         /// A group's rows, under it.
-        static let indent: CGFloat = 16
+        @MainActor static var indent: CGFloat { Zoom.pt(16) }
         /// The effort slider: its track, stops and thumb (ringed in the surface).
         static let track: CGFloat = 2
         static let stop: CGFloat = 5
-        static let thumb: CGFloat = 14
+        @MainActor static var thumb: CGFloat { Zoom.pt(14) }
         static let thumbRing: CGFloat = 2
         /// Narrower than this, the slider names the current level alone.
-        static let labelsMin: CGFloat = 260
+        @MainActor static var labelsMin: CGFloat { Zoom.pt(260) }
     }
 }

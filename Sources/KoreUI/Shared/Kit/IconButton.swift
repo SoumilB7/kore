@@ -11,7 +11,7 @@ struct IconButton: View {
         /// A message's Copy / Fork row.
         case mini
 
-        var size: CGFloat {
+        @MainActor var size: CGFloat {
             switch self {
             case .regular: Size.iconButton
             case .small: Size.iconButtonSmall

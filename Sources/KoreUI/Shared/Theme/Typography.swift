@@ -1,8 +1,8 @@
 import AppKit
 import SwiftUI
 
-/// Font roles, not sizes. Two kinds, kept apart so a view can't pick the wrong one:
-/// `TextStyle` is content and follows ⌘= / ⌘- zoom; `Chrome` is window chrome and never zooms.
+/// Font roles, not sizes. Two kinds: `TextStyle` is content, `Chrome` is window chrome. Both
+/// follow ⌘= / ⌘- zoom, so the whole window scales as one.
 /// Sizes match the Claude Code VS Code extension: the system font at 13, Menlo 12 for code.
 @MainActor
 enum TextStyle {
@@ -33,14 +33,15 @@ enum Glyph {
     static var remove: Font { .kore(13) }
 }
 
-/// Window chrome: welcome, tab bar, history, viewer toolbar. Fixed size at any zoom.
+/// Window chrome: welcome, tab bar, history, viewer toolbar. Zooms with the content.
+@MainActor
 enum Chrome {
-    static let display = Font.system(size: 30, weight: .semibold)
-    static let body = Font.system(size: 13)
-    static let bodyMedium = Font.system(size: 13, weight: .medium)
-    static let label = Font.system(size: 12)
-    static let labelDigits = Font.system(size: 12).monospacedDigit()
-    static let caption = Font.system(size: 11)
-    static let captionMedium = Font.system(size: 11, weight: .medium)
-    static let glyphClose = Font.system(size: 9, weight: .bold)
+    static var display: Font { .kore(30, .semibold) }
+    static var body: Font { .kore(13) }
+    static var bodyMedium: Font { .kore(13, .medium) }
+    static var label: Font { .kore(12) }
+    static var labelDigits: Font { .kore(12).monospacedDigit() }
+    static var caption: Font { .kore(11) }
+    static var captionMedium: Font { .kore(11, .medium) }
+    static var glyphClose: Font { .kore(9, .bold) }
 }

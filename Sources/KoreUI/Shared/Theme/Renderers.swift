@@ -29,6 +29,12 @@ extension Size {
     enum JSONTree {
         /// × zoom.
         static let row: CGFloat = 22
+        /// The explorer's tree metrics at 100% (× zoom where the tree draws them).
+        static let indent: CGFloat = 12
+        static let leading: CGFloat = 8
+        static let chevronBox: CGFloat = 16
+        static let trailing: CGFloat = 10
+        static let rowInset: CGFloat = 4
         /// Levels open on load.
         static let openDepth = 2
     }

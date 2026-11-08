@@ -42,7 +42,7 @@ extension Size {
     /// The mark at the track's end (the CLI's own limit, Off).
     static let contextTrackEnd = CGSize(width: 1.5, height: 6)
     /// The card's first line.
-    static let contextCardLine: CGFloat = 18
+    @MainActor static var contextCardLine: CGFloat { Zoom.pt(18) }
     /// The wheel's tick at the point, and the gap cut round it in the ring.
     static let contextTick: CGFloat = 1.5
     static let contextTickCut: CGFloat = 1
@@ -75,22 +75,22 @@ extension Theme {
 
 extension Size {
     /// The popup's widest: narrower composers give it their width.
-    static let usagePopupMax: CGFloat = 420
+    @MainActor static var usagePopupMax: CGFloat { Zoom.pt(420) }
     /// A limit's title column at its widest; longer titles truncate.
-    static let usageTitleMax: CGFloat = 120
+    @MainActor static var usageTitleMax: CGFloat { Zoom.pt(120) }
     /// A limit's bar at its narrowest.
     static let usageBarMin: CGFloat = 48
 
     /// The Account card's login rows (account-privacy.html).
     enum Account {
         /// A login's plan pill.
-        static let pill: CGFloat = 16
+        @MainActor static var pill: CGFloat { Zoom.pt(16) }
         static let pillRadius: CGFloat = 4
     }
     /// The least height the popup keeps however little room the window has above the composer.
     static let usageMinRoom: CGFloat = 72
     /// A full reset's row: its small "Use reset" button and a little room around it.
-    static let usageResetRow: CGFloat = 26
+    @MainActor static var usageResetRow: CGFloat { Zoom.pt(26) }
     /// The full resets' list at its tallest before it scrolls: four and a half rows, so the half
     /// row shows there's more.
     static let usageResetsMax: CGFloat = 117
