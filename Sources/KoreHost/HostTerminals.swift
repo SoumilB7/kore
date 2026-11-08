@@ -306,7 +306,12 @@ final class HostPty {
             writer?.cancel()
             writer = nil
         } else if writer == nil {
-            let source = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: .main)
+            // A copy of its own, closed as its watch ends: the reader's cancel closes the terminal's
+            // descriptor, maybe before this one's cancel is done with it.
+            let watched = dup(fd)
+            guard watched >= 0 else { return }
+            let source = DispatchSource.makeWriteSource(fileDescriptor: watched, queue: .main)
+            source.setCancelHandler { _ = sysClose(watched) }
             source.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.drainInput() } }
             writer = source
             source.resume()

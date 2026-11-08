@@ -197,10 +197,17 @@ package final class HostSocket {
     /// fell too far behind.
     package func start(max: Int, frame: @escaping @MainActor (Data) -> Void, ended: @escaping @MainActor () -> Void) {
         self.ended = ended
-        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
+        // Its source watches a copy of the descriptor, closed by its cancel handler: the socket's
+        // own closes at once (`close`), and a new connection given that number is never the one
+        // this source still watches while its cancel is under way.
+        let watched = dup(fd)
+        guard watched >= 0 else { return end() }
+        let source = DispatchSource.makeReadSource(fileDescriptor: watched, queue: .main)
+        source.setCancelHandler { _ = Glue2.close(watched) }
         source.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
-                guard let self else { return }
+                // A read queued as it closed: its number may be another socket's by now.
+                guard let self, !self.closed else { return }
                 var chunk = [UInt8](repeating: 0, count: 64 * 1024)
                 let count = read(self.fd, &chunk, chunk.count)
                 if count < 0, errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR { return }
@@ -249,10 +256,13 @@ package final class HostSocket {
             writer?.cancel()
             writer = nil
         } else if writer == nil {
-            let writer = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: .main)
+            let watched = dup(fd)
+            guard watched >= 0 else { return end() }
+            let writer = DispatchSource.makeWriteSource(fileDescriptor: watched, queue: .main)
+            writer.setCancelHandler { _ = Glue2.close(watched) }
             writer.setEventHandler { [weak self] in
                 MainActor.assumeIsolated {
-                    guard let self else { return }
+                    guard let self, !self.closed else { return }
                     self.flush()
                     if self.pending.count < Self.lowWater { self.drained?() }
                 }
