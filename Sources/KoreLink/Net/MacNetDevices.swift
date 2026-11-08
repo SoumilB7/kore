@@ -87,24 +87,34 @@ package final class MacNetDevices: PhoneDevices {
         var info: DeviceCardInfo = pending.kind == .box
             ? .box(name: device.name, node: node, address: address, login: device.login, firstSeen: device.firstSeen, device: device.device)
             : .phone(name: device.name, node: node, address: address, login: device.login, firstSeen: device.firstSeen)
-        // A phone of the same user and model that's offline now is this one reinstalled or left.
+        // A record this phone clearly replaces (reinstalled or left) shows on the card; Allow
+        // looks at the tailnet again before retiring anything (`MacNet.replaced`).
+        let probe = Self.probe(device, kind: pending.kind)
         let peers = KoreNetSwitch.shared?.status?.peers
-        var retire: [UUID] = []
-        if let peers, pending.kind == .phone, let id = device.device, let key = device.identityKey {
-            let probe = DeviceRecord(
-                id: id, name: device.name, kind: .phone, abilities: [.read, .ask], identityKey: key, nodeKeys: [device.nodeKey], userId: device.userId,
-                fqdn: device.fqdn, added: Date())
-            let replaced = MacNet.replaced(by: probe, model: device.name, in: mac.allowedPhones(), peers: peers)
-            retire = replaced.map(\.id)
-            info.replaces = replaced.first.map { MacNet.replacesLine($0, peers: peers, now: Date()) }
+        if let probe, let peers {
+            info.replaces = mac.replacing(probe, peers: peers).first.map { MacNet.replacesLine($0, peers: peers, now: Date()) }
         }
         mac.asks.ask(info) { [weak self] answer in
             guard answer == .allow else {
                 if answer != .gone { NetAudit.line("deny", ["node": device.nodeKey, "at": pending.box]) }
                 return
             }
-            self?.allow(device, retire: retire)
+            guard let probe else {
+                self?.allow(device)
+                return
+            }
+            mac.peers { [weak self] peers in self?.allow(device, retire: mac.replacing(probe, peers: peers).map(\.id)) }
         }
+    }
+
+    /// A waiting phone as a record, for what it replaces; nil for anything else.
+    static func probe(_ device: PendingDevice, kind: DeviceRow.Kind) -> DeviceRecord? {
+        guard kind == .phone, let id = device.device, let key = device.identityKey else { return nil }
+        var probe = DeviceRecord(
+            id: id, name: device.name, kind: .phone, abilities: [.read, .ask], identityKey: key, nodeKeys: [device.nodeKey], userId: device.userId,
+            fqdn: device.fqdn, added: Date())
+        probe.model = device.name
+        return probe
     }
 
     private func allow(_ device: PendingDevice, retire: [UUID] = []) {

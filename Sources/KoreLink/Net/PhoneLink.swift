@@ -202,6 +202,7 @@ package final class PhoneLink {
         net.feed.detach(client)
         client.sink.sendRaw(Data(#"{"t":"paused"}"#.utf8))
         NetAudit.line("park", ["device": id.uuidString.lowercased()])
+        net.phoneParked()
     }
 
     /// Brought online: the parked link ends with `bye online`, and the phone dials straight back.

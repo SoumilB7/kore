@@ -588,25 +588,23 @@ package final class MacNet {
             let info = DeviceCardInfo.phone(
                 name: record.name, node: Self.shortName(connection.whois.node.name), address: connection.remote, login: connection.whois.user.loginName,
                 firstSeen: connection.firstSeen)
-            // What's online now (one status read, off the main actor): an offline phone of the same
-            // user and model is this one reinstalled or left, and the card says it's replaced.
-            let tailnet = host.tailnet
-            let foreground = foreground
-            background { [weak self] in
-                let peers = (try? tailnet?.status())?.peers
-                _ = self
-                foreground { [weak self] in
-                    // Gone meanwhile: no card.
-                    guard let self, self.shaking[key] != nil else { return }
-                    let devices = (try? self.host.book.read().devices) ?? []
-                    let retire = peers.map { MacNet.replaced(by: record, model: record.model, in: devices, peers: $0) } ?? []
-                    var card = info
-                    card.replaces = retire.first.map { MacNet.replacesLine($0, peers: peers ?? [], now: self.clock()) }
-                    let ask = self.asks.ask(card) { [weak self] answer in
-                        self?.answered(answer, record: record, connection: connection, retire: retire.map(\.id))
+            // The tailnet now (one status read, off the main actor): a record this phone clearly
+            // replaces (reinstalled or left) shows on the card; Allow looks again before retiring.
+            peers { [weak self] peers in
+                // Gone meanwhile: no card.
+                guard let self, self.shaking[key] != nil else { return }
+                var card = info
+                card.replaces = self.replacing(record, peers: peers).first.map { MacNet.replacesLine($0, peers: peers ?? [], now: self.clock()) }
+                let ask = self.asks.ask(card) { [weak self] answer in
+                    guard let self else { return }
+                    guard answer == .allow else { return self.answered(answer, record: record, connection: connection) }
+                    // Looked at again now: a phone that came online since is kept.
+                    self.peers { [weak self] peers in
+                        guard let self else { return }
+                        self.answered(.allow, record: record, connection: connection, retire: self.replacing(record, peers: peers).map(\.id))
                     }
-                    self.held[key] = (connection, ask)
                 }
+                self.held[key] = (connection, ask)
             }
         case .established(let peer, let binding):
             shaking[key] = nil
@@ -624,6 +622,23 @@ package final class MacNet {
                 phone.gone()
             }
         }
+    }
+
+    /// The tailnet's peers as one status read off the main actor says (nil: unreadable), then `then`.
+    func peers(_ then: @escaping @MainActor ([TailnetStatus.Peer]?) -> Void) {
+        let tailnet = host.tailnet
+        let foreground = foreground
+        background {
+            let peers = (try? tailnet?.status())?.peers
+            foreground { then(peers) }
+        }
+    }
+
+    /// The records `record` replaces now (`replaced`), never one whose phone is linked here.
+    func replacing(_ record: DeviceRecord, peers: [TailnetStatus.Peer]?) -> [DeviceRecord] {
+        guard let peers else { return [] }
+        let devices = (try? host.book.read().devices) ?? []
+        return Self.replaced(by: record, model: record.model, in: devices, peers: peers).filter { phones[$0.id].map { $0.ended } ?? true }
     }
 
     /// The owner's answer to a phone's card; Allow retires the records it replaces (`retire`).
@@ -673,7 +688,7 @@ package final class MacNet {
         let phone = PhoneLink(net: self, record: peer.record, connection: connection, binding: binding, resumed: peer.resumed)
         phones[peer.record.id] = phone
         NetAudit.line("connect", ["device": peer.record.id.uuidString.lowercased(), "resumed": peer.resumed ? "1" : nil])
-        StayAwakePhones.connected(phones.count)
+        StayAwakePhones.connected(awakePhones)
         changed?("up \(peer.record.id.uuidString)")
         Devices.shared.changed()
         if phone.waitsForCursors {
@@ -684,9 +699,15 @@ package final class MacNet {
         }
     }
 
+    /// Phones that keep the Mac awake: linked and served (a parked one, taken offline, doesn't).
+    package var awakePhones: Int { phones.values.count { !$0.ended && !$0.parked } }
+
+    /// A link parked or brought back: Stay awake hears.
+    func phoneParked() { StayAwakePhones.connected(awakePhones) }
+
     func phoneGone(_ phone: PhoneLink) {
         if phones[phone.id] === phone { phones[phone.id] = nil }
-        StayAwakePhones.connected(phones.count)
+        StayAwakePhones.connected(awakePhones)
         changed?("gone \(phone.id.uuidString)")
         Devices.shared.changed()
     }
@@ -813,16 +834,35 @@ package final class MacNet {
 
     // MARK: A phone reinstalled or left (ID3 b)
 
-    /// The phone records a newly allowed phone replaces: another id, the same Tailscale user, the
-    /// same model (an older record without one: its name, which was the model unless renamed),
-    /// and none of its node keys online now. Most recently seen first.
+    /// The phone records a newly allowed phone replaces, on a strong signal only (a phone asleep,
+    /// or a second phone of the same model, is never one): another id, the same Tailscale user,
+    /// none of its node keys online now, and either
+    /// - the new node's name is the old one's plus Tailscale's collision suffix
+    ///   (`kore-cph2381` → `kore-cph2381-1`: the same phone registered again while its old node
+    ///   is still there), or
+    /// - its node is gone from the tailnet altogether and it's the same model (an older record
+    ///   without one: its name, which was the model unless renamed).
+    /// Most recently seen first.
     nonisolated static func replaced(by record: DeviceRecord, model: String?, in devices: [DeviceRecord], peers: [TailnetStatus.Peer]) -> [DeviceRecord] {
-        guard record.kind == .phone, let user = record.userId, let model, !model.isEmpty else { return [] }
+        guard record.kind == .phone, let user = record.userId else { return [] }
+        let present = Set(peers.map(\.publicKey))
         let online = Set(peers.filter(\.online).map(\.publicKey))
+        let newName = shortName(record.fqdn)
         return devices.filter { old in
-            old.kind == .phone && old.id != record.id && old.userId == user && (old.model ?? old.name) == model && old.nodeKeys.allSatisfy { !online.contains($0) }
+            guard old.kind == .phone, old.id != record.id, old.userId == user, old.nodeKeys.allSatisfy({ !online.contains($0) }) else { return false }
+            let suffixed = collision(newName, of: shortName(old.fqdn))
+            let gone = old.nodeKeys.allSatisfy { !present.contains($0) }
+            let sameModel = model.map { !$0.isEmpty && (old.model ?? old.name) == $0 } ?? false
+            return suffixed || (gone && sameModel)
         }
         .sorted { lastSeen($0, peers) ?? .distantPast > lastSeen($1, peers) ?? .distantPast }
+    }
+
+    /// `name` is `base` with Tailscale's `-N` suffix for a hostname taken already.
+    nonisolated static func collision(_ name: String, of base: String) -> Bool {
+        guard !base.isEmpty, name.hasPrefix(base + "-") else { return false }
+        let suffix = name.dropFirst(base.count + 1)
+        return !suffix.isEmpty && suffix.allSatisfy(\.isASCII) && suffix.allSatisfy(\.isNumber)
     }
 
     /// When a record's phone was last on: the tailnet's word for its node, else the record's.
