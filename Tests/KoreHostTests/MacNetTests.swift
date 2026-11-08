@@ -167,60 +167,76 @@ struct MacNetTests {
         let ups = Events<Bool>()
         connection.onLink("test") { ups.send($0) }
         connection.retain()
-        #expect(await ups.next())
+        #expect(try await ups.next())
         #expect(connection.route == .net)
 
         // The call reaches the box on the tailnet; its answer never makes it back.
         net?.deaf = true
         let answer = Task { await connection.call(hc.id, .send(text: "hello", files: [], queued: nil, id: "m1")) }
         // The box answered (and the answer was lost on the way).
-        await (try #require(net)).dropped.next()
+        try await (try #require(net)).dropped.next()
         #expect(hc.answered.count == 1)
         router.make = nil
         net?.inner.close()
         // Resent over SSH: the box's kept answer, the CLI asked once.
-        let result = await answer.value
+        // The call's own task, ended with the test's (its time limit): a resend that waits on a
+        // backoff (an hour, here) would otherwise hold the run.
+        let result = await withTaskCancellationHandler { await answer.value } onCancel: { answer.cancel() }
         #expect(result.ok)
         #expect(connection.route == .ssh(alias: "e2e-\(provider)", grant: "laptop"))
         #expect(backend.calls.filter { $0.hasPrefix("send hello") }.count == 1)
         // On both routes the box said who it is after its welcome (a full link): its id and key,
         // and that this Mac enrolled there.
-        await router.told.next()
-        await router.told.next()
+        try await router.told.next()
+        try await router.told.next()
         #expect(router.nodes.allSatisfy { $0.device == rig.identity.device && $0.enrolled == mac.id && $0.identityKey == rig.identity.signer.publicKey })
         connection.release()
         relays.forEach { $0.close() }
     }
 }
 
-/// Things that happen, awaited as they happen (no polling, no clock).
+/// Things that happen, awaited as they happen (no polling, no clock). A wait the test's time
+/// limit cancels ends there (throwing), so a hang fails its test instead of holding the run.
 final class Events<T: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [T] = []
-    private var waiters: [CheckedContinuation<T, Never>] = []
+    private var waiters: [(id: UUID, wake: CheckedContinuation<T, any Error>)] = []
 
     func send(_ item: T) {
         lock.lock()
         if !waiters.isEmpty {
             let waiter = waiters.removeFirst()
             lock.unlock()
-            return waiter.resume(returning: item)
+            return waiter.wake.resume(returning: item)
         }
         items.append(item)
         lock.unlock()
     }
 
     @discardableResult
-    func next() async -> T {
-        await withCheckedContinuation { wake in
-            lock.lock()
-            if !items.isEmpty {
-                let item = items.removeFirst()
+    func next() async throws -> T {
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { wake in
+                lock.lock()
+                if Task.isCancelled {
+                    lock.unlock()
+                    return wake.resume(throwing: CancellationError())
+                }
+                if !items.isEmpty {
+                    let item = items.removeFirst()
+                    lock.unlock()
+                    return wake.resume(returning: item)
+                }
+                waiters.append((id, wake))
                 lock.unlock()
-                return wake.resume(returning: item)
             }
-            waiters.append(wake)
+        } onCancel: {
+            lock.lock()
+            guard let i = waiters.firstIndex(where: { $0.id == id }) else { return lock.unlock() }
+            let waiter = waiters.remove(at: i)
             lock.unlock()
+            waiter.wake.resume(throwing: CancellationError())
         }
     }
 }
