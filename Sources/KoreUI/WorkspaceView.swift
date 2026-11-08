@@ -138,11 +138,15 @@ struct TabBar: View {
         strip.minX(index) + grab + translation
     }
 
-    /// Where in the tab the press was, from its start: its middle if its frame isn't known.
-    private func grabbed(_ tab: ChatTab, _ index: Int, at x: CGFloat, _ strip: TabStrip) -> CGFloat {
+    /// Where in the tab the press was, from its start, by the strip's own layout: the strip's frame
+    /// and its scroll, not the tab's last reported frame, which lags while tabs open, close or
+    /// slide (taken from it, the pointer could miss the middle third it was on and a hold didn't
+    /// group). Its middle before the strip has a frame.
+    private func grabbed(_ index: Int, at x: CGFloat, _ strip: TabStrip) -> CGFloat {
         let width = strip.width(index)
-        guard let frame = tabFrames.value[tab.id] else { return width / 2 }
-        return min(max(x - frame.minX, 0), width)
+        let origin = stripFrame.value
+        guard origin.width > 0 else { return width / 2 }
+        return min(max(x - (origin.minX + strip.minX(index) - scroller.scroll.offset), 0), width)
     }
 
     /// How far a tab is moved from its place while another is dragged: the dragged one with the
@@ -218,7 +222,7 @@ struct TabBar: View {
                 // Drawn within the strip; where it lands follows the pointer, which may go past
                 // either end (first, or last up to `+`).
                 let dx = min(max(value.translation.width, -strip.minX(index)), max(0, strip.content - strip.maxX(index)))
-                let grab = drag.value?.id == tab.id ? drag.value?.grab ?? 0 : grabbed(tab, index, at: value.startLocation.x, strip)
+                let grab = drag.value?.id == tab.id ? drag.value?.grab ?? 0 : grabbed(index, at: value.startLocation.x, strip)
                 let x = pointer(index, grab: grab, translation: value.translation.width, strip)
                 let landing = strip.drop(at: x, from: index)
                 var moved = TabDrag(id: tab.id, from: index, dx: dx, grab: grab, x: x, drop: landing, groupWith: drag.value?.groupWith)
@@ -503,9 +507,10 @@ struct TabBar: View {
                         }
                     }
                 } else {
-                    // No groups: the tabs alone, as before groups (a switch diffs only tabs).
+                    // No groups: the tabs alone, as before groups (a switch diffs only tabs). A tab
+                    // held on another still outlines it: the first group is made this way.
                     ForEach(Array(layout.tabs.enumerated()), id: \.element.id) { index, _ in
-                        tab(index, strip, layout, resting: nil)
+                        tab(index, strip, layout, resting: resting)
                     }
                 }
             }
