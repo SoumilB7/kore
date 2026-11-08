@@ -217,6 +217,10 @@ package enum LinkMessage: Sendable, Equatable {
     /// release's SHA256SUMS; `sig`, its signature; `apk`), from `offset`, answered with
     /// `blob.chunk`s, or a `result` with `gone.blob` when the Mac has none. The phone verifies.
     case appGet(id: String, part: String, offset: Int)
+    /// A phone's own content-free log (1.13): a Mac or box asks (`logs.get`, from `offset`), the
+    /// phone answers `logs.chunk`s (at most 32 Ki characters each) of the one log it read first.
+    case logsGet(id: String, offset: Int)
+    case logsChunk(id: String, offset: Int, total: Int, text: String)
     // Reads (1.2, with full control): a window's history, and a turn's changes to one file.
     case historyList(id: String, windowId: String, query: String?, archived: Bool, offset: Int)
     case historyPage(id: String, windowId: String, sessions: [HistorySession], more: Bool)
@@ -266,6 +270,8 @@ package enum LinkMessage: Sendable, Equatable {
         case .blobGet: "blob.get"
         case .blobChunk: "blob.chunk"
         case .appGet: "app.get"
+        case .logsGet: "logs.get"
+        case .logsChunk: "logs.chunk"
         case .cmd: "cmd"
         case .result: "result"
         case .attnState: "attn.state"
@@ -279,7 +285,7 @@ package enum LinkMessage: Sendable, Equatable {
     package static let types: Set<String> = [
         "challenge", "hello", "welcome", "bye", "command", "snapshot", "delta", "tx.open", "tx.more", "tx.close", "tx.page", "tx.delta", "tx.reset",
         "entry.more", "entry.chunk", "card.more", "card.chunk", "cmd", "result", "attn.state", "attn.event",
-        "blob.put.begin", "blob.put.chunk", "blob.put.end", "blob.get", "blob.chunk", "app.get",
+        "blob.put.begin", "blob.put.chunk", "blob.put.end", "blob.get", "blob.chunk", "app.get", "logs.get", "logs.chunk",
         "tx.earlier", "policy", "history.list", "history.page", "diff.get", "diff.hunks", "presence",
     ]
 }
@@ -349,6 +355,8 @@ extension LinkMessage: Codable {
             self = .blobGet(id: try d(.id), chatId: try d(.chatId), ref: try d(.ref), variant: try d(.variant), offset: try o(.offset) ?? 0)
         case "blob.chunk": self = .blobChunk(id: try d(.id), mime: try d(.mime), offset: try d(.offset), total: try d(.total), data: try d(.data))
         case "app.get": self = .appGet(id: try d(.id), part: try d(.part), offset: try o(.offset) ?? 0)
+        case "logs.get": self = .logsGet(id: try d(.id), offset: try o(.offset) ?? 0)
+        case "logs.chunk": self = .logsChunk(id: try d(.id), offset: try d(.offset), total: try d(.total), text: try d(.text))
         case "cmd": self = .cmd(id: try d(.id), try d(.cmd))
         case "result":
             self = .result(
@@ -488,6 +496,14 @@ extension LinkMessage: Codable {
             try c.encode(id, forKey: .id)
             try c.encode(part, forKey: .part)
             try c.encode(offset, forKey: .offset)
+        case .logsGet(let id, let offset):
+            try c.encode(id, forKey: .id)
+            try c.encode(offset, forKey: .offset)
+        case .logsChunk(let id, let offset, let total, let text):
+            try c.encode(id, forKey: .id)
+            try c.encode(offset, forKey: .offset)
+            try c.encode(total, forKey: .total)
+            try c.encode(text, forKey: .text)
         case .cmd(let id, let command):
             try c.encode(id, forKey: .id)
             try c.encode(command, forKey: .cmd)

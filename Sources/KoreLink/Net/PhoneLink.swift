@@ -114,7 +114,39 @@ package final class PhoneLink {
         }
     }
 
+    // MARK: The phone's log (1.13)
+
+    /// Asks waiting for their next `logs.chunk`, by id.
+    private var logWaits: [String: CheckedContinuation<(offset: Int, total: Int, text: String)?, Never>] = [:]
+
+    /// The phone's own content-free log, read piece by piece (`logs.get` / `logs.chunk`); nil when
+    /// it didn't answer within `wait` a piece, or the pieces didn't add up. Offsets count UTF-16
+    /// units, as the phone's strings do.
+    package func logs(wait: Duration = .seconds(15)) async -> String? {
+        let id = UUID().uuidString.lowercased()
+        var text = ""
+        while !ended {
+            let at = text.utf16.count
+            let piece: (offset: Int, total: Int, text: String)? = await withCheckedContinuation { waiting in
+                logWaits[id] = waiting
+                peer.client.sink.send(.logsGet(id: id, offset: at))
+                Task { @MainActor [weak self] in
+                    try? await Task.sleep(for: wait)
+                    self?.logWaits.removeValue(forKey: id)?.resume(returning: nil)
+                }
+            }
+            guard let piece, piece.offset == at else { return nil }
+            text += piece.text
+            if text.utf16.count >= piece.total || piece.text.isEmpty { return text }
+        }
+        return nil
+    }
+
     private func link(_ message: LinkMessage, proof: LinkRaiseWire.Signed?) {
+        if case .logsChunk(let id, let offset, let total, let text) = message {
+            logWaits.removeValue(forKey: id)?.resume(returning: (offset, total, text))
+            return
+        }
         if case .cmd(let id, let command) = message {
             let chat = command.chatId.flatMap { LinkSnapshot.chatsByID()[$0] }
             if let digest = LinkAsk.proofNeeded(command, chat.map(LinkSnapshot.facts)) {

@@ -176,6 +176,14 @@
       "type": "app.get"
     },
     {
+      "file": "logs.get.json",
+      "type": "logs.get"
+    },
+    {
+      "file": "logs.chunk.json",
+      "type": "logs.chunk"
+    },
+    {
       "file": "delta.commands.json",
       "type": "delta"
     },

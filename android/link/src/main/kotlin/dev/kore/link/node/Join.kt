@@ -345,6 +345,19 @@ class JoinFlow(
         /** Signed out with no sign-in URL for this many reads: the tailnet is started afresh once. */
         const val NO_URL_RESTART = 3
 
+        /** A step's name for the phone's log (written out: R8 renames the classes in a release build). */
+        fun label(s: Step): String = when (s) {
+            is Step.Join -> if (s.failed) "join-failed" else "join"
+            Step.Starting -> "starting"
+            is Step.SigningIn -> "signing-in"
+            is Step.Finding -> if (s.stopped) "finding-stopped" else if (s.addClosed) "finding-closed" else "finding"
+            is Step.Allowing -> "allowing"
+            is Step.Denied -> if (s.timedOut) "timed-out" else "denied"
+            is Step.NoMac -> "no-mac"
+            is Step.NeedsApproval -> "needs-approval"
+            is Step.Joined -> "joined"
+        }
+
         /** Mid sign-in: the tailnet holds a node key only in memory; stopping it now loses that sign-in. */
         fun signingIn(s: Step): Boolean = s is Step.Starting || s is Step.SigningIn || s is Step.NeedsApproval
     }

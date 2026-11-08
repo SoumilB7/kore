@@ -1,5 +1,6 @@
 import Foundation
 import HostClient
+import KoreCore
 import KoreNet
 import KoreTrust
 import KoreUI
@@ -64,6 +65,24 @@ package final class MacNetDevices: PhoneDevices {
 
     /// Taken offline: kept, but served nothing here (parked) and refused at every box (`paused`)
     /// until brought online.
+    /// "Get logs": the linked phone's own log, saved as `~/Library/Logs/Kore/phones/<name>-<time>.log`
+    /// (the folder Kore's logs keep a week in). Nil when it isn't linked or didn't answer.
+    package func fetchLogs(_ id: UUID, name: String) async -> URL? {
+        guard let phone = net()?.phones[id], !phone.ended, let text = await phone.logs() else { return nil }
+        NetAudit.line("phone-logs", ["device": id.uuidString.lowercased(), "bytes": "\(text.utf8.count)"])
+        let folder = KoreFolders.logs.appendingPathComponent("phones", isDirectory: true)
+        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "")
+        let safe = String(name.map { $0.isLetter || $0.isNumber || $0 == "-" ? $0 : "-" }.prefix(40))
+        let file = folder.appendingPathComponent("\(safe.isEmpty ? "phone" : safe)-\(stamp).log")
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: file, options: .atomic)
+            return file
+        } catch {
+            return nil
+        }
+    }
+
     package func setPaused(_ id: UUID, _ paused: Bool) {
         update(id) { $0.paused = paused ? true : nil }
         // Its link stays, parked: Bring online tells it to come back at once.

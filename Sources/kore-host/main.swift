@@ -21,7 +21,7 @@ let usage = """
            kore-host join
            kore-host upgrade [--want <version>] [--grant <name>] [--relogin]
            kore-host net on|off
-           kore-host devices [allow <id|code> | remove <id|code|name>]   (a code: "0009 a0e9", or "0009")
+           kore-host devices [allow <id|code> | remove <id|code|name> | logs <id|code|name>]   (a code: "0009 a0e9", or "0009")
            kore-host status
            kore-host attach --as <name> [--proto 2]
            kore-host mcp
@@ -97,6 +97,12 @@ case "run":
     reload.setEventHandler { MainActor.assumeIsolated { host.reloadNet() } }
     reload.resume()
     keep.append(reload)
+    // `kore-host devices logs`: a phone's log asked for (SIGUSR1).
+    signal(SIGUSR1, SIG_IGN)
+    let logs = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+    logs.setEventHandler { MainActor.assumeIsolated { host.phoneLogAsks() } }
+    logs.resume()
+    keep.append(logs)
     #if DEBUG
     let test = ProcessInfo.processInfo.environment
     if let hold = test["KORE_TEST_HOLD_START"] {
@@ -252,6 +258,35 @@ case "devices":
                 print("denied \(entry.name)")
             }
         } catch { fail("kore-host: \(error)") }
+    case "logs":
+        // A linked phone's own content-free log (1.13): the running daemon reads it over the
+        // phone's live link (asked by a file and SIGUSR1) and writes it under the state folder.
+        guard arguments.count >= 3 else { fail(usage) }
+        let which = arguments[2...].joined(separator: " ")
+        let digits = DeviceRecord.codePrefix(which)
+        let matches = store.all().filter { r in
+            r.kind == .phone && (UUID(uuidString: which) == r.id || (digits.map { r.id.uuidString.lowercased().hasPrefix($0) } ?? false) || r.name == which)
+        }
+        guard matches.count == 1, let phone = matches.first else { fail(matches.isEmpty ? "kore-host: no phone \(which)" : "kore-host: \(which) names more than one phone") }
+        guard HostLock.held(paths.lock), let text = try? String(contentsOf: paths.pid, encoding: .utf8),
+            let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines))
+        else { fail("kore-host isn't running") }
+        let name = phone.id.uuidString.lowercased()
+        let asks = paths.state.appendingPathComponent("asks", isDirectory: true)
+        let out = paths.state.appendingPathComponent("phone-logs", isDirectory: true)
+        let log = out.appendingPathComponent(name + ".log"), none = out.appendingPathComponent(name + ".none")
+        try? FileManager.default.removeItem(at: log)
+        try? FileManager.default.removeItem(at: none)
+        try? FileManager.default.createDirectory(at: asks, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: asks.appendingPathComponent("phone-logs-" + name).path, contents: Data())
+        kill(pid, SIGUSR1)
+        // Its answer: the log, or a mark that it didn't come (the phone must have Kore open).
+        for _ in 0..<160 {
+            if FileManager.default.fileExists(atPath: log.path) { print(log.path); exit(0) }
+            if FileManager.default.fileExists(atPath: none.path) { fail("\(phone.name) didn't send its logs: open Kore on it, then try again") }
+            usleep(250_000)
+        }
+        fail("kore-host: no answer from the daemon")
     default:
         fail(usage)
     }

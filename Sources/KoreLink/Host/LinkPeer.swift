@@ -169,7 +169,7 @@ final class LinkPeer {
                 Devices.shared.changed()
             }
         case .bye, .challenge, .hello, .welcome, .command, .snapshot, .delta, .txPage, .txDelta, .txReset, .entryChunk, .cardChunk, .result,
-            .attnState, .attnEvent, .blobChunk, .policy, .historyPage, .diffHunks, .unknown:
+            .attnState, .attnEvent, .blobChunk, .policy, .historyPage, .diffHunks, .logsGet, .logsChunk, .unknown:
             // `bye` is the host's; the rest are Kore's own messages, or a type from a newer client.
             break
         }

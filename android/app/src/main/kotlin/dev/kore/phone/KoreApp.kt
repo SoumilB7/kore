@@ -20,6 +20,8 @@ class KoreApp : Application() {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e -> android.util.Log.w("kore", "background: ${e::class.simpleName}") })
 
     val mesh by lazy { Mesh(this) }
+    /** The phone's content-free log (a day kept), for a Mac or box that asks for it. */
+    val log by lazy { dev.kore.link.log.PhoneLog(java.io.File(noBackupFilesDir, "logs")) }
     /** Which chats this phone has shown since they last did something (the lists' unread). */
     val seen by lazy { dev.kore.phone.ui.SeenBook(getSharedPreferences("seen", MODE_PRIVATE)) }
 
@@ -42,10 +44,20 @@ class KoreApp : Application() {
     private var started = 0
     private val main = Handler(Looper.getMainLooper())
     /** Off screen for a moment (a rotation, a hop between screens) isn't off screen. */
-    private val offScreen = Runnable { mesh.onScreen(false) }
+    private val offScreen = Runnable {
+        log.info("screen", "on" to false)
+        mesh.onScreen(false)
+    }
 
     override fun onCreate() {
         super.onCreate()
+        // A crash leaves one line (its class and frames, never its message), then goes on as before.
+        val before = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, e ->
+            runCatching { log.crash(e, thread.name) }
+            before?.uncaughtException(thread, e)
+        }
+        log.info("start", "version" to runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull())
         // The screen on, or the phone unlocked: a quiet link gets one probe.
         registerReceiver(object : android.content.BroadcastReceiver() {
             override fun onReceive(c: android.content.Context, i: android.content.Intent) {
@@ -63,6 +75,7 @@ class KoreApp : Application() {
             override fun onActivityStarted(a: Activity) {
                 if (started++ == 0) {
                     main.removeCallbacks(offScreen)
+                    log.info("screen", "on" to true)
                     mesh.onScreen(true)
                 }
             }

@@ -206,6 +206,10 @@ object Control {
     fun appGet(id: String, part: String, offset: Long = 0): JsonObject = buildJsonObject {
         put("t", "app.get"); put("id", id); put("part", part); put("offset", offset)
     }
+    /** A piece of this phone's log, answering a node's `logs.get` (1.13). */
+    fun logsChunk(id: String, offset: Int, total: Int, text: String): JsonObject = buildJsonObject {
+        put("t", "logs.chunk"); put("id", id); put("offset", offset); put("total", total); put("text", text)
+    }
     /** A command in its envelope. */
     fun envelope(id: String, cmd: JsonObject): JsonObject = buildJsonObject { put("t", "cmd"); put("id", id); put("cmd", cmd) }
 

@@ -275,6 +275,8 @@ struct DevicesPopup: View {
         let point = view.convert(CGPoint(x: x, y: view.isFlipped ? view.bounds.maxY : view.bounds.minY), to: nil)
         var items = [OptionItem("Rename") { startRename(row) }]
         items.append(row.paused ? OptionItem("Bring online") { devices.setPaused(row, false) } : OptionItem("Take offline") { devices.setPaused(row, true) })
+        // A linked phone's own log, to debug it without a cable.
+        if row.kind == .phone, row.status == .connected { items.append(OptionItem("Get logs") { devices.fetchLogs(row) }) }
         if row.canJoin { items.append(OptionItem(row.upgradeNote == nil ? "Join KoreNet" : "Try again") { join(row) }) }
         // A stopped upgrade's one action (its line is the row's detail).
         switch row.upgradeFix {
@@ -382,6 +384,7 @@ struct DevicesPopup: View {
     }
 
     @ViewBuilder private func runningLines(_ picture: DevicesPicture, now: Date) -> some View {
+        if let note = devices.logsNote { NetLine { Text(note) } }
         if picture.addOpen(at: now) {
             NetRule()
             NetLine { NetSpinner(); Text("On the phone or box, choose Join KoreNet") }

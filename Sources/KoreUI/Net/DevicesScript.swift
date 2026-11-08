@@ -76,6 +76,11 @@ package final class ScriptedPhones: PhoneDevices {
         log.append("remove")
     }
 
+    package func fetchLogs(_ id: UUID, name: String) async -> URL? {
+        log.append("logs")
+        return nil
+    }
+
     package func setPaused(_ id: UUID, _ paused: Bool) {
         if let i = phones.firstIndex(where: { $0.id == id }) {
             phones[i].paused = paused

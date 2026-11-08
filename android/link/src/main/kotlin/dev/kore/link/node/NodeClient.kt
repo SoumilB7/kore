@@ -90,6 +90,12 @@ class NodeClient(
     /** An owner Mac sent its directory (`devices.set`, or a welcome's): keep the boxes it lists. */
     private val onDirectory: (List<Device>) -> Unit = {},
     machineRandom: kotlin.random.Random = kotlin.random.Random.Default,
+    /**
+     * The phone's own log, for a Mac or box that asks (`logs.get`, 1.13): every node this phone
+     * links to is the owner's. Null: this client answers nothing. [onLogsAsked] runs once per ask.
+     */
+    private val logs: (() -> String)? = null,
+    private val onLogsAsked: () -> Unit = {},
 ) {
     private val deviceFlow = MutableStateFlow(initial)
     val device: StateFlow<Device> = deviceFlow.asStateFlow()
@@ -625,6 +631,30 @@ class NodeClient(
         return cards.map { it.jsonObject }.firstOrNull { it.str("id") == cardId }?.takeIf { it.str("digest") != null }
     }
 
+    /** One ask's log, read once at its first piece, so its pieces agree; the newest few asks only. */
+    private val logAsks = LinkedHashMap<String, String>()
+
+    /**
+     * `logs.get {id, offset}`: the piece of the log from `offset`, at most [LOG_PIECE] characters,
+     * as `logs.chunk {id, offset, total, text}`. The first piece reads the log and says so on screen.
+     */
+    private fun answerLogs(message: JsonObject) {
+        val read = logs ?: return
+        val link = session ?: return
+        val id = message.str("id")?.takeIf { it.length <= 64 } ?: return
+        val offset = (message["offset"]?.jsonPrimitive?.intOrNull ?: 0).coerceAtLeast(0)
+        val text = synchronized(logAsks) {
+            logAsks[id] ?: read().also {
+                logAsks[id] = it
+                while (logAsks.size > 4) logAsks.remove(logAsks.keys.first())
+                onLogsAsked()
+            }
+        }
+        val start = minOf(offset, text.length)
+        val piece = text.substring(start, minOf(text.length, start + LOG_PIECE))
+        link.send(Control.logsChunk(id, start, text.length, piece).bytes())
+    }
+
     private fun route(message: JsonObject) {
         messageFlow.tryEmit(message)
         when (message.str("t")) {
@@ -633,6 +663,7 @@ class NodeClient(
                 val policy = (w["policy"] as? JsonObject).orEmpty() + message.filterKeys { it != "t" && it != "seq" }
                 welcomeFlow.value = JsonObject(w + ("policy" to JsonObject(policy)))
             }
+            "logs.get" -> answerLogs(message)
             "snapshot" -> snapshotFlow.value = message
             "delta" -> snapshotFlow.value = snapshotFlow.value?.let { merge(it, message) } ?: message
             "tx.page", "tx.delta", "tx.reset" -> transcriptFlow.tryEmit(message)
@@ -653,6 +684,8 @@ class NodeClient(
 
     companion object {
         const val QUIET_MS = 15_000L
+        /** Characters of the log per `logs.chunk`. */
+        const val LOG_PIECE = 32 * 1024
         const val PROBE_MS = 5_000L
         /** A risky card's Allow signs this mode id, with the card's digest after it. */
         const val APPROVE = "approve."

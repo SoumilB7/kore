@@ -23,6 +23,8 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -34,7 +36,10 @@ class NodeClientTest {
     private fun JsonObject.cmd() = this["cmd"] as JsonObject
 
     /** A node client whose dials are answered, in order, by [plan] (a link, or a failure). */
-    private class Rig(scope: TestScope, plan: List<() -> Any>, signer: RaiseSigner? = null, device: dev.kore.link.trust.Device = mac()) {
+    private class Rig(
+        scope: TestScope, plan: List<() -> Any>, signer: RaiseSigner? = null, device: dev.kore.link.trust.Device = mac(),
+        logs: (() -> String)? = null, onLogsAsked: () -> Unit = {},
+    ) {
         val clock = { scope.testScheduler.currentTime }
         val links = mutableListOf<FakeLink>()
         val dials = mutableListOf<Long>()
@@ -50,7 +55,7 @@ class NodeClientTest {
         }, clock = clock, raiseSigner = signer, machineRandom = object : kotlin.random.Random() {
             override fun nextBits(bitCount: Int) = 0
             override fun nextDouble() = 0.5
-        })
+        }, logs = logs, onLogsAsked = onLogsAsked)
     }
 
     private fun TestScope.link() = FakeLink(mac(), { testScheduler.currentTime })
@@ -459,5 +464,37 @@ class NodeClientTest {
         assertTrue(frames[0].startsWith("{\"t\":\"blob.put.begin\",\"uploadId\":\"u1\""))
         assertTrue(frames[2].contains("\"index\":1"))
         assertEquals("{\"t\":\"blob.put.end\",\"uploadId\":\"u1\"}", frames[3])
+    }
+
+    /** 1.13: a Mac asks for the phone's log: pieces from the one read of its first ask, said once on screen. */
+    @Test fun aLogAskIsAnsweredInPiecesFromOneRead() = runTest {
+        val link = link()
+        var reads = 0
+        var asked = 0
+        val text = "x".repeat(NodeClient.LOG_PIECE + 10)
+        val rig = Rig(this, listOf({ link }), logs = { reads++; text }, onLogsAsked = { asked++ })
+        rig.client.start()
+        runCurrent()
+        link.push(kotlinx.serialization.json.buildJsonObject { put("t", "logs.get"); put("id", "L1"); put("offset", 0) })
+        runCurrent()
+        link.push(kotlinx.serialization.json.buildJsonObject { put("t", "logs.get"); put("id", "L1"); put("offset", NodeClient.LOG_PIECE) })
+        runCurrent()
+        val chunks = link.sent.filter { it.s("t") == "logs.chunk" }
+        assertEquals(2, chunks.size)
+        assertEquals(listOf(0, NodeClient.LOG_PIECE), chunks.map { it["offset"]!!.jsonPrimitive.int })
+        assertEquals(text.length, chunks[0]["total"]!!.jsonPrimitive.int)
+        assertEquals(text, chunks.joinToString("") { it.s("text") ?: "" })
+        assertEquals(1, reads)
+        assertEquals(1, asked)
+    }
+
+    @Test fun aClientWithNoLogAnswersNothing() = runTest {
+        val link = link()
+        val rig = Rig(this, listOf({ link }))
+        rig.client.start()
+        runCurrent()
+        link.push(kotlinx.serialization.json.buildJsonObject { put("t", "logs.get"); put("id", "L1") })
+        runCurrent()
+        assertTrue(link.sent.none { it.s("t") == "logs.chunk" })
     }
 }

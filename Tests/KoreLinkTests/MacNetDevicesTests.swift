@@ -98,3 +98,32 @@ extension MacNetTests {
         #expect(try rig.host.book.record(boxID) == nil)
     }
 }
+
+/// 1.13: "Get logs" reads a linked phone's own log in pieces and keeps it in Kore's logs folder.
+extension MacNetTests {
+    @Test func aLinkedPhonesLogsComeInPiecesAndAreKept() async throws {
+        let rig = try MacRig()
+        defer { rig.finish() }
+        let devices = MacNetDevices { rig.net }
+        let pixel = Phone()
+        try rig.allow(pixel)
+        let phone = try rig.dial(pixel)
+        await phone.next("attn.state")
+        let log = "2026-11-17T10:41:03.118Z info screen on=true\n2026-11-17T10:41:04.000Z info node node=7f3a91c2 state=up\n"
+        let half = log.utf16.count / 2
+        let fetch = Task { @MainActor in await rig.net.phones[pixel.id]?.logs(wait: .seconds(5)) }
+        // The phone answers each ask with the piece from its offset.
+        let first = await phone.next("logs.get")
+        #expect(first["offset"] as? Int == 0)
+        let id = try #require(first.id)
+        let a = String(log.prefix(half)).replacingOccurrences(of: "\n", with: "\\n")
+        phone.send(#"{"t":"logs.chunk","id":"\#(id)","offset":0,"total":\#(log.utf16.count),"text":"\#(a)"}"#)
+        let second = await phone.next("logs.get")
+        #expect(second["offset"] as? Int == half)
+        let b = String(log.dropFirst(half)).replacingOccurrences(of: "\n", with: "\\n")
+        phone.send(#"{"t":"logs.chunk","id":"\#(id)","offset":\#(half),"total":\#(log.utf16.count),"text":"\#(b)"}"#)
+        #expect(await fetch.value == log)
+        // Not linked: nothing, at once.
+        #expect(await devices.fetchLogs(UUID(), name: "x") == nil)
+    }
+}

@@ -184,6 +184,27 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
     private fun jitter(ms: Long): Long = (ms * (0.8 + 0.4 * random.nextDouble())).toLong()
 
     companion object {
+        /** A state's name for the phone's log: written out, as R8 renames classes in a release build. */
+        /** An away reason's name for the log (written out: R8 may rename enum constants). */
+        fun label(why: AwayWhy): String = when (why) {
+            AwayWhy.ASLEEP -> "asleep"
+            AwayWhy.OFFLINE -> "offline"
+            AwayWhy.OFF -> "taken-offline"
+            AwayWhy.UNREACHABLE -> "unreachable"
+            AwayWhy.WAITING -> "waiting"
+            AwayWhy.NET_OFF -> "net-off"
+        }
+
+        fun label(s: State): String = when (s) {
+            State.Idle -> "idle"
+            State.Connecting -> "connecting"
+            State.AwaitingAllow -> "allowing"
+            State.Up -> "up"
+            is State.Away -> "away"
+            is State.Denied -> "denied"
+            State.Removed -> "removed"
+            State.SignedOut -> "signed-out"
+        }
         const val CAP_MS = 300_000L
         /** A box waiting for its Mac's push is tried at least this often while on screen. */
         const val WAITING_CAP_MS = 60_000L

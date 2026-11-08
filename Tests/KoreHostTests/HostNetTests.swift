@@ -547,3 +547,32 @@ extension HostNet {
     /// The first listener's port (a test binds port 0).
     var listenerPort: UInt16? { firstListener.flatMap(Sockets.localPort) }
 }
+
+/// 1.13: `kore-host devices logs`: the daemon reads a linked phone's own log over its live link.
+extension HostNetTests {
+    @Test func aPhoneLogAskIsReadOverItsLinkIntoTheStateFolder() async throws {
+        let rig = try await NetRig.make()
+        defer { rig.finish() }
+        let phone = Device("pixel", kind: .phone)
+        try rig.allow(phone)
+        let dialled = try await up(rig, phone)
+        let name = phone.id.uuidString.lowercased()
+        let asks = rig.rig.host.paths.state.appendingPathComponent("asks", isDirectory: true)
+        try FileManager.default.createDirectory(at: asks, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: asks.appendingPathComponent("phone-logs-" + name).path, contents: Data())
+        rig.rig.host.phoneLogAsks()
+        // The phone answers the ask with its log, in one piece.
+        var ask: (id: String, offset: Int)?
+        try await dialled.until {
+            for message in dialled.decoded(LinkMessage.self) { if case .logsGet(let id, let offset) = message { ask = (id, offset) } }
+            return ask != nil
+        }
+        #expect(ask?.offset == 0)
+        let log = "2026-11-17T10:41:03.118Z info screen on=true\n"
+        try dialled.send(LinkMessage.logsChunk(id: ask!.id, offset: 0, total: log.utf16.count, text: log))
+        let file = rig.rig.host.paths.state.appendingPathComponent("phone-logs/\(name).log")
+        try await dialled.until { FileManager.default.fileExists(atPath: file.path) }
+        #expect(try String(contentsOf: file, encoding: .utf8) == log)
+        #expect((try? FileManager.default.contentsOfDirectory(atPath: asks.path))?.isEmpty == true)
+    }
+}

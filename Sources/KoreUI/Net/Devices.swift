@@ -16,6 +16,8 @@ package protocol PhoneDevices: AnyObject {
     func rename(_ id: UUID, to name: String)
     func remove(_ id: UUID)
     func setPaused(_ id: UUID, _ paused: Bool)
+    /// The phone's own log (1.13), saved where Kore keeps logs; the file, or nil when it didn't answer.
+    func fetchLogs(_ id: UUID, name: String) async -> URL?
     /// A device waiting at a box: its Allow card (Allow makes its record and tells the boxes).
     func ask(_ pending: PendingRow)
 }
@@ -87,6 +89,8 @@ package final class Devices {
     @ObservationIgnored package var boxes: (@MainActor () -> [BoxFacts])?
     /// This Mac's name as Devices says it.
     @ObservationIgnored package var macNameOverride: String?
+    /// "Get logs" didn't get an answer: one line in the popup for a few seconds.
+    package private(set) var logsNote: String?
     /// Opens a page in the browser, or an app (storylines: recorded, nothing opens).
     @ObservationIgnored package var openURL: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
     @ObservationIgnored package var openTailscaleApp: @MainActor () -> Void = { Devices.launchTailscale() }
@@ -380,6 +384,22 @@ package final class Devices {
     }
 
     package func ask(_ pending: PendingRow) { phones?.ask(pending) }
+
+    /// "Get logs" on a phone: its content-free log, saved in Kore's logs folder and shown in the
+    /// Finder; one line says so, or that the phone didn't answer (it must be open and linked).
+    package func fetchLogs(_ row: DeviceRow) {
+        guard row.kind == .phone, let id = UUID(uuidString: row.id), let phones else { return }
+        Task { @MainActor in
+            if let file = await phones.fetchLogs(id, name: row.name) {
+                NSWorkspace.shared.activateFileViewerSelecting([file])
+            } else {
+                let line = "\(row.name) didn't send its logs. Open Kore on it, then try again."
+                logsNote = line
+                try? await Task.sleep(for: .seconds(8))
+                if logsNote == line { logsNote = nil }
+            }
+        }
+    }
 
     // MARK: Tailnet Lock (G16)
 

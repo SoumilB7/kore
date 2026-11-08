@@ -422,3 +422,20 @@ struct AttentionTests {
         try await until { client.got.contains { if case .delta = $0 { true } else { false } } }
     }
 }
+
+/// 1.13: `kore-host devices logs`: the daemon reads a linked phone's own log over its live link.
+@Suite("kore-host phone logs", .serialized)
+@MainActor
+struct PhoneLogsOnTheBoxTests {
+    @Test func anAskForAPhoneThatIsntLinkedSaysSo() async throws {
+        let rig = try HostRig()
+        defer { rig.finish() }
+        try rig.host.start()
+        let name = UUID().uuidString.lowercased()
+        let asks = rig.paths.state.appendingPathComponent("asks", isDirectory: true)
+        try FileManager.default.createDirectory(at: asks, withIntermediateDirectories: true)
+        FileManager.default.createFile(atPath: asks.appendingPathComponent("phone-logs-" + name).path, contents: Data())
+        rig.host.phoneLogAsks()
+        try await until { FileManager.default.fileExists(atPath: rig.paths.state.appendingPathComponent("phone-logs/\(name).none").path) }
+    }
+}

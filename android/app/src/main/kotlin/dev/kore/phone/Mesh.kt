@@ -73,12 +73,17 @@ class Mesh(private val app: KoreApp) {
         // Mid Leave the tailnet stays up until the Macs heard.
         TailnetKeeper(tailnet, switch, join, app.scope, { TailnetKeeper.Settings(networkOn, inBook) },
             onUp = { signedIn ->
+                app.log.info("tailnet", "state" to if (signedIn) "up" else "signed-out")
                 troubled = false
                 nodesFlow.value.forEach { it.start(); it.post(if (signedIn) NodeMachine.Event.SignedIn else NodeMachine.Event.SignedOut) }
             },
-            onDown = { nodesFlow.value.forEach(NodeClient::stop) },
+            onDown = {
+                app.log.info("tailnet", "state" to "down")
+                nodesFlow.value.forEach(NodeClient::stop)
+            },
             onTrouble = { e ->
                 android.util.Log.w("kore", "tailnet: start failed (${e::class.simpleName}), trying again")
+                app.log.warn("tailnet", "state" to "start-failed", "class" to e.javaClass.name)
                 // Once per spell of failures; it keeps trying by itself.
                 if (!troubled && joined) say("Tailscale didn't start · trying again")
                 troubled = true
@@ -113,7 +118,12 @@ class Mesh(private val app: KoreApp) {
         syncNodes()
         keeper.running // made now: it follows the join's steps from the first one
         // A sign-in that ended (signed in, cancelled, given up): its foreground service goes.
-        app.scope.launch { join.step.collect { if (!JoinFlow.signingIn(it)) SignInService.stop(app) } }
+        app.scope.launch {
+            join.step.collect {
+                app.log.info("join", "step" to JoinFlow.label(it))
+                if (!JoinFlow.signingIn(it)) SignInService.stop(app)
+            }
+        }
     }
 
     fun node(id: UUID?): NodeClient? = nodesFlow.value.firstOrNull { it.id == id } ?: if (id == null) nodesFlow.value.firstOrNull() else null
@@ -200,7 +210,20 @@ class Mesh(private val app: KoreApp) {
                     nodesFlow.value.filter { it.device.value.kind == NodeKind.BOX && (it.state.value as? NodeMachine.State.Away)?.why == NodeMachine.AwayWhy.OFF }
                         .forEach { it.post(NodeMachine.Event.Trigger) }
                 },
+                logs = { app.log.read() },
+                onLogsAsked = {
+                    app.log.info("logs", "node" to shortId(d.id), "kind" to "asked")
+                    say("Kore asked for this phone's logs")
+                },
             ).also { client ->
+                // Each change of state, one line: which device (8 hex of its id), what, and why.
+                app.scope.launch {
+                    client.state.collect { s ->
+                        app.log.info("node", "node" to shortId(d.id), "kind" to d.kind.wire, "state" to NodeMachine.label(s),
+                            "why" to (s as? NodeMachine.State.Away)?.why?.let(NodeMachine::label), "reason" to (s as? NodeMachine.State.Denied)?.reason,
+                            "attempt" to (s as? NodeMachine.State.Away)?.attempt)
+                    }
+                }
                 if (keeper.running) client.start()
                 val notifier = Notifier(app, d.id.toString()) { if (many) client.name else null }
                 notifiers[d.id] = notifier to app.scope.launch { client.attention.collect { notifier.handle(it, client.chatOnScreen) } }
@@ -224,6 +247,9 @@ class Mesh(private val app: KoreApp) {
             say(if (r["ok"]?.toString() == "true") "${node.name} took the new fingerprint" else "${node.name} didn't take the new fingerprint")
         }
     }
+
+    /** A device in the log: the first 8 hex of its id, never its name. */
+    private fun shortId(id: UUID): String = id.toString().take(8)
 
     private fun say(text: String) {
         val a = app.frontActivity ?: return

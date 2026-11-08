@@ -494,6 +494,31 @@ package final class HostDaemon {
         on ? startNet() : stopNet()
     }
 
+    /// `kore-host devices logs <code>` asked for a phone's log (it writes `asks/phone-logs-<id>` and
+    /// signals SIGUSR1): each ask is read from that phone's live link and written to
+    /// `phone-logs/<id>.log`, or `phone-logs/<id>.none` when it isn't linked or didn't answer.
+    package func phoneLogAsks() {
+        let asks = paths.state.appendingPathComponent("asks", isDirectory: true)
+        let out = paths.state.appendingPathComponent("phone-logs", isDirectory: true)
+        let files = (try? FileManager.default.contentsOfDirectory(at: asks, includingPropertiesForKeys: nil)) ?? []
+        for file in files where file.lastPathComponent.hasPrefix("phone-logs-") {
+            try? FileManager.default.removeItem(at: file)
+            guard let id = UUID(uuidString: String(file.lastPathComponent.dropFirst("phone-logs-".count))) else { continue }
+            let phone = connections.first { $0.proven && $0.deviceId == id }
+            Task { @MainActor in
+                let text = await phone?.phoneLogs()
+                try? FileManager.default.createDirectory(at: out, withIntermediateDirectories: true)
+                let name = id.uuidString.lowercased()
+                if let text {
+                    try? Data(text.utf8).write(to: out.appendingPathComponent(name + ".log"), options: .atomic)
+                    HostJournal.note("phone-logs", ["device": name, "bytes": "\(text.utf8.count)"])
+                } else {
+                    try? Data().write(to: out.appendingPathComponent(name + ".none"))
+                }
+            }
+        }
+    }
+
     /// The CLI changed `config.json`'s `net` (it signals the daemon, SIGHUP): applied now.
     package func reloadNet() {
         config.net = HostConfig.load(paths.config).net
