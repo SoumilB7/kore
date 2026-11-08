@@ -1,0 +1,14 @@
+{
+  "capDomain": "kore.invalid/cap/kore",
+  "files": {
+    "bind": "bind.json",
+    "control": "control.json",
+    "frames": "frames.json",
+    "raise": "raise.json"
+  },
+  "port": 47470,
+  "proto": {
+    "major": 2,
+    "minor": 0
+  }
+}

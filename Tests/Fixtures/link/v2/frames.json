@@ -1,0 +1,120 @@
+{
+  "about": "u32 len | u8 queue | u8 flags | u32 stream | payload, big endian; len counts the payload only. queue 0 interactive, 1 stream; flags bit 0 MORE (others must be 0); stream 0 is the session control stream (interactive, never fragmented).",
+  "fragmented": {
+    "about": "a stream message in two fragments (MORE on the first), an interactive message between them; any fragment may carry up to maxPayload bytes",
+    "frames": [
+      "0000000e01010000000373747265616d206d657373616765",
+      "0000000e0000000000057b22636d64223a2273746f70227d",
+      "0000001101000000000320696e2074776f20667261676d656e7473"
+    ],
+    "messages": [
+      {
+        "payload": "7b22636d64223a2273746f70227d",
+        "queue": 0,
+        "stream": 5
+      },
+      {
+        "payload": "73747265616d206d65737361676520696e2074776f20667261676d656e7473",
+        "queue": 1,
+        "stream": 3
+      }
+    ]
+  },
+  "invalid": [
+    {
+      "encoded": "00010001010000000003",
+      "error": "tooLong",
+      "name": "payload over 64 KiB",
+      "preAuth": false
+    },
+    {
+      "encoded": "0000000102000000000378",
+      "error": "badQueue",
+      "name": "unknown queue",
+      "preAuth": false
+    },
+    {
+      "encoded": "0000000100020000000378",
+      "error": "badFlags",
+      "name": "unknown flag",
+      "preAuth": false
+    },
+    {
+      "encoded": "0000000100010000000078",
+      "error": "control",
+      "name": "fragmented control",
+      "preAuth": false
+    },
+    {
+      "encoded": "0000000101000000000078",
+      "error": "control",
+      "name": "control on stream queue",
+      "preAuth": false
+    },
+    {
+      "encoded": "00000ff7000000000000",
+      "error": "preAuth",
+      "name": "pre-auth frame over 4 KiB",
+      "preAuth": true
+    },
+    {
+      "encoded": "0000000100000000000178",
+      "error": "preAuth",
+      "name": "pre-auth off stream 0",
+      "preAuth": true
+    },
+    {
+      "encoded": "000000020000000000007b7d000000020000000000007b7d",
+      "error": "preAuth",
+      "name": "pre-auth second frame",
+      "preAuth": true
+    },
+    {
+      "encoded": "00000001010100000003610000000100000000000362",
+      "error": "queueChanged",
+      "name": "queue changed mid-message",
+      "preAuth": false
+    }
+  ],
+  "limits": {
+    "headerSize": 10,
+    "maxMessage": 16777216,
+    "maxPartialStreams": 64,
+    "maxPayload": 65536,
+    "preAuthMaxFrame": 4096
+  },
+  "valid": [
+    {
+      "encoded": "000000180000000000007b2274223a22637265646974222c226e223a36353533367d",
+      "flags": 0,
+      "name": "control hello-sized",
+      "payload": "7b2274223a22637265646974222c226e223a36353533367d",
+      "queue": 0,
+      "stream": 0
+    },
+    {
+      "encoded": "000000130000000000077b22636d64223a22636861742e73656e64227d",
+      "flags": 0,
+      "name": "interactive command",
+      "payload": "7b22636d64223a22636861742e73656e64227d",
+      "queue": 0,
+      "stream": 7
+    },
+    {
+      "encoded": "00000000010000000009",
+      "flags": 0,
+      "name": "stream empty",
+      "payload": "",
+      "queue": 1,
+      "stream": 9
+    },
+    {
+      "encoded": "000000100100ffffffff000102030405060708090a0b0c0d0e0f",
+      "flags": 0,
+      "name": "stream last stream id",
+      "payload": "000102030405060708090a0b0c0d0e0f",
+      "queue": 1,
+      "stream": 4294967295
+    }
+  ]
+}

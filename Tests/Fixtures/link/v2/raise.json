@@ -1,0 +1,16 @@
+{
+  "B": "c85c9751bd543815f7ab65b36efddd4c6073a15ae2f592a736eeb7dabc656de2",
+  "about": "digest = SHA256(\"kore-raise/1\" | B | nonce | chatId | modeId), same field encoding as bind.json; the phone signs the digest with kore_raise. B is bind.json tailnet.B.",
+  "chatId": "chat-7f3a",
+  "digest": "8a168cc4ffff0c5c1fbe92d1412c731344e187a9e10c4e266b4ef35c708aef19",
+  "modeId": "auto",
+  "nonce": "67bf5dbc4f81d631ff2d7a62d174318daf925f68995419d144bfd7295768747e",
+  "preimage": "0000000c6b6f72652d72616973652f3100000020c85c9751bd543815f7ab65b36efddd4c6073a15ae2f592a736eeb7dabc656de20000002067bf5dbc4f81d631ff2d7a62d174318daf925f68995419d144bfd7295768747e00000009636861742d37663361000000046175746f",
+  "raiseKey": {
+    "privateKey": "0797f084904e29fae58041fb62b2cf671d5bc006772639859842e26a053c6dc3",
+    "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEH9uKTngqQU5wK1avQRcm45u1z5elMD+1LNxPEygeMZvvgzlNbSqqK1G0nlrO7YaPj1dxutDvBYJstDzJJm0IqQ=="
+  },
+  "sig": "MEUCICgZypVLdmzXa6fcBjX5RyYDwdPkX3/au8/W6PUqEgavAiEAk8FEon4C8FBBLb5dg6F0mSzODxbue8SfReR12u0YLH4=",
+  "signature": "ECDSA P-256 with SHA-256 over the 32-byte digest, DER.",
+  "ttlSeconds": 60
+}

@@ -94,6 +94,7 @@ let package = Package(
         .testTarget(name: "KoreLinkTests", dependencies: ["KoreLink", "LinkProtocol", "HostClient", "KoreHost", "AgentTools", "KoreUI", "src", "KoreCore", "kore-host"]),
         .testTarget(name: "KoreHostTests", dependencies: ["KoreHost", "LinkProtocol", "src", "KoreCore", "kore-host"]),
         .testTarget(name: "HostClientTests", dependencies: ["HostClient", "KoreHost", "LinkProtocol", "src", "KoreCore"]),
+        .testTarget(name: "NetTrustTests", dependencies: ["KoreNet", "Tailnet", "KoreTrust", "KoreHostSys"]),
         .testTarget(name: "StorylineTests", dependencies: ["KoreStorylines", "KoreUI", "src", "KoreCore"]),
     ]
 )
