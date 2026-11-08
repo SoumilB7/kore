@@ -215,7 +215,10 @@ class UnloadStoryline: ChatStoryline {
     }
 
     static func drawn(answer n: Int) -> Expect {
-        Expect("answer \(n) drawn in view", timeout: .seconds(8)) { story in
+        Expect("answer \(n) drawn in view", timeout: .seconds(8), found: { story in
+            guard let view = story.app.chat?.storyTranscript.scrollView, let document = view.documentView else { return "no scroll view" }
+            return "bottom \(view.contentView.bounds.maxY) of \(document.frame.height); \(story.app.chat?.storyTranscript.endWhy ?? "-")"
+        }) { story in
             guard let window = story.window, let frame = StoryElement(try answerRow(story, turn: n), in: window)?.frame else { return false }
             return window.contentView.map { $0.bounds.intersects(frame) } ?? false
         }
@@ -224,7 +227,7 @@ class UnloadStoryline: ChatStoryline {
     static var readerAtEnd: Expect {
         Expect("the reader at the end", found: { story in
             guard let view = story.app.chat?.storyTranscript.scrollView, let document = view.documentView else { return "no scroll view" }
-            return "\(story.app.chat?.storyTranscript.readerAtEnd ?? false), bottom \(view.contentView.bounds.maxY) of \(document.frame.height)"
+            return "\(story.app.chat?.storyTranscript.readerAtEnd ?? false), bottom \(view.contentView.bounds.maxY) of \(document.frame.height); \(story.app.chat?.storyTranscript.endWhy ?? "-")"
         }) { try $0.activeChat().storyTranscript.readerAtEnd }
     }
 

@@ -221,6 +221,7 @@ extension StoryTranscript {
 
     package var earlierAvailable: Bool { store.earlierAvailable }
     package var readerAtEnd: Bool { store.readerAtEnd?() ?? false }
+    package var endWhy: String { store.storyEndWhy?() ?? "-" }
     /// Its tab is the one shown, its window aside.
     package var showing: Bool { !store.hidden }
     /// The layers drawing in the visible part of the transcript: none is a blank view.

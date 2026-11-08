@@ -210,7 +210,10 @@ struct TranscriptTimeline: View, Equatable {
             .scrollPosition(binding)
             .defaultScrollAnchor(.bottom, for: .alignment)
             .onScrollPhaseChange { old, new, context in
-                gesturing.value = new != .idle
+                // The reader's own gestures. A glide (`.animating`) is ours, and a scroll with no
+                // phase (the scroll bar, End) cutting it short leaves it never ending: counted as
+                // the reader's, it held every end check off for good.
+                gesturing.value = new == .tracking || new == .interacting || new == .decelerating
                 // The end the view was taken to can lie below the rows: the check looks when it stops.
                 if new == .idle { checkBlank() }
                 guard !shift.zoomAdjusting else { return }
@@ -238,8 +241,10 @@ struct TranscriptTimeline: View, Equatable {
                 // new one is still being laid out (held).
                 if !shift.keep(), !widthHold.holding, old.count == new.count, new[4] == old[4] {
                     // The content's height is partly estimated: at its end only with no built row
-                    // reaching past the bottom of the view.
-                    widthHold.rest = (new[1], new[1] + new[2] >= new[0] - Self.atBottom && widthHold.rowsEnd(above: new[1] + new[3] + new[2] + Self.atBottom))
+                    // reaching past the bottom of the view. Followed, a row still being laid out
+                    // past it is the end coming (pinned to as it lands), not a reader above it.
+                    widthHold.rest = (new[1], new[1] + new[2] >= new[0] - Self.atBottom
+                        && (following.value || widthHold.rowsEnd(above: new[1] + new[3] + new[2] + Self.atBottom)))
                 }
                 let insetMoved = new[3] != insetTop.value
                 insetTop.value = new[3]
@@ -463,6 +468,9 @@ struct TranscriptTimeline: View, Equatable {
                     let seen = seenShown.value
                     let atEnd = following.value || (seen.count == 5 && seen[1] + seen[2] >= seen[0] - Self.atBottom)
                     return atEnd && !gesturing.value && restore.value == nil && restoreInRow.value == nil && !shift.zoomAdjusting
+                }
+                store.storyEndWhy = { [following, gesturing, restore, restoreInRow, shift, seenShown] in
+                    "following \(following.value), gesturing \(gesturing.value), restore \(restore.value != nil), in row \(restoreInRow.value != nil), zoom \(shift.zoomAdjusting), seen \(seenShown.value)"
                 }
                 // Rows gone while it was out of sight are laid out by now: the end is at once where
                 // the end row is, whatever the rows above it were estimated at.
@@ -1068,6 +1076,10 @@ private final class WidthHold: ObservableObject {
     /// hold gone by then let them move the reader), up to `waitsAtMost` more.
     private var unplaced = false
     static let waitsAtMost: TimeInterval = 10
+    /// At the end through a new width: held there while its rows are laid out at it, each one
+    /// laid out holding it a little longer (a busy Mac spreads that over more than `lasts`, and a
+    /// pass after the hold ended read the view as moved off the end), up to `waitsAtMost`.
+    private var endSince: Date?
 
     /// A row is kept: nothing else moves the view or reads where the reader left it meanwhile.
     var holding: Bool {
@@ -1101,6 +1113,15 @@ private final class WidthHold: ObservableObject {
     func placed(_ id: String, _ frame: CGRect, offset: CGFloat?, inset: CGFloat, visible: CGFloat, following: Bool) -> Put? {
         let put = take(at: frame.width, offset: offset, inset: inset, visible: visible, following: following)
         places[id] = frame
+        if case .none = put, let since = endSince, abs(frame.width - (width ?? frame.width)) <= 0.5 {
+            let now = Date()
+            guard following, now < since + Self.waitsAtMost else {
+                endSince = nil
+                return nil
+            }
+            until = max(until, now + Self.lasts / 4)
+            return .hold(.end)
+        }
         // A frame still at the width it was kept at is the lazy stack placing it by its guesses
         // for the rows around while they're laid out again: the next, at the new width, says.
         guard holding, let row, row.id == id, abs(frame.width - (width ?? frame.width)) <= 0.5 else { return put }
@@ -1119,8 +1140,10 @@ private final class WidthHold: ObservableObject {
         if following, rest?.atEnd ?? true {
             until = Date() + Self.lasts
             row = nil
+            endSince = Date()
             return .hold(.end)
         }
+        endSince = nil
         if holding {
             until = Date() + Self.lasts
             unplaced = true
@@ -1145,6 +1168,7 @@ private final class WidthHold: ObservableObject {
     /// The reader scrolled, or the view keeps its place another way: nothing is held.
     func drop() {
         row = nil
+        endSince = nil
         unplaced = false
         seeking = nil
         witnesses = [:]
@@ -1153,6 +1177,7 @@ private final class WidthHold: ObservableObject {
     /// A scroll view built anew lays its rows out afresh: none of it is a new width.
     func reset() {
         row = nil
+        endSince = nil
         unplaced = false
         seeking = nil
         witnesses = [:]

@@ -557,6 +557,8 @@ package final class TranscriptStore {
     /// Whether the reader is at the end, nothing moving the view: set by the timeline while it's
     /// up. Gone, `savedScroll` says.
     @ObservationIgnored var readerAtEnd: (() -> Bool)?
+    /// What `readerAtEnd` read, for a storyline that finds it false.
+    @ObservationIgnored var storyEndWhy: (() -> String)?
 
     /// Which view those are.
     @ObservationIgnored var readerView: ObjectIdentifier?
