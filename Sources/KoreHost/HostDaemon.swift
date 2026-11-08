@@ -127,6 +127,7 @@ package final class HostDaemon {
         // Its pid is there before its socket is: whoever finds it running (the lock held, the
         // socket there) reads it at once, however long what follows takes on a busy box.
         try? HostPaths.privateFile(Data("\(getpid())\n".utf8), to: paths.pid)
+        Self.startHeld?()
         try HostPaths.privateFolder(paths.state)
         listener = try HostListener(path: paths.socket) { [weak self] socket in self?.accepted(socket) }
         openAgentSocket()
@@ -415,7 +416,13 @@ package final class HostDaemon {
     package func reloadNet() {
         config.net = HostConfig.load(paths.config).net
         config.netOn ? startNet() : stopNet()
+        Self.reloaded?()
     }
+
+    /// Tests: the start held where its pid is there and its socket isn't yet, and each reload
+    /// said (kore-host's `KORE_TEST_HOLD_START`, `KORE_TEST_RELOADED`).
+    nonisolated(unsafe) package static var startHeld: (() -> Void)?
+    nonisolated(unsafe) package static var reloaded: (() -> Void)?
 
     /// 1.10: why a chat takes nothing now: it's being moved, or it lives elsewhere (a replica).
     static func held(_ hc: HostChat) -> (code: ResultCode, message: String)? {

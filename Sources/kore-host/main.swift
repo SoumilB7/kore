@@ -88,6 +88,25 @@ case "run":
     if let problem = paths.runtimeProblem { fail("kore-host: \(problem)") }
     if HostLock.held(paths.lock) { fail("kore-host is already running\(runningPid()); this one stops here") }
     let host = HostDaemon(paths: paths)
+    // `kore-host net on|off` (and `join`, and a Mac's upgrade) change config.json and signal:
+    // KoreNet follows at once. Taken before start: its pid is there from the start's first
+    // moment, and a SIGHUP's default would end a daemon still starting. One that comes meanwhile
+    // waits on the main queue, applied as soon as start returns.
+    signal(SIGHUP, SIG_IGN)
+    let reload = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
+    reload.setEventHandler { MainActor.assumeIsolated { host.reloadNet() } }
+    reload.resume()
+    keep.append(reload)
+    #if DEBUG
+    let test = ProcessInfo.processInfo.environment
+    if let hold = test["KORE_TEST_HOLD_START"] {
+        HostDaemon.startHeld = {
+            close(open(hold + ".reached", O_WRONLY))
+            close(open(hold, O_RDONLY))
+        }
+    }
+    if let said = test["KORE_TEST_RELOADED"] { HostDaemon.reloaded = { close(open(said, O_WRONLY)) } }
+    #endif
     do {
         try host.start()
     } catch HostLockError.held {
@@ -109,12 +128,6 @@ case "run":
         source.resume()
         keep.append(source)
     }
-    // `kore-host net on|off` (and `join`) change config.json and signal: KoreNet follows at once.
-    signal(SIGHUP, SIG_IGN)
-    let reload = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
-    reload.setEventHandler { MainActor.assumeIsolated { host.reloadNet() } }
-    reload.resume()
-    keep.append(reload)
     keep.append(host)
     dispatchMain()
 case "allow":
@@ -321,7 +334,8 @@ case "update":
             // Up again: a new daemon holds the lock.
             for _ in 0..<100 {
                 let pid = (try? String(contentsOf: paths.pid, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
-                if HostLock.held(paths.lock), pid != oldPid { return (true, "") }
+                // Its pid is written as it starts: up once its socket is there too.
+                if HostLock.held(paths.lock), pid != oldPid, FileManager.default.fileExists(atPath: paths.socket.path) { return (true, "") }
                 usleep(100_000)
             }
             return (false, said.split(separator: "\n").last.map(String.init) ?? "restart it: kore-host start")

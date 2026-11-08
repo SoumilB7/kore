@@ -466,6 +466,44 @@ struct OpsTests {
         return (process.terminationStatus, String(decoding: said, as: UTF8.self))
     }
 
+    /// A SIGHUP (`kore-host net on|off`, a Mac's upgrade) while the daemon is still starting, its
+    /// pid already there: it doesn't end the daemon, and its config is read once start returns.
+    /// The start is held at that moment (FIFOs: no sleeps), the signal sent, the start let go.
+    @Test(.enabled(if: binary != nil), .timeLimit(.minutes(1))) func aSighupWhileStartingIsAppliedOnceItsUp() throws {
+        let root = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let hold = root.appendingPathComponent("hold").path, reloaded = root.appendingPathComponent("reloaded").path
+        for fifo in [hold, hold + ".reached", reloaded] { #expect(mkfifo(fifo, 0o600) == 0) }
+        let env = [
+            "HOME": root.path, "XDG_STATE_HOME": root.appendingPathComponent("state").path,
+            "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
+            "PATH": "/usr/bin:/bin", "KORE_TEST_HOLD_START": hold, "KORE_TEST_RELOADED": reloaded,
+        ]
+        let paths = HostPaths(environment: env)
+        let daemon = Process()
+        daemon.executableURL = Self.binary
+        daemon.arguments = ["run"]
+        daemon.environment = env
+        daemon.standardOutput = FileHandle.nullDevice
+        daemon.standardError = FileHandle.nullDevice
+        try daemon.run()
+        defer {
+            if daemon.isRunning { daemon.terminate() }
+            daemon.waitUntilExit()
+        }
+        // Held in its start: its pid written, no socket yet.
+        close(open(hold + ".reached", O_RDONLY))
+        let pid = try #require(Int32(String(contentsOf: paths.pid, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        #expect(pid == daemon.processIdentifier)
+        #expect(!FileManager.default.fileExists(atPath: paths.socket.path))
+        kill(pid, SIGHUP)
+        // Let go: the start finishes, then the reload it was sent runs.
+        close(open(hold, O_WRONLY))
+        close(open(reloaded, O_RDONLY))
+        #expect(daemon.isRunning && kill(pid, 0) == 0)
+        #expect(FileManager.default.fileExists(atPath: paths.socket.path))
+    }
+
     @Test(.enabled(if: binary != nil)) func attachExitsWithADistinctCodeForEachCause() throws {
         let root = try Self.scratch()
         defer { try? FileManager.default.removeItem(at: root) }
