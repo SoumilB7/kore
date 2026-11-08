@@ -13,8 +13,9 @@ import Testing
 struct RealHostTests {
     nonisolated static let binary = ProcessInfo.processInfo.environment["KORE_HOST_BIN"]
 
-    @Test(.enabled(if: binary != nil))
-    func endToEnd() async throws {
+    @Test(.enabled(if: binary != nil), arguments: [("claude", "haiku"), ("codex", "gpt-6-luna")])
+    func endToEnd(_ cli: String, _ model: String) async throws {
+        let provider = try #require(Registry.provider(cli))
         let bin = try #require(Self.binary)
         // Short: the socket's path has to fit in sun_path.
         let root = URL(fileURLWithPath: "/tmp/kbx-\(UUID().uuidString.prefix(6))")
@@ -31,7 +32,7 @@ struct RealHostTests {
 
         let allow = Process()
         allow.executableURL = URL(fileURLWithPath: bin)
-        allow.arguments = ["allow", "laptop", "--control", "act"]
+        allow.arguments = ["allow", "laptop", "--control", "full"]
         allow.environment = env
         try allow.run()
         allow.waitUntilExit()
@@ -60,7 +61,7 @@ struct RealHostTests {
         #expect(connection.hostKind == "box")
         let folders = await connection.listFolders()
         #expect(folders.map(\.path) == [project.path])
-        let backend = LinkChatBackend(connection: connection, provider: .claude, folder: project.path, chatId: nil, model: "haiku")
+        let backend = LinkChatBackend(connection: connection, provider: provider, folder: project.path, chatId: nil, model: model)
         let log = EventLog(backend.events)
         try await backend.start()
         let chatId = try #require(backend.chatId)
@@ -70,7 +71,7 @@ struct RealHostTests {
         }
         #expect(finished)
         let answer = log.texts.joined().lowercased()
-        print("box answer: \(answer) · events \(log.events.count)")
+        print("box answer (\(cli)/\(model)): \(answer) · events \(log.events.count)")
         #expect(answer.contains("pong"))
         #expect(await until(5) { connection.chats(in: project.path).map(\.id).contains(chatId) })
         try await Task.sleep(for: .milliseconds(1200))
@@ -80,7 +81,7 @@ struct RealHostTests {
 
         // A second client: the chat shows from the copy, then catches up without rebuilding.
         let again = connect()
-        let reopened = LinkChatBackend(connection: again, provider: .claude, folder: project.path, chatId: chatId)
+        let reopened = LinkChatBackend(connection: again, provider: provider, folder: project.path, chatId: chatId, model: nil)
         let second = EventLog(reopened.events)
         try await reopened.start()
         let offline = await until { second.texts.joined().lowercased().contains("pong") }
