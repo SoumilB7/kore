@@ -14,8 +14,7 @@ struct CLIEndTests {
     }
 
     @Test func cLIsEndingAtOnceCloseTheirPipesWithoutTrapping() async throws {
-        let before = openDescriptors()
-        await withTaskGroup(of: Int32?.self) { group in
+        let processes = await withTaskGroup(of: StdioProcess?.self) { group -> [StdioProcess] in
             for n in 0..<8 {
                 group.addTask {
                     guard
@@ -25,14 +24,24 @@ struct CLIEndTests {
                     else { return nil }
                     var status: Int32?
                     for await output in io.output { if case .exited(let code) = output { status = code } }
+                    #expect(status == 0)
                     io.close()
-                    return status
+                    return io
                 }
             }
-            for await status in group { #expect(status == 0) }
+            var all: [StdioProcess] = []
+            for await io in group { if let io { all.append(io) } }
+            return all
         }
-        try await Task.sleep(for: .milliseconds(300))
-        #expect(openDescriptors() <= before + 2, "before \(before), after \(openDescriptors())")
+        #expect(processes.count == 8)
+        // Each one's two read ends close at EOF, off their handlers' queue; counted per process,
+        // so files other suites open meanwhile can't move the number.
+        var waited = 0
+        while processes.contains(where: { $0.readEndsClosed < 2 }), waited < 3000 {
+            try await Task.sleep(for: .milliseconds(50))
+            waited += 50
+        }
+        #expect(processes.allSatisfy { $0.readEndsClosed == 2 }, "\(processes.map(\.readEndsClosed))")
     }
 
     @Test func aReadEndClosedFromItsOwnHandlerAtEOF() async throws {

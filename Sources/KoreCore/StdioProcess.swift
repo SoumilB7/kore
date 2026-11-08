@@ -43,6 +43,16 @@ package final class StdioProcess: @unchecked Sendable {
     private let process = Process()
     private let stdin: FileHandle
     private let track: CassetteTrack?
+    /// How many of its two read ends (stdout, stderr) were closed at EOF: for tests.
+    private let ends = ClosedEnds()
+    package var readEndsClosed: Int { ends.value }
+
+    final class ClosedEnds: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        var value: Int { lock.withLock { count } }
+        func bump() { lock.withLock { count += 1 } }
+    }
 
     /// Records every CLI started from here into a cassette (phase 12's `--record`). Nil in Kore.
     package static let recorder = HostSetting<CassetteRecorder?>(nil)
@@ -74,11 +84,12 @@ package final class StdioProcess: @unchecked Sendable {
         // At EOF each read end is closed here: the parent holds no write end (Foundation closes
         // its copies once the child runs), and the pipe's own descriptor otherwise stayed open
         // as long as anything kept this process's objects (two per CLI that had ended, on a box).
+        let closedEnds = ends
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
-                Self.closeAfterHandler(handle)
+                Self.closeAfterHandler(handle) { closedEnds.bump() }
                 chunkSink.finish()
             } else {
                 chunkSink.yield(data)
@@ -89,7 +100,7 @@ package final class StdioProcess: @unchecked Sendable {
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
-                Self.closeAfterHandler(handle)
+                Self.closeAfterHandler(handle) { closedEnds.bump() }
                 stderrEnd.finish()
             } else {
                 let text = String(decoding: data, as: UTF8.self)
@@ -152,8 +163,11 @@ package final class StdioProcess: @unchecked Sendable {
     /// Linux `FileHandle.close()` waits on the handle's queue (`queue.sync`), the one its handler
     /// runs on: called there, libdispatch traps (kore-host died with SIGILL at each CLI's end,
     /// 2026-11-11). On a queue of its own the close waits for the handler, then runs.
-    static func closeAfterHandler(_ handle: FileHandle) {
-        DispatchQueue.global(qos: .utility).async { try? handle.close() }
+    static func closeAfterHandler(_ handle: FileHandle, then closed: (@Sendable () -> Void)? = nil) {
+        DispatchQueue.global(qos: .utility).async {
+            try? handle.close()
+            closed?()
+        }
     }
 
     func write(_ message: JSONValue) throws {

@@ -68,12 +68,8 @@ struct BoxStallTests {
         #expect(file.path.hasSuffix("/s1/tasks/b1.output"))
     }
 
-    private func openDescriptors() -> Int {
-        ((try? FileManager.default.contentsOfDirectory(atPath: "/dev/fd")) ?? []).count
-    }
-
     @Test func aCLIsEndReachesItsReaderAndLeavesNoDescriptor() async throws {
-        let before = openDescriptors()
+        var processes: [StdioProcess] = []
         for _ in 0..<12 {
             let io = try StdioProcess(
                 executable: URL(fileURLWithPath: "/bin/sh"), arguments: ["-c", "echo hi; echo oops >&2"], cwd: nil,
@@ -90,15 +86,16 @@ struct BoxStallTests {
             #expect(lines == ["hi"])
             #expect(status == 0)
             io.close()
+            processes.append(io)
         }
-        // The pipes' read ends close at EOF, off their handlers' queue: give them up to 3 s. The
-        // count is the whole test process's, and other suites open files meanwhile, so the bound
-        // is half of what 12 leaked pipe pairs (24 descriptors) would add, not an exact match.
+        // Each process's two read ends close at EOF, off their handlers' queue. Counted per
+        // process, so other suites opening files meanwhile can't move the number.
         var waited = 0
-        while openDescriptors() >= before + 12, waited < 3000 {
+        while processes.contains(where: { $0.readEndsClosed < 2 }), waited < 3000 {
             try await Task.sleep(for: .milliseconds(50))
             waited += 50
         }
-        #expect(openDescriptors() < before + 12, "before \(before), after \(openDescriptors())")
+        #expect(processes.allSatisfy { $0.readEndsClosed == 2 }, "\(processes.map(\.readEndsClosed))")
     }
+
 }
