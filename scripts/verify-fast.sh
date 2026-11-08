@@ -47,6 +47,10 @@ typeset -A began ended
 phase() { began[$1]=$EPOCHREALTIME }
 done_() { ended[$1]=$EPOCHREALTIME }
 
+# The Mac stays awake while the check runs (an idle sleep froze one mid-run); the display may
+# sleep. The hold is this script's: it ends by itself when the check ends.
+caffeinate -i -w $$ &!
+
 # One check at a time uses the kept build folder (its wait is its own phase: the time another
 # gate or an install held it).
 phase wait-cache
@@ -64,7 +68,10 @@ git -C $clone archive $sha | tar x -C $out/ref
 # What the kept folder last held (every gate writes its ref there), and how many files differ now: the release build's
 # line says how warm it is.
 built_from=$(cat $cache/ref 2>/dev/null); built_from=${built_from:-nothing}
-synced=$(rsync -rlci --delete --exclude /.build --exclude /.build-test --exclude /build $out/ref/ $cache/src/ | grep -c '^[>*]')
+# The Android check's Gradle outputs stay too (android/*/build, .gradle): deleting them each time
+# made every Android check start cold.
+synced=$(rsync -rlci --delete --exclude /.build --exclude /.build-test --exclude /build \
+  --exclude /android/.gradle --exclude '/android/*/build' --exclude /android/build $out/ref/ $cache/src/ | grep -cE '^(>f|\*deleting)')
 rm -rf $out/ref
 ln -s $cache/src $out/src
 print $sha > $cache/ref
