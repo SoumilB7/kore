@@ -60,8 +60,10 @@ package final class AgentChannel {
 
     private final class Client {
         let token: UUID
-        let connection: AgentConnection
-        let peer: AgentCaller.Peer
+        /// A caller on the socket, or a chat on a box (one call, its lines to `answer`).
+        let connection: AgentConnection?
+        let peer: AgentCaller.Peer?
+        let answer: ((Data) -> Void)?
         /// Set by its hello: the chat it runs in, or nil for an external caller.
         var named = false
         var chat: String?
@@ -86,6 +88,27 @@ package final class AgentChannel {
             self.token = token
             self.connection = connection
             self.peer = peer
+            answer = nil
+        }
+
+        /// A box chat's call (link 1.6): named by the Mac's records, not by a hello.
+        init(token: UUID, chat: String, answer: @escaping (Data) -> Void) {
+            self.token = token
+            connection = nil
+            peer = nil
+            self.answer = answer
+            self.chat = chat
+            named = true
+        }
+
+        /// One line to it.
+        func send(_ line: @escaping @Sendable () -> Data) {
+            if let connection { connection.send(line) } else { answer?(line()) }
+        }
+
+        /// `last`, then the end of it.
+        func finish(after last: Data) {
+            if let connection { connection.finish(after: last) } else { answer?(last) }
         }
 
         var key: String { chat.map { "chat:" + $0 } ?? "external" }
@@ -161,7 +184,7 @@ package final class AgentChannel {
         guard AgentChannel.current === self else { return }
         AgentChannel.current = nil
         let bye = Self.encode(AgentBye(code: code, message: "Agent control is off in Kore."))
-        for client in clients.values { client.connection.finish(after: bye) }
+        for client in clients.values { client.finish(after: bye) }
         clients = [:]
         listener.close()
         if let quitObserver { NotificationCenter.default.removeObserver(quitObserver) }
@@ -175,7 +198,7 @@ package final class AgentChannel {
     /// could read it only because of that access stops following it.
     func revoked(chat: String?) {
         for (key, client) in clients where client.named && client.chat == chat {
-            client.connection.finish(after: Self.encode(AgentBye(code: .stopped, message: "Kore access is off for this caller.")))
+            client.finish(after: Self.encode(AgentBye(code: .stopped, message: "Kore access is off for this caller.")))
             clients[key] = nil
         }
         for client in clients.values where !client.follows.isEmpty || !client.waits.isEmpty {
@@ -269,7 +292,7 @@ package final class AgentChannel {
 
     private func refuse(_ client: Client, _ code: AgentCode, _ message: String) {
         clients[client.token] = nil
-        client.connection.finish(after: Self.encode(AgentBye(code: code, message: message)))
+        client.finish(after: Self.encode(AgentBye(code: code, message: message)))
         log("agent-refused", client, ["caller": client.callerClass, "chat": client.chat, "code": code.rawValue])
         if !client.follows.isEmpty || !client.waits.isEmpty { followsChanged() }
     }
@@ -328,7 +351,7 @@ package final class AgentChannel {
     private func hello(_ message: AgentIn, _ client: Client) {
         guard message.type == "hello" else { return refuse(client, .invalid, "Say hello first.") }
         guard message.proto == AgentProto.version else { return refuse(client, .version, "Kore speaks agent protocol \(AgentProto.version).") }
-        let verdict = AgentCaller.verdict(ancestors: client.peer.ancestors, pass: message.pass, clis: AgentPasses.shared.pids())
+        let verdict = AgentCaller.verdict(ancestors: client.peer?.ancestors ?? [], pass: message.pass, clis: AgentPasses.shared.pids())
         switch verdict {
         case .mismatch:
             return refuse(client, .mismatch, "This caller's pass doesn't match the chat it runs in.")
@@ -555,9 +578,23 @@ package final class AgentChannel {
     }
 
     /// A new chat in the caller's window, in front, at or below its mode; its first message, if given.
+    /// A chat on a box opens it on that box, or with `place` `mac` in a window on this Mac.
     private func newChat(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
-        guard let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }), let window = AgentReads.workspace(of: own) else {
+        guard let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }), let home = AgentReads.workspace(of: own) else {
             fail(client, id, .noWindow, "Only a chat in Kore opens chats, in its own window.")
+            return nil
+        }
+        let window: Workspace
+        switch args.place {
+        case nil, "box": window = home
+        case "mac":
+            guard let mac = home.macWindow else {
+                fail(client, id, .noWindow, "No Kore window is open on the Mac.")
+                return nil
+            }
+            window = mac
+        default:
+            fail(client, id, .invalid, "place is box or mac.")
             return nil
         }
         guard roomForNew(client, id) else { return nil }
@@ -871,7 +908,7 @@ package final class AgentChannel {
     /// Encoded and masked on the channel's queue: a page of long rows costs the main thread
     /// nothing. Every line a caller gets comes through `encode`.
     private func send(_ client: Client, _ value: some Encodable & Sendable) {
-        client.connection.send { Self.encode(value) }
+        client.send { Self.encode(value) }
     }
 
     nonisolated static func encode(_ value: some Encodable) -> Data {
@@ -880,6 +917,34 @@ package final class AgentChannel {
         guard let data = try? encoder.encode(value) else { return Data("{}".utf8) }
         return Data(AgentSecrets.mask(String(decoding: data, as: UTF8.self)).utf8)
     }
+
+    // MARK: A chat on a box
+
+    /// One tool call from a box chat's agent (link 1.6, `AgentBoxCalls`): run as a caller in that
+    /// chat would run it, against the chat's tier and its limits, and answered with the line its
+    /// command's result (or refusal) would be. Its lines go nowhere else.
+    func boxCall(chat: String, _ name: String, _ args: [String: Any]) async -> Data {
+        await withCheckedContinuation { (done: CheckedContinuation<Data, Never>) in
+            let token = UUID()
+            var answered = false
+            let client = Client(token: token, chat: chat) { [weak self] line in
+                guard !answered else { return }
+                answered = true
+                self?.clients[token] = nil
+                done.resume(returning: line)
+            }
+            clients[token] = client
+            // A chat whose access went off since the call was made.
+            guard tier(client) != .off else { return refuse(client, .denied, Self.offLine) }
+            let line = (try? JSONSerialization.data(withJSONObject: ["type": "cmd", "id": Self.boxCallID, "cmd": name, "args": args])) ?? Data()
+            received([line], token)
+            // A result to come (a wait, a fork) holds its client; one that never comes isn't left
+            // waiting when the channel closes.
+            if !answered, clients[token] == nil { client.finish(after: Self.encode(AgentBye(code: .stopped, message: Self.message(.stopped)))) }
+        }
+    }
+
+    static let boxCallID = "box"
 
     // MARK: For tests and storylines
 

@@ -258,8 +258,9 @@ final class BoxChatServices: ChatServices {
     private weak var chat: Chat?
     /// What a chat new from here is made with on the box (a fork's start).
     private let making: LinkChatBackend.Making?
-    /// The CLI runs on the box, which sets its own instructions; nothing of this Mac's reaches it.
-    var agentTools: Bool { false }
+    /// The CLI runs on the box, which sets its own instructions and gives it the `kore_app` server
+    /// while Arsenal is on; the tier and Arsenal's notes go with each message (`LinkChatBackend`).
+    var agentTools: Bool { true }
     var instructions: URL? { nil }
 
     init(binding: BoxBinding, chatId: String?, making: LinkChatBackend.Making? = nil) {
@@ -280,6 +281,7 @@ final class BoxChatServices: ChatServices {
             chat.adoptName(title)
         }
         backend.onCreated = { [weak self] in self?.chatId = $0 }
+        backend.arsenal = { [weak self] in self?.chat?.arsenal?.rawValue }
         return backend
     }
 

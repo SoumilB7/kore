@@ -139,6 +139,8 @@ extension Workspace {
         if let model {
             let known = arsenalModels(provider.id, caller: caller)
             guard !known.isEmpty else {
+                // A box's CLIs list their own: they come with its next snapshot.
+                guard box == nil else { return .failure(.init("\(provider.name) here hasn't listed its models yet: open it without a model.")) }
                 ArsenalModels.fetch(provider.id, folder: folder)
                 return .failure(.init("Kore is still reading \(provider.name)'s models: ask again in a moment, or open it without a model."))
             }
@@ -156,11 +158,13 @@ extension Workspace {
         return .success(chat)
     }
 
-    /// The models a CLI lists, from a chat of it in this window that has them (the caller's first),
-    /// else as any chat of it last listed them in this run (`ArsenalModels`).
+    /// The models a CLI lists, from a chat of it in this window that has them (the caller's first,
+    /// when it runs where this window's chats do), else as any chat of it last listed them in this
+    /// run (`ArsenalModels`); a box window's, as its box last listed them.
     func arsenalModels(_ provider: String, caller: Chat) -> [ModelOption] {
-        let chats = [caller] + tabs.compactMap(\.chat)
-        return chats.first { $0.provider.id == provider && !$0.controls.models.isEmpty }?.controls.models ?? ArsenalModels.seen[provider] ?? []
+        let chats = (caller.services.onBox == (box != nil) ? [caller] : []) + tabs.compactMap(\.chat)
+        if let found = chats.first(where: { $0.provider.id == provider && !$0.controls.models.isEmpty }) { return found.controls.models }
+        return boxModels(provider) ?? ArsenalModels.seen[provider] ?? []
     }
 
     /// The chat's tab to the front, as a click on it.

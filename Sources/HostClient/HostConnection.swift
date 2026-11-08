@@ -182,6 +182,10 @@ package final class HostConnection {
     /// The alias's connection while a window holds it; nil otherwise (nothing is made).
     package static func live(_ alias: String) -> HostConnection? { open[alias] }
 
+    /// Makes `connection` its alias's, as `named` would have made it: a test's, over a transport
+    /// and a copy of its own.
+    package static func adopt(_ connection: HostConnection) { open[connection.alias] = connection }
+
     /// A window on the box opened: the link starts with the first.
     package func retain() {
         users += 1
@@ -288,13 +292,13 @@ package final class HostConnection {
     }
 
     /// One forwarded backend call on a chat (1.5 `chat.call`): its answer, typed, sent again after
-    /// a drop.
-    package func call(_ chatId: String, _ command: ChatCommand) async -> ChatCallResult {
+    /// a drop. A message carries the chat's Arsenal tier and any note owed (1.6).
+    package func call(_ chatId: String, _ command: ChatCommand, arsenal: String? = nil, note: String? = nil) async -> ChatCallResult {
         var asked = ""
         let result = await self.command({ id in
             asked = id
             calls.insert(id)
-            return StreamWire.encode(ChatCall(id: id, chatId: chatId, command: command))
+            return StreamWire.encode(ChatCall(id: id, chatId: chatId, command: command, arsenal: arsenal, note: note))
         }, resending: true, keeping: Self.keeps(command) ? chatId : nil)
         calls.remove(asked)
         return answers.removeValue(forKey: result.id) ?? ChatCallResult(id: result.id, ok: result.ok, code: result.code, message: result.message)
@@ -598,6 +602,8 @@ package final class HostConnection {
             }
         case .unknown(let type) where type == HostWire.syncChanged:
             if let folder = HostWire.syncFolder(raw) { syncReaders[folder]?(raw) }
+        case .unknown(let type) where type == BoxToolCall.type:
+            toolCall(raw)
         default:
             break
         }
@@ -693,6 +699,26 @@ package final class HostConnection {
             state.folders = self.folders
             state.updated = self.heardAt?.timeIntervalSince1970
             self.cache.save(state)
+        }
+    }
+
+    // MARK: Arsenal on the box (1.6)
+
+    /// Answers a box chat's tool calls (`agent.call`): Kore's agent channel, which decides each by
+    /// that chat's tier here. Unset, every call is refused.
+    package static var toolCalls: (@MainActor (HostConnection, BoxToolCall) async -> BoxToolResult)?
+
+    /// Only a full grant's link carries calls; each is answered on the link it came on, if that
+    /// link is still up.
+    private func toolCall(_ raw: Data) {
+        guard control == .full, let call = try? JSONDecoder().decode(BoxToolCall.self, from: raw) else { return }
+        let link = transport
+        Task { [weak self] in
+            guard let self else { return }
+            var result = await Self.toolCalls?(self, call) ?? BoxToolResult(id: call.id, ok: false, code: "denied", text: "Kore's agent control is off.")
+            result.id = call.id
+            guard let link, self.transport === link, self.ready else { return }
+            link.send(BoxTools.encode(result))
         }
     }
 

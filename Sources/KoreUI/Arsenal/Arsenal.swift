@@ -64,7 +64,7 @@ package final class Arsenal {
         anyOn = true
         AgentTaps.setTier?(chat.id.uuidString, chat.arsenalLast)
         UILog.event("arsenal", ["chat": chat.id.uuidString, "tier": chat.arsenalLast.rawValue])
-        if chat.arsenalLast == .drive { ArsenalModels.fetch("codex", folder: chat.folder) }
+        if chat.arsenalLast == .drive, !chat.services.onBox { ArsenalModels.fetch("codex", folder: chat.folder) }
     }
 
     /// A tier from its popup: on at it, or moved to it while on. It's the chat's last tier from then.
@@ -79,7 +79,7 @@ package final class Arsenal {
         AgentTaps.setTier?(chat.id.uuidString, tier)
         UILog.event("arsenal", ["chat": chat.id.uuidString, "tier": tier.rawValue])
         // Drive opens chats on a model the CLI lists: Codex's, when no chat of it has said them yet.
-        if tier == .drive { ArsenalModels.fetch("codex", folder: chat.folder) }
+        if tier == .drive, !chat.services.onBox { ArsenalModels.fetch("codex", folder: chat.folder) }
     }
 
     /// A tier from the link, with full control (`z-docs/link-protocol.md`, 1.3): the tiers popup's
@@ -116,9 +116,10 @@ package final class Arsenal {
     }
 
     /// Why this chat can't have it now. Codex's default sandbox refuses the socket, and Kore doesn't
-    /// open a hole in it: only Full access reaches Kore.
+    /// open a hole in it: only Full access reaches Kore. A chat on a box reaches Kore through its
+    /// box's MCP server alone, which Codex runs outside its sandbox.
     package static func unavailable(_ chat: Chat) -> String? {
-        if chat.services.onBox { return "Not in a chat on a box: Kore's tools aren't there." }
+        if chat.services.onBox { return nil }
         return chat.provider == .codex && chat.controls.mode != CodexModes.fullAccess
             ? "Codex's sandbox blocks this. It works in Full access." : nil
     }
@@ -128,7 +129,6 @@ package final class Arsenal {
         if let tier = chat.arsenal {
             return OptionItem("Arsenal · \(tier.title)", tint: Theme.Arsenal.color(tier), key: Self.key) { [self] in flip(chat) }
         }
-        if chat.services.onBox { return OptionItem("Arsenal · not on a box", enabled: false, key: Self.key) }
         if Self.unavailable(chat) != nil { return OptionItem("Arsenal · Codex needs Full access", enabled: false, key: Self.key) }
         return OptionItem("Arsenal", key: Self.key) { [self] in flip(chat) }
     }

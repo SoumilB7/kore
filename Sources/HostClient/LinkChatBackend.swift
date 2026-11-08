@@ -64,6 +64,11 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     package var onTitle: ((String) -> Void)?
     /// A chat made from this Mac has its id on the box.
     package var onCreated: ((String) -> Void)?
+    /// The chat's Arsenal tier here (`watch`, `own`, `drive`; nil for off), told to the box with
+    /// each message so its CLI has the `kore_app` server while it's on (1.6).
+    package var arsenal: () -> String? = { nil }
+    /// A `KoreReach.note` for the next message (the tier changed since the agent was told).
+    private var note: String?
     /// Where the box chat's model requests go: this Mac's usage, so Kore's share of the plan's
     /// limits counts them (tests set their own).
     package var usage: @Sendable (ForwardedRequest) -> Void = { request in Task { await KoreUsage.shared.forwarded(request) } }
@@ -258,9 +263,9 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     /// One call on the box's backend: its value, or the box's reason.
     @discardableResult
-    private func call(_ command: ChatCommand) async throws -> CallValue {
+    private func call(_ command: ChatCommand, arsenal: String? = nil, note: String? = nil) async throws -> CallValue {
         let chatId = try await ready()
-        let result = await connection.call(chatId, command)
+        let result = await connection.call(chatId, command, arsenal: arsenal, note: note)
         guard result.ok else { throw HostRefusal(result, command: command, alias: connection.alias, modes: provider.modes) }
         return result.value ?? CallValue()
     }
@@ -277,8 +282,13 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             sent.append(try await uploadText(text))
             words = ""
         }
-        return try await call(.send(text: words, files: sent, queued: queued, id: id)).bool ?? true
+        let note = self.note
+        self.note = nil
+        return try await call(.send(text: words, files: sent, queued: queued, id: id), arsenal: arsenal(), note: note).bool ?? true
     }
+
+    /// Goes to the box with the next message, which its CLI gets before the user's words.
+    package func noteNextTurn(_ note: String) { self.note = note }
 
     /// A file to the box by the link's upload: the blob its message names it by there, which the
     /// box saves and attaches by its path.

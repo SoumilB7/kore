@@ -138,6 +138,8 @@ package struct AgentArgs: Codable, Sendable, Equatable {
     /// has); none forks at the end. `chat.wait`: seconds to wait, 300 at most.
     package var at: String?
     package var timeout: Int?
+    /// `chat.new` from a chat on a box: `box` (its box and folder, the default) or `mac`.
+    package var place: String?
 
     package init(
         chat: String? = nil, last: Int? = nil, before: String? = nil, folder: String? = nil, query: String? = nil,
@@ -152,6 +154,7 @@ package struct AgentArgs: Codable, Sendable, Equatable {
         self.deny = nil
         self.at = nil
         self.timeout = nil
+        self.place = nil
         self.chat = chat
         self.last = last
         self.before = before

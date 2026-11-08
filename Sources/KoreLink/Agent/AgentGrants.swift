@@ -26,6 +26,7 @@ package enum AgentGrants {
             set(granted, chat: chat)
         }
         AgentTaps.stopAll = { stopAll() }
+        AgentBoxCalls.install()
         Arsenal.shared.adopt(allowed: enabled)
     }
 

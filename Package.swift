@@ -49,7 +49,7 @@ let package = Package(
         // local copy per chat, and the chat backend that runs a `Chat` through the link. No UI;
         // KoreUI holds the one seam. Asleep until a window on a box opens.
         .target(name: "HostClient", dependencies: ["src", "LinkProtocol", "KoreCore"], swiftSettings: releaseForSize),
-        .target(name: "KoreLink", dependencies: ["KoreUI", "LinkProtocol", "src", "KoreCore"], swiftSettings: releaseForSize),
+        .target(name: "KoreLink", dependencies: ["KoreUI", "LinkProtocol", "HostClient", "AgentTools", "src", "KoreCore"], swiftSettings: releaseForSize),
         // kore-host: Kore's chats on a headless machine (phase 17), served over the link. It
         // never links KoreUI or KoreLink, and the Mac app never links it.
         // `VERSION` links to the package's own: the version kore-host says (`--version`, the welcome).
@@ -79,7 +79,7 @@ let package = Package(
         // `swift test`: Swift Testing, in the Command Line Tools (phase 12's core layer).
         .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore", "kore-fake-cli"]),
         .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "src", "KoreCore", "kore-fake-cli"]),
-        .testTarget(name: "KoreLinkTests", dependencies: ["KoreLink", "LinkProtocol", "KoreUI", "src", "KoreCore"]),
+        .testTarget(name: "KoreLinkTests", dependencies: ["KoreLink", "LinkProtocol", "HostClient", "KoreHost", "AgentTools", "KoreUI", "src", "KoreCore", "kore-host"]),
         .testTarget(name: "KoreHostTests", dependencies: ["KoreHost", "LinkProtocol", "src", "KoreCore", "kore-host"]),
         .testTarget(name: "HostClientTests", dependencies: ["HostClient", "KoreHost", "LinkProtocol", "src", "KoreCore"]),
         .testTarget(name: "StorylineTests", dependencies: ["KoreStorylines", "KoreUI", "src", "KoreCore"]),
