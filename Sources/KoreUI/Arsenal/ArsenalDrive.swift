@@ -230,6 +230,13 @@ extension Workspace {
         return .success((chat, true))
     }
 
+    /// The past chats this window's History lists, as `arsenalOpen` looks them up: read once if
+    /// they haven't been yet, or again with `fresh` (a box's, over its link).
+    package func arsenalPast(fresh: Bool) async -> [SessionSummary] {
+        if fresh || !loaded { await refresh() }
+        return chats
+    }
+
     /// The chat's tab to the front, as a click on it.
     package func arsenalShow(_ chat: Chat) -> Bool {
         guard let tab = tab(of: chat) else { return false }

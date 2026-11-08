@@ -310,8 +310,8 @@ and never sees the new messages.
 - `agent.call {id, chatId, tool, args}`, box to client, full grants only: kore-host passes the
   call to the full grant that follows the chat, else the last full grant to connect. With none,
   the answer is "Kore isn't connected to <box> right now"; a link that ends, or no answer in as
-  long as a chat on the Mac waits for that command (`AgentTools.answerWait`: 10 s, a fork 75 s,
-  an open 30 s, a fetch or a reply 120 s, a wait its `timeout` + 15 s) and 20 s for the link,
+  long as a chat on the Mac waits for that command (`AgentTools.answerWait`: 10 s, a send 60 s,
+  a fork 75 s, an open 30 s, a fetch or a reply 120 s, a wait its `timeout` + 15 s) and 20 s for the link,
   ends the call so too ("Kore didn't answer in time.", as `kore mcp` says it).
 - `agent.result {id, ok, code?, text}`, client to box: `text` is what the agent reads, the
   command's data as JSON or why not. `code` is the agent channel's (`denied`, `tier`, `limit`,
@@ -326,6 +326,18 @@ and never sees the new messages.
   devices need more: `kore_fetch` from another device (box to Mac, Mac to box, box to box) needs
   Act device (`device`); below it, "Not fetched: a file on another device needs Arsenal's Act
   device tier". A box whose welcome lacks the `arsenalDevice` cap is told `drive` for it.
+- `kore_send` (`kore send <chat> "message" [--folder F]`) reaches a chat that isn't open too. An
+  open chat is named as before (title, short id, or `.`), or by its CLI session id; one no open
+  chat matches is looked for in History (the caller's window's, or `folder`'s): its History id
+  (`kore history`), the start of it (6 or more), or its title. Found, it opens as `kore_open_chat`
+  opens it (in a box window on the box, through the Mac's box window), then takes the message:
+  the same tier (Act unlimited), the same limits (a new chat, and a message), its mode capped at
+  the caller's, its Arsenal off. A title several past chats share is refused with their ids, and
+  nothing opens. A past chat in another folder isn't opened: opened, its Arsenal is off, so the
+  caller couldn't reach it. The answer waits for the chat's CLI to take the message: one that
+  doesn't start says why, and the message is back in the chat's composer. Sends that come while
+  the chat opens go after the first, in order. With `folder`, a box answers for its own folder's
+  open chats; anything else (another folder, a chat to wake) goes to the Mac.
 - `kore` in a box chat's shell: kore-host keeps a link named `kore` to itself in
   `$XDG_RUNTIME_DIR/kore-host/bin/` and puts that folder at the front of each chat CLI's PATH
   (`kore-host kore …` is the same). It runs the Mac `kore`'s chat commands (`ls`, `show`, `log`,

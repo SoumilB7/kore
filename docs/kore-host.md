@@ -410,6 +410,8 @@ limits are the Mac's, and only the Mac decides each call.
 - Each tool call goes to the daemon on `agent.sock` with the chat's id and a secret the daemon gave
   that CLI alone, then on to the Mac over the link. kore-host decides nothing.
 - New chats open on the same box and folder; `place: "mac"` opens one in a window on the Mac.
+- `kore_send` (`kore send`) to a chat that isn't open opens it from the folder's History first,
+  as `kore_open_chat` does, then sends; the Mac opens it, on the box.
 - With no Mac connected, a call says "Kore isn't connected to <box> right now".
 
 ## Uninstalling

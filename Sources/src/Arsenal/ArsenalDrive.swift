@@ -40,19 +40,47 @@ extension Chat {
     /// composer would, queued while a turn runs. A "/" command only from the chat's own "/" list,
     /// and never one of `userCommands` (the owner, 2026-11-15); a "!" shell line never.
     package func arsenalSend(_ text: String, from caller: String) -> Result<String, ArsenalRefusal> {
+        arsenalSend(text, from: caller, done: nil)
+    }
+
+    /// `arsenalSend`, and `done` once the CLI has the message or with why it didn't go (`sendFromLink`):
+    /// a chat just woken from History answers its caller only then, so a CLI that doesn't start is
+    /// said, not lost.
+    package func arsenalSend(_ text: String, from caller: String, done: (@MainActor (Result<Bool, Error>) -> Void)?) -> Result<String, ArsenalRefusal> {
         var text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return .failure(.init("A message needs some text.")) }
-        // Invisible format characters (U+200B, U+FEFF, U+2060, …) before the "/" or "!" don't hide it: a CLI may drop them.
-        let lead = text.unicodeScalars.first { !$0.properties.isWhitespace && $0.properties.generalCategory != .format }
-        guard lead != "!" else { return .failure(.init("Only you run a “!” shell line.")) }
-        if lead == "/" {
+        if let refusal = Self.arsenalRefusal(text) { return .failure(refusal) }
+        if Self.arsenalLead(text) == "/" {
             text = String(String.UnicodeScalarView(text.unicodeScalars.drop { $0 != "/" }))
             if case .failure(let refusal) = arsenalCommand(text) { return .failure(refusal) }
         }
         let queued = status.isRunning
         note("Arsenal · sent by \(caller)")
-        guard sendFromLink(text) else { return .failure(.init("This chat can't take a message right now.")) }
+        guard sendFromLink(text, done: done) else { return .failure(.init("This chat can't take a message right now.")) }
         return .success(queued ? "Queued: it goes when the turn running there ends." : "Sent.")
+    }
+
+    /// The first character that counts: invisible format characters (U+200B, U+FEFF, U+2060, …)
+    /// before a "/" or "!" don't hide it, as a CLI may drop them.
+    package static func arsenalLead(_ text: String) -> Unicode.Scalar? {
+        text.unicodeScalars.first { !$0.properties.isWhitespace && $0.properties.generalCategory != .format }
+    }
+
+    /// Why no chat takes this message from an agent, whatever chat it is: empty, a "!" shell
+    /// line, or a "/" command only the user runs. A "/" in the chat's own list is the chat's to say.
+    package static func arsenalRefusal(_ text: String) -> ArsenalRefusal? {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return .init("A message needs some text.") }
+        switch arsenalLead(text) {
+        case "!": return .init("Only you run a “!” shell line.")
+        case "/":
+            let command = String(String.UnicodeScalarView(text.unicodeScalars.drop { $0 != "/" }))
+            let name = String(command.dropFirst().prefix { !$0.isWhitespace }).lowercased()
+            guard !name.isEmpty else { return .init("A “/” needs a command after it.") }
+            if let kore = koreSets[name] { return .init("Kore sets that: \(kore), not /\(name).") }
+            if userCommands.contains(name) { return .init("Only you run /\(name): sign-in, account, permission and settings commands are yours.") }
+            return nil
+        default: return nil
+        }
     }
 
     /// The "/" commands only the user runs: signing in and accounts, permissions, settings, the

@@ -104,8 +104,13 @@ package enum AgentTools {
                 ("timeout", "integer", "Seconds, 300 at most (default 300)."),
             ], required: []),
         Tool(
-            name: "kore_send", command: "chat.send", description: "Send a message to another chat, as the user would type it, queued while it works. It shows who sent it. Only chats at this chat's mode or lower (Act unlimited).",
-            args: [chatArg, ("text", "string", "The message. A \"/\" command that chat's CLI has goes too, except sign-in, account, permission and settings ones (mode and model: their own tools); never a \"!\" line.")], required: ["chat", "text"]),
+            name: "kore_send", command: "chat.send",
+            description: "Send a message to another chat, as the user would type it, queued while it works. It shows who sent it. A chat that isn't open (closed, or in History) is opened first, as kore_open_chat opens it, then sent; a title several past chats share is refused with their ids. Only chats at this chat's mode or lower (Act unlimited).",
+            args: [
+                ("chat", "string", "The chat: its title (any part only it has), its short id, its CLI session id (or the start of it), or a past chat's id from kore_history."),
+                ("text", "string", "The message. A \"/\" command that chat's CLI has goes too, except sign-in, account, permission and settings ones (mode and model: their own tools); never a \"!\" line."),
+                ("folder", "string", "Look only in this folder's window, as kore_history names one (default: open chats anywhere, then this chat's window's History). Past chats wake only in this chat's own folder."),
+            ], required: ["chat", "text"]),
         Tool(name: "kore_stop", command: "chat.stop", description: "Stop another chat's turn (Act unlimited).", args: [chatArg], required: ["chat"]),
         Tool(
             name: "kore_open_chat", command: "chat.open",
@@ -178,6 +183,8 @@ package enum AgentTools {
         case "chat.fork": 75
         case "file.fetch", "chat.reply": 120
         case "chat.open": 30
+        // A chat that isn't open is woken first: opened, its CLI started, then sent.
+        case "chat.send": 60
         default: 10
         }
     }

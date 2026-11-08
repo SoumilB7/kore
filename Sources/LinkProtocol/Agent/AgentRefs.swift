@@ -57,4 +57,37 @@ package enum AgentRefs {
         let titled = chats.filter { $0.title.lowercased().contains(lower) }
         return titled.isEmpty ? .none : .byTitle(titled.map(\.id))
     }
+
+    /// A past chat named for a wake (`chat.send` to a chat no tab has).
+    package enum PastFound: Equatable, Sendable {
+        /// Its History id: the session (or, on a box, the closed chat) `chat.open` takes.
+        case session(String)
+        case none
+        /// Several match: their History ids, newest first as listed.
+        case ambiguous([String])
+    }
+
+    /// A past chat History lists, named as `kore open` names one, or by its title: its whole id, the
+    /// start of it (6 or more, as kore history shows 8) only one has, a title equal to `ref` only one
+    /// has, else a part of a title only one has. Archived chats are named by their id alone. Two or
+    /// more never name one: they come back to choose from.
+    package static func resolvePast(_ ref: String, sessions: [(id: String, title: String, archived: Bool)]) -> PastFound {
+        let lower = ref.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !lower.isEmpty, lower != "." else { return .none }
+        if let exact = sessions.first(where: { $0.id.lowercased() == lower }) { return .session(exact.id) }
+        if lower.count >= 6 {
+            let byId = sessions.filter { $0.id.lowercased().hasPrefix(lower) }
+            if byId.count == 1 { return .session(byId[0].id) }
+            if byId.count > 1 { return .ambiguous(byId.map(\.id)) }
+        }
+        let listed = sessions.filter { !$0.archived }
+        let equal = listed.filter { $0.title.lowercased() == lower }
+        if equal.count == 1 { return .session(equal[0].id) }
+        let holding = equal.count > 1 ? equal : listed.filter { $0.title.lowercased().contains(lower) }
+        switch holding.count {
+        case 0: return .none
+        case 1: return .session(holding[0].id)
+        default: return .ambiguous(holding.map(\.id))
+        }
+    }
 }

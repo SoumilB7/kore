@@ -63,7 +63,13 @@ extension HostDaemon {
         case AgentCommand.whoami.name, AgentCommand.chats.name: return !mac
         case AgentCommand.cards.name: return chat == nil ? !mac : resolvesHere(hc, chat)
         case AgentCommand.wait.name: return args["ask"] != nil ? false : resolvesHere(hc, chat)
-        case AgentCommand.show.name, AgentCommand.read.name, AgentCommand.send.name, AgentCommand.stop.name, AgentCommand.answer.name:
+        case AgentCommand.send.name:
+            // A folder named: one of this box's, its chats there; another's, or none of its chats
+            // (a past chat to wake, through the Mac's box window), the Mac's.
+            guard let folder = args["folder"] as? String else { return resolvesHere(hc, chat) }
+            guard let path = historyFolder(folder, of: hc) else { return !mac }
+            return resolvesHere(hc, chat, in: path)
+        case AgentCommand.show.name, AgentCommand.read.name, AgentCommand.stop.name, AgentCommand.answer.name:
             return resolvesHere(hc, chat)
         case AgentCommand.close.name: return resolvesHere(hc, chat, byID: true)
         case _ where AgentTools.ownCommands.contains(tool.command): return resolvesHere(hc, chat ?? ".")
@@ -76,9 +82,9 @@ extension HostDaemon {
 
     /// `ref` names something on the box: one of its chats, several (answered here as ambiguous),
     /// or nothing well-formed. A ref no box chat has may be one of the Mac's.
-    private func resolvesHere(_ hc: HostChat, _ ref: String?, byID: Bool = false) -> Bool {
+    private func resolvesHere(_ hc: HostChat, _ ref: String?, byID: Bool = false, in folder: String? = nil) -> Bool {
         guard let ref, !ref.isEmpty else { return true }
-        let titled = readable(hc).map { (id: $0.id, title: $0.title) }
+        let titled = readable(hc, in: folder).map { (id: $0.id, title: $0.title) }
         if byID {
             if case .none = AgentRefs.resolveID(ref, chats: titled) { return false }
             return true
@@ -190,6 +196,12 @@ extension HostDaemon {
         chats.filter { $0.record.folder == hc.record.folder || $0.arsenal != nil }
     }
 
+    /// `readable`, and with `folder` only that folder's (`chat.send --folder`).
+    func readable(_ hc: HostChat, in folder: String?) -> [HostChat] {
+        guard let folder else { return readable(hc) }
+        return readable(hc).filter { Self.standard($0.record.folder) == Self.standard(folder) }
+    }
+
     private func callerInfo(_ hc: HostChat) -> AgentCallerInfo {
         AgentCallerInfo(class: "chat", chat: hc.id, short: AgentRefs.short(hc.id), title: Self.title(hc.title))
     }
@@ -270,9 +282,9 @@ extension HostDaemon {
     }
 
     /// The chat `ref` names among those the caller may read, or the refusal (`AgentChannel.resolve`'s words).
-    private func resolve(_ ref: String?, _ hc: HostChat) -> Result<HostChat, Refused> {
+    private func resolve(_ ref: String?, _ hc: HostChat, in folder: String? = nil) -> Result<HostChat, Refused> {
         guard let ref, !ref.isEmpty else { return .failure(Refused(Self.failed(.noChat, "Name a chat: its title, its short id, or . for this one."))) }
-        let shown = Dictionary(readable(hc).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let shown = Dictionary(readable(hc, in: folder).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         switch AgentRefs.resolve(ref, chats: shown.values.map { (id: $0.id, title: $0.title) }, own: hc.id) {
         case .chat(let found):
             return shown[found].map(Result.success) ?? .failure(Refused(Self.failed(.noChat, "That chat isn't open in Kore.")))
@@ -286,8 +298,8 @@ extension HostDaemon {
         }
     }
 
-    private func resolved(_ ref: String?, _ hc: HostChat, _ then: (HostChat) -> Data) -> Data {
-        switch resolve(ref, hc) {
+    private func resolved(_ ref: String?, _ hc: HostChat, in folder: String? = nil, _ then: (HostChat) -> Data) -> Data {
+        switch resolve(ref, hc, in: folder) {
         case .failure(let refused): refused.line
         case .success(let found): then(found)
         }
@@ -318,8 +330,8 @@ extension HostDaemon {
     }
 
     /// A chat other than the caller's that it may drive.
-    private func other(_ ref: String?, _ hc: HostChat, _ then: (HostChat) -> Data) -> Data {
-        resolved(ref, hc) { target in
+    private func other(_ ref: String?, _ hc: HostChat, in folder: String? = nil, _ then: (HostChat) -> Data) -> Data {
+        resolved(ref, hc, in: folder) { target in
             guard target !== hc else { return Self.failed(.refused, "Not this chat: it's the one asking.") }
             if let refused = drivable(target, hc) { return refused }
             if let held = Self.held(target) { return Self.failed(.refused, held.message) }
@@ -392,7 +404,16 @@ extension HostDaemon {
     // MARK: Drive
 
     private func send(_ hc: HostChat, _ args: AgentArgs) -> Data {
-        other(args.chat, hc) { target in
+        var folder: String?
+        if let named = args.folder {
+            // Another device's folder, with no Mac to reach it through.
+            guard let path = historyFolder(named, of: hc) else { return Self.failed(.noWindow, Self.notConnected) }
+            if Self.standard(path) != Self.standard(hc.record.folder), tier(hc) < .drive {
+                return Self.failed(.noWindow, "Past chats can be read only for this chat's own folder: other folders need Act unlimited.")
+            }
+            folder = path
+        }
+        return other(args.chat, hc, in: folder) { target in
             guard let text = args.text, text.utf8.count <= ArsenalRules.textMax else {
                 return Self.failed(.invalid, "Say the message, \(ArsenalRules.textMax / 1024) KiB at most.")
             }

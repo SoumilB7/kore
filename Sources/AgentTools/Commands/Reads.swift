@@ -81,8 +81,9 @@ package enum Reads {
                kore fetch <device:path | path>
                                      copy a file from an open folder into .kore/inbox/ (50 MB, no secrets;
                                      another device's needs Act device)
-               kore send <chat> "message"
-                                     send to another chat, queued while it works
+               kore send <chat> "message" [--folder F]
+                                     send to another chat, queued while it works; one that isn't
+                                     open (closed, in History: its id or title) opens first
                kore stop <chat>      stop its turn
                kore tab <chat>       bring its tab to the front
                kore open <session> [--folder F]

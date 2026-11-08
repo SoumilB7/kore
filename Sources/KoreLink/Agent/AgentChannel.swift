@@ -500,20 +500,7 @@ package final class AgentChannel {
         case AgentCommand.wait.name:
             return wait(args, client, id)
         case AgentCommand.send.name:
-            guard let chat = other(args, client, id) else { return nil }
-            guard let text = args.text, text.utf8.count <= Self.textMax else {
-                fail(client, id, .invalid, "Say the message, \(Self.textMax / 1024) KiB at most.")
-                return chat.id.uuidString
-            }
-            if let free = sendBudgets[client.key, default: RateLimiter(limit: Self.sendsPerMinute, per: 60)].nextFree() {
-                fail(client, id, .limit, "\(Self.sendsPerMinute) messages a minute at most: " + Self.freesUp(free))
-                return chat.id.uuidString
-            }
-            // Spent only by a message the chat takes.
-            let outcome = chat.arsenalSend(text, from: callerName(client))
-            if case .success = outcome { _ = sendBudgets[client.key, default: RateLimiter(limit: Self.sendsPerMinute, per: 60)].take() }
-            done(outcome, chat, client, id)
-            return chat.id.uuidString
+            return sendChat(args, client, id)
         case AgentCommand.stop.name:
             guard let chat = other(args, client, id) else { return nil }
             let running = chat.isBusy
@@ -597,6 +584,243 @@ package final class AgentChannel {
         case .success(let said): send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chatId, message: said, short: short)))
         }
         return chatId
+    }
+
+    // MARK: Sending, and waking a chat
+
+    /// `chat.send`: a message to a chat it drives, queued while that chat works. An open chat it
+    /// names goes as it always went (`sendOpen`); with `folder`, only that folder's window's open
+    /// chats are looked at. A name no open chat has is looked for in History: the chat is woken
+    /// (`wake`), opened as `chat.open` opens it, then sent the message.
+    private func sendChat(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
+        var scope: Workspace?
+        if args.folder != nil {
+            guard let window = window(args, client, id) else { return nil }
+            scope = window
+        }
+        if let ref = args.chat, !ref.isEmpty, case .none = lookup(ref, client, in: scope).found {
+            return wake(ref, args, client, id, in: scope)
+        }
+        guard let chat = other(args, client, id, in: scope) else { return nil }
+        return sendOpen(chat, args, client, id)
+    }
+
+    /// A message to an open chat it drives, as the composer sends it.
+    private func sendOpen(_ chat: Chat, _ args: AgentArgs, _ client: Client, _ id: String) -> String? {
+        guard let text = args.text, text.utf8.count <= Self.textMax else {
+            fail(client, id, .invalid, "Say the message, \(Self.textMax / 1024) KiB at most.")
+            return chat.id.uuidString
+        }
+        if let free = sendBudgets[client.key, default: RateLimiter(limit: Self.sendsPerMinute, per: 60)].nextFree() {
+            fail(client, id, .limit, "\(Self.sendsPerMinute) messages a minute at most: " + Self.freesUp(free))
+            return chat.id.uuidString
+        }
+        // Spent only by a message the chat takes.
+        let outcome = chat.arsenalSend(text, from: callerName(client))
+        if case .success = outcome { _ = sendBudgets[client.key, default: RateLimiter(limit: Self.sendsPerMinute, per: 60)].take() }
+        done(outcome, chat, client, id)
+        return chat.id.uuidString
+    }
+
+    /// Sends that wait for a chat being woken, by its window and History id: the first opens it,
+    /// the rest go after it in the order they came, so one chat opens once and its messages keep
+    /// their order however close together they arrive.
+    private var waking: [WakeKey: [(Result<(chat: Chat, opened: Bool), ArsenalRefusal>) -> Void]] = [:]
+
+    /// A woken chat's send is answered once: when its CLI has the message, or at the patience's end.
+    @MainActor
+    private final class WakeAnswer {
+        var answered = false
+        var patience: Task<Void, Never>?
+    }
+
+    /// Why a woken chat's message didn't go, as its caller is told.
+    private struct WakeRefusal: Error {
+        let code: AgentCode
+        let text: String
+    }
+
+    private struct WakeKey: Hashable {
+        let window: ObjectIdentifier
+        let session: String
+    }
+
+    /// How long a woken chat's caller waits for its CLI to take the message before it's told the
+    /// message waits there (the CLI's own start tries again for up to 17 s).
+    package static var wakePatience: Duration = .seconds(40)
+
+    /// A chat named by its CLI session id, or by a past chat History lists in the window (the
+    /// caller's, or `folder`'s): opened as `chat.open` opens it (`Workspace.arsenalOpen`: its tab,
+    /// its CLI's session resumed, its mode capped at the caller's, its Arsenal off), then sent the
+    /// message as `sendOpen` sends it. The same tier, limits and reach as `chat.open` then
+    /// `chat.send`: a new chat for the limits, and only a chat this caller could read and drive
+    /// once it's open, so never one in another folder (opened, its Arsenal is off). Answered once
+    /// its CLI has the message, or with why it doesn't.
+    private func wake(_ ref: String, _ args: AgentArgs, _ client: Client, _ id: String, in scope: Workspace?) -> String? {
+        let quoted = "\u{201C}\(ref.prefix(80))\u{201D}"
+        // A caller outside Kore's chats has no window, so no History: as before.
+        guard let own = callerChat(client), let home = AgentReads.workspace(of: own) else {
+            fail(client, id, .noChat, "No open chat matches \(quoted).")
+            return nil
+        }
+        let window = scope ?? home
+        let place = window.boxFolder ?? LinkSnapshot.homeRelative(window.folder.path)
+        // An open chat named by its CLI session id, as kore history and kore show give it.
+        let wanted = ref.trimmingCharacters(in: .whitespaces).lowercased()
+        let readable = AgentReads.readable(own: client.chat).filter { scope == nil || AgentReads.workspace(of: $0) === scope }
+        let bySession = readable.filter { chat in
+            guard let session = chat.listedId?.lowercased() else { return false }
+            return session == wanted || (wanted.count >= 6 && session.hasPrefix(wanted))
+        }
+        if bySession.count == 1 {
+            guard let chat = otherThan(client, bySession[0], id) else { return bySession[0].id.uuidString }
+            return sendOpen(chat, args, client, id)
+        }
+        if bySession.count > 1 {
+            let names = bySession.map { "\(AgentReads.short($0.id.uuidString)) \u{201C}\(AgentReads.title($0.title))\u{201D}" }
+            fail(client, id, .ambiguous, "Several open chats' sessions start with \(quoted): " + names.joined(separator: ", ") + ".")
+            return nil
+        }
+        // What `sendOpen` and `chat.open` check, before anything opens.
+        guard let text = args.text, text.utf8.count <= Self.textMax else {
+            fail(client, id, .invalid, "Say the message, \(Self.textMax / 1024) KiB at most.")
+            return nil
+        }
+        if let refusal = Chat.arsenalRefusal(text) {
+            fail(client, id, .refused, refusal.message)
+            return nil
+        }
+        if Chat.arsenalLead(text) == "/" {
+            fail(client, id, .refused, "\(quoted) isn't open, and a \u{201C}/\u{201D} command goes only to an open chat, whose list has it: open it first (kore open).")
+            return nil
+        }
+        if let free = sendBudgets[client.key, default: RateLimiter(limit: Self.sendsPerMinute, per: 60)].nextFree() {
+            fail(client, id, .limit, "\(Self.sendsPerMinute) messages a minute at most: " + Self.freesUp(free))
+            return nil
+        }
+        guard roomForNew(client, id) else { return nil }
+        // History is read (a box's over its link), one wake's lookup after another in a window, so
+        // sends to a chat it's opening line up in the order they came. Answered once the chat is
+        // open and has the message.
+        let lookups = ObjectIdentifier(window)
+        let previous = wakeLookups[lookups]
+        let token = UUID()
+        let lookup = Task { @MainActor [weak self, weak client] in
+            await previous?.task.value
+            defer { if self?.wakeLookups[lookups]?.token == token { self?.wakeLookups[lookups] = nil } }
+            var past = await window.arsenalPast(fresh: false)
+            var found = AgentRefs.resolvePast(ref, sessions: past.map { (id: $0.id, title: $0.title, archived: $0.archived) })
+            // A list read before the chat closed may not have it yet: read once more before saying so.
+            if case .none = found {
+                past = await window.arsenalPast(fresh: true)
+                found = AgentRefs.resolvePast(ref, sessions: past.map { (id: $0.id, title: $0.title, archived: $0.archived) })
+            }
+            guard let self, let client, AgentChannel.current === self, self.tier(client) >= .drive else { return }
+            let summary: SessionSummary
+            switch found {
+            case .none:
+                return self.fail(client, id, .noChat, "No open or past chat matches \(quoted) in \(place).")
+            case .ambiguous(let ids):
+                let byId = Dictionary(past.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+                let names = ids.compactMap { byId[$0] }.map { "\(AgentRefs.short($0.id)) \u{201C}\(AgentReads.title($0.title))\u{201D}" }
+                return self.fail(client, id, .ambiguous, "Several past chats match \(quoted): " + names.joined(separator: ", ") + ". Name one by its id; nothing was sent.")
+            case .session(let session):
+                guard let found = past.first(where: { $0.id == session }) else { return self.fail(client, id, .noChat, "No open or past chat matches \(quoted) in \(place).") }
+                summary = found
+            }
+            let title = "\u{201C}\(AgentReads.title(summary.title))\u{201D}"
+            // Opened, its Arsenal is off: only a chat in the caller's own folder is one it reads then.
+            guard window.folder.standardizedFileURL.path == home.folder.standardizedFileURL.path else {
+                return self.fail(
+                    client, id, .notOwn,
+                    "\(title) is in History in \(place), another folder: opened from here its Arsenal is off, so this chat couldn't reach it. Nothing was opened or sent.")
+            }
+            self.wakeAndSend(summary, in: window, text: text, client, id)
+        }
+        wakeLookups[lookups] = (token, lookup)
+        return nil
+    }
+
+    /// Each window's last wake lookup: the next waits for it.
+    private var wakeLookups: [ObjectIdentifier: (token: UUID, task: Task<Void, Never>)] = [:]
+
+    /// Opens the past chat (once, however many sends wait for it) and sends it this caller's message.
+    private func wakeAndSend(_ summary: SessionSummary, in window: Workspace, text: String, _ client: Client, _ id: String) {
+        let key = WakeKey(window: ObjectIdentifier(window), session: summary.id)
+        let first = waking[key] == nil
+        guard let own = callerChat(client) else { return fail(client, id, .noWindow, "This chat closed.") }
+        waking[key, default: []].append { [weak self, weak client] result in
+            guard let self, let client, AgentChannel.current === self, self.tier(client) >= .drive else { return }
+            switch result {
+            case .failure(let refusal):
+                self.fail(client, id, .refused, refusal.message)
+            case .success(let (chat, opened)):
+                if opened && first { self.spentNew(chat, client) }
+                self.sendWoken(chat, opened: opened && first, text: text, client, id)
+            }
+        }
+        guard first else { return }
+        Task { @MainActor [weak self] in
+            let result = await window.arsenalOpen(session: summary.id, under: own)
+            guard let self else { return }
+            // Every send that waited, in the order they came: each message is in the chat before the next.
+            for send in self.waking.removeValue(forKey: key) ?? [] { send(result) }
+        }
+    }
+
+    /// The woken chat's message, under `chat.send`'s rules for this caller now (its reach, its
+    /// limit), answered when the CLI has it: a CLI that didn't start says why, and the message
+    /// is back in the chat's composer, never lost without a word.
+    private func sendWoken(_ chat: Chat, opened: Bool, text: String, _ client: Client, _ id: String) {
+        let chatId = chat.id.uuidString
+        let short = AgentReads.short(chatId)
+        let title = "\u{201C}\(AgentReads.title(chat.title))\u{201D}"
+        let lead = opened ? "Opened \(title). " : ""
+        // Opened, it must be one this caller reads and drives, as `chat.send` would find it.
+        guard AgentReads.readable(own: client.chat).contains(where: { $0 === chat }) else {
+            return fail(client, id, .notOwn, lead + "This chat can't reach it now: not sent.")
+        }
+        guard otherThan(client, chat, id) != nil else { return }
+        if let free = sendBudgets[client.key, default: RateLimiter(limit: Self.sendsPerMinute, per: 60)].nextFree() {
+            return fail(client, id, .limit, lead + "\(Self.sendsPerMinute) messages a minute at most: " + Self.freesUp(free))
+        }
+        let queued = chat.status.isRunning
+        let once = WakeAnswer()
+        let answer: @MainActor (Result<String, WakeRefusal>) -> Void = { [weak self, weak client] outcome in
+            guard !once.answered else { return }
+            once.answered = true
+            once.patience?.cancel()
+            guard let self, let client else { return }
+            switch outcome {
+            case .success(let said): self.send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chatId, message: lead + said, short: short)))
+            case .failure(let refusal): self.fail(client, id, refusal.code, lead + refusal.text)
+            }
+        }
+        let outcome = chat.arsenalSend(text, from: callerName(client)) { taken in
+            switch taken {
+            case .success: answer(.success(queued ? "Queued: it goes when the turn running there ends." : "Sent."))
+            case .failure(let error):
+                if AgentReads.chatsByID()[chatId] == nil {
+                    answer(.failure(WakeRefusal(code: .noChat, text: "It closed before its CLI took the message: not sent.")))
+                } else {
+                    let back = queued ? "" : " The message is back in its composer."
+                    answer(.failure(WakeRefusal(code: .refused, text: "Not sent: \(chat.provider.name) couldn't take it (\(Chat.reason(error))).\(back)")))
+                }
+            }
+        }
+        switch outcome {
+        case .failure(let refusal):
+            answer(.failure(WakeRefusal(code: .refused, text: refusal.message)))
+        case .success:
+            // Spent only by a message the chat takes.
+            _ = sendBudgets[client.key, default: RateLimiter(limit: Self.sendsPerMinute, per: 60)].take()
+            guard !once.answered else { return }
+            once.patience = Task { @MainActor in
+                try? await Task.sleep(for: Self.wakePatience)
+                guard !Task.isCancelled else { return }
+                answer(.success("Its CLI is still starting: the message goes once it has (kore log \(short) shows it)."))
+            }
+        }
     }
 
     // MARK: Chat to chat
@@ -824,8 +1048,13 @@ package final class AgentChannel {
 
     /// A chat other than the caller's own, that it may drive: a message, a stop or an answer to
     /// itself would come from inside its own turn.
-    private func other(_ args: AgentArgs, _ client: Client, _ id: String) -> Chat? {
-        guard let chat = resolve(args.chat, client, id) else { return nil }
+    private func other(_ args: AgentArgs, _ client: Client, _ id: String, in scope: Workspace? = nil) -> Chat? {
+        guard let chat = resolve(args.chat, client, id, in: scope) else { return nil }
+        return otherThan(client, chat, id)
+    }
+
+    /// `chat` when it isn't the caller's own and the caller drives it (`other`'s checks).
+    private func otherThan(_ client: Client, _ chat: Chat, _ id: String) -> Chat? {
         guard chat.id.uuidString != client.chat else {
             fail(client, id, .refused, "Not this chat: it's the one asking.")
             return nil
@@ -1058,15 +1287,13 @@ package final class AgentChannel {
 
     static func message(_ code: AgentCode) -> String { ArsenalRules.message(code) }
 
-    private func resolve(_ ref: String?, _ client: Client, _ id: String) -> Chat? {
+    private func resolve(_ ref: String?, _ client: Client, _ id: String, in scope: Workspace? = nil) -> Chat? {
         guard let ref, !ref.isEmpty else {
             fail(client, id, .noChat, "Name a chat: its title, its short id, or . for this one.")
             return nil
         }
-        // Only what this caller may read: the rest isn't there to it, not even by its id.
-        let chats = Dictionary(AgentReads.readable(own: client.chat).map { ($0.id.uuidString, $0) }, uniquingKeysWith: { a, _ in a })
-        let titled = chats.values.map { (id: $0.id.uuidString, title: $0.title) }
-        switch AgentRefs.resolve(ref, chats: titled, own: client.chat) {
+        let (found, chats) = lookup(ref, client, in: scope)
+        switch found {
         case .chat(let found):
             if let chat = chats[found] { return chat }
             fail(client, id, .noChat, "That chat isn't open in Kore.")
@@ -1079,6 +1306,15 @@ package final class AgentChannel {
             fail(client, id, .ambiguous, "Several chats match: " + names.joined(separator: ", "))
         }
         return nil
+    }
+
+    /// The open chats `ref` names for this caller, and those it looked among: only what it may read
+    /// (the rest isn't there to it, not even by its id), and with `scope` only that window's.
+    private func lookup(_ ref: String, _ client: Client, in scope: Workspace?) -> (found: AgentRefs.Found, chats: [String: Chat]) {
+        let readable = AgentReads.readable(own: client.chat).filter { chat in scope.map { AgentReads.workspace(of: chat) === $0 } ?? true }
+        let chats = Dictionary(readable.map { ($0.id.uuidString, $0) }, uniquingKeysWith: { a, _ in a })
+        let titled = chats.values.map { (id: $0.id.uuidString, title: $0.title) }
+        return (AgentRefs.resolve(ref, chats: titled, own: client.chat), chats)
     }
 
     /// The window a history read or an open is for: the caller's own chat's, or with Act unlimited

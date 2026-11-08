@@ -894,25 +894,31 @@ package final class Chat: Identifiable {
     /// queued while a turn runs, without touching the draft or its attachments on the Mac.
     /// False when it can't go now (a compaction, an account switch, a chat closed).
     /// `note`: a line its agent reads with this message only (`noteNextTurn`), never shown: an
-    /// Arsenal ask's how-to-answer.
+    /// Arsenal ask's how-to-answer. `done`: once the CLI has it (whether a turn is under way), or
+    /// why it didn't go (the CLI didn't start, the chat closed first); a message held for a
+    /// compaction, or a /compact, is done at once.
     @discardableResult
-    package func sendFromLink(_ text: String, files: [URL] = [], note: String? = nil) -> Bool {
+    package func sendFromLink(
+        _ text: String, files: [URL] = [], note: String? = nil, done: (@MainActor (Result<Bool, Error>) -> Void)? = nil
+    ) -> Bool {
         guard !closed, !accountRestartPending else { return false }
         let sent = services.attachments(files)
         // During a compaction a phone's message waits for it, shown queued, as the composer's does.
         if context.compacting {
             guard !sent.isEmpty || Self.compactCommand(text) == nil else { return false }
             holdForCompaction(text, sent)
+            done?(.success(true))
             return true
         }
         if sent.isEmpty, let instructions = Self.compactCommand(text) {
             guard canCompact else { return false }
             showCompactRow(text)
             compact(instructions: instructions)
+            done?(.success(true))
             return true
         }
         cancelContinue()
-        deliver(text, sent, note: note)
+        deliver(text, sent, note: note, done: done)
         return true
     }
 
