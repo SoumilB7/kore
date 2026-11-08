@@ -34,18 +34,50 @@ extension Chat {
     }
 
     /// A message from another chat's agent: shown with where it came from, then sent as the
-    /// composer would, queued while a turn runs. Never a "/" command: Kore runs some itself (`/plan`
-    /// flips Codex's Plan, `/compact` compacts), and the CLIs run their own.
+    /// composer would, queued while a turn runs. A "/" command only from the chat's own "/" list,
+    /// and never one of `userCommands` (the owner, 2026-11-15); a "!" shell line never.
     package func arsenalSend(_ text: String, from caller: String) -> Result<String, ArsenalRefusal> {
-        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        var text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return .failure(.init("A message needs some text.")) }
-        // Invisible format characters (U+200B, U+FEFF, U+2060, …) before the "/" don't hide it: a CLI may drop them.
+        // Invisible format characters (U+200B, U+FEFF, U+2060, …) before the "/" or "!" don't hide it: a CLI may drop them.
         let lead = text.unicodeScalars.first { !$0.properties.isWhitespace && $0.properties.generalCategory != .format }
-        guard lead != "/" else { return .failure(.init("Only you send a “/” command.")) }
+        guard lead != "!" else { return .failure(.init("Only you run a “!” shell line.")) }
+        if lead == "/" {
+            text = String(String.UnicodeScalarView(text.unicodeScalars.drop { $0 != "/" }))
+            if case .failure(let refusal) = arsenalCommand(text) { return .failure(refusal) }
+        }
         let queued = status.isRunning
         note("Arsenal · sent by \(caller)")
         guard sendFromLink(text) else { return .failure(.init("This chat can't take a message right now.")) }
         return .success(queued ? "Queued: it goes when the turn running there ends." : "Sent.")
+    }
+
+    /// The "/" commands only the user runs: signing in and accounts, permissions, settings, the
+    /// CLI's own exit, and what Kore sets with a command of its own (mode, model, effort, fast).
+    static let userCommands: Set<String> = [
+        "login", "logout", "account", "usage", "upgrade", "extra-usage", "privacy-settings", "remote-control", "feedback", "bug",
+        "permissions", "allowed-tools", "approvals", "add-dir", "sandbox", "sandbox-add-read-dir",
+        "config", "settings", "hooks", "statusline", "terminal-setup", "mcp", "plugin", "plugins", "agents", "output-style",
+        "theme", "vim", "ide", "keybindings", "install-github-app", "install-slack-app", "personality", "experimental",
+        "exit", "quit", "plan", "model", "effort", "fast",
+    ]
+
+    /// Kore's own command for one of `userCommands`, where it has one.
+    private static let koreSets = ["plan": "kore mode", "model": "kore model", "effort": "kore effort", "fast": "kore fast"]
+
+    /// A "/" command it may send this chat: one its "/" list has, not one of `userCommands`.
+    func arsenalCommand(_ text: String) -> Result<Void, ArsenalRefusal> {
+        let name = String(text.dropFirst().prefix { !$0.isWhitespace }).lowercased()
+        guard !name.isEmpty else { return .failure(.init("A “/” needs a command after it.")) }
+        if let kore = Self.koreSets[name] { return .failure(.init("Kore sets that: \(kore), not /\(name).")) }
+        guard !Self.userCommands.contains(name) else {
+            return .failure(.init("Only you run /\(name): sign-in, account, permission and settings commands are yours."))
+        }
+        // compact is Kore's own, as the context wheel's.
+        guard name == "compact" || controls.commands.contains(where: { $0.kind != .kore && $0.name.lowercased() == name }) else {
+            return .failure(.init("/\(name) isn't in this chat's “/” list."))
+        }
+        return .success(())
     }
 
     /// A question card's answers, an option's label (or typed text, where the card takes it) per

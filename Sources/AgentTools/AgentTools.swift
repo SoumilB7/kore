@@ -102,7 +102,7 @@ package enum AgentTools {
             args: [chatArg, ("timeout", "integer", "Seconds, 300 at most (default 300).")], required: ["chat"]),
         Tool(
             name: "kore_send", command: "chat.send", description: "Send a message to another chat, as the user would type it, queued while it works. It shows who sent it. Only chats at this chat's mode or lower (Act unlimited).",
-            args: [chatArg, ("text", "string", "The message.")], required: ["chat", "text"]),
+            args: [chatArg, ("text", "string", "The message. A \"/\" command that chat's CLI has goes too, except sign-in, account, permission and settings ones (mode and model: their own tools); never a \"!\" line.")], required: ["chat", "text"]),
         Tool(name: "kore_stop", command: "chat.stop", description: "Stop another chat's turn (Act unlimited).", args: [chatArg], required: ["chat"]),
         Tool(
             name: "kore_open_chat", command: "chat.open",

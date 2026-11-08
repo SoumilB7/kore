@@ -120,11 +120,12 @@ final class ArsenalDrive: ChatStoryline {
             role("b", "b planning") { $0.storyPlanning },
             plan("b", false, codex: codex, back: low),
             KoreAs(["send", "{a}", "me"], a, "not to itself", status: 1, says: "Not this chat"),
-            // "/" commands are the user's: Kore runs /plan (Codex's Plan switch) and /compact itself.
-            KoreAs(["send", "{b}", "/plan"], a, "no /plan", status: 1, says: "Only you send"),
-            KoreAs(["send", "{b}", "  /compact now"], a, "no /compact", status: 1, says: "Only you send"),
-            KoreAs(["send", "{b}", "\u{FEFF}/plan"], a, "no /plan behind a BOM", status: 1, says: "Only you send"),
-            KoreAs(["send", "{b}", "\u{200B}/compact"], a, "no /compact behind a zero-width space", status: 1, says: "Only you send"),
+            // The user's "/" commands (ArsenalSlash sends the others): /plan is kore mode's, sign-in theirs.
+            KoreAs(["send", "{b}", "/plan"], a, "no /plan: kore mode", status: 1, says: "Kore sets that"),
+            KoreAs(["send", "{b}", "  /login now"], a, "no /login", status: 1, says: "Only you run /login"),
+            KoreAs(["send", "{b}", "\u{FEFF}/plan"], a, "no /plan behind a BOM", status: 1, says: "Kore sets that"),
+            KoreAs(["send", "{b}", "\u{200B}/login"], a, "no /login behind a zero-width space", status: 1, says: "Only you run /login"),
+            KoreAs(["send", "{b}", "\u{200B}!ls"], a, "no “!” line", status: 1, says: "Only you run a “!” shell line"),
             role("b", "b not planning, not compacting") { !$0.storyPlanning && !$0.isBusy },
 
             // A question card in b: answered by its option; the card goes and the turn goes on.
