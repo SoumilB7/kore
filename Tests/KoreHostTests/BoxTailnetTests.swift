@@ -292,6 +292,7 @@ final class HandoffTailnet: Tailnet, @unchecked Sendable {
     init() throws { (mine, theirs) = try Sockets.pair() }
     deinit {
         Sockets.closeFD(mine)
+        Sockets.closeFD(theirs)
         for fd in held.withLock({ $0 }) { Sockets.closeFD(fd) }
     }
 
@@ -300,7 +301,12 @@ final class HandoffTailnet: Tailnet, @unchecked Sendable {
     }
     func whois(_ address: String) throws -> TailnetWhoIs { throw TailnetError.notTailnet(address) }
     func events() -> AsyncStream<TailnetEvent> { AsyncStream { _ in } }
-    func listen(port: UInt16) throws -> [TailnetListenSocket] { [.handoff(theirs)] }
+    /// A copy per listen, as the helper hands a socket of its own each time: the daemon closes
+    /// what it was given when that listen ends, and a rebind's listen is never one closed already.
+    func listen(port: UInt16) throws -> [TailnetListenSocket] {
+        guard let copy = Sockets.duplicate(theirs) else { throw TailnetError.notTailnet("no descriptor left") }
+        return [.handoff(copy)]
+    }
     func dial(_ address: String, port: UInt16) throws -> Int32 { throw TailnetError.notTailnet(address) }
 
     /// One connection from `remote`, handed over.

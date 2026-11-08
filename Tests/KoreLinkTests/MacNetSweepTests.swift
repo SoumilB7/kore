@@ -44,7 +44,12 @@ final class LoopbackTailnet: Tailnet {
     }
     func events() -> AsyncStream<TailnetEvent> { AsyncStream { $0.finish() } }
     func listen(port: UInt16) throws -> [TailnetListenSocket] {
-        let (ips, fixed, handoff, failure) = held.withLock { ($0.ips, $0.port, $0.handoff, $0.failure) }
+        // A handoff socket goes once: the listener closes what it was given, so a later listen
+        // never gets a number closed already.
+        let (ips, fixed, handoff, failure) = held.withLock { h in
+            defer { h.handoff = nil }
+            return (h.ips, h.port, h.handoff, h.failure)
+        }
         if let failure { throw failure }
         if let handoff { return [.handoff(handoff)] }
         var made: [Int32] = []
