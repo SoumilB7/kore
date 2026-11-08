@@ -185,7 +185,7 @@ enum LinkSnapshot {
         let modes = Dictionary(chat.controls.availableModes.map { ($0.id, Self.level($0)) }, uniquingKeysWith: { a, _ in a })
         let current = chat.provider.modes.first { $0.id == chat.controls.mode }.map(Self.level) ?? .danger
         var waiting: [String: LinkPolicy.ChatFacts.Card] = [:]
-        for card in cards(chat) { waiting[card.id] = .init(kind: card.kind, digest: card.digest, risk: card.risk) }
+        for card in cards(chat) { waiting[card.id] = .init(kind: card.kind, digest: card.digest) }
         let all = chat.controls.linkCommands
         return LinkPolicy.ChatFacts(
             level: current, planOn: chat.provider.planToggle != nil && chat.controls.planMode, modes: modes, cards: waiting,
@@ -334,11 +334,9 @@ enum LinkSnapshot {
             kind: kind, title: approval.title, detail: approval.detail, body: approval.body, plan: approval.plan, questions: questions,
             actions: actions
         ).digest
-        let risk = kind == .permission ? CardRisk.classify(tool: approval.tool, targets: approval.targets ?? [], folder: chat.folder.path) : nil
         return LinkCard(
             id: approval.id, kind: kind, title: approval.title, detail: approval.detail, body: body?.text,
-            bodyLen: body?.cut == true ? body?.length : nil, plan: plan, questions: questions, agent: agent, actions: actions, digest: digest,
-            risk: risk)
+            bodyLen: body?.cut == true ? body?.length : nil, plan: plan, questions: questions, agent: agent, actions: actions, digest: digest)
     }
 
     // MARK: Transcript

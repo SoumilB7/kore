@@ -24,8 +24,7 @@ package final class PhoneConnection: @unchecked Sendable {
         case raise(LinkRaiseWire.Incoming)
         /// Leave KoreNet (`{"t":"leave","id":…}`): the phone signs out next; its record goes now.
         case leave(String)
-        /// A link message, with a risky card's signature when its `chat.answer` carried one.
-        case link(LinkMessage, proof: LinkRaiseWire.Signed?)
+        case link(LinkMessage)
         case invalid
     }
 
@@ -153,7 +152,7 @@ package final class PhoneConnection: @unchecked Sendable {
                 } else if let raise = LinkRaiseWire.incoming(message.payload) {
                     incoming.append(.raise(raise))
                 } else if let decoded = try? LinkMessage.decode(message.payload) {
-                    incoming.append(.link(decoded, proof: LinkRaiseWire.answerProof(message.payload)))
+                    incoming.append(.link(decoded))
                 } else {
                     incoming.append(.invalid)
                 }

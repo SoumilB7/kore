@@ -632,11 +632,9 @@ package struct Approval: Identifiable, Sendable, Codable {
     /// Why Always allow is offered but can't be picked here (a box's chat sets it on the box
     /// itself): the card shows it dim, saying so. Nil where it can, or isn't offered.
     package var alwaysAllowNote: String? = nil
-    /// What asks, for the link's risk rule (`CardRisk`): Claude's tool name, or Codex's approval
-    /// kind (`commandExecution`, `commandExecution.network`, `fileChange`, `permissions`).
+    /// What asks: Claude's tool name, or Codex's approval kind (`commandExecution`,
+    /// `commandExecution.network`, `fileChange`, `permissions`).
     package var tool: String? = nil
-    /// The paths the ask would write, as the CLI gave them.
-    package var targets: [String]? = nil
     /// Cross-session messages the CLI held (`ClaudePeerHolds`): who says they sent them. Set,
     /// this is that card, not the CLI's: Allow lets them in, Deny refuses them.
     package var held: [HeldSender]? = nil
@@ -682,7 +680,6 @@ package struct Approval: Identifiable, Sendable, Codable {
             agent: agent)
         copy.signIn = signIn
         copy.tool = tool
-        copy.targets = targets
         copy.held = held
         copy.allowNote = allowNote
         copy.autoStop = autoStop
@@ -752,7 +749,7 @@ extension AgentID {
 
 extension Approval {
     enum CodingKeys: String, CodingKey {
-        case id, title, detail, body, canAlwaysAllow, questions, plan, changes, agent, signIn, alwaysAllowNote, tool, targets, held,
+        case id, title, detail, body, canAlwaysAllow, questions, plan, changes, agent, signIn, alwaysAllowNote, tool, held,
             allowNote, autoStop, retryMessage, alwaysRule
     }
 
@@ -772,7 +769,6 @@ extension Approval {
         signIn = try c.decodeIfPresent(Bool.self, forKey: .signIn) ?? false
         alwaysAllowNote = try c.decodeIfPresent(String.self, forKey: .alwaysAllowNote)
         tool = try c.decodeIfPresent(String.self, forKey: .tool)
-        targets = try c.decodeIfPresent([String].self, forKey: .targets)
         held = try c.decodeIfPresent([HeldSender].self, forKey: .held)
         allowNote = try c.decodeIfPresent(String.self, forKey: .allowNote)
         autoStop = try c.decodeIfPresent(Bool.self, forKey: .autoStop) ?? false
@@ -794,7 +790,6 @@ extension Approval {
         try c.encode(signIn, forKey: .signIn)
         try c.encodeIfPresent(alwaysAllowNote, forKey: .alwaysAllowNote)
         try c.encodeIfPresent(tool, forKey: .tool)
-        try c.encodeIfPresent(targets, forKey: .targets)
         try c.encodeIfPresent(held, forKey: .held)
         try c.encodeIfPresent(allowNote, forKey: .allowNote)
         if autoStop { try c.encode(autoStop, forKey: .autoStop) }

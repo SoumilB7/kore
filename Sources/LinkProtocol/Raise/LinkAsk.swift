@@ -2,9 +2,10 @@ import Foundation
 
 /// What a device that may **ask** (a phone, phase 18 §1 "Abilities") does over the link, on the Mac
 /// and on a box alike: follow and read; send within the chat's mode, answer cards plainly, stop,
-/// keep drafts, rename, arrange chats, tabs and windows Kore already has. Never accounts or
-/// sign-ins, a box's files, Always allow, or a raise without the fingerprint: a mode, an Arsenal
-/// tier, or a risky card's Allow takes a signed `raise` (`LinkRaiseWire`). Of accounts, only
+/// keep drafts, rename, arrange chats, tabs and windows Kore already has. Every card's Allow is a
+/// plain tap (owner, 2026-11-20). Never accounts or sign-ins, a box's files, Always allow, or a
+/// raise without the fingerprint: a mode or an Arsenal tier takes a signed `raise`
+/// (`LinkRaiseWire`). Of accounts, only
 /// their usage is read (1.14 `account.usage` without a login): no login named, nothing switched.
 package enum LinkAsk {
     /// The 1.2 control commands ask covers.
@@ -25,14 +26,6 @@ package enum LinkAsk {
         let order = ["off"] + LinkPolicy.arsenalTiers
         guard let to = order.firstIndex(of: tier) else { return true }
         return to > (order.firstIndex(of: current ?? "off") ?? 0)
-    }
-
-    /// A risky card's Allow (`CardRisk`): the digest its signature covers (`approve.<digest>`); nil
-    /// when the answer is a plain tap.
-    package static func proofNeeded(_ command: LinkCommand, _ chat: LinkPolicy.ChatFacts?) -> String? {
-        guard case .answer(_, let cardId, let action, _, _) = command, CardRisk.needsProof(action),
-              let card = chat?.cards[cardId], card.risk != nil else { return nil }
-        return card.digest
     }
 
     /// A control command as ask may send it: allowed kinds only, checked as full control checks

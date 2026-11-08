@@ -531,9 +531,6 @@ final class LinkClient {
                     return send(.result(.init(id: id, ok: false, code: .goneBlob, message: "A file wasn't uploaded, or expired. Attach it again.")))
                 }
             }
-            if signs, let digest = LinkAsk.proofNeeded(command, command.chatId.flatMap(host.chat).map { HostMeta.facts($0) }) {
-                guard approved(id: id, digest: digest, data) else { return }
-            }
             let result = host.apply(command, id: id, control: control, phone: device?.kind == .phone) { [weak self] result in self?.send(.result(result)) }
             if let result {
                 if result.ok, case .send(_, _, let blobs) = command { for blob in blobs { unsent[blob] = nil } }
@@ -610,9 +607,6 @@ final class LinkClient {
 
     // MARK: Raises (phase 18)
 
-    /// A device that may ask but not run (a phone): its raises and risky Allows take its fingerprint.
-    var signs: Bool { device.map { !$0.abilities.effective.contains(.run) } ?? false }
-
     private func gate() -> LinkRaiseGate? {
         if let raises { return raises }
         guard let binding = (socket as? NetLinkWire)?.bindingDigest else { return nil }
@@ -649,22 +643,6 @@ final class LinkClient {
         case .malformed(let id, let type):
             send(.result(.init(id: type == LinkRaiseWire.raise ? id : "\(type):\(id)", ok: false, code: .invalid)))
         }
-    }
-
-    /// A risky card's Allow from a phone: its signature over `approve.<digest>`, or refused.
-    private func approved(id: String, digest: String, _ data: Data) -> Bool {
-        let who = deviceId.map { $0.uuidString.lowercased() }
-        guard let proof = LinkRaiseWire.answerProof(data), proof.modeId == LinkRaiseWire.approveMode(digest), let gate = gate() else {
-            send(.result(.init(id: id, ok: false, code: .raiseMode, message: "Allowing this takes your fingerprint.")))
-            return false
-        }
-        if case .refused(let code, let message) = gate.verify(proof, raiseKey: device?.raiseKey) {
-            HostJournal.audit("risky", ["device": who, "ok": "0"])
-            send(.result(.init(id: id, ok: false, code: code, message: message)))
-            return false
-        }
-        HostJournal.audit("risky", ["device": who, "ok": "1"])
-        return true
     }
 
     // MARK: Presence (1.12)

@@ -403,40 +403,16 @@ class NodeClient(
     fun stop(chatId: String): String = command(Control.stop(chatId))
 
     /**
-     * A card answer, over the card as last seen; null when the card is gone. A plain tap, except
-     * Allow on a risky card (`risk`: shell, write outside the folder, network): that one carries
-     * the fingerprint's signature over `approve.<digest>` and the node's nonce (`cancelled` without
-     * it). Deny is always free.
+     * A card answer, over the card as last seen; null when the card is gone. Always a plain tap,
+     * Allow on a risky card (`risk`) too (owner, 2026-11-20): the fingerprint is only for raises.
      */
     fun answer(chatId: String, cardId: String, action: String, answers: Map<String, List<String>>? = null): String? {
         card(chatId, cardId) ?: return null
-        return issue { link ->
+        return issue {
             val card = card(chatId, cardId) ?: return@issue null
             val digest = card.str("digest") ?: return@issue null
-            val body = Control.answer(chatId, cardId, action, digest, answers)
-            if (card.str("risk") == null || action != "allow") return@issue body.toString()
-            val modeId = APPROVE + digest
-            val (nonce, sig) = signRaise(link, chatId, modeId) ?: throw NotSigned()
-            JsonObject(body + mapOf("nonce" to JsonPrimitive(nonce), "sig" to JsonPrimitive(sig))).toString()
+            Control.answer(chatId, cardId, action, digest, answers).toString()
         }
-    }
-
-    /** The fingerprint wasn't given (or the nonce didn't come): the command is answered `cancelled`. */
-    class NotSigned : Exception("not signed")
-
-    /**
-     * The node's nonce for [modeId] on [link], and the `kore_raise` signature over
-     * `SHA256("kore-raise/1" | B | nonce | chatId | modeId)` (base64 both); null when refused,
-     * unanswered, or not signed.
-     */
-    private suspend fun signRaise(link: LinkSession, chatId: String, modeId: String): Pair<String, String>? {
-        val signer = raiseSigner ?: return null
-        val chal = readOn(link, Control.raiseChallenge(chatId, modeId)) ?: return null
-        if (chal.str("t") != "raise.chal") return null
-        val nonceText = chal.str("nonce") ?: return null
-        val nonce = runCatching { Base64.getDecoder().decode(nonceText) }.getOrNull()?.takeIf { it.size == Raise.NONCE_SIZE } ?: return null
-        val sig = signer.sign(Raise.digest(link.binding, nonce, chatId, modeId)) ?: return null
-        return nonceText to Base64.getEncoder().encodeToString(sig)
     }
 
     /**
@@ -615,9 +591,7 @@ class NodeClient(
     }
 
     private suspend fun sendNow(link: LinkSession, id: String, make: suspend (LinkSession) -> String?) {
-        val made = runCatching { make(link) }
-        if (made.exceptionOrNull() is NotSigned) return fail(id, "cancelled")
-        val body = made.getOrNull() ?: return fail(id, "gone.card")
+        val body = runCatching { make(link) }.getOrNull() ?: return fail(id, "gone.card")
         if (!link.send("{\"t\":\"cmd\",\"id\":${quote(id)},\"cmd\":$body}".toByteArray())) fail(id, "busy")
     }
 
@@ -647,7 +621,7 @@ class NodeClient(
         put("t", "result"); put("id", id); put("ok", false); put("code", code)
     }
 
-    /** The card as last seen (its `digest`, its `risk`). */
+    /** The card as last seen (its `digest`). */
     private fun card(chatId: String, cardId: String): JsonObject? {
         val chats = snapshotFlow.value?.get("chats") as? JsonArray ?: return null
         val chat = chats.map { it.jsonObject }.firstOrNull { it.str("id") == chatId } ?: return null
@@ -711,8 +685,6 @@ class NodeClient(
         /** Characters of the log per `logs.chunk`. */
         const val LOG_PIECE = 32 * 1024
         const val PROBE_MS = 5_000L
-        /** A risky card's Allow signs this mode id, with the card's digest after it. */
-        const val APPROVE = "approve."
         /** The Mac waits up to 100 s for its owner on a new fingerprint key. */
         const val RAISE_KEY_MS = 110_000L
         /** Leave waits this long for each Mac's answer before signing out. */

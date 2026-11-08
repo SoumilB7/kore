@@ -199,8 +199,8 @@ final class LinkPeer {
         blobs = blobs.filter { now.timeIntervalSince($0.value.made) < 600 }
     }
 
-    /// A plain command: under the companion's control, or ask's for a phone (a risky Allow has
-    /// had its signature checked by then).
+    /// A plain command: under the companion's control, or ask's for a phone (a card's Allow, any
+    /// card's, is one of these: no signature).
     func perform(_ id: String, _ command: LinkCommand, control: LinkControlLevel? = nil) -> LinkMessage.Result {
         guard commands.take() else { return .init(id: id, ok: false, code: .rateLimited) }
         if case .send = command, !sends.take() { return .init(id: id, ok: false, code: .rateLimited) }

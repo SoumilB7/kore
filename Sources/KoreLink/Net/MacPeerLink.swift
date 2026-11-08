@@ -55,9 +55,9 @@ package final class MacPeerLink {
             switch item {
             case .invalid:
                 return end(LinkMessage.ByeReason.invalid.rawValue)
-            case .link(.bye, _):
+            case .link(.bye):
                 return end(LinkMessage.ByeReason.quit.rawValue)
-            case .link(.cmd(let id, let command), _):
+            case .link(.cmd(let id, let command)):
                 perform(id, command)
             case .raise, .leave, .link:
                 continue

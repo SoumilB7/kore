@@ -11,6 +11,7 @@
                 <action android:name="dev.kore.android.debug.TAP" />
                 <action android:name="dev.kore.android.debug.STREAM" />
                 <action android:name="dev.kore.android.debug.LIST" />
+                <action android:name="dev.kore.android.debug.SELECT" />
             </intent-filter>
         </receiver>
         <!-- The demo (no Mac, box or Tailscale), on with files/demo: set up before the app starts. -->

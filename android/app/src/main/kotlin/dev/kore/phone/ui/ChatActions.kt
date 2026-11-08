@@ -427,8 +427,6 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         note = when (r.str("code")) {
             "denied.sendCap" -> "This chat only takes messages on the Mac."
             "denied.raiseMode" -> r.str("message") ?: "That needs your fingerprint first."
-            // A risky card's Allow without the fingerprint: nothing was sent.
-            "cancelled" -> "Allow needs your fingerprint."
             "stale.card", "gone.card" -> "That card changed. Look again."
             "rateLimited" -> "Too fast. Try again in a moment."
             else -> deviceWords(r.str("message"))?.let { "Not sent: $it" } ?: "Not sent (${r.str("code") ?: "refused"})."

@@ -83,6 +83,8 @@ class ChatActivity : NodeActivity() {
                     super.onLayoutCompleted(state)
                     if (!settleQueued) { settleQueued = true; list.post { settleQueued = false; settle() } }
                 }
+                // Text taking focus for a selection (`TextPick`) leaves the list where it is.
+                override fun onRequestChildFocus(parent: RecyclerView, state: RecyclerView.State, child: View, focused: View?) = true
             }.apply { stackFromEnd = true }
             // Rows change in place as text streams in: no fade or slide on each update.
             itemAnimator = null
@@ -487,7 +489,7 @@ class ChatActivity : NodeActivity() {
         override fun getItemCount() = items.size
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int) = object : RecyclerView.ViewHolder(
-            android.widget.FrameLayout(this@ChatActivity).apply {
+            Row(this@ChatActivity).apply {
                 layoutParams = RecyclerView.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 addView(label("", 15f), android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
                 // The rule a compaction divider sits on; hidden for every other row.
@@ -505,7 +507,7 @@ class ChatActivity : NodeActivity() {
         ) {}
 
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
-            val frame = holder.itemView as android.widget.FrameLayout
+            val frame = holder.itemView as Row
             val rule = frame.getChildAt(0)
             val v = frame.getChildAt(1) as TextView
             val docBox = frame.getChildAt(2) as LinearLayout
@@ -513,6 +515,8 @@ class ChatActivity : NodeActivity() {
             rule.visibility = View.GONE
             docBox.visibility = View.GONE
             spin.visibility = View.GONE
+            v.picks(false)
+            frame.menu = null
             v.visibility = View.VISIBLE
             v.maxWidth = Int.MAX_VALUE
             v.background = null
@@ -565,15 +569,13 @@ class ChatActivity : NodeActivity() {
                         if (docBox.tag != doc) { DocViews.build(this@ChatActivity, doc, docBox); docBox.tag = doc }
                     } else bind(v, item.e)
                     if (item.e.str("kind") == "divider") rule.visibility = View.VISIBLE
-                    if (item.e.str("kind") in setOf("user", "answer", "plan")) {
-                        val hold = View.OnLongClickListener { pressed ->
-                            val table = DocViews.tableText(pressed)
-                            messageMenu(if (table != null) pressed else if (v.visibility == View.VISIBLE) v else docBox, item.e, table)
-                            true
-                        }
+                    if (TextPick.selectable(item.e.str("kind"))) {
+                        // Its text picks (the toolbar's "Message…" opens the menu); beside it, a long-press does.
+                        val menu = { at: View -> DocViews.tableText(at).let { messageMenu(if (it != null) at else if (v.visibility == View.VISIBLE) v else docBox, item.e, it) } }
+                        frame.menu = menu
+                        val hold = View.OnLongClickListener { pressed -> menu(pressed); true }
                         frame.setOnLongClickListener(hold)
-                        v.setOnLongClickListener(hold)
-                        holdAll(docBox, hold)
+                        if (v.visibility == View.VISIBLE) v.picks() else holdAll(docBox, hold)
                     }
                 }
                 Item.Earlier -> {
@@ -624,10 +626,25 @@ class ChatActivity : NodeActivity() {
             spin.visibility = View.VISIBLE
         }
 
-        /** Every view of a rendered answer takes the long-press (its text views would swallow it). */
+        /**
+         * A rendered answer: its text views pick (`DocViews`), every other view that would take the
+         * touch (a code block's sideways scroll) opens the menu on a long-press.
+         */
         private fun holdAll(v: View, hold: View.OnLongClickListener) {
+            if (v is TextView && v.isTextSelectable) return
             v.setOnLongClickListener(hold)
             if (v is ViewGroup) for (i in 0 until v.childCount) holdAll(v.getChildAt(i), hold)
+        }
+
+        /**
+         * A recycled row's text picks again: a selectable view detached and attached again would
+         * refuse its next selection ("does not support text selection") until it's enabled anew.
+         */
+        override fun onViewAttachedToWindow(holder: RecyclerView.ViewHolder) = rearm(holder.itemView)
+
+        private fun rearm(v: View) {
+            if (v is TextView) { if (v.isTextSelectable) { v.isEnabled = false; v.isEnabled = true } }
+            else if (v is ViewGroup) for (i in 0 until v.childCount) rearm(v.getChildAt(i))
         }
 
         /** A rescue row: the Mac's words, then its actions as accent words. */
@@ -687,17 +704,28 @@ class ChatActivity : NodeActivity() {
             }
         }
 
-        /** A tap on a bubble's image (where the finger went down) opens it full screen. */
+        /**
+         * A tap on a bubble's image (where the finger went down) opens it full screen. Read from the
+         * touches, not a click: the bubble's text picks, and its first tap only takes focus.
+         */
         private fun tapImages(v: TextView) {
             val spanned = v.text as? android.text.Spanned ?: return
             if (spanned.getSpans(0, spanned.length, ImageRef::class.java).isEmpty()) return
             var x = 0f
             var y = 0f
-            v.setOnTouchListener { _, ev -> if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) { x = ev.x; y = ev.y }; false }
-            v.setOnClickListener {
-                val at = v.getOffsetForPosition(x, y)
-                val hit = spanned.getSpans(maxOf(0, at - 1), at + 1, ImageRef::class.java).firstOrNull() ?: return@setOnClickListener
-                ImageActivity.open(this@ChatActivity, chatId, hit.ref, hit.name)
+            var down = 0L
+            val slop = android.view.ViewConfiguration.get(this@ChatActivity).scaledTouchSlop
+            v.setOnTouchListener { _, ev ->
+                when (ev.actionMasked) {
+                    android.view.MotionEvent.ACTION_DOWN -> { x = ev.x; y = ev.y; down = ev.eventTime }
+                    android.view.MotionEvent.ACTION_UP -> if (!v.hasSelection() &&
+                        TextPick.isTap(ev.x - x, ev.y - y, ev.eventTime - down, slop, android.view.ViewConfiguration.getLongPressTimeout().toLong())) {
+                        val text = v.text as? android.text.Spanned
+                        val at = v.getOffsetForPosition(x, y)
+                        text?.getSpans(maxOf(0, at - 1), at + 1, ImageRef::class.java)?.firstOrNull()?.let { ImageActivity.open(this@ChatActivity, chatId, it.ref, it.name) }
+                    }
+                }
+                false
             }
         }
 
@@ -850,3 +878,8 @@ class ChatActivity : NodeActivity() {
 
 /** Marks a sent image's place in a user bubble (its thumbnail or its name): what a tap there opens. */
 private class ImageRef(val ref: String, val name: String?)
+
+/** A chat row: its message menu, for the selection toolbar of the text it holds ([PickRow]). */
+private class Row(context: android.content.Context) : android.widget.FrameLayout(context), PickRow {
+    override var menu: ((View) -> Unit)? = null
+}

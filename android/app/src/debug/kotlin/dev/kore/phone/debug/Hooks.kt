@@ -56,10 +56,26 @@ class Hooks : BroadcastReceiver() {
             // A tap on the screen in front, by the view's identity (its content description,
             // `--es desc Mode`), never by a point: for screenshots of what it opens.
             "dev.kore.android.debug.TAP" -> {
-                val desc = intent.getStringExtra("desc") ?: return run { resultData = "no desc" }
                 val front = (context.applicationContext as KoreApp).frontActivity ?: return run { resultData = "no screen" }
+                // `--es label Allow`: a shown button by its words, for one without a description.
+                intent.getStringExtra("label")?.let { label ->
+                    front.runOnUiThread { labelled(front.window.decorView, label)?.performClick() }
+                    resultData = "tapped $label"
+                    return
+                }
+                val desc = intent.getStringExtra("desc") ?: return run { resultData = "no desc" }
                 front.runOnUiThread { (find(front.window.decorView) { it == desc } ?: find(front.window.decorView) { it.startsWith(desc) })?.performClick() }
                 resultData = "tapped $desc"
+                return
+            }
+            // A partial selection, by the words (`--es text "the total"`) in a shown picking text
+            // view: a long-press there, in-process (as a finger's, so the system's toolbar comes),
+            // then the selection set to exactly those words.
+            "dev.kore.android.debug.SELECT" -> {
+                val words = intent.getStringExtra("text") ?: return run { resultData = "no text" }
+                val front = (context.applicationContext as KoreApp).frontActivity ?: return run { resultData = "no screen" }
+                front.runOnUiThread { select(front.window.decorView, words) }
+                resultData = "selecting $words"
                 return
             }
         }
@@ -72,6 +88,38 @@ class Hooks : BroadcastReceiver() {
         if (v is androidx.recyclerview.widget.RecyclerView && v.isShown) return v
         if (v is android.view.ViewGroup) for (i in 0 until v.childCount) findList(v.getChildAt(i))?.let { return it }
         return null
+    }
+
+    /** The first shown clickable text view that reads [label]. */
+    private fun labelled(v: android.view.View, label: String): android.view.View? {
+        if (v is android.widget.TextView && v.isShown && v.isClickable && v.text.toString() == label) return v
+        if (v is android.view.ViewGroup) for (i in 0 until v.childCount) labelled(v.getChildAt(i), label)?.let { return it }
+        return null
+    }
+
+    private fun picking(v: android.view.View, words: String): android.widget.TextView? {
+        if (v is android.widget.TextView && v.isShown && v.isTextSelectable && v.text.contains(words)) return v
+        if (v is android.view.ViewGroup) for (i in 0 until v.childCount) picking(v.getChildAt(i), words)?.let { return it }
+        return null
+    }
+
+    private fun select(root: android.view.View, words: String) {
+        val v = picking(root, words) ?: return
+        val start = v.text.indexOf(words)
+        val layout = v.layout ?: return
+        val line = layout.getLineForOffset(start)
+        val x = layout.getPrimaryHorizontal(start) + v.totalPaddingLeft - v.scrollX + 4f
+        val y = (layout.getLineTop(line) + layout.getLineBottom(line)) / 2f + v.totalPaddingTop - v.scrollY
+        val at = android.os.SystemClock.uptimeMillis()
+        fun touch(action: Int, time: Long) = android.view.MotionEvent.obtain(at, time, action, x, y, 0).apply {
+            source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+        }
+        val hold = android.view.ViewConfiguration.getLongPressTimeout().toLong() + 150
+        v.dispatchTouchEvent(touch(android.view.MotionEvent.ACTION_DOWN, at))
+        v.postDelayed({
+            v.dispatchTouchEvent(touch(android.view.MotionEvent.ACTION_UP, at + hold))
+            v.postDelayed({ (v.text as? android.text.Spannable)?.let { android.text.Selection.setSelection(it, start, start + words.length) } }, 300)
+        }, hold)
     }
 
     /** The first shown view whose content description [matches] (exact first, then by its start: `Mode` finds "Mode: Manual"). */

@@ -1,24 +1,21 @@
 import Foundation
 import KoreTrust
 
-/// Raises from a phone (phase 18 §1 "Raises", §11 answer 1), the same on Kore's link and on
-/// kore-host: a chat's mode (`modeId` a mode's id), an Arsenal tier (`arsenal.<tier>`), and a risky
-/// card's approval (`approve.<cardDigest>`) each need the phone's biometric `kore_raise` signature
-/// over a nonce this node handed out on the same session.
+/// Raises from a phone (phase 18 §1 "Raises"), the same on Kore's link and on kore-host: a chat's
+/// mode (`modeId` a mode's id) and an Arsenal tier (`arsenal.<tier>`) each need the phone's
+/// biometric `kore_raise` signature over a nonce this node handed out on the same session. A
+/// card's Allow is a plain `chat.answer` (owner, 2026-11-20).
 ///
 /// Wire (link bodies on stream 1):
 /// - in  `{"t":"raise.chal","id":…,"chatId":…,"modeId":…}`
 /// - out `{"t":"raise.chal","id":…,"nonce":"<base64, 32 bytes>"}` (or a refusing `result` keyed `raise.chal:<id>`)
 /// - in  `{"t":"cmd","id":…,"cmd":{"type":"raise","chatId":…,"modeId":…,"nonce":…,"sig":…}}` → `result`
-/// - in  `{"t":"cmd","id":…,"cmd":{"type":"chat.answer",…,"nonce":…,"sig":…}}`: a risky card's Allow
 /// - in  `{"t":"raise.key","id":…,"pub":"<base64 SPKI DER>"}`: a new fingerprint key, taken only once
 ///   the owner Allows it on the Mac; one `result` keyed `raise.key:<id>` says how it went.
 package enum LinkRaiseWire {
     package static let challenge = "raise.chal"
     package static let raise = "raise"
     package static let key = "raise.key"
-    /// A risky card's approval signs this mode id.
-    package static func approveMode(_ digest: String) -> String { "approve." + digest }
     package static let arsenalPrefix = "arsenal."
 
     package struct Challenge: Codable, Equatable, Sendable {
@@ -45,7 +42,7 @@ package enum LinkRaiseWire {
         }
     }
 
-    /// A raise's signed parts, as a `raise` command or a risky `chat.answer` carries them.
+    /// A raise's signed parts, as a `raise` command carries them.
     package struct Signed: Equatable, Sendable {
         package var chatId: String
         package var modeId: String
@@ -98,17 +95,6 @@ package enum LinkRaiseWire {
         default:
             return nil
         }
-    }
-
-    /// The signature a `chat.answer` carries for a risky card (`modeId` `approve.<digest>`), if any.
-    package static func answerProof(_ data: Data) -> Signed? {
-        guard let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any], object["t"] as? String == "cmd",
-              let cmd = object["cmd"] as? [String: Any], cmd["type"] as? String == "chat.answer",
-              let digest = cmd["digest"] as? String, let chatId = cmd["chatId"] as? String,
-              let nonceText = cmd["nonce"] as? String, let sigText = cmd["sig"] as? String,
-              let nonce = Data(base64Encoded: nonceText), let sig = Data(base64Encoded: sigText)
-        else { return nil }
-        return Signed(chatId: chatId, modeId: approveMode(digest), nonce: nonce, sig: sig)
     }
 
     private static func signed(_ cmd: [String: Any]) -> Signed? {
