@@ -20,10 +20,11 @@ struct ChatSettingsLandingTests {
         let window: Workspace
         let allowed: Bool
         let memory: UserDefaults
+        let before: UserDefaults
         @MainActor func finish() {
             Arsenal.shared.stopAll()
             Arsenal.shared.adopt(allowed: allowed)
-            ArsenalMemory.defaults = .standard
+            ArsenalMemory.defaults = before
             try? FileManager.default.removeItem(at: root)
         }
     }
@@ -33,9 +34,10 @@ struct ChatSettingsLandingTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let memory = try #require(UserDefaults(suiteName: "kore-carry-\(UUID().uuidString.prefix(6))"))
         let allowed = Arsenal.shared.allowed
+        let before = ArsenalMemory.defaults
         ArsenalMemory.defaults = memory
         Arsenal.shared.adopt(allowed: true)
-        return Rig(root: root, window: Workspace(folder: root, restore: false), allowed: allowed, memory: memory)
+        return Rig(root: root, window: Workspace(folder: root, restore: false), allowed: allowed, memory: memory, before: before)
     }
 
     func notices(_ chat: Chat) -> [String] { chat.transcript.entries.filter { $0.kind == .notice }.map(\.text) }

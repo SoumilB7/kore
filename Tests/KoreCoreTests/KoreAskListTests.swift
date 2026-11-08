@@ -10,7 +10,7 @@ import Testing
 @Suite("Auto asks: the list and the settings")
 struct KoreAskListTests {
     @Test(arguments: [
-        ("rm -rf \"$BUILD_DIR\"", "variable"), ("rm -rf $HOME", "variable"), ("rm -rf ~", "home"), ("rm -rf ~/Documents", "home"),
+        ("rm -rf \"$BUILD_DIR\"", "variable"), ("rm -rf $HOME", "home"), ("rm -rf ~", "home"), ("rm -rf ~/Documents", "home"),
         ("rm -rf /", "system"), ("rm -fr /usr/local", "system"), ("rmdir -f /opt", "system"), ("rm --recursive /Users/someone", "home"),
         ("sudo ls /var/root", "sudo"), ("FOO=1 sudo make install", "sudo"), ("git status && sudo rm -rf build", "sudo"),
         ("security find-generic-password -s github -w", "Keychain"), ("security dump-keychain", "Keychain"),
@@ -132,6 +132,50 @@ struct KoreAlwaysRuleTests {
         #expect(KoreAlwaysRule.rule(for: "sudo apt install x", cwd: nil, suggested: ["sudo apt install x"]) == "sudo apt install *", "an exact one isn't a kind")
         #expect(KoreAlwaysRule.rule(for: "sudo apt install x", cwd: nil, suggested: ["npm *"]) == "sudo apt install *", "one that doesn't cover it")
         #expect(KoreAlwaysRule.shown("sudo apt install *") == "sudo apt install …" && KoreAlwaysRule.shown("git push:*") == "git push …")
+    }
+
+    static let env = ["HOME": "/Users/me", "TMPDIR": "/var/folders/xy/T/", "BUILD": "/Users/me/app/build"]
+
+    /// What builders and scripts write all day: deleting their own temp output, or a script whose
+    /// text holds an rm. Auto decides these, as before Kore's list.
+    @Test(arguments: [
+        "T=\"${TMPDIR:-/tmp}/sash\"; rm -rf $T; mkdir -p $T",
+        "O=\"$TMPDIR/g035\"; rm -rf \"$O\" \"$O.log\"",
+        "rm -rf \"$TMPDIR/kore-x\"",
+        "G=\"$HOME/Library/Application Support/KoreDev/gate-035\"; rm -rf \"$G\"",
+        "export OUT=/tmp/k/out && rm -rf \"$OUT\"/*",
+        "D=build; rm -rf $D",
+        "cat > runs/ab.sh <<'EOF'\n#!/bin/zsh\nout=$TMPDIR/x/$1; rm -rf $out\nsudo reboot\nEOF\nchmod +x runs/ab.sh",
+        "cat > /tmp/p.zsh <<EOF\nrm -rf \"$o\"\nEOF\necho ok",
+        "python3 - <<'PY'\nprint('rm -rf $X')\nPY",
+        "git commit -F - <<'MSG'\nrm -rf $X notes\nMSG",
+    ])
+    func everydayScratchIsLeftToAuto(_ command: String) {
+        #expect(KoreAskList.reason(for: command, environment: Self.env) == nil, "\(command)")
+    }
+
+    /// Still asked: a variable Kore can't read, one that reads as home or a system path, a
+    /// heredoc a shell runs, and the rest of the list after a heredoc ends.
+    @Test(arguments: [
+        ("rm -rf \"$UNSET\"", "variable"), ("rm -rf $(pwd)", "variable"), ("rm -rf \"${X%/*}\"", "variable"),
+        ("rm -rf $1", "variable"),
+        ("rm -rf $HOME", "home"), ("rm -rf \"$HOME\"/", "home"), ("rm -rf $HOME/*", "home"), ("D=$HOME; rm -rf \"$D\"/*", "home"),
+        ("X=/; rm -rf $X", "system"), ("P=/usr/local; rm -rf \"$P\"", "system"), ("rm -rf /Users/me/*", "home"),
+        ("T=$(mktemp -d); rm -rf $T", "variable"), ("T=`pwd`; rm -rf $T", "variable"),
+        ("bash <<'EOF'\nrm -rf $Y\nEOF", "variable"), ("cat <<EOF | sh\nrm -rf $Y\nEOF", "variable"),
+        ("ssh box <<EOF\nsudo reboot\nEOF", "sudo"), ("cat > f <<EOF\nhi\nEOF\nsudo rm -rf build", "sudo"),
+        ("T=/tmp/x\nT=$UNSET; rm -rf $T", "variable"), ("cat > f <<-END\n\trm -rf $Z\n\tEND\nrm -rf $Q", "variable"),
+    ])
+    func stillAsked(_ command: String, _ word: String) {
+        #expect(KoreAskList.reason(for: command, environment: Self.env)?.contains(word) == true, "\(command)")
+    }
+
+    @Test func theHookAsksNothingForAScriptWrittenInAuto() {
+        let input: [String: Any] = [
+            "permission_mode": "auto", "tool_name": "Bash",
+            "tool_input": ["command": "cat > run.sh <<'EOF'\nrm -rf \"$out\"\nEOF"],
+        ]
+        #expect(KoreAskList.answer(input) == nil)
     }
 
     @Test(arguments: [
