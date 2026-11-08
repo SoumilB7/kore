@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Camera shots for one upload: the app's cache, removed after sending. -->
+<paths>
+    <cache-path name="shots" path="shots/" />
+</paths>

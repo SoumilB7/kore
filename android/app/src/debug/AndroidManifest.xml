@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Debug builds only: a state probe for smoke tests over adb (`adb shell am broadcast`; the shell
+     holds DUMP). Never in a release build. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <receiver android:name=".debug.Hooks" android:exported="true" android:permission="android.permission.DUMP">
+            <intent-filter><action android:name="dev.kore.android.debug.STATE" /></intent-filter>
+        </receiver>
+    </application>
+</manifest>

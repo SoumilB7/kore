@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Kore" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:textColor">@color/text</item>
+        <item name="android:colorAccent">@color/accent</item>
+    </style>
+    <color name="bg">#111113</color>
+    <color name="surface">#171D21</color>
+    <color name="icon_bg">#000000</color>
+    <color name="claude">#D97757</color>
+    <color name="line">#212326</color>
+    <color name="text">#EDEDED</color>
+    <color name="dim">#89959F</color>
+    <color name="faint">#77828B</color>
+    <color name="accent">#6AB1E7</color>
+    <color name="ok">#74C991</color>
+    <color name="warn">#E1C08D</color>
+    <color name="err">#F0736B</color>
+</resources>
