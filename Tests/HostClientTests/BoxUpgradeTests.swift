@@ -432,8 +432,14 @@ struct BoxUpgradeTests {
         guard arrived1 else { return switcher.set(false) }
         let first = ran[0]
         #expect(first.value("state") == "done" && first.value("mac") == "allowed", "\(first.text)")
-        #expect(await holds { upgrades.joinedAt[alias] != nil }, "\(upgrades.joins[alias]?.rows ?? []) · \(String(describing: connection.route))")
-        #expect(upgrades.started == 1 && upgrades.facts(alias)?.joinedAt != nil)
+        // Under its alias, or its id when the rekey (the first tailnet welcome) lands before the
+        // upgrade ends: `facts` reads both, as the box's row does.
+        let joined = await holds { upgrades.facts(alias)?.joinedAt != nil }
+        let join1 = upgrades.joins[alias] ?? upgrades.joins[connection.alias]
+        #expect(joined, "\(join1?.note ?? "-") \(join1?.rows ?? []) · \(String(describing: connection.route))")
+        // Nothing after it can come: the test ends here, not in waits that never would.
+        guard joined else { return switcher.set(false) }
+        #expect(upgrades.started == 1)
         let entry = try #require(directory.entry(forKey: connection.alias))
         #expect(entry.enrolled && entry.nodeKey == "nodekey:box")
         #expect(host.config.netOn && host.net?.listening == true)
@@ -445,7 +451,9 @@ struct BoxUpgradeTests {
         upgrades.reached(alias, fresh: true)
         #expect(upgrades.started == 1 && upgrades.running(alias) == nil)
         // "on KoreNet" for 5 s, then quiet.
-        await clock.pending(BoxUpgrades.shownFor)
+        let shown = await clock.pending(BoxUpgrades.shownFor)
+        #expect(shown, "\"on KoreNet\" never began its 5 s")
+        guard shown else { return switcher.set(false) }
         clock.advance(BoxUpgrades.shownFor)
         #expect(await holds { upgrades.facts(alias) == nil })
 

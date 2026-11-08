@@ -299,10 +299,32 @@ final class VirtualClock: Sendable {
     private let started = Feed<Duration>()
     private let cancelled = Feed<Duration>()
 
-    /// Returns once a wait of `duration` has started (one already waiting counts).
-    func pending(_ duration: Duration) async {
-        // A start seen earlier may have ended since: each one wakes a look at who waits now.
-        while !held.withLock({ $0.sleepers.contains { $0.duration == duration } }) { await started.next { $0 == duration } }
+    /// Returns true once a wait of `duration` has started (one already waiting counts); false
+    /// when none starts within 30 s, or the test is cancelled (its time limit): a wait that never
+    /// comes fails the test, never hangs the run.
+    @discardableResult
+    func pending(_ duration: Duration) async -> Bool {
+        let done = Feed<Bool>()
+        let waiter = Task {
+            // A start seen earlier may have ended since: each one wakes a look at who waits now.
+            while !held.withLock({ $0.sleepers.contains { $0.duration == duration } }) {
+                await started.next { $0 == duration }
+                if Task.isCancelled { return }
+            }
+            done.send(true)
+        }
+        let bound = Task {
+            try? await Task.sleep(for: .seconds(30))
+            done.send(false)
+        }
+        let came = await withTaskCancellationHandler { await done.next() } onCancel: { done.send(false) }
+        bound.cancel()
+        if !came {
+            // The waiter let go: woken by a start that isn't one (every wake looks at who waits).
+            waiter.cancel()
+            started.send(duration)
+        }
+        return came
     }
 
     /// Returns once a wait of `duration` was given up (an answer came first).
