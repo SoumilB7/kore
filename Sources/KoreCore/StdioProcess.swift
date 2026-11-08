@@ -78,7 +78,7 @@ package final class StdioProcess: @unchecked Sendable {
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
-                try? handle.close()
+                Self.closeAfterHandler(handle)
                 chunkSink.finish()
             } else {
                 chunkSink.yield(data)
@@ -89,7 +89,7 @@ package final class StdioProcess: @unchecked Sendable {
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
-                try? handle.close()
+                Self.closeAfterHandler(handle)
                 stderrEnd.finish()
             } else {
                 let text = String(decoding: data, as: UTF8.self)
@@ -146,6 +146,14 @@ package final class StdioProcess: @unchecked Sendable {
             sink.yield(.exited(status: status))
             sink.finish()
         }
+    }
+
+    /// A read end closed from its own readability handler, once that handler has returned. On
+    /// Linux `FileHandle.close()` waits on the handle's queue (`queue.sync`), the one its handler
+    /// runs on: called there, libdispatch traps (kore-host died with SIGILL at each CLI's end,
+    /// 2026-11-11). On a queue of its own the close waits for the handler, then runs.
+    static func closeAfterHandler(_ handle: FileHandle) {
+        DispatchQueue.global(qos: .utility).async { try? handle.close() }
     }
 
     func write(_ message: JSONValue) throws {
