@@ -267,7 +267,7 @@ public final class KoreLog: @unchecked Sendable {
         "sheet", "used", "kore", "version", "build", "last_event", "signal", "status", "stderr", "at", "video", "cmd",
         // How much and how long.
         "n", "count", "rows", "lines", "bytes", "files", "tabs", "chats", "items", "kinds", "sections", "tools", "agents", "in_tok",
-        "out_tok", "cache_tok", "ms", "s", "dur_ms", "busy", "shown_ms", "quiet", "attempt", "tried", "stderr_bytes", "size", "height",
+        "out_tok", "cache_tok", "ms", "s", "dur_ms", "busy", "frames", "frames2", "shown_ms", "quiet", "attempt", "tried", "stderr_bytes", "size", "height",
         "offset", "tops", "first_top", "remounts", "drawn", "ak_height", "ak_y", "ak_visible", "mb", "now", "layers", "images", "heap",
         "commands", "axis", "snap", "aim",
     ]
