@@ -280,6 +280,9 @@ package final class HostConnection {
     /// The alias's connection while a window holds it; nil otherwise (nothing is made).
     package static func live(_ alias: String) -> HostConnection? { open[alias] }
 
+    /// Every link held now.
+    package static var held: [HostConnection] { Array(open.values) }
+
     /// Makes `connection` its alias's, as `named` would have made it: a test's, over a transport
     /// and a copy of its own.
     package static func adopt(_ connection: HostConnection) {
@@ -1170,5 +1173,10 @@ package enum HostLog {
 
     package static func note(_ alias: String, _ what: String, _ detail: String?) {
         log.write(what, ["host": alias, "detail": detail])
+    }
+
+    /// Phase 18: an audit line (`audit <event>`): ids and kinds, never content.
+    package static func audit(_ event: String, _ fields: KeyValuePairs<String, String?>) {
+        log.write("audit " + event, fields)
     }
 }

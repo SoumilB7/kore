@@ -115,6 +115,72 @@ struct LinkCardView: View {
     }
 }
 
+/// A device asking this Mac (phase 18): a phone joining from the Add device window, or a phone's
+/// new fingerprint key. The card shows what Tailscale says of it, never only the name it gives.
+package struct DeviceCardInfo: Equatable, Sendable {
+    /// "Pixel 9 wants to join", "Pixel 9: new fingerprint key".
+    package var title: String
+    /// What Allow lets it do, one line.
+    package var note: String
+    /// The Tailscale node's name, its address and login, and when it first knocked.
+    package var node: String
+    package var address: String
+    package var login: String
+    package var firstSeen: Date
+
+    package init(title: String, note: String, node: String, address: String, login: String, firstSeen: Date) {
+        self.title = title
+        self.note = note
+        self.node = node
+        self.address = address
+        self.login = login
+        self.firstSeen = firstSeen
+    }
+}
+
+/// The device card: Deny is the default (Return and Esc); Allow takes the mouse only (it never
+/// takes focus, so no key can press it), and only once the card has been up a second, counted
+/// again whenever the card takes the keys back.
+struct DeviceCardView: View {
+    let info: DeviceCardInfo
+    @ObservedObject var armed: Local<Bool>
+    let answer: (Bool) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.md) {
+            Text(info.title).font(Chrome.bodyMedium).foregroundStyle(Theme.text)
+            VStack(alignment: .leading, spacing: Space.xs) {
+                line(info.node)
+                line("\(info.address) · \(info.login)")
+                line("First seen \(info.firstSeen.formatted(date: .omitted, time: .shortened))")
+            }
+            Text(info.note).font(Chrome.label).foregroundStyle(Theme.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: Space.sm) {
+                Spacer(minLength: 0)
+                Button("Allow") { if armed.value { answer(true) } }
+                    .buttonStyle(SubtleButtonStyle())
+                    .focusable(false)
+                    .disabled(!armed.value)
+                    .storyID(StoryID.Link.deviceAllow) { if armed.value { answer(true) } }
+                Button("Deny") { answer(false) }
+                    .buttonStyle(SubtleButtonStyle(prominent: true))
+                    .keyboardShortcut(.defaultAction)
+                    .storyID(StoryID.Link.deviceDeny) { answer(false) }
+            }
+        }
+        .padding(Space.lg)
+        .frame(width: Size.Link.deviceCardWidth, alignment: .leading)
+        .panel(.panel)
+        .cornerMarks(Theme.cornerOption)
+        .onExitCommand { answer(false) }
+        .storyID(StoryID.Link.deviceCard)
+    }
+
+    private func line(_ text: String) -> some View {
+        Text(text).font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.middle)
+    }
+}
+
 /// A borderless floating panel for the card and the mark's popup: Kore's own popup look, outside
 /// any one window (a ring can come while Kore is in the background).
 @MainActor
@@ -148,6 +214,63 @@ package enum LinkPanel {
         card = nil
         allowsReady = false
     }
+
+    private static var deviceCard: NSPanel?
+    private static var deviceArming: Task<Void, Never>?
+    private static var deviceKeyWatch: NSObjectProtocol?
+    private static var deviceArmed: Local<Bool>?
+
+    /// Shows a device card over the front window, answered once. It comes forward but takes the
+    /// keys only while Kore is frontmost: a phone knocking never pulls focus from another app.
+    package static func showDeviceCard(_ info: DeviceCardInfo, answer: @escaping (Bool) -> Void) {
+        closeDeviceCard()
+        let armed = Local(false)
+        var answered = false
+        let panel = makePanel(DeviceCardView(info: info, armed: armed) { allow in
+            guard !answered else { return }
+            answered = true
+            closeDeviceCard()
+            answer(allow)
+        })
+        let size = panel.frame.size
+        let base = NSApp.keyWindow?.frame ?? NSApp.mainWindow?.frame ?? NSScreen.main?.visibleFrame ?? .zero
+        panel.setFrameOrigin(NSPoint(x: base.midX - size.width / 2, y: base.midY - size.height / 2))
+        deviceCard = panel
+        deviceArmed = armed
+        // Each time the card takes the keys (again), Allow waits its second anew.
+        deviceKeyWatch = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: panel, queue: .main) { _ in
+            MainActor.assumeIsolated { if let armed = deviceArmed { arm(armed) } }
+        }
+        if NSApp.isActive {
+            panel.makeKeyAndOrderFront(nil)
+        } else {
+            panel.orderFrontRegardless()
+        }
+        arm(armed)
+    }
+
+    private static func arm(_ armed: Local<Bool>) {
+        armed.value = false
+        deviceArming?.cancel()
+        deviceArming = Task { @MainActor in
+            try? await Task.sleep(for: Size.Link.deviceAllowDelay)
+            guard !Task.isCancelled else { return }
+            armed.value = true
+        }
+    }
+
+    package static func closeDeviceCard() {
+        deviceArming?.cancel()
+        deviceArming = nil
+        if let deviceKeyWatch { NotificationCenter.default.removeObserver(deviceKeyWatch) }
+        deviceKeyWatch = nil
+        deviceCard?.orderOut(nil)
+        deviceCard = nil
+        deviceArmed = nil
+    }
+
+    /// A device card is up.
+    package static var deviceCardOpen: Bool { deviceCard != nil }
 
     /// The open card's Allows take a press: its moment has passed since the card was drawn.
     package fileprivate(set) static var allowsReady = false

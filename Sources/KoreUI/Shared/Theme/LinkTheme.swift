@@ -7,6 +7,10 @@ extension Size {
         static let popupWidth: CGFloat = 240
         /// How long the card's Allow stays disabled after it appears.
         static let allowDelay: Duration = .milliseconds(700)
+        /// A device card's Allow: disabled for this long after it appears, and again after the
+        /// card takes the keys back (UX pass, 2026-11-14: 1 s).
+        static let deviceAllowDelay: Duration = .seconds(1)
+        static let deviceCardWidth: CGFloat = 320
     }
 
     /// The box button's popup.
