@@ -1378,7 +1378,10 @@ package final class TranscriptStore {
     /// Everything is built again on the next rebuild (the window moved, or entries shifted).
     package func invalidateAll() {
         sectionStarts = []
-        if LinkTaps.on { linkDirtyFrom = 0 }
+        if LinkTaps.on {
+            linkDirtyFrom = 0
+            LinkTaps.dirty?()
+        }
         touchesDirty = true
     }
 
@@ -1717,7 +1720,10 @@ package final class TranscriptStore {
     package func mark(_ index: Int?) {
         let i = max(index ?? 0, 0)
         dirtyFrom = min(dirtyFrom ?? i, i)
-        if LinkTaps.on { linkDirtyFrom = min(linkDirtyFrom ?? i, i) }
+        if LinkTaps.on {
+            linkDirtyFrom = min(linkDirtyFrom ?? i, i)
+            LinkTaps.dirty?()
+        }
     }
 
     /// The lowest entry index changed since the local link last looked; it clears it.

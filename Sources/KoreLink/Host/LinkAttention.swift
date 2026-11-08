@@ -12,9 +12,12 @@ final class LinkAttention {
     private(set) var ledger = AttentionLedger()
     /// Chats whose cards may have changed since the last look.
     private var dirty = Set<String>()
-    /// Chats with an item open: looked at once a second, since a card answered in Kore
-    /// leaves without an event.
-    private var withItems = Set<String>()
+    /// Chats with an item open: their cards are observed (`LinkFeed`), since a card answered in
+    /// Kore leaves without an event.
+    private(set) var withItems = Set<String>()
+
+    /// A chat's cards may have changed (Observation saw them change).
+    func mark(_ chatId: String) { dirty.insert(chatId) }
 
     /// A chat event (O(1): which event it is, never its payload). Returns a turn end to send.
     func noted(_ chat: Chat, _ event: ChatEvent) -> LinkMessage? {
@@ -41,7 +44,7 @@ final class LinkAttention {
 
     /// Opens and clears since the last look, for the chats that changed (all with `everything`).
     func look(_ chats: [String: Chat], everything: Bool) -> [LinkMessage] {
-        let ids = everything ? Set(chats.keys).union(withItems) : dirty.union(withItems)
+        let ids = everything ? Set(chats.keys).union(withItems) : dirty
         dirty = []
         var out: [LinkMessage] = []
         for id in ids.sorted() {

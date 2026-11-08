@@ -76,6 +76,7 @@ package final class Workspace {
     /// close, not its view's, ends the chats.
     @ObservationIgnored package weak var window: NSWindow? {
         didSet {
+            if window !== oldValue, LinkTaps.on { LinkTaps.layout?() }
             guard let window, window !== oldValue else { return }
             terminals.window = window
             if let closer { NotificationCenter.default.removeObserver(closer) }
@@ -142,6 +143,7 @@ package final class Workspace {
         if box == nil { AppModel.shared?.rememberClosedWorkspace(folder: folder, snapshot: persistenceSnapshot()) }
         closeAll()
         box?.windowClosed()
+        if LinkTaps.on { LinkTaps.layout?() }
         let key = box?.key ?? folder.standardizedFileURL.path
         if Self.open[key] === self { Self.open[key] = nil }
     }

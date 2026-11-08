@@ -10,6 +10,10 @@ package enum LinkTaps {
     package static var on = false
     /// Every event a chat applies, once its stores have it, while `on`.
     package static var event: ((Chat, ChatEvent) -> Void)?
+    /// A transcript marked entries changed (`linkDirtyFrom`), while `on`: the link looks soon.
+    package static var dirty: (() -> Void)?
+    /// A window opened or closed (its tabs are observed), while `on`.
+    package static var layout: (() -> Void)?
     /// The doorbell: the app sets it at launch; `AppDelegate`'s Apple Event handler calls it on
     /// a ring. Nothing runs until then.
     package static var doorbell: ((_ event: NSAppleEventDescriptor, _ reply: NSAppleEventDescriptor) -> Void)?
@@ -64,5 +68,9 @@ extension StoryID {
         package static let allow = card.part(.allow)
         package static let allowFull = StoryID(.welcome, "link.card.full")
         package static let deny = card.part(.deny)
+        /// Phase 18: a device asking (a phone joining, a new fingerprint key).
+        package static let deviceCard = StoryID(.welcome, "device.card")
+        package static let deviceAllow = deviceCard.part(.allow)
+        package static let deviceDeny = deviceCard.part(.deny)
     }
 }
