@@ -80,6 +80,7 @@ final class AccountState {
         if !store.onBox {
             LoginMoves.shared.clearFailures()
             LoginMoves.shared.settle()
+            LoginMoves.shared.lookAgain()
             LoginMoves.shared.check()
         }
     }
@@ -371,7 +372,7 @@ final class AccountState {
         if case .moving = moves.line(provider, id) { return [] }
         if login.onBox != nil { return [MoveRow(title: "Move back here") { [weak self] in self?.moveBack(id) }] }
         if let box = moves.alsoOn(provider, id) {
-            let name = NodeNames.name(box)
+            let name = moves.placeName(box)
             return [
                 MoveRow(title: "Keep here") { [weak self] in self?.keep(id, here: true) },
                 MoveRow(title: "Keep on \(name)") { [weak self] in self?.keep(id, here: false) },
@@ -1038,13 +1039,13 @@ private struct LoginList: View {
             case nil: break
             }
             if let box = LoginMoves.shared.alsoOn(provider, login.id) {
-                return ("Also on \(NodeNames.name(box)): one will be logged out", true, true)
+                return ("Also on \(LoginMoves.shared.placeName(box)): one will be logged out", true, true)
             }
         }
         // The plan is the row's pill: the caption keeps only what the login is to Kore.
         let main = login.id == nil ? (store.onBox ? "Default" : "Main") : nil
         let state =
-            login.onBox.map { "On " + NodeNames.name($0) } ?? login.from.map { "from " + $0 }
+            login.onBox.map { "On " + (store.onBox ? NodeNames.name($0) : LoginMoves.shared.placeName($0)) } ?? login.from.map { "from " + $0 }
             ?? (login.duplicate ? AccountText.duplicate : login.signedOut ? AccountText.loginSignedOut : nil)
         let words = [main, state].compactMap { $0 }
         return (words.isEmpty ? nil : words.joined(separator: " · "), false, false)

@@ -76,7 +76,7 @@ package struct BoxLogins: LoginMove.Remote {
     }
 
     /// The box's refusal as the engine's failure: its words where they name one.
-    static func failure(_ result: LoginMoveResult) -> LoginMove.Failure {
+    package static func failure(_ result: LoginMoveResult) -> LoginMove.Failure {
         let words = result.message ?? ""
         switch words {
         case "sentWrong": return .sentWrong
@@ -85,6 +85,7 @@ package struct BoxLogins: LoginMove.Remote {
         case "occupied": return .occupied
         case "busy": return .busy
         case "notThere": return .notThere
+        case "keychainDenied": return .keychainDenied
         default: break
         }
         if words.hasPrefix("inUse:"), let n = Int(words.dropFirst(6)) { return .inUse(n) }
@@ -105,4 +106,61 @@ extension HostConnection {
 
     /// The boxes held now (each alias's one link).
     package static var linked: [HostConnection] { Array(open.values) }
+}
+
+/// Another device's side of a login move over any link that carries 1.14 (another of the
+/// owner's Macs): the same calls as `BoxLogins`, through `send`.
+package struct PeerLogins: LoginMove.Remote {
+    package typealias Send = @Sendable (_ kind: ControlKind, _ args: ControlArgs) async -> LoginMoveResult
+    package let send: Send
+    /// Why it can't take a move now; nil: it can.
+    package let unready: @Sendable () async -> LoginMove.Failure?
+    package let cli: String
+    package let login: String
+    package let host: String
+    package let profile: String?
+    package let force: Bool
+
+    package init(
+        cli: String, login: String, host: String, profile: String? = nil, force: Bool = false, unready: @escaping @Sendable () async -> LoginMove.Failure? = { nil },
+        send: @escaping Send
+    ) {
+        (self.cli, self.login, self.host, self.profile, self.force) = (cli, login, host, profile, force)
+        (self.unready, self.send) = (unready, send)
+    }
+
+    package func prepareImport(moveId: String, data: Data, sha: String) async throws {
+        _ = try await call(.accountImport, ControlArgs(
+            force: force ? true : nil, text: profile, provider: cli, login: login, data: data.base64EncodedString(), phase: MovePhase.prepare.rawValue,
+            moveId: moveId, host: host, sha: sha))
+    }
+
+    package func commitImport(moveId: String) async throws -> Bool? {
+        try await call(.accountImport, ControlArgs(force: force ? true : nil, provider: cli, login: login, phase: MovePhase.commit.rawValue, moveId: moveId)).signedIn
+    }
+
+    package func abortImport(moveId: String) async throws {
+        _ = try await call(.accountImport, ControlArgs(provider: cli, phase: MovePhase.abort.rawValue, moveId: moveId))
+    }
+
+    package func prepareExport(moveId: String) async throws -> (data: Data, sha: String) {
+        let result = try await call(.accountExport, ControlArgs(provider: cli, login: login, phase: MovePhase.prepare.rawValue, moveId: moveId))
+        guard let data = result.data.flatMap({ Data(base64Encoded: $0) }), let sha = result.sha else { throw LoginMove.Failure.sentWrong }
+        return (data, sha)
+    }
+
+    package func commitExport(moveId: String) async throws {
+        _ = try await call(.accountExport, ControlArgs(provider: cli, phase: MovePhase.commit.rawValue, moveId: moveId))
+    }
+
+    package func abortExport(moveId: String) async throws {
+        _ = try await call(.accountExport, ControlArgs(provider: cli, phase: MovePhase.abort.rawValue, moveId: moveId))
+    }
+
+    private func call(_ kind: ControlKind, _ args: ControlArgs) async throws -> LoginMoveResult {
+        if let why = await unready() { throw why }
+        let result = await send(kind, args)
+        guard result.ok else { throw BoxLogins.failure(result) }
+        return result
+    }
 }

@@ -73,10 +73,12 @@ struct MacNetTests {
     @Test func outsideTheWindowAnEnrollIsUnknownAndNothingIsKept() async throws {
         let rig = try MacRig()
         defer { rig.finish() }
-        let phone = try rig.dial(Phone(), enroll: true)
+        let stranger = Phone()
+        let phone = try rig.dial(stranger, enroll: true)
         #expect(await phone.closed() == "bye unknown")
         await drainMain()
-        #expect(rig.shown.isEmpty && rig.audits.isEmpty)
+        // Audit lines are process-wide (other suites run alongside): none names this phone.
+        #expect(rig.shown.isEmpty && !rig.audits.contains { $0.contains(stranger.id.uuidString.lowercased()) })
     }
 
     @Test func insideTheWindowTheOwnerAllowsAndThePhoneIsWelcomedWithTheDirectory() async throws {

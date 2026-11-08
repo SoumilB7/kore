@@ -116,6 +116,14 @@ package final class NetSession {
         /// device and identity key are only learned (`learned`); the hello goes with `enroll`, and
         /// the box answers `bye claim` (or `unknown`). Never a welcome: nothing is trusted here.
         package var learn = false
+        /// Another of the owner's Macs, first contact (its Add device window is open): it isn't in
+        /// the book yet, so its challenge's device and identity key are taken for this session
+        /// only, with the node key from this side's own WhoIs. The hello goes with `enroll`; the
+        /// welcome (once its owner Allowed) must prove that key. The caller pins it after
+        /// (`pinned`); nothing is written to the book here.
+        package var pinFirst = false
+        /// How long the handshake may take (a first contact waits for the other's Allow card).
+        package var window = NetSession.clientWindow
 
         package init(local: NetLocal, route: Binding.Route, peer: NetPeerFacts, book: DeviceBook, server: UUID, service: String, resume: NetControl.Resume? = nil) {
             self.local = local
@@ -214,7 +222,7 @@ package final class NetSession {
         _ = kore_tcp_tune(fd, Int32(Self.notSentLowWater))
         switch role {
         case .server: deadline = clock().addingTimeInterval(Self.preAuthWindow)
-        case .client: deadline = clock().addingTimeInterval(Self.clientWindow)
+        case .client(let client): deadline = clock().addingTimeInterval(client.window)
         }
     }
 
@@ -511,9 +519,22 @@ package final class NetSession {
 
     private func clientChallenge(_ client: Client, _ challenge: NetControl.Challenge) {
         guard challenge.v == NetControl.version else { return fail(NetControl.Reason.version) }
-        guard challenge.route == client.route.rawValue, client.learn || challenge.device == client.server else { return fail(NetControl.Reason.proof) }
+        guard challenge.route == client.route.rawValue, client.learn || client.pinFirst || challenge.device == client.server else {
+            return fail(NetControl.Reason.proof)
+        }
         var record: DeviceRecord?
-        if client.learn {
+        if client.pinFirst {
+            // Never over SSH, never without saying who this side is, and never a device the book
+            // already holds under another key.
+            guard client.route == .tailnet, client.enroll != nil, let key = challenge.identityKey, !key.isEmpty,
+                  challenge.device != client.local.device
+            else { return fail(NetControl.Reason.proof) }
+            if let held = try? client.book.record(challenge.device), held.identityKey != key { return fail(NetControl.Reason.proof) }
+            learned = (challenge.device, key)
+            record = DeviceRecord(
+                id: challenge.device, name: "Mac", kind: .mac, abilities: [.read, .ask, .run], owner: true, identityKey: key,
+                nodeKeys: [client.peer.nodeKey], userId: client.peer.userId, tags: client.peer.tags, fqdn: "", added: clock())
+        } else if client.learn {
             guard client.route == .tailnet, client.enroll != nil, let key = challenge.identityKey, !key.isEmpty else { return fail(NetControl.Reason.proof) }
             learned = (challenge.device, key)
         } else {

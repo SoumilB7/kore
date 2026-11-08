@@ -16,6 +16,8 @@ public enum CLIProfiles {
         /// The organisation (or Codex's plan) it works in, with the email telling two logins
         /// apart: "" for none, nil when not read yet.
         public var workspace: String?
+
+        public init(id: String, email: String?, workspace: String?) { (self.id, self.email, self.workspace) = (id, email, workspace) }
     }
 
     struct Saved: Codable {
@@ -38,6 +40,14 @@ public enum CLIProfiles {
     /// Kore's folder for them, and the CLIs' main folders by name; a test's own.
     package static let root = HostSetting<URL?>(nil)
     package static let mains = HostSetting<[String: URL]>([:])
+    /// Logins moving to or from another device, by "cli/id" ("cli/main" for main): no CLI starts
+    /// on one until its move ends (two copies exist meanwhile).
+    package static let moving = HostSetting<Set<String>>([])
+
+    /// A CLI start refused while its login moves.
+    public struct Moving: Error, CustomStringConvertible {
+        public var description: String { "This login is moving to another device. It's back once the move ends." }
+    }
 
     /// Reads the list again (after `root` changes).
     package static func reload() { state.set(nil) }
@@ -175,9 +185,10 @@ public enum CLIProfiles {
     /// Healthy launches only check paths; directory enumeration happens only on repair.
     /// The sign-in task's pin takes precedence over the active login, including a pinned main.
     static func repairForLaunch(_ cli: String) throws {
-        guard cli == "claude" else { return }
         let id: String?
         if let pin = pinned, pin.cli == cli { id = pin.id } else { id = saved.active[cli] }
+        if pinned?.folder == nil || pinned?.cli != cli, moving.value.contains(cli + "/" + (id ?? "main")) { throw Moving() }
+        guard cli == "claude" else { return }
         guard let id else { return }
         let files = FileManager.default
         let main = mainFolder(cli)
