@@ -225,7 +225,8 @@ struct HostTests {
         #expect(raised?.ok == true)
         #expect(HostMeta.modeID(hc) == "auto")
         #expect(hc.record.mode == "auto")
-        #expect(HostMeta.meta(hc, raise: true).allowedModeIds.contains("bypassPermissions"))
+        #expect(!HostMeta.meta(hc, raise: true).allowedModeIds.contains("bypassPermissions"))
+        #expect(rig.host.apply(.setMode(chatId: hc.id, modeId: "bypassPermissions"), id: "5", control: .full) { _ in }?.code == .raiseMode)
         // Lowering stays open to an act grant; an unknown mode is refused to anyone.
         #expect(rig.host.apply(.setMode(chatId: hc.id, modeId: "plan"), id: "3", control: .act) { _ in }?.ok == true)
         #expect(rig.host.apply(.setMode(chatId: hc.id, modeId: "nope"), id: "4", control: .full) { _ in }?.code == .invalid)
@@ -249,6 +250,18 @@ struct HostTests {
         #expect(text.contains("through kore-host"))
         #expect(text.contains(ProcessInfo.processInfo.hostName))
         #expect(!text.contains("Arsenal"))
+    }
+
+    @Test func planCardsOfferAutoAcceptToFullControlOnly() throws {
+        let rig = try HostRig()
+        defer { rig.finish() }
+        let hc = try #require(rig.host.newChat(folder: rig.folder.path, provider: "claude", modelId: nil))
+        let chat = hc.live(services: rig.host.services)
+        let plan = Approval(id: "p", title: "Plan", detail: nil, body: nil, canAlwaysAllow: false, questions: [], plan: "1. Do it")
+        let full = HostMeta.card(plan, in: chat, raise: true).actions.first { $0.id == .approvePlanAcceptEdits }
+        let standard = HostMeta.card(plan, in: chat).actions.first { $0.id == .approvePlanAcceptEdits }
+        #expect(full?.refused == nil)
+        #expect(standard?.refused == true)
     }
 
     @Test func watchGrantsCantAct() throws {

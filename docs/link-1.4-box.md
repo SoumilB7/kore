@@ -55,7 +55,7 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 |---|---|---|
 | `chat.new` | `folder, provider, modelId?` | `folder` (an absolute path the box serves) in place of `windowId`; `windowId` still works. Result: `chatId`, `windowId`. The CLI starts on the first send. |
 | `chat.setModel` | `chatId, modelId` | Also for an `act` grant. A chat whose CLI isn't running starts on that model. |
-| `chat.setMode`, `chat.setPlan`, `chat.planReady`, `chat.answer approvePlanAcceptEdits` | as §6 | A `full` grant is full control, which may raise a chat's mode (Auto, Bypass, leaving plan, approving with auto-accept edits), the same rule as the Mac's link (§11). `watch` and `act` stay lower-only (`denied.raiseMode`). Under full control `ChatMeta.allowedModeIds` lists every mode. Always allow and `!` lines stay refused. |
+| `chat.setMode`, `chat.setPlan`, `chat.planReady`, `chat.answer approvePlanAcceptEdits` | as §6 | A `full` grant is full control, which may raise a chat's mode up to Auto (Auto, Approve for me, leaving plan, approving with auto-accept edits), the same rule as the Mac's link (§11). Bypass, Codex's Full access and unknown modes stay refused to every client; `watch` and `act` stay lower-only (`denied.raiseMode`). Under full control `ChatMeta.allowedModeIds` lists every mode up to Auto, and a plan card's `approvePlanAcceptEdits` isn't marked `refused`. Always allow and `!` lines stay refused. |
 | `folders.list` | | Result: `folders: [{windowId, path}]`. |
 | `folder.add` | `path` | An absolute path to an existing folder; it's added to `config.json`. Result: `folders`. `gone.folder` otherwise. |
 | `account.refresh` | `provider` | Result `message`: "Signed in as …" / "… isn't signed in.". |

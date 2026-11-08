@@ -114,15 +114,16 @@ package enum LinkPolicy {
             return .allow
         case .setMode(_, let modeId):
             guard let target = chat.modes[modeId] else { return .deny(.invalid, "This chat doesn't offer that mode.") }
-            return target <= chat.level || control == .full ? .allow : .deny(.raiseMode, "The link can only lower a chat's mode.")
+            return target <= chat.level || (control == .full && target <= raiseCap)
+                ? .allow : .deny(.raiseMode, control == .full ? "The link can raise a chat's mode up to Auto." : "The link can only lower a chat's mode.")
         case .setPlan(_, let on):
             // Plan is the lowest level: on lowers. Off goes back to the chat's own mode, which the
             // link may do only where tools still ask, or with full control.
-            return on || !chat.planOn || chat.level <= leavePlanMaxLevel || control == .full
+            return on || !chat.planOn || chat.level <= leavePlanMaxLevel || (control == .full && chat.level <= raiseCap)
                 ? .allow : .deny(.raiseMode, "Leaving plan raises the mode; do it in Kore.")
         case .planReady(_, let choice):
             guard chat.cards.values.contains(where: { $0.kind == .planReady }) else { return .deny(.goneCard, "No plan is waiting.") }
-            return choice == .stay || chat.level <= leavePlanMaxLevel || control == .full
+            return choice == .stay || chat.level <= leavePlanMaxLevel || (control == .full && chat.level <= raiseCap)
                 ? .allow : .deny(.raiseMode, "Implementing leaves plan, which raises the mode; do it in Kore.")
         case .new, .unknown, .control:
             return .allow
@@ -133,7 +134,7 @@ package enum LinkPolicy {
     /// what the link may arrange (chats, tabs, boards, windows, history). Always allow and `!`
     /// lines stay refused. Two exceptions, the owner's: Arsenal (1.3), which full control may turn
     /// on and raise to a built tier, as the Mac's tiers popup does; and a chat's mode (2026-11-10),
-    /// which full control may raise, Auto included (`check(_:_:control:)`).
+    /// which full control may raise up to Auto (`raiseCap`), never to Bypass or Full access.
     package static func check(_ kind: ControlKind, _ args: ControlArgs, _ chat: ChatFacts?, control: LinkControlLevel) -> Verdict {
         guard control == .full else { return .deny(.deniedControl, "Full control isn't granted in Kore for this run.") }
         if kind.onChat, chat == nil { return .deny(.goneChat, "That chat isn't open in Kore any more.") }
@@ -184,10 +185,15 @@ package enum LinkPolicy {
         }
     }
 
-    /// The modes the link may switch a chat to: its own level and below; any with full control
-    /// (owner, 2026-11-10: a full-control client may raise a mode, Auto included).
+    /// The highest a full-control client may raise a mode (owner, 2026-11-10: Auto, not Bypass or
+    /// Full access).
+    package static let raiseCap = ModeLevel.auto
+
+    /// The modes the link may switch a chat to: its own level and below; with full control, also
+    /// up to Auto.
     package static func allowedModes(_ chat: ChatFacts, control: LinkControlLevel = .standard) -> Set<String> {
-        control == .full ? Set(chat.modes.keys) : Set(chat.modes.filter { $0.value <= chat.level }.keys)
+        let top = control == .full ? max(chat.level, raiseCap) : chat.level
+        return Set(chat.modes.filter { $0.value <= top }.keys)
     }
 }
 

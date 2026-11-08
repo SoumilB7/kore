@@ -23,11 +23,11 @@ enum HostMeta {
 
     static func modeID(_ hc: HostChat) -> String { hc.chat?.controls.mode ?? hc.record.mode ?? hc.provider.modes[0].id }
 
-    static func facts(_ hc: HostChat) -> LinkPolicy.ChatFacts {
+    static func facts(_ hc: HostChat, raise: Bool = false) -> LinkPolicy.ChatFacts {
         let provider = hc.provider
         let modes = Dictionary(provider.modes.map { ($0.id, level($0)) }, uniquingKeysWith: { a, _ in a })
         let current = modes[modeID(hc)] ?? .manual
-        let cards = Dictionary(self.cards(hc).map { ($0.id, LinkPolicy.ChatFacts.Card(kind: $0.kind, digest: $0.digest)) }, uniquingKeysWith: { a, _ in a })
+        let cards = Dictionary(self.cards(hc, raise: raise).map { ($0.id, LinkPolicy.ChatFacts.Card(kind: $0.kind, digest: $0.digest)) }, uniquingKeysWith: { a, _ in a })
         let commands = hc.chat?.controls.commands ?? []
         return LinkPolicy.ChatFacts(
             level: current, planOn: provider.planToggle != nil && (hc.chat?.controls.planMode ?? false), modes: modes, cards: cards,
@@ -36,7 +36,7 @@ enum HostMeta {
 
     /// `raise`: the grant may raise the mode (a full grant), so every mode is allowed.
     static func meta(_ hc: HostChat, raise: Bool = false) -> ChatMeta {
-        let facts = facts(hc)
+        let facts = facts(hc, raise: raise)
         let allowed = LinkPolicy.allowedModes(facts, control: raise ? .full : .standard)
         let chat = hc.chat
         let state: ChatMeta.State =
@@ -52,7 +52,7 @@ enum HostMeta {
             mode: .init(id: modeID(hc), level: facts.level, planOn: hc.provider.planToggle != nil ? (chat?.controls.planMode ?? false) : nil),
             modeIds: (chat?.controls.availableModes ?? hc.provider.modes).map(\.id), allowedModeIds: allowed.sorted(),
             model: chat?.controls.currentModel?.name ?? hc.record.modelId, queued: chat?.queuedCount ?? 0, running: chat?.isBusy ?? false,
-            cards: cards(hc), can: .init(send: !(chat?.accountRestartPending ?? false), stop: chat?.isWorking ?? false), commands: Array(commands))
+            cards: cards(hc, raise: raise), can: .init(send: !(chat?.accountRestartPending ?? false), stop: chat?.isWorking ?? false), commands: Array(commands))
     }
 
     static func kind(_ approval: Approval) -> LinkCard.Kind {
@@ -62,9 +62,9 @@ enum HostMeta {
         return .permission
     }
 
-    static func cards(_ hc: HostChat) -> [LinkCard] {
+    static func cards(_ hc: HostChat, raise: Bool = false) -> [LinkCard] {
         guard let chat = hc.chat else { return [] }
-        var out = chat.approvals.pending.map { card($0, in: chat) }
+        var out = chat.approvals.pending.map { card($0, in: chat, raise: raise) }
         if chat.approvals.offerImplementPlan {
             let actions: [CardAction] = [
                 .init(id: .implement, label: "Yes, implement it", style: .primary), .init(id: .stay, label: "Stay in Plan", style: .neutral),
@@ -79,7 +79,7 @@ enum HostMeta {
     /// A card's whole content: a plan's text, else its body. What `card.more` reads.
     static func fullContent(_ approval: Approval) -> String? { approval.plan ?? approval.body }
 
-    static func card(_ approval: Approval, in chat: Chat) -> LinkCard {
+    static func card(_ approval: Approval, in chat: Chat, raise: Bool = false) -> LinkCard {
         let agent: String? =
             switch approval.agent {
             case .main: nil
@@ -95,7 +95,7 @@ enum HostMeta {
         case .plan:
             actions = [
                 .init(id: .approvePlan, label: "Yes, manually approve edits", style: .primary),
-                .init(id: .approvePlanAcceptEdits, label: "Yes, and auto-accept edits", style: .neutral, refused: true),
+                .init(id: .approvePlanAcceptEdits, label: "Yes, and auto-accept edits", style: .neutral, refused: raise ? nil : true),
                 .init(id: .keepPlanning, label: "No, keep planning", style: .neutral),
             ]
         case .questions:

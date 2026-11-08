@@ -213,7 +213,7 @@ package final class HostDaemon {
         case .send(_, let text, let blobs):
             guard let hc else { return fail(.goneChat, "") }
             guard blobs.isEmpty else { return fail(.invalid, "Uploads aren't on the box yet.") }
-            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc), control: control) { return fail(code, message) }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
             guard let chat = live(hc) else { return fail(.busy, "Too many CLIs are running on this box.") }
             guard chat.sendFromLink(text) else { return fail(.busy, "The chat can't take a message right now.") }
             armIdle(hc)
@@ -224,7 +224,7 @@ package final class HostDaemon {
             return .init(id: id, ok: true)
         case .answer(_, let cardId, let action, _, let answers):
             guard let hc else { return fail(.goneChat, "") }
-            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc), control: control) { return fail(code, message) }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
             guard let chat = hc.chat else { return fail(.goneCard, "That was answered or withdrawn.") }
             if cardId == HostMeta.planReadyID { return planReady(chat, action == .implement ? .implement : .stay, id: id) }
             guard let approval = chat.approvals.pending.first(where: { $0.id == cardId }) else { return fail(.goneCard, "That was answered or withdrawn.") }
@@ -243,7 +243,7 @@ package final class HostDaemon {
             return .init(id: id, ok: true)
         case .setMode(_, let modeId):
             guard let hc else { return fail(.goneChat, "") }
-            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc), control: control) { return fail(code, message) }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
             hc.live(services: services).setMode(modeId, remember: false)
             if let chat = hc.chat { hc.noted(chat) }
             armIdle(hc)
@@ -251,14 +251,14 @@ package final class HostDaemon {
             return .init(id: id, ok: true)
         case .setPlan(_, let on):
             guard let hc else { return fail(.goneChat, "") }
-            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc), control: control) { return fail(code, message) }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
             hc.live(services: services).setPlanMode(on)
             armIdle(hc)
             broadcast(chats: [hc])
             return .init(id: id, ok: true)
         case .planReady(_, let choice):
             guard let hc, let chat = hc.chat else { return fail(.goneCard, "No plan is waiting.") }
-            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc), control: control) { return fail(code, message) }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
             return planReady(chat, choice, id: id)
         case .new(let windowId, let provider):
             return newChat(id: id, folder: folder(windowId: windowId), provider: provider, modelId: nil)

@@ -216,6 +216,15 @@ struct LinkPolicyTests {
         autoPlan.planOn = true
         #expect(LinkPolicy.check(.setPlan(chatId: "x", on: false), autoPlan, control: .full) == .allow)
         #expect(LinkPolicy.allowedModes(Self.manual, control: .full) == Set(Self.manual.modes.keys))
+        // Up to Auto only: Bypass and Full access stay refused to every link client.
+        var withDanger = Self.manual
+        withDanger.modes["bypassPermissions"] = .danger
+        #expect(LinkPolicy.check(.setMode(chatId: "x", modeId: "bypassPermissions"), withDanger, control: .full) == .deny(.raiseMode, "The link can raise a chat's mode up to Auto."))
+        #expect(!LinkPolicy.allowedModes(withDanger, control: .full).contains("bypassPermissions"))
+        var dangerPlan = withDanger
+        dangerPlan.level = .danger
+        dangerPlan.planOn = true
+        if case .deny(let code, _) = LinkPolicy.check(.setPlan(chatId: "x", on: false), dangerPlan, control: .full) { #expect(code == .raiseMode) } else { Issue.record() }
         var plan = Self.manual
         plan.cards = ["p": .init(kind: .plan, digest: "P")]
         #expect(LinkPolicy.check(.answer(chatId: "x", cardId: "p", action: .approvePlanAcceptEdits, digest: "P", answers: nil), plan, control: .full) == .allow)

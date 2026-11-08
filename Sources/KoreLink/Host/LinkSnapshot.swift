@@ -285,6 +285,9 @@ enum LinkSnapshot {
         return .permission
     }
 
+    /// The link's client has full control this run.
+    static var fullControl: Bool { LinkHost.current?.run.control == .full }
+
     static func cards(_ chat: Chat) -> [LinkCard] {
         var out = chat.approvals.pending.map { card($0, in: chat) }
         if chat.approvals.offerImplementPlan {
@@ -320,7 +323,8 @@ enum LinkSnapshot {
             plan = doc(capped(approval.plan ?? "", planCap).text)
             actions = [
                 .init(id: .approvePlan, label: "Yes, manually approve edits", style: .primary),
-                .init(id: .approvePlanAcceptEdits, label: "Yes, and auto-accept edits", style: .neutral, refused: true),
+                // Full control may take it (`LinkPolicy`): it raises the mode only to Edit automatically.
+                .init(id: .approvePlanAcceptEdits, label: "Yes, and auto-accept edits", style: .neutral, refused: fullControl ? nil : true),
                 .init(id: .keepPlanning, label: "No, keep planning", style: .neutral),
             ]
         case .questions:
