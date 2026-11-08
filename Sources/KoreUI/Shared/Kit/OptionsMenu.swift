@@ -51,6 +51,8 @@ extension Array where Element == OptionItem {
 final class OptionsMenu {
     static let shared = OptionsMenu()
     private(set) var items: [OptionItem] = []
+    /// Storylines: the items of the menu open now, by title (`StoryMenus`).
+    static var storyOpen: [String] { shared.items.map(\.title) }
     private(set) var selected: Int?
     private(set) var parents: [[OptionItem]] = []
     @ObservationIgnored private weak var owner: NSWindow?
@@ -450,4 +452,10 @@ extension StoryID {
         /// The open popup's rows, by their words, and whether each can be chosen.
         @MainActor package static var rows: [(title: String, enabled: Bool)] { OptionsMenu.shared.items.map { ($0.title, $0.enabled) } }
     }
+}
+
+/// Storylines: the options menu open now, by its items' titles.
+@MainActor
+package enum StoryMenus {
+    package static var open: [String] { OptionsMenu.storyOpen }
 }

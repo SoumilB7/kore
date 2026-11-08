@@ -514,7 +514,7 @@ final class BoardDensity: BoardStoryline {
             Expect("the focused tile a step smaller", found: { story in
                 let model = try? BoardProbe.model(story)
                 let rect = model?.focused.flatMap { try? BoardProbe.frames(story).tiles[$0] }
-                return "focused \(model?.focused != nil), its frame \(String(describing: rect)), undo \(model?.history.undoStack.count ?? -1), key window \(story.window?.isKeyWindow == true), responder \(String(describing: story.window?.firstResponder.map { type(of: $0) }))"
+                return "focused \(model?.focused != nil), its frame \(String(describing: rect)), undo \(model?.history.undoStack.count ?? -1), key window \(story.window?.isKeyWindow == true), responder \(String(describing: story.window?.firstResponder.map { type(of: $0) })), overlay \(story.app.workspace?.hasOverlay == true), workspace window \(story.app.workspace?.window === story.window), board active \((try? BoardProbe.tab(story)).map { $0 === story.app.workspace?.activeTab } ?? false), menu open \(StoryMenus.open), key \(NSApp.keyWindow.map { String(describing: type(of: $0)) } ?? "none")"
             }) { story in
                 let model = try BoardProbe.model(story)
                 guard let tile = model.focused, let rect = try BoardProbe.frames(story).tiles[tile] else { return false }
