@@ -620,6 +620,21 @@ package struct Approval: Identifiable, Sendable, Codable {
     package var tool: String? = nil
     /// The paths the ask would write, as the CLI gave them.
     package var targets: [String]? = nil
+    /// Cross-session messages the CLI held (`ClaudePeerHolds`): who says they sent them. Set,
+    /// this is that card, not the CLI's: Allow lets them in, Deny refuses them.
+    package var held: [HeldSender]? = nil
+    /// Why Allow can't be picked here (a hold a flag can't lift): the card shows it dim, saying so.
+    package var allowNote: String? = nil
+
+    package struct HeldSender: Equatable, Sendable, Codable {
+        /// Its address (`uds:/tmp/cc-socks/<pid>.sock`) and name, as it gave them.
+        package let from: String
+        package let name: String?
+        package init(from: String, name: String?) {
+            self.from = from
+            self.name = name
+        }
+    }
 
     package init(id: String, title: String, detail: String?, body: String?, canAlwaysAllow: Bool, questions: [Question], plan: String? = nil, changes: [FileChange] = [], agent: AgentID = .main) {
         self.id = id
@@ -642,6 +657,8 @@ package struct Approval: Identifiable, Sendable, Codable {
         copy.signIn = signIn
         copy.tool = tool
         copy.targets = targets
+        copy.held = held
+        copy.allowNote = allowNote
         if canAlwaysAllow { copy.alwaysAllowNote = note }
         return copy
     }

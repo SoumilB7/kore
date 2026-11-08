@@ -132,10 +132,10 @@ package enum AgentTools {
         Tool(name: "kore_show_tab", command: "tab.show", description: "Bring a chat's tab to the front (Act unlimited).", args: [chatArg], required: ["chat"]),
         Tool(
             name: "kore_answer", command: "cards.answer",
-            description: "Answer another chat's question card (kore_pending lists them), one answer per question; deny any card; or allow a permission card once, from a chat at Auto or above. Plans, Always allow and sign-ins stay the user's (Act unlimited).",
+            description: "Answer another chat's question card (kore_pending lists them), one answer per question; deny any card; or allow a permission card once, from a chat at Auto or above. A peer-hold card (messages from other sessions Claude held) is let in with allow, never by a chat whose own message is held. Plans, Always allow and sign-ins stay the user's (Act unlimited).",
             args: [
                 chatArg, ("card", "string", "The card's id."), ("answers", "array", "One option label (or typed text) per question, in order."),
-                ("deny", "boolean", "Deny the card instead."), ("allow", "boolean", "Allow a permission card once (this chat at Auto or above)."),
+                ("deny", "boolean", "Deny the card instead."), ("allow", "boolean", "Allow a permission card once (this chat at Auto or above), or let a peer-hold card's messages in."),
             ], required: ["chat", "card"]),
     ]
 

@@ -65,6 +65,9 @@ struct PermissionCard: View {
                 }
                 Button("Allow") { decide(.allow) }
                     .buttonStyle(SubtleButtonStyle(prominent: true))
+                    // Held by a setting Kore can't change: dim, saying so.
+                    .disabled(approval.allowNote != nil)
+                    .help(approval.allowNote ?? "")
                     .storyID(StoryID.Approval.card(approval.id).part(.allow))
             }
         }

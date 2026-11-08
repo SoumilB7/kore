@@ -244,7 +244,9 @@ package final class ClaudeBackend: ChatBackend {
             log.startFailed("claude", chat: sessionId ?? fork?.from, launch: kind, error: error)
             throw error
         }
-        log.started("claude", chat: sessionId ?? fork?.from, pid: await session.processId, launch: kind)
+        let pid = await session.processId
+        log.started("claude", chat: sessionId ?? fork?.from, pid: pid, launch: kind)
+        peerAddress = pid.map { "uds:/tmp/cc-socks/\($0).sock" }
         planAccount = PlanSnapshot.account(email: await session.capabilities["account"]?["email"]?.string)
         KoreSessions.shared.record(cli: "claude", session: sessionId, folder: options.folder, launch: kind, account: planAccount)
         relaunchReason = nil
@@ -450,6 +452,39 @@ package final class ClaudeBackend: ChatBackend {
     /// What the running CLI wrote to stderr, for its exit line.
     private var stderrTail = StderrTail()
 
+    /// Cross-session messages the CLI held: their card and the policy window.
+    private let holds = ClaudePeerHolds()
+    package private(set) var peerAddress: String?
+
+    private func held(_ actions: [ClaudePeerHolds.Action]) {
+        for action in actions {
+            switch action {
+            case .policy(let value):
+                let session = session
+                Task { try? await session?.setCrossSessionInbound(value) }
+            case .notice(let text):
+                yield(.notice(text))
+            case .card(let card):
+                yield(.approvalWithdrawn(ClaudePeerHolds.cardID))
+                guard let card else { continue }
+                var approval = Approval(id: ClaudePeerHolds.cardID, title: card.title, detail: nil, body: nil, canAlwaysAllow: false, questions: [])
+                approval.held = card.senders
+                approval.allowNote = card.allowNote
+                approval.tool = "PeerMessage"
+                yield(.approvalRequested(approval))
+            }
+        }
+    }
+
+    package func answerHeld(allow: Bool, by: String?) async {
+        holds.bypass = options.mode == "bypassPermissions"
+        let actions = holds.answer(allow: allow, by: by)
+        held(actions)
+        guard holds.open else { return }
+        try? await Task.sleep(for: .seconds(ClaudePeerHolds.cap))
+        held(holds.tick())
+    }
+
     private func handle(_ event: ClaudeEvent) {
         if rollbackAt != nil, Self.writesSession(event) { forgetRollbackPoint() }
         switch event {
@@ -466,6 +501,11 @@ package final class ClaudeBackend: ChatBackend {
             stderrTail.append(text)
         case .bridgeState(let state, let detail):
             bridge(state, detail)
+        case .peerHold(let hold):
+            holds.bypass = options.mode == "bypassPermissions"
+            held(holds.frame(hold))
+        case .exited:
+            held(holds.exited())
         default: break
         }
         translator.translate(event)
@@ -1038,6 +1078,10 @@ package final class ClaudeBackend: ChatBackend {
     }
 
     package func respond(to approvalID: String, _ decision: Decision) async {
+        if approvalID == ClaudePeerHolds.cardID {
+            if case .deny = decision { return await answerHeld(allow: false, by: nil) }
+            return await answerHeld(allow: true, by: nil)
+        }
         guard let request = translator.request(approvalID), let session else { return }
         let mapped: PermissionDecision =
             switch decision {

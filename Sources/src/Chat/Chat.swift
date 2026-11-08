@@ -1831,6 +1831,7 @@ package final class Chat: Identifiable {
     }
 
     package func answer(_ approval: Approval, _ decision: Decision) {
+        if approval.held != nil { return answerHeld(approval, allow: !Self.denies(decision), by: nil) }
         if case .allowAlways = decision { alwaysAllowed = true }
         approvals.remove(approval.id)
         transcriptView.approvalSettled(approval.id)
@@ -1838,6 +1839,25 @@ package final class Chat: Identifiable {
         let backend = backend
         Task { await backend?.respond(to: approval.id, decision) }
     }
+
+    /// The held-messages card answered: Allow lets them in, Deny refuses them; `by` the chat that
+    /// did, when not the user. Not a turn's action: nothing in the turn is marked denied.
+    package func answerHeld(_ approval: Approval, allow: Bool, by: String?) {
+        // A hold no flag can lift: only Deny does anything, and the card stays.
+        if allow, approval.allowNote != nil { return }
+        approvals.remove(approval.id)
+        transcriptView.approvalSettled(approval.id)
+        let backend = backend
+        Task { await backend?.answerHeld(allow: allow, by: by) }
+    }
+
+    private static func denies(_ decision: Decision) -> Bool {
+        if case .deny = decision { return true }
+        return false
+    }
+
+    /// This chat's address as other Claude sessions see it, while its CLI runs.
+    package var peerAddress: String? { backend?.peerAddress }
 }
 
 extension SentAttachment {

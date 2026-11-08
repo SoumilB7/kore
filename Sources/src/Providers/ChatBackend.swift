@@ -31,6 +31,11 @@ package protocol ChatBackend: AnyObject {
     func noteNextTurn(_ note: String)
     func interrupt() async
     func respond(to approvalID: String, _ decision: Decision) async
+    /// The held-messages card answered (`ClaudePeerHolds`); `by`: the chat that let them in, when
+    /// not the user. Elsewhere, the card's own answer.
+    func answerHeld(allow: Bool, by: String?) async
+    /// This chat's address as other sessions see it (`uds:/tmp/cc-socks/<pid>.sock`), when it has one.
+    var peerAddress: String? { get }
     /// Before `start()`, sets what the CLI launches with.
     func setMode(_ id: String) async throws
     /// A no-op for providers without a plan toggle.
@@ -241,6 +246,8 @@ package struct EarlierMessage: Equatable, Sendable, Codable {
 }
 
 extension ChatBackend {
+    package func answerHeld(allow: Bool, by: String?) async { await respond(to: "peer-hold", allow ? .allow : .deny) }
+    package var peerAddress: String? { nil }
     package func earlier(turns: Int) async -> (events: [ChatEvent], more: Bool)? { await earlier() }
     package func earlierMessages() async -> [EarlierMessage] { [] }
     package func unloadPoint(message id: String?, text: String) async -> UnloadPoint? { nil }

@@ -348,7 +348,7 @@ enum LinkSnapshot {
             actions = [.init(id: .submitAnswers, label: "Submit", style: .primary), .init(id: .deny, label: "Skip", style: .neutral)]
         case .permission, .planReady:
             actions =
-                [.init(id: .allow, label: "Allow", style: .primary)]
+                [.init(id: .allow, label: "Allow", style: .primary, refused: approval.allowNote != nil ? true : nil)]
                 + (approval.canAlwaysAllow ? [.init(id: .allowAlways, label: "Always allow", style: .neutral, refused: true)] : [])
                 + [.init(id: .deny, label: "Deny", style: .destructive)]
         }

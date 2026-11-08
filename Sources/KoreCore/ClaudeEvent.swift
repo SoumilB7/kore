@@ -35,6 +35,9 @@ public enum ClaudeEvent: Sendable {
     /// `system/bridge_state`: the CLI's Remote Control link to claude.ai/code ("ready",
     /// "connected", "failed", "policy_disabled"), and why, when it failed.
     case bridgeState(state: String, detail: String?)
+    /// `system/peer_message_hold`: a cross-session message the CLI's receive-side policy held
+    /// rather than queued, and how that hold ended (`z-docs/design/cli-wiring.md`).
+    case peerHold(PeerHold)
     /// End of a turn. The process stays alive for the next `send`.
     case turnCompleted(TurnResult)
     /// The API refused the login (an assistant message with `error: "authentication_failed"`):
@@ -234,6 +237,12 @@ extension ClaudeEvent {
         switch json["type"]?.string {
         case "system" where json["subtype"]?.string == "init":
             self = .sessionStarted(SessionInfo(json))
+        case "system" where json["subtype"]?.string == "peer_message_hold":
+            guard let hold = PeerHold(json) else {
+                self = .raw(json)
+                return
+            }
+            self = .peerHold(hold)
         case "system" where json["subtype"]?.string == "bridge_state":
             self = .bridgeState(state: json["state"]?.string ?? "", detail: json["detail"]?.string)
         case "system" where json["subtype"]?.string == "status" && json["permissionMode"]?.string != nil:
@@ -303,5 +312,39 @@ public struct PeerMessage: Sendable {
             else { return nil }
             text = prompt[prompt.index(after: start)..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
         }
+    }
+}
+
+
+/// One `system/peer_message_hold` frame: `held` (who sent it and why, never its text), then
+/// `released` (it goes to the model, under `uuid`) or `dropped` (with `outcome`).
+public struct PeerHold: Sendable, Equatable {
+    public enum State: String, Sendable { case held, released, dropped }
+    public let state: State
+    /// The held message's uuid, chosen by its sender on the socket lane.
+    public let uuid: String
+    /// The sender's address (`uds:/tmp/cc-socks/<pid>.sock`) and name: both its own claims.
+    public let from: String
+    public let name: String?
+    /// `held`: why (`mode-mismatch`, `no-mode-asserted`, `mode-unknown`, `explicit-setting`,
+    /// `managed-setting`, `repo-setting`, `invalid-setting`, `bypass-default`).
+    public let cause: String?
+    /// `dropped`: `expired`, `refused`, `dropped`, `discarded`.
+    public let outcome: String?
+
+    public init(state: State, uuid: String, from: String, name: String? = nil, cause: String? = nil, outcome: String? = nil) {
+        self.state = state
+        self.uuid = uuid
+        self.from = from
+        self.name = name
+        self.cause = cause
+        self.outcome = outcome
+    }
+
+    init?(_ json: JSONValue) {
+        guard let state = json["state"]?.string.flatMap(State.init), let uuid = json["message_uuid"]?.string else { return nil }
+        self.init(
+            state: state, uuid: uuid, from: json["from"]?.string ?? "", name: json["from_name"]?.string, cause: json["cause"]?.string,
+            outcome: json["outcome"]?.string)
     }
 }

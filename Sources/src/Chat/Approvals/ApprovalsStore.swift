@@ -20,7 +20,10 @@ package final class ApprovalsStore {
             offerImplementPlan = true
         case .turnStarted:
             offerImplementPlan = false
-        case .turnFinished, .exited:
+        case .turnFinished:
+            // Held messages wait whatever the turns do.
+            pending.removeAll { $0.held == nil }
+        case .exited:
             pending.removeAll()
         case .replayed(let events):
             events.forEach(apply)

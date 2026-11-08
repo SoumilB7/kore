@@ -194,6 +194,12 @@ public actor ClaudeSession {
         try await control("apply_flag_settings", ["settings": ["effortLevel": .string(level)]])
     }
 
+    /// `crossSessionInbound` as a flag setting, for this process only: `accept`, `refuse`, or nil
+    /// to clear it (the user's own settings and the mode decide again).
+    public func setCrossSessionInbound(_ value: String?) async throws {
+        try await control("apply_flag_settings", ["settings": ["crossSessionInbound": value.map(JSONValue.string) ?? .null]])
+    }
+
     /// Fast mode, from the next request. The CLI says whether it took (`result`'s `fast_mode_state`).
     public func setFastMode(_ on: Bool) async throws {
         try await control("apply_flag_settings", Self.fastModeFields(on))
