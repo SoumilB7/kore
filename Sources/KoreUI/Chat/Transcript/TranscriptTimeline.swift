@@ -34,6 +34,9 @@ struct TranscriptTimeline: View, Equatable {
     @StateObject private var nudge = Local(0)
     /// A scroll gesture is under way (from its phase): the geometry rules leave following to it.
     @StateObject private var gesturing = Held(false)
+    /// When the scroll phase went to `.animating`, while it's there.
+    @StateObject private var animatingSince = Held<Date?>(nil)
+    private static let animationsEnd: TimeInterval = 3
     /// A gesture ended short of the end as its geometry read then: looked at again once the
     /// rows it brought in are measured (a busy Mac measures them a pass or more later).
     @StateObject private var endAfterGesture = Held(false)
@@ -126,6 +129,9 @@ struct TranscriptTimeline: View, Equatable {
     private static let leftEnd: CGFloat = 150
     /// After a send, new content glides into view for this long.
     private static let glide: TimeInterval = 2
+
+    /// An animated scroll past any of ours: cut short, it never ended.
+    private static func stuck(_ since: Date?) -> Bool { since.map { Date().timeIntervalSince($0) > animationsEnd } ?? false }
     private static let landing: TimeInterval = 0.5
     /// A scroll view new or built again has laid out this long after its height last changed,
     /// and within `settleLimit` in all.
@@ -213,10 +219,11 @@ struct TranscriptTimeline: View, Equatable {
             .scrollPosition(binding)
             .defaultScrollAnchor(.bottom, for: .alignment)
             .onScrollPhaseChange { old, new, context in
-                // The reader's own gestures. A glide (`.animating`) is ours, and a scroll with no
-                // phase (the scroll bar, End) cutting it short leaves it never ending: counted as
-                // the reader's, it held every end check off for good.
-                gesturing.value = new == .tracking || new == .interacting || new == .decelerating
+                gesturing.value = new != .idle
+                // An animated scroll of ours (a glide, a magnification) is over in well under a
+                // second; one a scroll with no phase (the scroll bar, End) cut short never says it
+                // ended, and is let go after `animationsEnd` (`readerGesturing`).
+                if new == .animating { if old != .animating { animatingSince.value = Date() } } else { animatingSince.value = nil }
                 // The end the view was taken to can lie below the rows: the check looks when it stops.
                 if new == .idle { checkBlank() }
                 guard !shift.zoomAdjusting else { return }
@@ -448,7 +455,7 @@ struct TranscriptTimeline: View, Equatable {
                     endAfterGesture.value = false
                     if !shift.zoomAdjusting, !following.value, offset + new[2] >= height - Self.atBottom { following.value = true }
                 }
-                if !shift.zoomAdjusting, !following.value, !widthHeld, !gesturing.value, offset > geometry.value.offset + 1,
+                if !shift.zoomAdjusting, !following.value, !widthHeld, !gesturing.value || Self.stuck(animatingSince.value), offset > geometry.value.offset + 1,
                     offset + new[2] >= height - Self.atBottom
                 {
                     following.value = true
@@ -478,10 +485,11 @@ struct TranscriptTimeline: View, Equatable {
             // A history read again brings a store of its own, under this same view.
             .onChange(of: ObjectIdentifier(store), initial: true) {
                 // Following it, or there by a move that didn't say so.
-                store.readerAtEnd = { [following, gesturing, restore, restoreInRow, shift, seenShown] in
+                store.readerAtEnd = { [following, gesturing, animatingSince, restore, restoreInRow, shift, seenShown] in
                     let seen = seenShown.value
                     let atEnd = following.value || (seen.count == 5 && seen[1] + seen[2] >= seen[0] - Self.atBottom)
-                    return atEnd && !gesturing.value && restore.value == nil && restoreInRow.value == nil && !shift.zoomAdjusting
+                    let moving = gesturing.value && !Self.stuck(animatingSince.value)
+                    return atEnd && !moving && restore.value == nil && restoreInRow.value == nil && !shift.zoomAdjusting
                 }
                 store.storyEndWhy = { [following, gesturing, restore, restoreInRow, shift, seenShown] in
                     "following \(following.value), gesturing \(gesturing.value), restore \(restore.value != nil), in row \(restoreInRow.value != nil), zoom \(shift.zoomAdjusting), seen \(seenShown.value)"
