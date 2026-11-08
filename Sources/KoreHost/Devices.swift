@@ -46,6 +46,29 @@ package struct BoxIdentity: Sendable {
     }
 }
 
+/// `kore-host join`'s time: an unclaimed box takes a claim only within `window` of it (running
+/// `join` again opens it again).
+package enum NetJoin {
+    package static let window: TimeInterval = 600
+
+    package static func mark(_ paths: HostPaths, at time: Date) throws {
+        try PrivateFile.write(Data("\(Int(time.timeIntervalSince1970))\n".utf8), to: paths.netJoined)
+    }
+
+    package static func at(_ paths: HostPaths) -> Date? {
+        guard let data = try? PrivateFile.read(paths.netJoined),
+              let seconds = Double(String(decoding: data, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+        return Date(timeIntervalSince1970: seconds)
+    }
+
+    /// Whether a claim may be taken now.
+    package static func open(_ paths: HostPaths, now: Date) -> Bool {
+        guard let joined = at(paths) else { return false }
+        let since = now.timeIntervalSince(joined)
+        return since >= 0 && since <= window
+    }
+}
+
 /// The box's devices (phase 18 §4): the KoreTrust `DeviceBook` in its folder form at
 /// `devices/<id>.json`, read on every command as `GrantStore.current` is, and the devices waiting
 /// for an Allow (`devices/pending.json`): told apart by node key, at most `pendingCap`, each noted
@@ -96,26 +119,28 @@ package struct DeviceStore: Sendable {
         case cooling
         /// The list is full of recent ones: not kept.
         case full
+        /// Another node says it's a device already listed, or the listed node another device or
+        /// key: refused, the entry untouched.
+        case conflict
     }
 
-    /// Keeps a device that reached the box without a record. One already listed (same node key,
-    /// or same device id) is refreshed; a full list lets go of its oldest entry quiet for a
-    /// cool-down (never the claim), else the newcomer isn't kept.
+    /// Keeps a device that reached the box without a record. Entries are told apart by node key
+    /// (WhoIs's, never the peer's word): one already listed only gains what it lacked (its device
+    /// id, key, kind) and is seen again; its node key, key and name are never replaced. Another
+    /// node naming a listed device id, or the listed node naming another id or key, is refused.
+    /// A full list lets go of its oldest entry quiet for a cool-down (never the claim), else the
+    /// newcomer isn't kept.
     @discardableResult
     package func notePending(_ fresh: PendingDevice, at now: Date) -> Noted {
         (try? lockedPending { list -> Noted in
-            if let i = list.firstIndex(where: { $0.nodeKey == fresh.nodeKey || (fresh.device != nil && $0.device == fresh.device) }) {
+            if let i = list.firstIndex(where: { $0.nodeKey == fresh.nodeKey }) {
                 var entry = list[i]
-                entry.nodeKey = fresh.nodeKey
-                entry.device = fresh.device ?? entry.device
-                entry.name = fresh.name
-                entry.kind = fresh.kind ?? entry.kind
-                entry.identityKey = fresh.identityKey ?? entry.identityKey
-                entry.raiseKey = fresh.raiseKey ?? entry.raiseKey
-                entry.userId = fresh.userId
-                entry.tags = fresh.tags
-                entry.fqdn = fresh.fqdn
-                entry.login = fresh.login
+                if let device = fresh.device, let had = entry.device, device != had { return .conflict }
+                if let key = fresh.identityKey, let had = entry.identityKey, key != had { return .conflict }
+                entry.device = entry.device ?? fresh.device
+                entry.identityKey = entry.identityKey ?? fresh.identityKey
+                entry.kind = entry.kind ?? fresh.kind
+                entry.raiseKey = entry.raiseKey ?? fresh.raiseKey
                 entry.claim = entry.claim || fresh.claim
                 entry.lastSeen = now
                 let due = now.timeIntervalSince(entry.notedAt) >= Self.coolDown
@@ -123,6 +148,7 @@ package struct DeviceStore: Sendable {
                 list[i] = entry
                 return due ? .seen : .cooling
             }
+            if let device = fresh.device, list.contains(where: { $0.device == device }) { return .conflict }
             if list.count >= Self.pendingCap {
                 let quiet = list.enumerated().filter { !$0.element.claim && now.timeIntervalSince($0.element.lastSeen) >= Self.coolDown }
                 guard let oldest = quiet.min(by: { $0.element.lastSeen < $1.element.lastSeen }) else { return .full }
@@ -236,7 +262,15 @@ package struct DeviceStore: Sendable {
     /// issuing Mac isn't in it dropped), pending entries now allowed leave the list.
     @discardableResult
     package func set(rev: Int, records: [DeviceRecord], from peer: VerifiedPeer) throws -> DeviceBook.Contents {
-        let next = try book.apply(rev: rev, devices: records, from: peer)
+        // Each kind's abilities at most (a phone never runs, a box only reads), and the box keeps
+        // an owner Mac: a set without one would leave nobody able to change it.
+        let capped = records.map { record -> DeviceRecord in
+            var record = record
+            record.abilities = record.abilities.effective.intersection(Self.abilities(record.kind).effective)
+            return record
+        }
+        guard capped.contains(where: { $0.kind == .mac && $0.owner }) else { throw TrustError.refused("a set without an owner Mac") }
+        let next = try book.apply(rev: rev, devices: capped, from: peer)
         let ids = Set(next.devices.map(\.id))
         _ = try? lockedPending { list in list.removeAll { $0.device.map(ids.contains) ?? false } }
         return next

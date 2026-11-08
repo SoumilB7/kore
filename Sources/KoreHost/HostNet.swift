@@ -32,8 +32,13 @@ package final class HostNet {
     nonisolated package static let port = NetListener.port
     /// The interface installed Tailscale makes on Linux.
     package static let interface = "tailscale0"
-    /// Handshakes under way at once; more wait outside (closed).
+    /// Tailnet handshakes under way at once; more are closed.
     package static let maxHandshakes = 16
+    /// `attach --proto 2` handshakes (this user only), counted apart so tailnet peers can't
+    /// crowd them out.
+    package static let maxSSHHandshakes = 4
+
+    func handshaking(_ route: Binding.Route) -> Int { handshakes.values.filter { $0.route == route }.count }
 
     unowned let host: HostDaemon
     /// The tailnet while the box is on KoreNet (`join`); nil while off: no port, no LocalAPI, no
@@ -51,6 +56,16 @@ package final class HostNet {
     /// The first listening socket (tests read the port the kernel picked).
     var firstListener: Int32? { listeners.first?.fd }
     private var boundIndex: Int32 = 0
+    /// `tailscale0`'s index now (0 off Linux; tests set their own).
+    package var interfaceIndex: () -> Int32 = {
+        #if os(Linux)
+        kore_interface_index(HostNet.interface)
+        #else
+        0
+        #endif
+    }
+    /// Times the port was bound (tests read it).
+    package private(set) var binds = 0
     /// This node as its own Status says: node key, user (nil when tagged).
     package private(set) var selfNode: TailnetStatus.SelfNode?
     /// Why the port couldn't be bound, for `status` and the journal.
@@ -102,7 +117,6 @@ package final class HostNet {
     package func leave() {
         closeListeners()
         netlink?.source.cancel()
-        if let fd = netlink?.fd { close(fd) }
         netlink = nil
         busWatch?.cancel()
         busWatch = nil
@@ -123,7 +137,6 @@ package final class HostNet {
     package func stop() {
         leave()
         ssh?.source.cancel()
-        if let fd = ssh?.fd { close(fd) }
         ssh = nil
         unlink(host.paths.netSocket.path)
         for shake in handshakes.values {
@@ -141,6 +154,12 @@ package final class HostNet {
         guard status.backendState == .running, let me = status.selfNode, !me.tailscaleIPs.isEmpty else { return [] }
         try NetListener.check(me.tailscaleIPs, allowed: Set(me.tailscaleIPs))
         return me.tailscaleIPs
+    }
+
+    /// Whether the sockets bound now still fit: the same addresses, and the same `tailscale0`
+    /// (a tailscaled restart makes a new interface: a socket held to the old index hears nothing).
+    nonisolated static func keeps(want: [String], bound: [String], listening: Bool, boundIndex: Int32, index: Int32) -> Bool {
+        listening && want == bound && boundIndex == index
     }
 
     /// Looks at Tailscale again and binds what it says (or closes, when it's stopped).
@@ -164,20 +183,21 @@ package final class HostNet {
             closeListeners()
             return
         }
-        if want == bound && !listeners.isEmpty { return }
+        let index = interfaceIndex()
+        if Self.keeps(want: want, bound: bound, listening: !listeners.isEmpty, boundIndex: boundIndex, index: index) { return }
         closeListeners()
         guard !want.isEmpty else { return }
         #if os(Linux)
-        let device: String? = kore_interface_index(Self.interface) > 0 ? Self.interface : nil
+        let device: String? = index > 0 ? Self.interface : nil
         // Userspace Tailscale has no interface: its addresses aren't this kernel's to bind.
         guard device != nil else {
             bindProblem = "no \(Self.interface) interface"
             return
         }
-        boundIndex = kore_interface_index(Self.interface)
         #else
         let device: String? = nil
         #endif
+        boundIndex = index
         var fds: [Int32] = []
         for address in want {
             var fd = device.map { kore_listen_on(address, port, $0, 16) } ?? kore_listen_on(address, port, nil, 16)
@@ -198,9 +218,11 @@ package final class HostNet {
         }
         bindProblem = nil
         bound = want
+        binds += 1
         for fd in fds {
             let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
             source.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.acceptAll(fd) } }
+            source.setCancelHandler { close(fd) }
             source.resume()
             listeners.append((fd, source))
         }
@@ -211,8 +233,8 @@ package final class HostNet {
 
     private func closeListeners() {
         for listener in listeners {
+            // The descriptor closes in the source's cancel handler.
             listener.source.cancel()
-            close(listener.fd)
         }
         listeners = []
         bound = []
@@ -231,6 +253,7 @@ package final class HostNet {
                 if kore_netlink_drain(fd, Self.interface, self.boundIndex) != 0 { self.rebind() }
             }
         }
+        source.setCancelHandler { close(fd) }
         source.resume()
         netlink = (fd, source)
         #else
@@ -257,7 +280,9 @@ package final class HostNet {
                 $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { accept(listener, $0, &length) }
             }
             guard fd >= 0 else { return }
-            guard let remote = Sockets.peerAddress(fd)?.description, limiter.admit(remote), handshakes.count < Self.maxHandshakes else {
+            Self.noSigPipe(fd)
+            // Room first: a connection turned away for capacity doesn't spend its source's limit.
+            guard handshaking(.tailnet) < Self.maxHandshakes, let remote = Sockets.peerAddress(fd)?.description, limiter.admit(remote) else {
                 close(fd)
                 continue
             }
@@ -277,10 +302,16 @@ package final class HostNet {
                         HostJournal.note("korenet refused", ["from": remote, "reason": "whois"])
                         return Sockets.closeFD(fd)
                     }
-                    self.greet(fd, route: .tailnet, facts: NetPeerFacts(nodeKey: who.node.key, userId: who.userId, tags: who.node.tags), whois: who)
+                    self.greet(fd, route: .tailnet, facts: Self.facts(who), whois: who)
                 }
             }
         }
+    }
+
+    /// The peer as its WhoIs says: node key, user or tags, and Kore's app capability.
+    nonisolated static func facts(_ who: TailnetWhoIs) -> NetPeerFacts {
+        NetPeerFacts(
+            nodeKey: who.node.key, userId: who.userId, tags: who.node.tags, cap: AppCap.abilities(capMap: who.capMap, tagged: !who.node.tags.isEmpty))
     }
 
     /// A connected socket's session, server side: the challenge goes now, the proof has 2 s.
@@ -297,8 +328,16 @@ package final class HostNet {
         let shake = Handshake(session: session, route: route, facts: facts)
         let key = ObjectIdentifier(shake)
         handshakes[key] = shake
-        let read = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
+        // The session owns `fd` and closes it; the source watches its own duplicate, closed when
+        // the source is cancelled.
+        let watched = dup(fd)
+        guard watched >= 0 else {
+            handshakes[key] = nil
+            return session.close(NetControl.Reason.limit)
+        }
+        let read = DispatchSource.makeReadSource(fileDescriptor: watched, queue: .main)
         read.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.advance(key) } }
+        read.setCancelHandler { close(watched) }
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + NetSession.preAuthWindow + 0.05)
         timer.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.advance(key) } }
@@ -361,15 +400,26 @@ package final class HostNet {
             nodeKey: whois.node.key, device: hello.device, name: hello.enroll?.name ?? Self.shortName(whois.node.name), kind: hello.enroll?.kind,
             identityKey: hello.enroll?.identityKey, raiseKey: hello.enroll?.raiseKey, userId: whois.userId, tags: whois.node.tags,
             fqdn: whois.node.name, login: whois.user.loginName, at: now)
-        // An unclaimed box: the first Mac of its own user (or, for a tagged box, one Kore's app
-        // capability lets run) waits as its claimant until its owner Allows it.
+        // An unclaimed box: within 10 minutes of `kore-host join`, the first Mac of its own user
+        // (or, for a tagged box, one Kore's app capability lets run) waits as its claimant until
+        // its owner Allows it. Outside the window it's an ordinary pending device.
         let mayOwn = ownerUser == nil ? cap?.allows(.run) == true : sameUser
         if mayOwn, let enroll = hello.enroll, enroll.kind == .mac, !store.claimed {
-            let claimant = store.claimant
-            if claimant == nil || claimant?.device == hello.device {
-                if enroll.claim == true, let claimant, claimant.identityKey == enroll.identityKey, claimant.nodeKey == whois.node.key {
+            let window = NetJoin.open(host.paths, now: now)
+            if let claimant = store.claimant, claimant.device == hello.device {
+                // The claimant's device id is only the claimant's: its key, from its node.
+                guard claimant.identityKey == enroll.identityKey, claimant.nodeKey == whois.node.key else {
+                    HostJournal.audit("deny", ["node": whois.node.key, "device": hello.device.uuidString.lowercased(), "reason": "not the claimant"])
+                    return .refuse(NetControl.Reason.unknown)
+                }
+                if enroll.claim == true {
+                    guard window else {
+                        HostJournal.audit("deny", ["device": hello.device.uuidString.lowercased(), "reason": "claim window closed"])
+                        return .refuse(NetControl.Reason.unknown)
+                    }
                     return claim(claimant, hello: hello)
                 }
+            } else if store.claimant == nil, window {
                 var entry = fresh
                 entry.claim = true
                 notePending(entry, at: now)
@@ -388,6 +438,8 @@ package final class HostNet {
                 "claim": entry.claim ? "1" : nil,
             ])
             host.pushPending()
+        case .conflict:
+            HostJournal.audit("deny", ["node": entry.nodeKey, "device": entry.device.map { $0.uuidString.lowercased() }, "reason": "pending conflict"])
         case .cooling, .full:
             break
         }
@@ -465,6 +517,14 @@ package final class HostNet {
         }
     }
 
+    /// A peer that went mid-write is an error to read, never SIGPIPE (macOS has no MSG_NOSIGNAL).
+    nonisolated static func noSigPipe(_ fd: Int32) {
+        #if canImport(Darwin)
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        #endif
+    }
+
     /// Equal secrets, compared in constant time.
     static func same(_ a: String, _ b: String) -> Bool {
         let x = Array(a.utf8), y = Array(b.utf8)
@@ -496,14 +556,16 @@ package final class HostNet {
                 while true {
                     let client = accept(fd, nil, nil)
                     guard client >= 0 else { return }
-                    guard HostListener.peerIsUser(client), let self, self.handshakes.count < Self.maxHandshakes else {
+                    guard let self, self.handshaking(.ssh) < Self.maxSSHHandshakes, HostListener.peerIsUser(client) else {
                         close(client)
                         continue
                     }
+                    Self.noSigPipe(client)
                     self.greet(client, route: .ssh, facts: .ssh, whois: nil)
                 }
             }
         }
+        source.setCancelHandler { close(fd) }
         source.resume()
         ssh = (fd, source)
     }
@@ -538,7 +600,9 @@ final class NetLinkWire: LinkWire {
     func start(max: Int, frame: @escaping @MainActor (Data) -> Void, ended: @escaping @MainActor () -> Void) {
         self.frame = frame
         self.ended = ended
-        let source = DispatchSource.makeReadSource(fileDescriptor: session.descriptor, queue: .main)
+        guard let watched = Self.watched(session.descriptor) else { return finish() }
+        let source = DispatchSource.makeReadSource(fileDescriptor: watched, queue: .main)
+        source.setCancelHandler { _ = Glue4.close(watched) }
         source.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.pump() } }
         reader = source
         source.resume()
@@ -583,9 +647,13 @@ final class NetLinkWire: LinkWire {
     /// A write source while frames wait, none otherwise.
     private func arm() {
         guard !done else { return }
+        // A write that failed ended the session (and closed its descriptor).
+        if case .closed = session.state { return finish() }
         if session.wantsWrite {
             guard writer == nil else { return }
-            let source = DispatchSource.makeWriteSource(fileDescriptor: session.descriptor, queue: .main)
+            guard let watched = Self.watched(session.descriptor) else { return finish() }
+            let source = DispatchSource.makeWriteSource(fileDescriptor: watched, queue: .main)
+            source.setCancelHandler { _ = Glue4.close(watched) }
             source.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.pump() } }
             writer = source
             source.resume()
@@ -593,6 +661,13 @@ final class NetLinkWire: LinkWire {
             writer?.cancel()
             writer = nil
         }
+    }
+
+    /// A duplicate of the session's descriptor for one source (the session closes the
+    /// original); the source closes it in its cancel handler.
+    private static func watched(_ fd: Int32) -> Int32? {
+        let copy = dup(fd)
+        return copy >= 0 ? copy : nil
     }
 
     private func stopSources() {
@@ -629,5 +704,17 @@ package enum PortHolder {
     package static func uid(port: UInt16) -> UInt32? {
         let tables = ["/proc/net/tcp", "/proc/net/tcp6"].compactMap { try? String(contentsOfFile: $0, encoding: .utf8) }
         return uid(port: port, tables: tables)
+    }
+}
+
+private enum Glue4 {
+    static func close(_ fd: Int32) -> Int32 {
+        #if canImport(Darwin)
+        Darwin.close(fd)
+        #elseif canImport(Glibc)
+        Glibc.close(fd)
+        #else
+        Musl.close(fd)
+        #endif
     }
 }

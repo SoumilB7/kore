@@ -60,4 +60,8 @@ int kore_netlink_drain(int fd, const char *name, int known);
 /// The interface's index, 0 when there's none by that name.
 int kore_interface_index(const char *name);
 
+/// Whether a netlink `IFLA_IFNAME` attribute's `room` payload bytes hold exactly `name`
+/// (NUL-terminated within them).
+int kore_ifname_is(const void *payload, size_t room, const char *name);
+
 #endif

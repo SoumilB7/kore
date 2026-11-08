@@ -243,6 +243,12 @@ int kore_listen_on(const char *ip, unsigned short port, const char *device, int 
 
 int kore_interface_index(const char *name) { return (int)if_nametoindex(name); }
 
+int kore_ifname_is(const void *payload, size_t room, const char *name) {
+    // The whole name, NUL-terminated inside the attribute: never a prefix, never past its end.
+    const char *got = (const char *)payload;
+    return memchr(got, 0, room) != NULL && strcmp(got, name) == 0;
+}
+
 #if defined(__linux__)
 // The static musl SDK has no kernel headers: rtnetlink's few shapes, as the kernel lays them out.
 #define KORE_NETLINK_ROUTE 0
@@ -303,7 +309,7 @@ int kore_netlink_drain(int fd, const char *name, int known) {
                 while (a + sizeof(struct kore_rtattr) <= size) {
                     struct kore_rtattr *attr = (struct kore_rtattr *)(body + a);
                     if (attr->len < sizeof(*attr) || a + attr->len > size) break;
-                    if (attr->type == KORE_IFLA_IFNAME && strncmp((const char *)(attr + 1), name, attr->len - sizeof(*attr)) == 0) about = 1;
+                    if (attr->type == KORE_IFLA_IFNAME && kore_ifname_is(attr + 1, attr->len - sizeof(*attr), name)) about = 1;
                     a += KORE_ALIGN4(attr->len);
                 }
             } else if ((h->type == KORE_RTM_NEWADDR || h->type == KORE_RTM_DELADDR) && size >= sizeof(struct kore_ifaddrmsg)) {

@@ -75,6 +75,8 @@ final class NetRig {
         rig.host.now = { [clock] in clock.now }
         try rig.host.start()
         identity = try BoxIdentity.loadOrCreate(rig.paths)
+        // `kore-host join` just ran: the claim window is open.
+        try NetJoin.mark(rig.paths, at: clock.now)
         tailnet = FakeTailnet(status: status)
         let made = tailnet
         rig.host.makeTailnet = { made }
@@ -119,7 +121,7 @@ final class NetRig {
         setup.enroll = enroll
         let session = Dialled(NetSession(fd: a, role: .client(setup), clock: { [clock] in clock.now }))
         let who = whois ?? FakeTailnet.who(key: device.nodeKey)
-        let facts = route == .ssh ? NetPeerFacts.ssh : NetPeerFacts(nodeKey: who.node.key, userId: who.userId, tags: who.node.tags)
+        let facts = route == .ssh ? NetPeerFacts.ssh : HostNet.facts(who)
         net.greet(b, route: route, facts: facts, whois: route == .ssh ? nil : who)
         return session
     }

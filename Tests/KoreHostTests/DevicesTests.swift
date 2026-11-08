@@ -68,16 +68,17 @@ struct DevicesTests {
 
     @Test func pendingDedupesByNodeKeyCoolsDownAndCaps() throws {
         defer { try? FileManager.default.removeItem(at: root) }
-        #expect(store.notePending(pending("nk:1"), at: t0) == .added)
-        #expect(store.notePending(pending("nk:1"), at: t0.addingTimeInterval(60)) == .cooling)
+        let entries = (1...9).map { pending("nk:\($0)") }
+        #expect(store.notePending(entries[0], at: t0) == .added)
+        #expect(store.notePending(entries[0], at: t0.addingTimeInterval(60)) == .cooling)
         #expect(store.pending().count == 1)
-        #expect(store.notePending(pending("nk:1"), at: t0.addingTimeInterval(601)) == .seen)
-        for i in 2...8 { #expect(store.notePending(pending("nk:\(i)"), at: t0.addingTimeInterval(601)) == .added) }
+        #expect(store.notePending(entries[0], at: t0.addingTimeInterval(601)) == .seen)
+        for entry in entries[1...7] { #expect(store.notePending(entry, at: t0.addingTimeInterval(601)) == .added) }
         // Full of recent ones: a ninth isn't kept.
-        #expect(store.notePending(pending("nk:9"), at: t0.addingTimeInterval(700)) == .full)
+        #expect(store.notePending(entries[8], at: t0.addingTimeInterval(700)) == .full)
         #expect(store.pending().count == DeviceStore.pendingCap)
         // A cool-down later the quietest one gives way.
-        #expect(store.notePending(pending("nk:9"), at: t0.addingTimeInterval(1302)) == .added)
+        #expect(store.notePending(entries[8], at: t0.addingTimeInterval(1302)) == .added)
         #expect(store.pending().count == DeviceStore.pendingCap && !store.pending().contains { $0.nodeKey == "nk:1" })
     }
 

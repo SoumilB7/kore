@@ -52,7 +52,8 @@ package final class UsageLedger {
         }
     }
 
-    /// The lines after `cursor` within the week, at most `pageMax`.
+    /// The lines after `cursor` within the week, at most `pageMax`. Reads the whole file (a week of
+    /// lines, asked once per link-up): left so, a seek index would cost more than it saves.
     package func since(_ cursor: Int?, id: String) -> UsageWire.Page {
         let time = now()
         let all = read().filter { $0.n > (cursor ?? 0) && !old($0, at: time) }

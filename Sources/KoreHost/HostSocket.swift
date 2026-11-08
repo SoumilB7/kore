@@ -50,8 +50,9 @@ package final class HostListener {
     }
 
     package func stop() {
+        let fd = fd
+        source.setCancelHandler { close(fd) }
         source.cancel()
-        close(fd)
         unlink(path.path)
     }
 

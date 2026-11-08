@@ -95,10 +95,16 @@ struct HostNetTests {
         let other = try rig.dial(second, enroll: .init(name: "iMac", kind: .mac, identityKey: second.key.publicKey))
         try await other.until { other.closed != nil }
         #expect(rig.store.claimant?.device == mac.id && rig.store.pending().count == 2)
-        // Hours later (no window), its owner Allows: the Mac owns the box.
+        // Hours later the window has closed: its owner's Allow is refused.
         rig.clock.advance(6 * 3600)
         var allowed = enroll
         allowed.claim = true
+        let late = try rig.dial(mac, enroll: allowed)
+        try await late.until { late.closed != nil }
+        #expect(late.closed == "bye unknown" && !rig.store.claimed)
+        #expect(journal.audit("deny").contains { $0.contains("reason=\"claim window closed\"") })
+        // `kore-host join` again opens it: the Allow now takes.
+        try NetJoin.mark(rig.rig.paths, at: rig.clock.now)
         let claimed = try rig.dial(mac, enroll: allowed)
         try await claimed.until { claimed.types.contains("snapshot") || claimed.closed != nil }
         #expect(claimed.up)
@@ -107,9 +113,9 @@ struct HostNetTests {
         #expect(rig.store.claimed && rig.store.claimant == nil)
         #expect(journal.audit("allow").contains { $0.contains("how=claim") })
         // Claimed: the second Mac's own "claim" is just a pending device now.
-        var late = NetControl.Enroll(name: "iMac", kind: .mac, identityKey: second.key.publicKey)
-        late.claim = true
-        let refused = try rig.dial(second, enroll: late)
+        var other2 = NetControl.Enroll(name: "iMac", kind: .mac, identityKey: second.key.publicKey)
+        other2.claim = true
+        let refused = try rig.dial(second, enroll: other2)
         try await refused.until { refused.closed != nil }
         #expect(refused.closed == "bye unknown" && rig.store.all().count == 1)
     }
@@ -372,7 +378,7 @@ struct HostUpgradeTests {
         let forged = try rig.dialAttach(other, grant: wrong, enroll: .init(name: "x", kind: .mac, identityKey: other.key.publicKey))
         try await forged.until { forged.closed != nil }
         #expect(forged.closed == "bye grant")
-        #expect(journal.audit("deny").count == 2)
+        #expect(journal.audit("deny").filter { $0.contains("grant=laptop") }.count == 2)
         // 30 days on, the grant's SSH link is refused; the device's isn't.
         rig.clock.advance(Grant.upgradeGrace)
         #expect(grants.current("laptop", secret: grant.secret, at: rig.clock.now) == nil)

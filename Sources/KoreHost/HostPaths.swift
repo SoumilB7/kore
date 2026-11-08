@@ -92,6 +92,8 @@ package struct HostPaths: Sendable {
     /// The box's own identity: its P-256 key (0600) and its device id.
     package var identityKey: URL { state.appendingPathComponent("identity.key") }
     package var deviceId: URL { state.appendingPathComponent("device-id") }
+    /// When `kore-host join` last ran: the claim window's start.
+    package var netJoined: URL { state.appendingPathComponent("net-joined") }
     /// A week of what the box's chats spent, a line per model request.
     package var usageLedger: URL { state.appendingPathComponent("usage/ledger.jsonl") }
     /// `attach --proto 2`'s way in: link 2.0 sessions over SSH.

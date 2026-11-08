@@ -134,11 +134,13 @@ case "join":
     }
     do {
         let me = try BoxIdentity.loadOrCreate(paths)
+        // An unclaimed box takes its owner Mac's claim for the next 10 minutes.
+        try NetJoin.mark(paths, at: Date())
         setNet(true)
         print("KoreNet is on for this box (kore-host net off turns it off)")
         print("device  \(me.device.uuidString.lowercased())")
         print("code    \(me.code)")
-        print("Open Devices in Kore on your Mac and check the code matches before you Allow this box.")
+        print("Within 10 minutes, open Devices in Kore on your Mac and check the code matches before you Allow this box.")
     } catch { fail("kore-host: \(error)") }
 case "net":
     switch arguments.dropFirst().first {
