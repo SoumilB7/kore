@@ -29,7 +29,9 @@ struct SocketEndTests {
         while write(theirs, chunk, chunk.count) > 0 {}
         _ = fcntl(theirs, F_SETFL, fcntl(theirs, F_GETFL) & ~O_NONBLOCK)
         Self.peer(theirs)
-        SocketEnd.start(mine, owed: Data("bye".utf8))
+        // Its bound well past the test's own pace: the peer's thread may start late on a busy
+        // Mac (the bound has a test of its own).
+        SocketEnd.start(mine, owed: Data("bye".utf8), wait: .seconds(30))
         let got: (Data, Bool) = await Self.off {
             // Still writing, more than the buffers hold, before it reads anything.
             for _ in 0..<64 { guard write(theirs, chunk, chunk.count) == chunk.count else { return (Data(), false) } }
