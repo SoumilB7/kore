@@ -99,7 +99,7 @@ final class BoxBinding {
 
     /// The folder as the box's window names it ("~/Code"), else its path.
     var shownFolder: String {
-        let window = connection.folders.first { $0.path == folder }?.windowId
+        let window = connection.windowId(of: folder)
         return connection.windows.first { $0.id == window }?.path ?? folder
     }
 
@@ -109,7 +109,9 @@ final class BoxBinding {
 
     func windowOpened() {
         BoxBinding.opened(alias: alias, folder: folder)
-        connection.onSnapshot(key) { [weak self] in self?.adoptChats() }
+        // The folder's chats opened anywhere (the box, the phone, another Mac, an agent) as tabs,
+        // as the box lists them: on each snapshot and each delta.
+        connection.onTabs(key) { [weak self] in self?.adoptChats() }
         // 1.10: where each chat lives (a replica's dimmed tab and pill).
         let alias = alias
         connection.onChatMeta(key) { [weak connection] ids in
@@ -120,7 +122,7 @@ final class BoxBinding {
     }
 
     func windowClosed() {
-        connection.onSnapshot(key, nil)
+        connection.onTabs(key, nil)
         connection.onChatMeta(key, nil)
         if filesMade { files.stop() }
         stopSync()
@@ -164,7 +166,12 @@ final class BoxBinding {
     /// known when the window opened) get tabs at the end; a lone empty tab gives way to them.
     func adoptChats() {
         guard let workspace, !workspace.isClosed else { return }
-        let shown = Set(workspace.tabs.compactMap { ($0.chat?.services as? BoxChatServices)?.chatId })
+        let services = workspace.tabs.flatMap { tab in
+            ([tab.chat] + (tab.board.map { Array($0.chats.values) } ?? [])).compactMap { $0?.services as? BoxChatServices }
+        }
+        // A chat made here that the box may list before its id comes back: adopted once it has it.
+        guard !services.contains(where: \.creating) else { return }
+        let shown = Set(services.compactMap(\.chatId))
         let tabs: [ChatTab] = connection.chats(in: folder).filter { !shown.contains($0.id) && !closedIds.contains($0.id) }.compactMap { meta in
             guard let provider = Registry.provider(meta.provider) else { return nil }
             let tab = ChatTab()
@@ -260,9 +267,7 @@ final class BoxBinding {
         return chat(provider, id: chatId, title: title)
     }
 
-    private var windowId: String? {
-        connection.folders.first { $0.path == folder }?.windowId ?? connection.windows.first { $0.path == folder }?.id
-    }
+    private var windowId: String? { connection.windowId(of: folder) }
 
     /// The folder's history on the box, for the History popup: its closed chats (by box chat id)
     /// and, from 1.9, the past sessions its CLIs keep there, archived ones too.
@@ -330,6 +335,8 @@ final class BoxChatServices: ChatServices {
     private let making: LinkChatBackend.Making?
     /// Its backend, for what the box keeps with the chat (1.9), and the draft the box last had.
     private weak var backend: LinkChatBackend?
+    /// Being made on the box: its id isn't known here yet.
+    var creating: Bool { backend?.creating ?? false }
     private var boxDraft = ""
     /// The CLI runs on the box, which sets its own instructions and gives it the `kore_app` server
     /// while Arsenal is on; the tier and Arsenal's notes go with each message (`LinkChatBackend`).
@@ -355,6 +362,8 @@ final class BoxChatServices: ChatServices {
         }
         backend.onCreated = { [weak self, weak backend] id in
             self?.chatId = id
+            // What the box listed meanwhile, now this chat is known.
+            self?.binding?.adoptChats()
             // A chat made here (a fork) keeps the point it started with on the box.
             if let chat = self?.chat, chat.context.autoCompactAt != nil { backend?.keepAutoCompact(chat.context.autoCompactAt) }
         }

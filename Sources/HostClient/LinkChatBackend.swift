@@ -334,6 +334,9 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     // MARK: To the box
 
+    /// `chat.new` asked and not answered yet: the box may list the chat before its id is known here.
+    package var creating: Bool { chatId == nil && starting != nil }
+
     /// The chat's id once it's on the box (a new chat's, after `chat.new`).
     private func ready() async throws -> String {
         try await start()

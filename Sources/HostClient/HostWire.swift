@@ -41,6 +41,10 @@ package struct BoxFolder: Codable, Sendable, Equatable, Hashable {
         name = BoxFolder.lastPart(path)
     }
 
+    /// The window a box keeps for a folder it serves: named by its path (`HostDaemon.windowID`),
+    /// so it's known here before `folders.list` answers.
+    package static func windowId(_ path: String) -> String { StableID.of(path, prefix: "w_") }
+
     package static func lastPart(_ path: String) -> String {
         let trimmed = path.hasSuffix("/") ? String(path.dropLast()) : path
         return trimmed.split(separator: "/").last.map(String.init) ?? trimmed

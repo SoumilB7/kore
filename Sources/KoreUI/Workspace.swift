@@ -288,6 +288,13 @@ package final class Workspace {
 
     /// A box's chat back in a tab, at `index` (where it was), selected.
     private func place(_ chat: Chat, at index: Int) {
+        // A box chat its window adopted already (the box listed it before this answer came).
+        if let id = (chat.services as? BoxChatServices)?.chatId,
+            let shown = tabs.first(where: { ($0.chat?.services as? BoxChatServices)?.chatId == id && $0.agent == nil })
+        {
+            activeID = shown.id
+            return
+        }
         let tab = ChatTab()
         tab.chat = chat
         if tabs.count == 1, tabs[0].isEmpty { tabs.removeAll() }

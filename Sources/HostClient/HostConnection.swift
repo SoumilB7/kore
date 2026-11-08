@@ -130,6 +130,8 @@ package final class HostConnection {
     @ObservationIgnored private var snapshotWatchers: [String: @MainActor () -> Void] = [:]
     /// Told the ids of chats whose meta came (a snapshot's every chat, a delta's), by key.
     @ObservationIgnored private var metaWatchers: [String: @MainActor ([String]) -> Void] = [:]
+    /// Told when the box's windows or chats changed (a snapshot, a delta that names either), by key.
+    @ObservationIgnored private var tabWatchers: [String: @MainActor () -> Void] = [:]
     /// Box windows' open explorer folders (1.8 `fs.watch`), by window, and who hears their changes.
     @ObservationIgnored package var fileWatchers: [String: (folders: Set<String>, changed: (@MainActor (BoxChange) -> Void)?)] = [:]
     /// Running searches' pages (1.8 `fs.hits`), by command id.
@@ -238,6 +240,10 @@ package final class HostConnection {
     /// Hands each `sync.changed` for a box folder to `read` (its frame's bytes); nil stops it.
     /// Watches chats' metas as they come (1.10: a moved chat's replica, followed or not).
     package func onChatMeta(_ key: String, _ action: (@MainActor ([String]) -> Void)?) { metaWatchers[key] = action }
+
+    /// Runs `action` each time the box's windows or chats change: a snapshot, or a delta naming
+    /// either (a chat opened on the box, the phone, another Mac). Nil stops it.
+    package func onTabs(_ key: String, _ action: (@MainActor () -> Void)?) { tabWatchers[key] = action }
 
     package func onSync(_ folder: String, _ read: (@MainActor (Data) -> Void)?) { syncReaders[folder] = read }
 
@@ -610,6 +616,7 @@ package final class HostConnection {
             }
             for watcher in snapshotWatchers.values { watcher() }
             for watcher in metaWatchers.values { watcher(Array(self.chats.keys)) }
+            for watcher in tabWatchers.values { watcher() }
             saveSoon()
         case .delta(_, let windows, let chats, let removed, let extras):
             if let windows { self.windows = windows }
@@ -629,6 +636,7 @@ package final class HostConnection {
                 followers[id]?.follower?.meta(nil)
             }
             if let chats, !chats.isEmpty { for watcher in metaWatchers.values { watcher(chats.map(\.id)) } }
+            if windows != nil || chats?.isEmpty == false { for watcher in tabWatchers.values { watcher() } }
             saveSoon()
         case .historyPage(let id, _, let sessions, _):
             historyAsks.removeValue(forKey: id)?.resume(returning: sessions)
@@ -785,10 +793,15 @@ package final class HostConnection {
 
     // MARK: Reading the state
 
-    /// The chats the box has in a folder, in its tab order: its window's tabs (the window
-    /// `folders.list` named for it).
+    /// A served folder's window on the box: as `folders.list` named it, else by its path (a window
+    /// opened before the box listed its folders here, or with this Mac's copy gone).
+    package func windowId(of folder: String) -> String {
+        folders.first { $0.path == folder }?.windowId ?? BoxFolder.windowId(folder)
+    }
+
+    /// The chats the box has in a folder, in its tab order: its window's tabs.
     package func chats(in folder: String) -> [ChatMeta] {
-        let window = folders.first { $0.path == folder }?.windowId
+        let window = windowId(of: folder)
         let ids = windows.filter { $0.id == window || $0.path == folder }.flatMap { $0.tabs.compactMap(\.chatId) }
         return ids.compactMap { chats[$0] }
     }

@@ -168,7 +168,7 @@ private func moveSSH(_ root: URL) throws -> SyncBox {
 
 /// The client's end of a socket to an in-process kore-host, the hello's proof filled in as
 /// `kore-host attach` fills it.
-private final class MoveDaemonTransport: HostTransport, @unchecked Sendable {
+final class MoveDaemonTransport: HostTransport, @unchecked Sendable {
     let events: AsyncStream<TransportEvent>
     private let continuation: AsyncStream<TransportEvent>.Continuation
     private let path: String
