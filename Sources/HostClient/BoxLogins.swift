@@ -82,6 +82,7 @@ package struct BoxLogins: LoginMove.Remote {
         case "sentWrong": return .sentWrong
         case "notSignedIn": return .notSignedIn
         case "notALogin": return .notALogin
+        case "occupied": return .occupied
         case "busy": return .busy
         case "notThere": return .notThere
         default: break

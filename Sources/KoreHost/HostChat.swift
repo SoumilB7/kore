@@ -257,6 +257,8 @@ package final class HostChat {
         // Its account's folder, read at each start: a switch takes effect at the next.
         if record.provider == "claude" {
             chat.launchEnvironment = { [weak self, weak services] in try services?.accountEnvironment?(self?.record.account) ?? [:] }
+        } else if record.provider == "codex" {
+            chat.launchEnvironment = { [weak services] in try services?.codexEnvironment?() ?? [:] }
         }
         if let point = record.autoCompact { chat.setAutoCompact(point == 0 ? nil : point) }
         expectingWake = session != nil && !entries.isEmpty

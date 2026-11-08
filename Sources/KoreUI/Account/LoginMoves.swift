@@ -117,7 +117,7 @@ package final class LoginMoves {
 
     /// The boxes a login could move to, those that can't take one now with their reason.
     func targets(_ cli: String) -> [Target] {
-        guard cli == "claude" else { return [] }
+        guard LinkLogins.clis.contains(cli) else { return [] }
         return boxes().map { box in Target(key: box.key, name: box.name, why: box.unready.map { Self.words($0, box: box.name) }) }
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
@@ -143,7 +143,8 @@ package final class LoginMoves {
                 guard working == 0 else { return self.finish(key, .failed(.inUse(working)), box: name) }
                 if case .some(let other) = fallback { store.switchLogin(cli, to: other, LoginPick.byMove()) }
             }
-            let remote = target.remote(cli, LinkLogins.name(forEmail: email), Self.profile(cli, id), false)
+            // A box keeps one Codex login ("main"); a Claude one goes in a folder named for its email.
+            let remote = target.remote(cli, cli == "codex" ? LinkAccount.main : LinkLogins.name(forEmail: email), Self.profile(cli, id), false)
             let outcome = await LoginMove.out(MacLogin(cli: cli, id: id), to: remote, cli: cli)
             if let pending = outcome.pending { self.owe(Owed(box: box, cli: cli, login: AccountStore.loginKey(id), pending: pending)) }
             if outcome.moved {
@@ -168,7 +169,8 @@ package final class LoginMoves {
         let name = target.name
         lines[key] = .moving(name)
         Task {
-            guard let login = await target.login(email) else { return self.finish(key, .failed(.notThere), box: name) }
+            let found = cli == "codex" ? LinkAccount.main : await target.login(email)
+            guard let login = found else { return self.finish(key, .failed(.notThere), box: name) }
             let remote = target.remote(cli, login, nil, false)
             let outcome = await LoginMove.back(MacLogin(cli: cli, id: id), from: remote, cli: cli)
             if let pending = outcome.pending { self.owe(Owed(box: box, cli: cli, login: AccountStore.loginKey(id), pending: pending)) }
@@ -273,22 +275,24 @@ package final class LoginMoves {
         guard let key = Self.fingerprintKey() else { return }
         let ready = boxes().filter { $0.unready == nil }
         guard !ready.isEmpty else { return }
-        let cli = "claude"
-        let ids: [String?] = [nil] + CLIProfiles.added(cli).map(\.id)
         Task {
-            var mine: [String: String] = [:]
-            for id in ids {
-                let place = MacLogin(cli: cli, id: id).place
-                let data = try? await Task.detached { try LoginVault.store.value.read(place, prompt: false) }.value
-                if let data = data ?? nil, let print = LoginFingerprint.of(data, cli: cli, key: key) { mine[print] = Self.key(cli, id) }
-            }
             var found: [String: String] = [:]
             var names: [String: String] = [:]
-            for box in ready {
-                for print in await box.prints(cli, key) ?? [] {
-                    if let login = mine[print.fingerprint] {
-                        found[login] = box.key
-                        names[login] = print.login
+            for cli in LinkLogins.clis.sorted() {
+                let ids: [String?] = [nil] + CLIProfiles.added(cli).map(\.id)
+                var mine: [String: String] = [:]
+                for id in ids {
+                    let place = MacLogin(cli: cli, id: id).place
+                    let data = try? await Task.detached { try LoginVault.store.value.read(place, prompt: false) }.value
+                    if let data = data ?? nil, let print = LoginFingerprint.of(data, cli: cli, key: key) { mine[print] = Self.key(cli, id) }
+                }
+                guard !mine.isEmpty else { continue }
+                for box in ready {
+                    for print in await box.prints(cli, key) ?? [] {
+                        if let login = mine[print.fingerprint] {
+                            found[login] = box.key
+                            names[login] = print.login
+                        }
                     }
                 }
             }
@@ -312,6 +316,7 @@ package final class LoginMoves {
         case .sentWrong: "It arrived changed on \(box): not moved"
         case .notSignedIn: "\(box) doesn't read it signed in"
         case .notALogin: "It isn't a complete login: not moved"
+        case .occupied: "\(box) has its own Codex login: a box keeps one"
         case .changedMeanwhile: "It refreshed while moving: try again"
         case .failed(let words): words
         case .refused(let words): words == "not on KoreNet" ? "\(box) isn't on KoreNet" : words
@@ -330,6 +335,7 @@ package final class LoginMoves {
         case .sentWrong: "sentWrong"
         case .notSignedIn: "notSignedIn"
         case .notALogin: "notALogin"
+        case .occupied: "occupied"
         case .changedMeanwhile: "changedMeanwhile"
         case .failed: "failed"
         case .refused: "refused"

@@ -1,28 +1,44 @@
 import Foundation
 import KoreCore
 import LinkProtocol
+import src
 
 /// The box's side of a login moved between the owner's devices (1.14, `LinkLogins`). The owner's
 /// Mac runs the move (`LoginMove`); the box only ever stages, checks, places, pauses or deletes,
 /// each step idempotent by the move's id, so a Mac that sends one again after a drop does it
 /// once.
 ///
-/// - A login coming in is written 0600 to a hidden staging folder beside the accounts
-///   (`.incoming-<move>`), never listed and never run, then checked: its bytes against the sha
-///   the Mac sent, and `claude auth status` there. It's put in place only on the Mac's commit,
-///   which the Mac sends after deleting its own copy. Staging is never removed by the box on its
-///   own: after the Mac's delete it's the only copy left.
-/// - A login going out is paused first (persisted: nothing starts on it, through restarts),
-///   refused while a chat runs on it, read and sent; deleted on commit, un-paused on abort.
+/// - A login coming in is written 0600 to a hidden staging folder (`.incoming-<move>`), never
+///   listed and never run, then checked as a file only: complete, and its bytes the ones the Mac
+///   sent. No CLI reads it while the Mac still holds its copy (online, a CLI's status refreshes a
+///   login, or wipes it). It's put in place only on the Mac's commit, sent after the Mac deleted
+///   its own copy; then, one copy left, the CLI reads it. Staging is never removed by the box on
+///   its own: after the Mac's delete it's the only copy left.
+/// - A login going out is paused first (persisted: nothing starts on it, through restarts, and no
+///   CLI reads it), refused while a chat runs on it, read and sent; deleted on commit, un-paused
+///   on abort.
 ///
-/// Claude only for now: an added account is a folder of `~/.config/claude-accounts`, the default
-/// is `~/.claude`. Kore never runs a logout here.
+/// Claude: an added account is a folder of `~/.config/claude-accounts`, the default is
+/// `~/.claude`. Codex: the box keeps one login, `auth.json` in `CODEX_HOME` (else `~/.codex`); one
+/// comes in only while there's none. Kore never runs a logout here.
 @MainActor
 package final class HostLoginMoves {
     private let accounts: HostAccounts
     private let file: URL
+    /// Codex's one login's folder on the box.
+    private let codexHome: URL
     /// The chats whose CLI runs on a login now.
     package var chatsOn: (String) -> Int = { _ in 0 }
+    /// The Codex chats whose CLI runs now (the box's one Codex login).
+    package var codexChats: () -> Int = { 0 }
+    /// Whether Codex reads its login signed in: asked only after a commit, one copy left.
+    package var codexSignedIn: () async -> Bool = {
+        guard let ops = Registry.provider("codex")?.account, let reply = try? await ops.calls.status() else { return false }
+        if case .signedIn = ops.parse(reply) { return true }
+        return false
+    }
+    /// Codex's login in the pause list (Claude's are by account name).
+    nonisolated package static let codexKey = "codex:main"
     /// The device that sent a login in, by name, for its "from MacBook" line.
     private struct Saved: Codable, Sendable {
         /// Logins going out: by name, the move that paused them.
@@ -31,8 +47,9 @@ package final class HostLoginMoves {
 
     private var saved: Saved
 
-    package init(accounts: HostAccounts, state: URL) {
+    package init(accounts: HostAccounts, state: URL, codexHome: URL) {
         self.accounts = accounts
+        self.codexHome = codexHome
         file = state.appendingPathComponent("login-moves.json")
         saved = (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode(Saved.self, from: $0) } ?? Saved()
     }
@@ -81,7 +98,8 @@ package final class HostLoginMoves {
     // MARK: Coming in
 
     package func importPrepare(_ args: ControlArgs, id: String) -> LoginMoveResult {
-        guard args.provider == "claude" else { return .refused(id, .invalid, "Only Claude logins move to a box for now.") }
+        if args.provider == "codex" { return codexImportPrepare(args, id: id) }
+        guard args.provider == "claude" else { return .refused(id, .invalid, "That CLI's logins don't move here.") }
         guard let moveId = args.moveId, let data = args.data.flatMap({ Data(base64Encoded: $0) }), let sha = args.sha else {
             return .refused(id, .invalid, "Name the move and send the login.")
         }
@@ -120,6 +138,7 @@ package final class HostLoginMoves {
     /// Puts the staged login in place (the source deleted its copy before sending this), then
     /// reads it with the CLI: one copy is left, so a refresh there is harmless.
     package func importCommit(_ args: ControlArgs, id: String) async -> LoginMoveResult {
+        if args.provider == "codex" { return await codexImportCommit(args, id: id) }
         guard let moveId = args.moveId else { return .refused(id, .invalid, "Name the move.") }
         let dir = staging(moveId)
         // Sent again after it landed: the folder it went to says so.
@@ -155,6 +174,12 @@ package final class HostLoginMoves {
 
     package func importAbort(_ args: ControlArgs, id: String) -> LoginMoveResult {
         guard let moveId = args.moveId else { return .refused(id, .invalid, "Name the move.") }
+        if args.provider == "codex" {
+            if codexPlaced(moveId) { return LoginMoveResult(id: id, ok: true) }
+            try? FileManager.default.removeItem(at: codexStaging(moveId))
+            HostJournal.note("login import", ["cli": "codex", "move": moveId, "outcome": "aborted"])
+            return LoginMoveResult(id: id, ok: true)
+        }
         // A commit that landed is never undone by an abort: the source deleted its copy first.
         if placed(moveId) != nil { return LoginMoveResult(id: id, ok: true) }
         try? FileManager.default.removeItem(at: staging(moveId))
@@ -198,7 +223,8 @@ package final class HostLoginMoves {
     // MARK: Going out
 
     package func exportPrepare(_ args: ControlArgs, id: String) -> LoginMoveResult {
-        guard args.provider == "claude" else { return .refused(id, .invalid, "Only Claude logins move from a box for now.") }
+        if args.provider == "codex" { return codexExportPrepare(args, id: id) }
+        guard args.provider == "claude" else { return .refused(id, .invalid, "That CLI's logins don't move here.") }
         guard let moveId = args.moveId, let login = args.login, accounts.exists(login), let url = credentials(login) else {
             return .refused(id, .goneLogin, "That login isn't on this box.")
         }
@@ -223,8 +249,12 @@ package final class HostLoginMoves {
             // Sent again after it landed: nothing left to do.
             return LoginMoveResult(id: id, ok: true)
         }
-        // Only the local copy goes: an added account's folder, the default's credentials file.
-        if login == LinkAccount.main {
+        // Only the local copy goes: Codex's auth.json, an added account's folder, the default's
+        // credentials file.
+        if login == Self.codexKey {
+            try? FileManager.default.removeItem(at: codexHome.appendingPathComponent("auth.json"))
+            try? FileManager.default.removeItem(at: codexHome.appendingPathComponent(Self.fromFile))
+        } else if login == LinkAccount.main {
             try? FileManager.default.removeItem(at: accounts.main.appendingPathComponent(".credentials.json"))
         } else if let dir = accounts.folder(login) {
             try? FileManager.default.removeItem(at: dir)
@@ -250,6 +280,13 @@ package final class HostLoginMoves {
 
     package func fingerprints(_ args: ControlArgs, id: String) -> LoginMoveResult {
         guard let key = args.key.flatMap({ Data(base64Encoded: $0) }) else { return .refused(id, .invalid, "Send the key.") }
+        if args.provider == "codex" {
+            let prints = [codexAuth].compactMap { url -> LoginPrint? in
+                guard let data = try? Data(contentsOf: url), let print = LoginFingerprint.of(data, cli: "codex", key: key) else { return nil }
+                return LoginPrint(cli: "codex", login: LinkAccount.main, email: nil, fingerprint: print)
+            }
+            return LoginMoveResult(id: id, ok: true, prints: prints)
+        }
         guard args.provider == "claude" else { return LoginMoveResult(id: id, ok: true, prints: []) }
         let emails = Dictionary(accounts.lastListed.map { ($0.id, $0.email) }, uniquingKeysWith: { a, _ in a })
         let prints = accounts.ids().compactMap { login -> LoginPrint? in
@@ -259,5 +296,94 @@ package final class HostLoginMoves {
             return LoginPrint(cli: "claude", login: login, email: emails[login] ?? nil, fingerprint: print)
         }
         return LoginMoveResult(id: id, ok: true, prints: prints)
+    }
+
+    // MARK: Codex: the box's one login
+
+    private var codexAuth: URL { codexHome.appendingPathComponent("auth.json") }
+    private func codexStaging(_ moveId: String) -> URL { codexHome.appendingPathComponent(".incoming-\(moveId)", isDirectory: true) }
+
+    /// A commit for this move put its login in place (the marker beside auth.json says so).
+    private func codexPlaced(_ moveId: String) -> Bool { Self.from(codexHome)?.moveId == moveId }
+
+    /// The box's Codex holds a complete login now (read as a file, never by the CLI).
+    private var codexHeld: Data? {
+        guard let data = try? Data(contentsOf: codexAuth), LoginCredential.complete(data, cli: "codex") else { return nil }
+        return data
+    }
+
+    private func codexImportPrepare(_ args: ControlArgs, id: String) -> LoginMoveResult {
+        guard let moveId = args.moveId, let data = args.data.flatMap({ Data(base64Encoded: $0) }), let sha = args.sha else {
+            return .refused(id, .invalid, "Name the move and send the login.")
+        }
+        // A box keeps one Codex login: one comes in only while there's none (a Keep replaces it).
+        if args.force != true, let held = codexHeld {
+            let key = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+            let same = LoginFingerprint.of(held, cli: "codex", key: key) == LoginFingerprint.of(data, cli: "codex", key: key)
+            return .refused(id, .invalid, same ? "This login is already on this box." : "occupied")
+        }
+        let dir = codexStaging(moveId)
+        let staged = dir.appendingPathComponent("auth.json")
+        do {
+            try HostPaths.privateFolder(dir)
+            try LoginVault.writePrivate(data, to: staged)
+            try LoginVault.writePrivate(try JSONEncoder().encode(From(host: args.host, moveId: moveId)), to: dir.appendingPathComponent(Self.fromFile))
+        } catch {
+            try? FileManager.default.removeItem(at: dir)
+            return .refused(id, .invalid, "Couldn't write the login here.")
+        }
+        guard let written = try? Data(contentsOf: staged), LoginMove.sha(written) == sha else {
+            try? FileManager.default.removeItem(at: dir)
+            HostJournal.note("login import", ["cli": "codex", "move": moveId, "outcome": "sha"])
+            return .refused(id, .invalid, "sentWrong")
+        }
+        // A complete login, read as a file only: no CLI runs on a staged copy.
+        guard LoginCredential.complete(written, cli: "codex") else {
+            try? FileManager.default.removeItem(at: dir)
+            HostJournal.note("login import", ["cli": "codex", "move": moveId, "outcome": "notALogin"])
+            return .refused(id, .invalid, "notALogin")
+        }
+        HostJournal.note("login import", ["cli": "codex", "move": moveId, "outcome": "staged"])
+        return LoginMoveResult(id: id, ok: true)
+    }
+
+    private func codexImportCommit(_ args: ControlArgs, id: String) async -> LoginMoveResult {
+        guard let moveId = args.moveId else { return .refused(id, .invalid, "Name the move.") }
+        let dir = codexStaging(moveId)
+        guard FileManager.default.fileExists(atPath: dir.path) else {
+            return codexPlaced(moveId) ? LoginMoveResult(id: id, ok: true, login: LinkAccount.main) : .refused(id, .invalid, "No such move here.")
+        }
+        // Signed in here since the prepare: the staged one is kept (it may be the only copy now)
+        // and the commit refused, to be sent again once that's settled.
+        if args.force != true, codexHeld != nil { return .refused(id, .invalid, "occupied") }
+        do {
+            // One step each: auth.json replaced by rename, its marker beside it.
+            if rename(dir.appendingPathComponent("auth.json").path, codexAuth.path) != 0 { throw POSIXError(.EIO) }
+            _ = rename(dir.appendingPathComponent(Self.fromFile).path, codexHome.appendingPathComponent(Self.fromFile).path)
+        } catch {
+            return .refused(id, .invalid, "Couldn't put the login in place.")
+        }
+        try? FileManager.default.removeItem(at: dir)
+        HostJournal.note("login import", ["cli": "codex", "move": moveId, "outcome": "placed"])
+        let signedIn = await codexSignedIn()
+        HostJournal.note("login import", ["cli": "codex", "move": moveId, "outcome": signedIn ? "signedIn" : "signedOut"])
+        return LoginMoveResult(id: id, ok: true, login: LinkAccount.main, signedIn: signedIn)
+    }
+
+    private func codexExportPrepare(_ args: ControlArgs, id: String) -> LoginMoveResult {
+        guard let moveId = args.moveId else { return .refused(id, .invalid, "Name the move.") }
+        if let other = saved.paused[Self.codexKey], other != moveId { return .refused(id, .invalid, "busy") }
+        let running = codexChats()
+        guard running == 0 else { return .refused(id, .invalid, "inUse:\(running)") }
+        // Paused before it's read: no Codex chat starts and no Codex read runs until commit or abort.
+        saved.paused[Self.codexKey] = moveId
+        save()
+        guard let data = try? Data(contentsOf: codexAuth), !data.isEmpty else {
+            saved.paused[Self.codexKey] = nil
+            save()
+            return .refused(id, .goneLogin, "notThere")
+        }
+        HostJournal.note("login export", ["cli": "codex", "move": moveId, "outcome": "paused"])
+        return LoginMoveResult(id: id, ok: true, data: data.base64EncodedString(), sha: LoginMove.sha(data))
     }
 }

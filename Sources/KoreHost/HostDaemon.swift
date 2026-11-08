@@ -113,12 +113,19 @@ package final class HostDaemon {
         made.paused = { HostLoginMoves.isPaused($0, state: state) }
         return made
     }()
+    /// Codex's one login's folder here: `CODEX_HOME` as kore-host has it, else `~/.codex`.
+    package var codexHome: URL {
+        if let dir = sessionEnv["CODEX_HOME"], !dir.isEmpty { return URL(fileURLWithPath: dir, isDirectory: true) }
+        return HostPaths.home(sessionEnv).appendingPathComponent(".codex", isDirectory: true)
+    }
+
     /// 1.14: logins moved in and out by the owner's Mac.
     package lazy var loginMoves: HostLoginMoves = {
-        let moves = HostLoginMoves(accounts: accounts, state: paths.state)
+        let moves = HostLoginMoves(accounts: accounts, state: paths.state, codexHome: codexHome)
         moves.chatsOn = { [weak self] login in
             self?.chats.filter { $0.cliRunning && $0.record.provider == "claude" && ($0.record.account ?? LinkAccount.main) == login }.count ?? 0
         }
+        moves.codexChats = { [weak self] in self?.chats.filter { $0.cliRunning && $0.record.provider == "codex" }.count ?? 0 }
         return moves
     }()
 
@@ -131,6 +138,12 @@ package final class HostDaemon {
         services.server = { [weak self] chat in self?.server(for: chat) }
         services.onTranscript = { [weak self] chat in self?.chats.first { $0.chat === chat }?.attach(chat, replaced: true) }
         services.accountEnvironment = { [weak self] id in try self?.accounts.environment(id) ?? [:] }
+        // A Codex chat doesn't start while the box's Codex login is moving (1.14).
+        let state = paths.state
+        services.codexEnvironment = {
+            if HostLoginMoves.isPaused(HostLoginMoves.codexKey, state: state) { throw HostAccounts.Failure.codexMoving }
+            return [:]
+        }
         if let data = try? Data(contentsOf: paths.models), let kept = try? JSONDecoder().decode([CLIState].self, from: data) { clis = kept }
         let note = paths.state.appendingPathComponent("instructions.md")
         try? HostPaths.privateFile(Data(HostServices.instructions(host: ProcessInfo.processInfo.hostName).utf8), to: note)
@@ -913,6 +926,10 @@ package final class HostDaemon {
         let cli = provider.id
         switch kind {
         case .accountRefresh:
+            // Codex's login moving (1.14): no CLI reads it until the move ends.
+            if cli == "codex", HostLoginMoves.isPaused(HostLoginMoves.codexKey, state: paths.state) {
+                return .init(id: id, ok: false, code: .invalid, message: HostAccounts.Failure.codexMoving.localizedDescription)
+            }
             // A Claude chat's own account (or one named), read in its folder.
             let login = cli == "claude" ? args.login ?? args.chatId.flatMap(chat).map { $0.record.account ?? LinkAccount.main } : nil
             let accounts = accounts

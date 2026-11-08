@@ -4,14 +4,15 @@ import KoreUI
 import LinkProtocol
 import src
 
-/// A Claude login moved to a box and back from its row's ⋯ (`account-move-subtle.html`): the
+/// A Claude or Codex login moved to a box and back from its row's ⋯ (`account-move-subtle.html`): the
 /// ⋯ offers "Move to mybox"; it goes in the safe order, leaving no copy on this Mac, the row
 /// dimmed "On mybox"; its ⋯ then holds "Move back here", which brings it back. A box that stops
 /// answering stops the move with one amber line, the login untouched here.
-/// The box is held in memory, and this Mac's Keychain is the storylines' own.
+/// The box is held in memory, and this Mac's Keychain is the storylines' own. A box keeps one
+/// Codex login, "main".
 final class AccountMove: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
-    override class var variants: [Variant] { [.claude] }
+    override class var variants: [Variant] { [.claude, .codex] }
 
     /// A box in memory: what it staged, what's placed, by name.
     final class StoryBox: LoginMove.Remote, @unchecked Sendable {
@@ -21,10 +22,13 @@ final class AccountMove: ChatStoryline {
         /// Its link is down (the move must stop, untouched).
         var down = false
         var login = "work"
+        var cli = "claude"
 
         func prepareImport(moveId: String, data: Data, sha: String) throws {
             guard !down else { throw LoginMove.Failure.unreachable }
-            guard LoginMove.sha(data) == sha, LoginCredential.complete(data, cli: "claude") else { throw LoginMove.Failure.sentWrong }
+            guard LoginMove.sha(data) == sha, LoginCredential.complete(data, cli: cli) else { throw LoginMove.Failure.sentWrong }
+            // A box keeps one Codex login.
+            if cli == "codex", placed[login] != nil { throw LoginMove.Failure.occupied }
             staged[moveId] = data
         }
         /// Placed, then read by its CLI (one copy left).
@@ -46,10 +50,14 @@ final class AccountMove: ChatStoryline {
     }
 
     override func steps() -> [any Step] {
-        let provider = "claude"
+        let provider = variant.provider ?? "claude"
         let popup = Locator.id(StoryID.Composer.account)
         let box = StoryBox()
-        let credential = Data(#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"story-r1","expiresAt":1}}"#.utf8)
+        box.cli = provider
+        if provider == "codex" { box.login = LinkAccount.main }
+        let credential = provider == "codex"
+            ? Data(#"{"tokens":{"access_token":"a","refresh_token":"story-r1","account_id":"acct"},"last_refresh":"2026-11-18T10:00:00Z"}"#.utf8)
+            : Data(#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"story-r1","expiresAt":1}}"#.utf8)
         let vault = ScriptedAccounts.shared.loginVault
         let work = { CLIProfiles.added(provider).first { $0.email == "work@acme.dev" }?.id }
         let place = { work().map { LoginVault.Place(cli: provider, folder: CLIProfiles.folder(provider, $0)) } }
@@ -64,6 +72,20 @@ final class AccountMove: ChatStoryline {
         let reopen: [any Step] = [
             Key(.escape), ExpectElement(popup, .absent),
             Press(.id(StoryID.Composer.slash)), Press(.id(StoryID.Composer.command("account"))), WaitForElement(popup),
+        ]
+        // Codex: a box signed in to Codex already takes no other; the row says so, nothing moved.
+        let theirs = Data(#"{"tokens":{"access_token":"b","refresh_token":"box-r1","account_id":"acct-2"}}"#.utf8)
+        let occupied: [any Step] = [
+            Do("mybox signed in to Codex already") { _ in box.placed[box.login] = theirs },
+        ] + reopen + openMenu + [
+            Press(.id(StoryID.Composer.accountMethod("Move to mybox"))),
+            Expect("not moved: mybox keeps its own, this one stays here", found: { _ in "\(String(describing: work().flatMap { LoginMoves.shared.line(provider, $0) }))" }) { _ in
+                guard let id = work(), case .failed(let words) = LoginMoves.shared.line(provider, id) else { return false }
+                return words.contains("has its own Codex login") && place().flatMap(vault.held) == credential
+                    && box.staged.isEmpty && box.placed[box.login] == theirs
+            },
+            FadesEnd(), Snapshot("account-move-occupied"),
+            Do("mybox signs out of it") { _ in box.placed = [:] },
         ]
         return [
             UseScript(AccountPopup.script(provider), for: provider), SeedLogins(provider: provider),
@@ -92,13 +114,14 @@ final class AccountMove: ChatStoryline {
                     && box.staged.isEmpty && box.placed.isEmpty
             },
             FadesEnd(), Snapshot("account-move-failed"),
-            // Again, with mybox reading it: moved, one copy, the row "On mybox".
             Do("mybox answers again") { _ in box.down = false },
+        ] + (provider == "codex" ? occupied : []) + [
+            // Again, with mybox reading it: moved, one copy, the row "On mybox".
         ] + reopen + openMenu + [
             Press(.id(StoryID.Composer.accountMethod("Move to mybox"))),
             Expect("moved: on mybox only, none left here") { _ in
                 guard let id = work() else { return false }
-                return LoginMoves.shared.line(provider, id) == nil && box.placed["work"] == credential
+                return LoginMoves.shared.line(provider, id) == nil && box.placed[box.login] == credential
                     && place().flatMap(vault.held) == nil && CLIProfiles.movedTo(provider, email: "work@acme.dev") == "mybox"
             },
             Expect("its row is on mybox, never signed out", found: { $0.app.chat?.storyLogins.joined(separator: " | ") }) { story in

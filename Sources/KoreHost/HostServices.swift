@@ -16,6 +16,8 @@ package final class HostServices: ChatServices {
     package var backend: (ProviderDescriptor, BackendOptions) -> any ChatBackend = { $0.makeBackend($1) }
     /// What a Claude chat's CLI starts with for its account (`HostAccounts.environment`).
     package var accountEnvironment: ((String?) throws -> [String: String])?
+    /// What a Codex chat's CLI starts with: refused while the box's Codex login moves (1.14).
+    package var codexEnvironment: (() throws -> [String: String])?
 
     /// The box's paragraph for every chat (`HostDaemon` writes it): where it runs, and when
     /// Kore's tools are there.

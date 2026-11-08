@@ -143,10 +143,12 @@ package final class HostAccounts {
     package enum Failure: LocalizedError {
         case gone(String)
         case moving(String)
+        case codexMoving
         package var errorDescription: String? {
             switch self {
             case .gone(let id): "The Claude account “\(id)” isn't on this machine any more. Pick another in Account."
             case .moving(let id): "The Claude account “\(id)” is moving to another device. Pick another in Account."
+            case .codexMoving: "This box's Codex login is moving to another device. It's back once the move ends."
             }
         }
     }
