@@ -45,6 +45,13 @@ package final class HostCache: Sendable {
         package init() {}
     }
 
+    /// A folder's open chats as this copy last had them (`HostConnection.chats(in:)` offline).
+    package func chats(in folder: String) -> [ChatMeta] {
+        guard let state = state() else { return [] }
+        let byId = Dictionary(state.chats.map { ($0.id, $0) }, uniquingKeysWith: { _, b in b })
+        return HostConnection.chats(in: folder, windows: state.windows, folders: state.folders) { byId[$0] }
+    }
+
     package func state() -> State? {
         guard let data = try? Data(contentsOf: stateFile) else { return nil }
         return try? JSONDecoder().decode(State.self, from: data)

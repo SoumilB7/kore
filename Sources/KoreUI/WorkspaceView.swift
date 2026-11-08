@@ -424,6 +424,8 @@ struct TabBar: View {
                 .truncationMode(.middle)
                 .layoutPriority(-1)
                 .help(workspace.box?.label ?? workspace.folder.path)
+            // A Mac folder synced with a box folder that has chats open there: one quiet line.
+            if let paired = workspace.paired { PairedBoxCue(paired: paired) }
             if let chat = workspace.activeTab.chat {
                 AgentsButton(chat: chat, height: tabHeight).storyID(StoryID.Titlebar.agents, press: chat.agentMap.toggle)
                 CommandsButton(chat: chat, height: tabHeight)

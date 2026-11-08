@@ -94,7 +94,8 @@ struct HistoryPanel: View {
                                 toggleArchive: {
                                     Task { chat.archived ? await workspace.unarchive(chat) : await workspace.archive(chat) }
                                 },
-                                locked: workspace.box?.historyLocked)
+                                locked: workspace.historyLocked(chat),
+                                elsewhere: workspace.boxRowPlace(chat.id))
                             .highlightRow(StoryID.History.row(chat.id), lit: (lit.value ?? 0) == index) { lit.value = index }
                         }
                     }
@@ -142,7 +143,9 @@ struct HistoryPanel: View {
                 }
                 searchChats()
                 Task { await workspace.refresh() }
+                workspace.historyOpened()
             } else {
+                workspace.historyClosed()
                 if let m = monitor.value { NSEvent.removeMonitor(m) }
                 monitor.value = nil
                 renaming.value = nil
@@ -271,6 +274,8 @@ private struct HistoryRow: View {
     /// Why Rename and Archive can't be done here (a box too old to keep its history); nil when
     /// they can. They show dim, saying so.
     var locked: String? = nil
+    /// A paired box's chat: the box it's on.
+    var elsewhere: String? = nil
     @StateObject private var draft = Local("")
     /// Return and the focus loss that follows it both end a rename; only the first counts.
     @StateObject private var finished = Local(false)
@@ -323,6 +328,9 @@ private struct HistoryRow: View {
             // A chat Kore made by an import names where it came from.
             if let source = HandoffRecords.record(target: session.id)?.sourceProduct {
                 Text("from \(source)").font(Chrome.label).foregroundStyle(Theme.tertiary).fixedSize()
+            }
+            if let elsewhere {
+                Text("on \(elsewhere)").font(Chrome.label).foregroundStyle(Theme.tertiary).fixedSize()
             }
             Spacer(minLength: Space.md)
             if !showsActions {

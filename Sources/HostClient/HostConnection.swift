@@ -186,6 +186,9 @@ package final class HostConnection {
     private static var open: [String: HostConnection] = [:]
 
     /// The alias's connection, made on first ask; the same one while any window uses it.
+    /// The box's link while something holds it, else nil: nothing is made or dialed.
+    package static func existing(_ alias: String) -> HostConnection? { open[alias] }
+
     package static func named(_ alias: String, grant: String = defaultGrant, command: String = SSHTransport.defaultCommand) -> HostConnection {
         if let connection = open[alias] { return connection }
         let connection = HostConnection(alias: alias, grant: grant, command: command)
@@ -795,15 +798,19 @@ package final class HostConnection {
 
     /// A served folder's window on the box: as `folders.list` named it, else by its path (a window
     /// opened before the box listed its folders here, or with this Mac's copy gone).
-    package func windowId(of folder: String) -> String {
+    package func windowId(of folder: String) -> String { Self.windowId(of: folder, folders) }
+
+    package nonisolated static func windowId(of folder: String, _ folders: [BoxFolder]) -> String {
         folders.first { $0.path == folder }?.windowId ?? BoxFolder.windowId(folder)
     }
 
     /// The chats the box has in a folder, in its tab order: its window's tabs.
-    package func chats(in folder: String) -> [ChatMeta] {
-        let window = windowId(of: folder)
-        let ids = windows.filter { $0.id == window || $0.path == folder }.flatMap { $0.tabs.compactMap(\.chatId) }
-        return ids.compactMap { chats[$0] }
+    package func chats(in folder: String) -> [ChatMeta] { Self.chats(in: folder, windows: windows, folders: folders) { chats[$0] } }
+
+    /// A folder's window's chats, in its tab order, from a box's windows and its chats by id.
+    package nonisolated static func chats(in folder: String, windows: [LinkWindow], folders: [BoxFolder], _ chat: (String) -> ChatMeta?) -> [ChatMeta] {
+        let window = windowId(of: folder, folders)
+        return windows.filter { $0.id == window || $0.path == folder }.flatMap { $0.tabs.compactMap(\.chatId) }.compactMap(chat)
     }
 
     /// A CLI's models, as its pickers list them.

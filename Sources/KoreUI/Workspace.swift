@@ -125,6 +125,8 @@ package final class Workspace {
     }
 
     private func windowClosed() {
+        // History open as the window went: the box's link isn't held for it any more.
+        paired?.letGo()
         if let closer { NotificationCenter.default.removeObserver(closer) }
         closer = nil
         if let activation { NotificationCenter.default.removeObserver(activation) }
@@ -148,6 +150,11 @@ package final class Workspace {
     }
     /// Every chat the CLIs have for this folder, newest first, archived ones flagged.
     private(set) var chats: [SessionSummary] = []
+    /// A Mac folder synced with a box folder: the box's chats there (the cue, History's rows).
+    private(set) var paired: PairedBox?
+    /// The paired box's chats in History, while it's open, and which of them are open there.
+    private(set) var boxRows: [SessionSummary] = []
+    @ObservationIgnored private var boxOpen: Set<String> = []
     private(set) var loaded = false
     private var refreshing: Task<Void, Never>?
     /// A running chat's tab asking before its close ends the turn (`requestClose`).
@@ -229,9 +236,62 @@ package final class Workspace {
         if tabs.contains(where: { $0.file != nil }) { _ = filesStore() }
         // Coming back to Kore checks the folder is still where it was (one lookup, no polling).
         guard box == nil else { return }
+        paired = PairedBox.of(folder)
         activation = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
-        ) { [weak self] _ in MainActor.assumeIsolated { self?.followFolder() } }
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.followFolder()
+                self?.paired?.refresh()
+            }
+        }
+    }
+
+    // MARK: The paired box
+
+    /// The folder's pair was made or stopped: its cue and History follow.
+    func followPairedBox() {
+        guard box == nil else { return }
+        let pair = PairedBox.pairFor(folder)
+        guard pair?.alias != paired?.alias || pair?.box != paired?.folder else { return }
+        paired?.letGo()
+        paired = pair.map { PairedBox(alias: $0.alias, folder: $0.box) }
+        boxRows = []
+    }
+
+    /// A box's link came or went (its window opened or closed): the paired windows' cues read it again.
+    static func boxLinkChanged(_ alias: String) {
+        for workspace in all.allObjects where !workspace.isClosed && workspace.paired?.alias == alias { workspace.paired?.refresh() }
+    }
+
+    /// History opened: the paired box's open chats at once, then its closed ones once linked.
+    func historyOpened() {
+        guard let paired else { return }
+        paired.hold()
+        boxRows = paired.chats.compactMap { meta in
+            Registry.provider(meta.provider).map { SessionSummary(id: meta.id, agent: $0.historyAgent, title: meta.title.isEmpty ? "New chat" : meta.title, updated: .now) }
+        }
+        boxOpen = Set(boxRows.map(\.id))
+        Task {
+            let (rows, open) = await paired.rows()
+            guard self.paired === paired else { return }
+            boxRows = rows
+            boxOpen = open
+        }
+    }
+
+    /// History closed: the link goes unless a box window holds it.
+    func historyClosed() { paired?.letGo() }
+
+    /// A History row of the paired box's ("on mybox"), and why it can't be renamed here.
+    func boxRowPlace(_ id: String) -> String? {
+        guard let paired, boxRows.contains(where: { $0.id == id }) else { return nil }
+        return paired.alias
+    }
+
+    func historyLocked(_ row: SessionSummary) -> String? {
+        if let alias = boxRowPlace(row.id) { return "Rename or archive it in \(alias)'s window" }
+        return box?.historyLocked
     }
 
     package var activeTab: ChatTab { tabs.first { $0.id == activeID } ?? tabs[0] }
@@ -304,6 +364,12 @@ package final class Workspace {
 
     /// Shows a chat: its tab if already open, else the empty active tab or a new one.
     package func open(_ session: SessionSummary) {
+        // The paired box's: in its window there.
+        if let paired, boxRowPlace(session.id) != nil {
+            let isOpen = boxOpen.contains(session.id)
+            Task { await paired.open(session, isOpen: isOpen) }
+            return
+        }
         // On a box: a closed chat it keeps, back on the box and in a tab here.
         if let box {
             if let tab = tabs.first(where: { ($0.chat?.services as? BoxChatServices)?.chatId == session.id && $0.agent == nil }) {
@@ -1110,7 +1176,12 @@ package final class Workspace {
 
     /// The History's rows, an open chat's under the name its tab shows: a rename in the tab shows
     /// there at once, before the CLI's (or the box's) list is read again.
-    var historyChats: [SessionSummary] { historyTitles(chats) }
+    var historyChats: [SessionSummary] {
+        let own = historyTitles(chats)
+        guard !boxRows.isEmpty else { return own }
+        let ids = Set(own.map(\.id))
+        return (own + boxRows.filter { !ids.contains($0.id) }).sorted { $0.updated > $1.updated }
+    }
 
     func historyTitles(_ rows: [SessionSummary]) -> [SessionSummary] {
         var names: [String: String] = [:]

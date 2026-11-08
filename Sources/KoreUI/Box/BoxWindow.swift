@@ -119,6 +119,7 @@ final class BoxBinding {
         }
         connection.retain()
         followPair()
+        Workspace.boxLinkChanged(alias)
     }
 
     func windowClosed() {
@@ -127,6 +128,7 @@ final class BoxBinding {
         if filesMade { files.stop() }
         stopSync()
         connection.release()
+        Workspace.boxLinkChanged(alias)
     }
 
     /// The Mac folder this one syncs with, as the panel and tooltip show it (`~/Desktop/app`).
@@ -159,7 +161,10 @@ final class BoxBinding {
 
     /// Every open box window's sync follows the pairs (one was made or stopped).
     static func pairsChanged() {
-        for workspace in Workspace.all.allObjects where !workspace.isClosed { workspace.box?.followPair() }
+        for workspace in Workspace.all.allObjects where !workspace.isClosed {
+            workspace.box?.followPair()
+            workspace.followPairedBox()
+        }
     }
 
     /// Chats in this folder the window doesn't show yet (opened on the box or elsewhere, or none
