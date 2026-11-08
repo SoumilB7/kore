@@ -278,6 +278,9 @@ struct NetReviewTests {
         let end = ContinuousClock.now + .seconds(5)
         while fcntl(fd, F_GETFD) != -1, ContinuousClock.now < end { await Task.yield() }
         #expect(fcntl(fd, F_GETFD) == -1)
-        #expect(throws: (any Error).self) { try Sockets.connectTCP(try #require(IPAddress("127.0.0.1")), port: port) }
+        // Nothing of the box's listens any more. (A connect to the port isn't the check: it was the
+        // system's pick, and another test running alongside can be given it once it's free.)
+        #expect(rig.net.firstListener == nil)
+        _ = port
     }
 }
