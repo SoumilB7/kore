@@ -189,12 +189,16 @@ done_ wait-slots
 ncpu=$(sysctl -n hw.ncpu); perf=$(sysctl -n hw.perflevel0.physicalcpu 2>/dev/null || print $ncpu)
 load=$(sysctl -n vm.loadavg | awk '{print $2}')
 others=$(ps -axo %cpu=,command= | awk '$1 > 5 && /swift-build|swift-frontend|GradleDaemon|GradleWorkerMain|kore-storylines/' | wc -l | tr -d ' ')
-free=$(( ncpu - load )); (( free < 1 )) && free=1; (( others )) && free=$(( free / 2 ))
-why="auto"; [[ -n $shards || -n $jobs ]] && why="given"
-[[ -n $shards ]] || shards=$(( int(free / 2 + 1) ))
-[[ -n $jobs ]] || jobs=$(( int(free) ))
+# Room: the cores half again (test processes wait on I/O and each other), less the load beyond
+# what's ours; halved again while other builds run. At least 2 of each, so a busy Mac still
+# overlaps the phases; at most 5 shards (what the storylines were proven side by side at).
+free=$(( ncpu * 1.5 - load )); (( others )) && free=$(( free / 2 ))
+whys=()
+if [[ -n $shards ]]; then whys+=("shards given"); else shards=$(( int(rint(free / 2)) )); (( shards < 2 )) && shards=2; (( shards > 5 )) && shards=5; fi
+if [[ -n $jobs ]]; then whys+=("jobs given"); else jobs=$(( int(rint(free)) )); (( jobs < 2 )) && jobs=2; fi
 (( shards < 1 )) && shards=1; (( shards > 6 )) && shards=6
 (( jobs < 1 )) && jobs=1; (( jobs > ${#test_targets} && ${#test_targets} > 0 )) && jobs=${#test_targets}
+why=${(j:, :)whys}; [[ -n $why ]] || why="auto"
 parallel="shards $shards, jobs $jobs ($why: $ncpu cores, $perf performance, load $load, $( (( others )) && print "$others other builds" || print "no other builds"))"
 
 # --plan: what would run, and on how many shards and jobs, then nothing more (no build: it lists
