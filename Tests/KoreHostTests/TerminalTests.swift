@@ -125,9 +125,9 @@ struct TerminalTests {
         // A pty the box doesn't have.
         rig.send(PtyAttach(id: "a3", ptyId: "pnope", after: 0))
         #expect(try await rig.result("a3").gone == true)
-        // Closed: the shell is hung up and gone.
+        // Closed: the shell is hung up, reaped, and gone.
         rig.send(PtyClose(ptyId: pty))
-        try await until { rig.rig.host.terminals.count == 0 }
+        try await until { rig.rig.host.terminals.count == 0 && rig.rig.host.terminals.reaping == 0 }
     }
 
     @Test func aGrantHoldsEightAndAShellNoClientShowsGivesWay() async throws {

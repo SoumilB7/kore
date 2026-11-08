@@ -80,8 +80,16 @@ final class HostTerminals {
     private func close(_ id: String) {
         guard let pty = ptys.removeValue(forKey: id) else { return }
         HostJournal.note("pty close", ["grant": pty.grant, "pty": id])
+        // Held until its shell is reaped.
+        if pty.exitCode == nil {
+            closing[id] = pty
+            pty.onExit = { [weak self] pty in self?.closing[pty.id] = nil }
+        }
         pty.hangUp()
     }
+
+    /// Hung up, not yet reaped.
+    private var closing: [String: HostPty] = [:]
 
     /// The link went: its shells keep running, held for the next one.
     func detach(_ client: LinkClient) {
@@ -106,8 +114,9 @@ final class HostTerminals {
         if pty.client != nil { ptys[pty.id] = nil }
     }
 
-    /// Ptys held now (tests).
+    /// Ptys held now, and those hung up but not yet reaped (tests).
     var count: Int { ptys.count }
+    var reaping: Int { closing.count }
 
     // MARK: The shell
 
@@ -481,8 +490,6 @@ final class HostPty {
         }
         killLater = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: work)
-        // Kept alive by its exit watch until it's reaped.
-        onExit = { _ in }
     }
 }
 
