@@ -625,7 +625,10 @@ final class UnloadBoardTile: BoardStoryline {
             UnloadStoryline.GlideEnds(),
             // At its end, with nothing under way: only being on screen keeps its turns.
             UnloadStoryline.ToEnd(chat: { tile($0) }),
-            Expect("the tile's reader at the end") { tile($0)?.storyTranscript.readerAtEnd == true },
+            Expect("the tile's reader at the end", found: { story in
+                guard let view = tile(story)?.storyTranscript.scrollView, let document = view.documentView else { return "no scroll view" }
+                return "bottom \(view.contentView.bounds.maxY) of \(document.frame.height); \(tile(story)?.storyTranscript.endWhy ?? "-")"
+            }) { tile($0)?.storyTranscript.readerAtEnd == true },
             Do("Ask for an unload") { tile($0)?.storyUnload() },
             UnloadStoryline.Settle(),
             Expect("all 18 turns held", found: { "\(users($0))" }) { users($0) == 18 },
