@@ -51,7 +51,6 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     private var assembler = StreamAssembler()
     /// Something was shown: a history from the box from now on rebuilds it.
     private var shown = false
-    private var connectionSaid = Connection.ok
     private var starting: Task<Void, Error>?
     private var closed = false
     private var titleSaid: String?
@@ -230,23 +229,9 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         onTitle?(meta.title)
     }
 
-    package func linked(_ up: Bool) {
-        guard !closed else { return }
-        // A send waiting on the link says so where the turn's spinner is, as the window's cue does.
-        let now: Connection = up ? .ok : .away(awayWords)
-        guard now != connectionSaid else { return }
-        connectionSaid = now
-        emit([.connection(now)])
-    }
-
-    /// "mybox offline · 14:32": the box's name, and when it last spoke.
-    private var awayWords: String {
-        guard let heard = connection.lastHeard else { return "\(connection.alias) offline · sends when it's back" }
-        let when =
-            Calendar.current.isDateInToday(heard)
-            ? heard.formatted(date: .omitted, time: .shortened) : heard.formatted(.dateTime.day().month(.abbreviated).hour().minute())
-        return "\(connection.alias) offline · \(when)"
-    }
+    /// The link came or went. The window says so, once, over all its chats (`BoxOfflineDialog`);
+    /// the chat itself shows nothing, and a send meanwhile waits for the box.
+    package func linked(_ up: Bool) {}
 
     private func emit(_ list: [ChatEvent]) {
         for event in list { continuation.yield(event) }

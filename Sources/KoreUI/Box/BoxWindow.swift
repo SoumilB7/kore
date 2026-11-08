@@ -140,30 +140,8 @@ final class BoxBinding {
         }
     }
 
-    /// The title row's cue: the box's name, or how long ago it last spoke while it can't be reached.
-    var line: String {
-        switch connection.phase {
-        case .online, .idle: return alias
-        case .refused(let why): return why.line(alias)
-        case .connecting where connection.lastHeard == nil: return alias + " · connecting"
-        case .connecting, .offline:
-            guard let heard = connection.lastHeard else { return alias + " offline" }
-            return alias + " offline · " + Self.when(heard)
-        }
-    }
-
-    var online: Bool { connection.phase == .online }
-
     /// The folder label's hover line: "mybox · ~/Code/app · synced locally to ~/Desktop/app".
     var label: String { alias + " · " + shownFolder + (syncedTo.map { " · synced locally to " + $0 } ?? "") }
-
-    /// The window's one cue, on the title row's box button: its line, marked while the box is
-    /// offline or its sync has something to say.
-    var cue: (line: String, marked: Bool) {
-        if let notice = sync?.notice { return (alias + " · " + notice, true) }
-        guard online else { return (line, true) }
-        return (alias + " · " + (sync != nil ? "in sync" : shownFolder), false)
-    }
 
     static func when(_ date: Date) -> String {
         Calendar.current.isDateInToday(date)

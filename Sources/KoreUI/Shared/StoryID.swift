@@ -83,15 +83,21 @@ extension StoryID {
         package static let tabName = StoryID(.titlebar, "tabname")
         /// The box button, beside the panel button.
         package static let boxes = StoryID(.titlebar, "boxes")
+        /// A box window's Sync button.
+        package static let boxSync = StoryID(.titlebar, "boxsync")
     }
 
-    /// The box button's popup: a box's row (by alias), a folder's (by path), Add a box… and its field.
+    /// The Welcome's place switcher (This Mac by "mac", a box by alias), Add a box… and its field;
+    /// a box's folders and chats there; the folder browser; a box window's offline card.
     package enum Boxes {
-        package static let popup = StoryID(.titlebar, "boxes.popup")
-        package static func box(_ alias: String) -> StoryID { StoryID(.titlebar, "boxes.box", key: alias) }
-        package static func folder(_ path: String) -> StoryID { StoryID(.titlebar, "boxes.folder", key: path) }
+        package static func place(_ key: String) -> StoryID { StoryID(.titlebar, "boxes.place", key: key) }
         package static let add = StoryID(.titlebar, "boxes.add")
         package static let field = StoryID(.titlebar, "boxes.field")
+        package static func folder(_ path: String) -> StoryID { StoryID(.titlebar, "boxes.folder", key: path) }
+        package static func chat(_ id: String) -> StoryID { StoryID(.titlebar, "boxes.chat", key: id) }
+        package static let browser = StoryID(.titlebar, "boxes.browser")
+        package static func entry(_ name: String) -> StoryID { StoryID(.titlebar, "boxes.entry", key: name) }
+        package static let offline = StoryID(.titlebar, "boxes.offline")
     }
 
     package enum Tabs {

@@ -113,6 +113,8 @@ package final class Workspace {
         open[box.key] = workspace
         box.workspace = workspace
         box.windowOpened()
+        // Opened from a chat's row on the Welcome: that chat in front.
+        if let chat = BoxBinding.pendingChat.removeValue(forKey: box.key) { box.select(chat) }
         return workspace
     }
 
@@ -162,7 +164,7 @@ package final class Workspace {
     var explorerWidth = Layout.Explorer.width {
         didSet { saveExplorer() }
     }
-    /// The title row's box button: a box's window only.
+    /// The title row's Sync button: a box's window only.
     var hasBoxButton: Bool { box != nil }
     /// ⌘P: files, or go to line (⌃G).
     var quickOpen: QuickOpenMode?

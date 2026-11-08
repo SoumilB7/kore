@@ -85,6 +85,8 @@ struct ComposerView: View {
         if chat.accountRestartPending { return "Switching accounts…" }
         // With a command and nothing typed: what the command takes ("objective").
         if let hint = chat.command?.hint, !hint.isEmpty, chat.draft.isEmpty { return hint }
+        // A box that can't be reached: what's sent waits for it (the window's dialog says why).
+        if let box = (chat.services as? BoxChatServices)?.connection, !box.isOnline { return "Sends when \(box.alias) is back" }
         guard chat.status.isRunning else {
             // Known before sending: what's sent waits for the network.
             return NetworkWatch.shared.isOnline ? "" : "Offline · what you send goes when you're back"

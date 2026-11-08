@@ -5,24 +5,20 @@ import SwiftUI
 /// A box window's left panel: the box folder's files, as the Files explorer shows a Mac folder's,
 /// read over the link. A folder's click opens or closes it; a file's opens it read-only in a
 /// preview tab (a double click keeps the tab). ↑ ↓ move, → ← open and close, Space or Return
-/// opens. Reload and Collapse all on the header while the pointer is over it; the header's
-/// right-click syncs the folder with a Mac folder. Nothing here creates, renames or deletes.
+/// opens. Reload and Collapse all on the header while the pointer is over it. Nothing here
+/// creates, renames or deletes; the folder's sync is the title row's Sync button.
 struct BoxExplorer: View {
     let workspace: Workspace
     let box: BoxBinding
     let floating: Bool
     @FocusState private var focused: Bool
     @StateObject private var hovered = Local(false)
-    /// The folder's pairing with a Mac folder while it's checked, asked or refused.
-    @StateObject private var pairing = Local<BoxPairing?>(nil)
-    @StateObject private var checking = Held<Task<Void, Never>?>(nil)
 
     private var store: BoxExplorerStore { box.files }
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            if let pairing = pairing.value { pairingCard(pairing) }
             content
         }
         .frame(maxHeight: .infinity, alignment: .top)
@@ -32,7 +28,6 @@ struct BoxExplorer: View {
         .task { await store.start() }
         // The link back after a drop: what changed meanwhile shows.
         .onChange(of: box.connection.isOnline) { _, online in if online, store.rootLoaded { Task { await store.refresh() } } }
-        .onDisappear { checking.value?.cancel() }
     }
 
     private var header: some View {
@@ -43,7 +38,6 @@ struct BoxExplorer: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .help(box.label)
-                .koreContextMenu("box-folder") { syncMenu }
             Spacer(minLength: Space.md)
             Group {
                 HeaderButton(symbol: "arrow.clockwise", help: "Reload") { Task { await store.refresh() } }
@@ -133,94 +127,6 @@ struct BoxExplorer: View {
             return .ignored
         }
         return .handled
-    }
-
-    // MARK: Sync with a Mac folder
-
-    private var syncMenu: [OptionItem] {
-        let pairs = SyncPairList.shared
-        let place = BoxPlace(alias: box.alias, folder: box.folder)
-        if pairs.pair(alias: box.alias, box: box.folder) != nil {
-            // A step in: it stops syncing and deletes nothing on either side.
-            return [OptionItem("Stop syncing", children: [OptionItem("Stop · files stay on both sides") { stopSyncing() }])]
-        }
-        guard pairs.around(alias: box.alias, box: box.folder) == nil else { return [] }
-        return [OptionItem("Sync with a Mac folder…") { startPairing(place) }]
-    }
-
-    private func pairingCard(_ pairing: BoxPairing) -> some View {
-        VStack(alignment: .trailing, spacing: Space.xs) {
-            Text(pairing.line)
-                .font(Chrome.caption)
-                .foregroundStyle(pairing.failed ? Theme.danger : Theme.secondary)
-                .lineLimit(2)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            HStack(spacing: Space.sm) {
-                switch pairing.state {
-                case .checking:
-                    Button("Cancel") { cancelPairing() }.smallButton()
-                case .ask(_, let start, let mac):
-                    Button("Cancel") { cancelPairing() }.smallButton()
-                    Button(start == .merge ? "Merge" : "Copy") { finishPairing(pairing.place, mac: mac) }.smallButton(prominent: true)
-                case .failed:
-                    Button("Pick another…") { startPairing(pairing.place) }.smallButton(prominent: true)
-                    Button("Close") { cancelPairing() }.smallButton()
-                }
-            }
-        }
-        .padding(Space.sm)
-        .panel(.panel)
-        .cornerMarks(Theme.cornerOption)
-        .padding(.horizontal, Space.sm)
-        .padding(.bottom, Space.xs)
-        .onExitCommand { cancelPairing() }
-    }
-
-    /// The open-folder panel, then the pair checked, asked once when both have files or it's big,
-    /// and kept.
-    private func startPairing(_ place: BoxPlace) {
-        guard let folder = place.folder else { return }
-        checking.value?.cancel()
-        guard let mac = AppModel.shared?.chooseFolder(prompt: "Sync", message: "Sync \(BoxFolder.lastPart(folder)) on \(place.alias) with a folder on this Mac")
-        else { return cancelPairing() }
-        let pairs = SyncPairList.shared
-        if let why = pairs.refusal(mac: mac, alias: place.alias, box: folder) {
-            pairing.value = BoxPairing(place: place, state: .failed(why))
-            return
-        }
-        guard let ssh = SyncBox.ssh(place.alias) else {
-            pairing.value = BoxPairing(place: place, state: .failed("\(place.alias) isn't an SSH alias Kore can use"))
-            return
-        }
-        pairing.value = BoxPairing(place: place, state: .checking(SyncPairs.shown(mac: mac.path)))
-        checking.value = Task {
-            let check = await pairs.check(mac: mac, alias: place.alias, box: folder, via: ssh)
-            guard !Task.isCancelled, pairing.value?.place == place else { return }
-            switch check {
-            case .go: finishPairing(place, mac: mac)
-            case .ask(let question, let start): pairing.value = BoxPairing(place: place, state: .ask(question, start, mac))
-            case .refuse(let why): pairing.value = BoxPairing(place: place, state: .failed(why))
-            }
-        }
-    }
-
-    private func finishPairing(_ place: BoxPlace, mac: URL) {
-        guard let folder = place.folder else { return }
-        checking.value = nil
-        pairing.value = nil
-        SyncPairList.shared.pair(mac: mac, alias: place.alias, box: folder)
-        BoxBinding.pairsChanged()
-    }
-
-    private func cancelPairing() {
-        checking.value?.cancel()
-        checking.value = nil
-        pairing.value = nil
-    }
-
-    private func stopSyncing() {
-        SyncPairList.shared.unpair(alias: box.alias, box: box.folder)
-        BoxBinding.pairsChanged()
     }
 }
 

@@ -61,7 +61,8 @@ struct HostClientTests {
         dials.hosts[0].close()
         #expect(await until { connection.phase == .offline })
         #expect(connection.lastHeard != nil)
-        #expect(await until { log.events.contains { if case .connection(.away(let words)) = $0 { words.hasPrefix("mybox offline") } else { false } } })
+        // The window says so, not each chat.
+        #expect(!log.events.contains { if case .connection(.away) = $0 { true } else { false } })
 
         let sending = Task { try await backend.send("are you there", files: [], queued: nil, id: "m1") }
 

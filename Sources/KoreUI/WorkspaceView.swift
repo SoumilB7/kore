@@ -384,7 +384,7 @@ struct TabBar: View {
             ExplorerButton(workspace: workspace, size: tabHeight).storyID(StoryID.Titlebar.explorer)
             // A box's window only: a window on this Mac's folder stays one.
             let boxButton = workspace.hasBoxButton
-            if boxButton { BoxButton(workspace: workspace, size: tabHeight) }
+            if boxButton, let box = workspace.box { BoxSyncButton(workspace: workspace, box: box, size: tabHeight) }
             if let explorerDock {
                 let buttons: CGFloat = boxButton ? 2 : 1
                 Color.clear.frame(width: max(0, explorerDock + Space.md - leadingInset - buttons * tabHeight - (buttons + 1) * Size.tabGap), height: 0)

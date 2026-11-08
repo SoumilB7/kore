@@ -121,3 +121,17 @@ struct BoxPairing: Equatable {
 
     var failed: Bool { if case .failed = state { true } else { false } }
 }
+
+extension BoxList.Box {
+    /// Its dot: connected while a window holds it online or it last answered, else what the last
+    /// probe found.
+    @MainActor var dotState: StatusDot.State {
+        if HostConnection.live(alias)?.isOnline == true { return .connected }
+        switch status {
+        case .ready: return .connected
+        case .notSetUp, .noGrant, .stale, .failed: return .notSetUp
+        case .stopped, .unreachable: return .offline
+        case .unknown, .probing, .working: return .unknown
+        }
+    }
+}
