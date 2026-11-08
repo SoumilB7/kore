@@ -45,6 +45,10 @@ let package = Package(
             name: "LinkProtocol",
             dependencies: ["src", "KoreCore", .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux]))],
             swiftSettings: releaseForSize),
+        // A Mac window's chats on a box (`kore-host` over SSH): the transport, the link client, the
+        // local copy per chat, and the chat backend that runs a `Chat` through the link. No UI;
+        // KoreUI holds the one seam. Asleep until a window on a box opens.
+        .target(name: "HostClient", dependencies: ["src", "LinkProtocol", "KoreCore"], swiftSettings: releaseForSize),
         .target(name: "KoreLink", dependencies: ["KoreUI", "LinkProtocol", "src", "KoreCore"], swiftSettings: releaseForSize),
         // kore-host: Kore's chats on a headless machine (phase 17), served over the link. It
         // never links KoreUI or KoreLink, and the Mac app never links it.
