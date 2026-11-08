@@ -418,6 +418,8 @@ final class BoxChatServices: ChatServices {
         }
         backend.onCreated = { [weak self, weak backend] id in
             self?.chatId = id
+            // Known on the box now: a tier on is kept under its id there.
+            if let chat = self?.chat { Arsenal.shared.identified(chat) }
             // What the box listed meanwhile, now this chat is known.
             self?.binding?.adoptChats()
             // A chat made here (a fork) keeps the point it started with on the box.
@@ -483,6 +485,11 @@ final class BoxChatServices: ChatServices {
         // Box chats go up to Auto (`LinkPolicy.raiseCap`): the picker doesn't offer the modes above.
         chat.controls.levelCap = LinkPolicy.raiseCap.rawValue
         chat.controls.levelCapNote = LinkPolicy.boxCapLine
+        // Its tier from before (Kore or the box restarted), once it's in its window: said to the box
+        // with its first look, so the box doesn't take the Mac's nothing for off.
+        Task { @MainActor [weak chat] in
+            if let chat { Arsenal.shared.restore(chat) }
+        }
     }
     func closed(_ chat: Chat) { app.closed(chat) }
     func planWindows(_ cli: String, _ snapshot: PlanSnapshot?) {}

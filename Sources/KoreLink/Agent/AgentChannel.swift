@@ -26,10 +26,10 @@ package final class AgentChannel {
     }
     package static let socketName = "kore.sock"
 
-    /// Commands a caller may run a minute.
-    static let perMinute = 30
+    /// Commands a caller may run a minute (`ArsenalRules`, kore-host's too).
+    static let perMinute = ArsenalRules.perMinute
     /// Lines a caller may send past `perMinute`, each answered, before its connection ends.
-    static let strikes = 30
+    static let strikes = ArsenalRules.strikes
     /// Log lines a caller may cause a minute; the rest are one `agent-throttled` line.
     static let logLinesPerMinute = 120
     /// The commands served. Tests add one above Own to reach `.tier` from it.
@@ -47,11 +47,11 @@ package final class AgentChannel {
     private var throttleLogged: [String: Date] = [:]
     /// Drive's limits per caller: messages a minute, new chats an hour, and the chats it made
     /// that are open now.
-    static let sendsPerMinute = 10
-    static let newPerHour = 10
-    static let madeOpen = 6
+    static let sendsPerMinute = ArsenalRules.sendsPerMinute
+    static let newPerHour = ArsenalRules.newPerHour
+    static let madeOpen = ArsenalRules.madeOpen
     /// The longest a `chat.wait` holds, in seconds.
-    static let waitMax = 300
+    static let waitMax = ArsenalRules.waitMax
     private var sendBudgets: [String: RateLimiter] = [:]
     private var newBudgets: [String: RateLimiter] = [:]
     private var made: [String: NSHashTable<Chat>] = [:]
@@ -813,7 +813,7 @@ package final class AgentChannel {
     private func callerChat(_ client: Client) -> Chat? { client.chat.flatMap { AgentReads.chatsByID()[$0] } }
 
     /// The longest message a caller may send.
-    static let textMax = 64 * 1024
+    static let textMax = ArsenalRules.textMax
 
     /// The chat a change names (`.` when none is named): the caller's own, or with Drive one it may drive.
     private func changeable(_ args: AgentArgs, _ client: Client, _ id: String) -> Chat? {
@@ -923,13 +923,7 @@ package final class AgentChannel {
     }
 
     /// When the next one frees up, for a limit's refusal.
-    static func freesUp(_ date: Date, now: Date = Date()) -> String {
-        let minutes = max(1, Int((date.timeIntervalSince(now) / 60).rounded(.up)))
-        let at = date.formatted(date: .omitted, time: .shortened)
-        return minutes < 2 && date.timeIntervalSince(now) < 60
-            ? "the next frees up in \(max(1, Int(date.timeIntervalSince(now).rounded(.up)))) s (at \(at))."
-            : "the next frees up in \(minutes) min (at \(at))."
-    }
+    static func freesUp(_ date: Date, now: Date = Date()) -> String { ArsenalRules.freesUp(date, now: now) }
 
     /// A fork of a chat it reaches (its own included), opened as the fork in a message's menu opens
     /// one: in front, the conversation with it, in that chat's mode, Arsenal off. A new chat for the
@@ -1062,15 +1056,7 @@ package final class AgentChannel {
     /// A chat's caller refused for having no grant: what the agent tells the user.
     static let offLine = AgentTools.offLine()
 
-    static func message(_ code: AgentCode) -> String {
-        switch code {
-        case .rateLimited: "Too many commands: \(perMinute) a minute."
-        case .unknownCommand: "Kore has no such command."
-        case .tier: "This chat's Kore access doesn't cover that."
-        case .stopped: "Kore access is off for this caller."
-        default: code.rawValue
-        }
-    }
+    static func message(_ code: AgentCode) -> String { ArsenalRules.message(code) }
 
     private func resolve(_ ref: String?, _ client: Client, _ id: String) -> Chat? {
         guard let ref, !ref.isEmpty else {
@@ -1245,12 +1231,7 @@ package final class AgentChannel {
         client.send { Self.encode(value) }
     }
 
-    nonisolated static func encode(_ value: some Encodable) -> Data {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.withoutEscapingSlashes]
-        guard let data = try? encoder.encode(value) else { return Data("{}".utf8) }
-        return Data(AgentSecrets.mask(String(decoding: data, as: UTF8.self)).utf8)
-    }
+    nonisolated static func encode(_ value: some Encodable) -> Data { ArsenalRules.encode(value) }
 
     // MARK: A chat on a box
 

@@ -21,22 +21,19 @@ package enum AgentBoxCalls {
         func refused(_ code: AgentCode, _ text: String) -> BoxToolResult { BoxToolResult(id: call.id, ok: false, code: code.rawValue, text: text) }
         // This Mac's tab of that chat on that box: an id it has no tab for names nothing.
         guard let chat = AgentReads.chatsByID().values.first(where: { $0.boxPlace?.connection === connection && $0.boxPlace?.chatId == call.chatId })
+        // kore-host answers what it can itself on this line (`HostDaemon.noTabLine`): keep the words.
         else { return refused(.noChat, "That chat isn't open in Kore on the Mac.") }
         let tier = AgentGrants.tier(chat: chat.id.uuidString)
-        guard tier != .off, let channel = AgentChannel.current else { return refused(.denied, AgentTools.offLine(box: true)) }
-        guard let tool = AgentTools.tool(call.tool, box: true) else { return refused(.unknownCommand, "No such tool: \(call.tool.prefix(64)).") }
-        // The channel checks the tier too: this says it in the agent's terms, as `kore mcp` does.
-        guard AgentCommand.allowed(tier).contains(where: { $0.name == tool.command }) else {
-            return refused(.tier, AgentTools.tierLine(tool.command, has: tier.rawValue))
-        }
+        // The channel checks the tier too: this says it in the agent's terms, as `kore mcp` does,
+        // and as kore-host does for the calls it answers itself (`ArsenalRules`).
+        let channel = AgentChannel.current
+        if let (code, text) = ArsenalRules.refusal(tool: call.tool, tier: channel == nil ? .off : tier, box: true) { return refused(code, text) }
+        guard let channel, let tool = AgentTools.tool(call.tool, box: true) else { return refused(.denied, AgentTools.offLine(box: true)) }
         let given = (try? call.args?.encoded()).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] ?? [:]
         let line = await channel.boxCall(chat: chat.id.uuidString, tool.command, AgentTools.arguments(tool, given))
         return result(line, id: call.id)
     }
 
     /// The channel's line as the agent reads it: the command's data, or why not.
-    static func result(_ line: Data, id: String) -> BoxToolResult {
-        let said = AgentTools.answer((try? JSONSerialization.jsonObject(with: line)) as? [String: Any] ?? [:], box: true)
-        return BoxToolResult(id: id, ok: said.ok, code: said.code, text: said.text)
-    }
+    static func result(_ line: Data, id: String) -> BoxToolResult { ArsenalRules.result(line, id: id) }
 }

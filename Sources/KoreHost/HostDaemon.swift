@@ -46,6 +46,8 @@ package final class HostDaemon {
     var askers: [ObjectIdentifier: (socket: HostSocket, asked: Bool)] = [:]
     var toolCalls: [String: HostToolCall] = [:]
     var toolSerial = 0
+    /// The calls the box answers itself: limits, waits (`HostArsenal`).
+    let boxArsenal = HostArsenal()
     /// 1.9: the folder's past sessions as each CLI on the box lists them (tests set their own),
     /// and the box's own titles and archive for them (`history.json`, read on first use).
     package var pastSessions: @Sendable (_ provider: ProviderDescriptor, _ folder: URL) async -> [SessionSummary]? = { provider, folder in
@@ -317,6 +319,7 @@ package final class HostDaemon {
         for connection in connections where connection.proven && connection.takesPushes() {
             connection.send(.delta(rev: connection.nextRev(), windows: windows, chats: nil, removed: [hc.id]))
         }
+        arsenalNoted(hc)
     }
 
     /// Closed chats kept for reopening.
@@ -418,6 +421,7 @@ package final class HostDaemon {
             if let ended = attention.turnEnded(hc, turn: turn, outcome: outcome, at: now()) { sendAttention([ended]) }
         }
         hc.noted(chat)
+        arsenalNoted(hc)
         armIdle(hc)
         broadcast(chats: [hc])
     }

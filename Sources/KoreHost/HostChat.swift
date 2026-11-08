@@ -48,6 +48,9 @@ package struct ChatRecord: Codable, Sendable, Equatable {
     package var last: String?
     /// A Claude chat's account (`HostAccounts`): an added one's folder name; nil, the default.
     package var account: String?
+    /// Link 1.6: its Arsenal tier as the Mac last said it (nil: off), kept so kore-host answers
+    /// the chat's own calls by it while the Mac is away, and after a restart.
+    package var arsenal: String?
 }
 
 /// A chat frozen for a move (`chat.release` prepare): which move, the grant it goes to, and since
@@ -108,9 +111,17 @@ package final class HostChat {
     /// the clients waiting on them: a repeat gets the first answer and runs nothing.
     var answered: [(id: String, data: Data)] = []
     var calling: [String: [LinkClient]] = [:]
-    /// Link 1.6: the chat's Arsenal tier as the Mac last said it with a message (nil: off), and
-    /// whether its running CLI was given the `kore_app` server (nil: no CLI yet).
-    var arsenal: String?
+    /// Link 1.6: the chat's Arsenal tier as the Mac last said it with a message (nil: off), kept
+    /// in its record (a change only is written), and whether its running CLI was given the
+    /// `kore_app` server (nil: no CLI yet).
+    var arsenal: String? {
+        get { record.arsenal }
+        set {
+            guard newValue != record.arsenal else { return }
+            record.arsenal = newValue
+            try? saveRecord()
+        }
+    }
     var serverGiven: Bool?
 
     /// `changed`: new or changed entries and turns to send, or a reset.
@@ -310,6 +321,12 @@ package final class HostChat {
                 self.projectWaiting(chat)
             }
         }
+    }
+
+    /// The log brought up to the live chat now, for a read that can't wait for the next projection
+    /// (an Arsenal call answered on the box).
+    func caughtUp() {
+        if let chat { projectWaiting(chat) }
     }
 
     private func projectWaiting(_ chat: Chat) {

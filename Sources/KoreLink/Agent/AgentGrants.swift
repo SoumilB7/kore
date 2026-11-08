@@ -1,4 +1,5 @@
 import Foundation
+import LinkProtocol
 import KoreUI
 
 /// Who may use the agent channel: the master switch (a setting, with no control yet) and each
