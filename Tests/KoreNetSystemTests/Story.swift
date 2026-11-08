@@ -24,6 +24,8 @@ extension World {
 
     /// Devices popup → "+" (the Add device window opens).
     func plus() async {
+        // Open already (its 10 minutes aren't up): the owner sees the countdown and taps nothing.
+        guard !mac.macNet.addOpen else { return }
         await step("+", .plus, until: { self.mac.macNet.addOpen && self.mac.macNet.listening }) {
             Devices.shared.openAddWindow()
         }

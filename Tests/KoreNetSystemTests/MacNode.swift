@@ -44,6 +44,9 @@ final class MacNode {
     private(set) var sshBoxes: [String: BoxNode] = [:]
 
     private(set) var switcher: KoreNetSwitch!
+    private(set) var upgrades: BoxUpgrades!
+    /// `kore-host upgrade` runs, by box alias (I25).
+    private(set) var upgradeRuns: [String: Int] = [:]
     private(set) var directory: NodeDirectory!
     private(set) var macNet: MacNet!
     private(set) var asks: DeviceAsks!
@@ -94,6 +97,22 @@ final class MacNode {
         BoxList.shared.reload()
         // Every box this Mac lists gets its link object (asleep: no window holds it).
         for box in BoxList.shared.boxes { makeLink(box.alias) }
+        // SSH boxes move to KoreNet by themselves (§2g): `kore-host upgrade` runs on the box in
+        // this process, as ssh would carry it.
+        let upgrades = BoxUpgrades()
+        let clock = clock
+        upgrades.directory = directory
+        upgrades.sleep = clock.sleep
+        upgrades.now = { Date(timeIntervalSince1970: 1_800_000_000).addingTimeInterval(Double(clock.nowMS) / 1000) }
+        upgrades.shell = BoxUpgradeShell(
+            upgrade: { [weak self] alias, _, grant, want in
+                await self?.upgradeOnBox(alias, grant: grant, want: want) ?? BoxRan(status: 255, output: "ssh: no route")
+            },
+            push: { _, _ in BoxSetup.Failure(message: "no push here") })
+        switcher.upgrades = upgrades
+        Devices.shared.upgrades = upgrades
+        Devices.shared.joinRunner = { upgrades.runner(for: $0) }
+        self.upgrades = upgrades
         switcher.start()
         asks = DeviceAsks()
         asks.present = { [weak self] info, _ in
@@ -101,11 +120,11 @@ final class MacNode {
             pulse.beat()
         }
         asks.dismiss = { pulse.beat() }
-        // `MacNetSwitch.follow`, with the listener's clock on virtual time (its pre-auth limit of
-        // 3 a minute per address counts minutes the world lives through, not the test's ms).
-        let clock = clock
+        // The real glue (`MacNetSwitch.install` + `follow`), with the listener's clock on virtual
+        // time (its pre-auth limit of 3 a minute per address counts the world's minutes).
         let base = Date(timeIntervalSince1970: 1_800_000_000)
-        macNet = MacNet(host: switcher, feed: LinkFeed(source: EmptySource(), taps: false), asks: asks) {
+        MacNetSwitch.install()
+        macNet = MacNetSwitch.follow(switcher, feed: LinkFeed(source: EmptySource(), taps: false), asks: asks) {
             base.addingTimeInterval(Double(clock.nowMS) / 1000)
         }
         // Its timers (the Add window's end, a resumed phone's cursor wait) on virtual time too.
@@ -125,8 +144,6 @@ final class MacNode {
                 pulse.ended()
             }
         }
-        Self.follow(switcher, macNet)
-        MacNetSwitch.apply(switcher.state, to: macNet)
         MacNet.shared = macNet
         macNet.changed = { _ in pulse.beat() }
         NetAudit.watch = { [weak self] line in
@@ -138,19 +155,6 @@ final class MacNode {
         Devices.shared.boxes = nil
         Devices.shared.net = nil
         pulse.beat()
-    }
-
-    /// The listener follows the switch's state, as `MacNetSwitch.watch` does.
-    private static func follow(_ net: KoreNetSwitch, _ mac: MacNet) {
-        withObservationTracking { _ = net.state } onChange: { [weak net, weak mac] in
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    guard let net, let mac, MacNet.shared === mac else { return }
-                    MacNetSwitch.apply(net.state, to: mac)
-                    follow(net, mac)
-                }
-            }
-        }
     }
 
     /// A box link as Kore makes it (`HostConnection.named`), over the box's SSH `attach --as`.
@@ -199,6 +203,23 @@ final class MacNode {
         Devices.shared.phones = nil
         popupOpen = false
         cards = []
+    }
+
+    /// `kore-host upgrade --grant <grant>` on the box, over its SSH (unreachable: ssh's own failure).
+    func upgradeOnBox(_ alias: String, grant: String, want: String?) async -> BoxRan {
+        guard let box = sshBoxes[alias], box.attach.reachable.withLock({ $0 }), let host = box.host else {
+            return BoxRan(status: 255, output: "ssh: connect to host \(alias) port 22: Operation timed out")
+        }
+        upgradeRuns[alias, default: 0] += 1
+        let paths = box.paths
+        let tailscale: HostUpgrade.Tailscale = net.node(box.ip)?.state == .running ? .running(node: box.nodeKey) : .stopped(.stopped, login: nil)
+        let report = HostUpgrade(
+            paths: paths, update: { nil }, service: { .running }, installService: { [] }, startDaemon: { true }, linger: { true },
+            tailscale: { tailscale }, reload: { MainActor.assumeIsolated { host.reloadNet() } }, listen: { _ in nil }
+        ).run(want: want, grant: grant)
+        await host.net?.settled()
+        pulse.beat()
+        return BoxRan(status: report.exit, output: report.text.joined(separator: "\n"))
     }
 
     // MARK: Set up over SSH (before KoreNet)

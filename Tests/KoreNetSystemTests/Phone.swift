@@ -98,7 +98,7 @@ final class Slot: @unchecked Sendable {
 
 /// The phone's `NodeMachine` (android/link node/NodeMachine.kt), line for line, on virtual time.
 struct NodeMachine: Equatable {
-    enum AwayWhy: String { case asleep, off, unreachable }
+    enum AwayWhy: String { case asleep, off, unreachable, waiting }
     enum State: Equatable {
         case idle, connecting, awaitingAllow, up
         case away(AwayWhy, at: Int64?, attempt: Int)
@@ -110,8 +110,12 @@ struct NodeMachine: Equatable {
     }
 
     static let capMS: Int64 = 300_000
+    /// A box waiting for its Mac's push is tried at least this often while on screen.
+    static let waitingCapMS: Int64 = 60_000
     private(set) var state = State.idle
     private var attempt = 0
+    /// A box's machine: `unknown` there means its Mac's push is on its way.
+    var box = false
 
     mutating func on(_ event: Event, now: Int64) {
         let s = state
@@ -153,8 +157,10 @@ struct NodeMachine: Equatable {
     private mutating func ended(_ reason: String?, _ now: Int64) -> State {
         switch reason {
         case "revoked": return .removed
-        case "unknown", "refused", "proof": return .denied(reason!)
+        case "unknown": return box ? backoff(now, .waiting, cap: Self.waitingCapMS) : .denied("unknown")
+        case "refused", "proof": return .denied(reason!)
         case "paused": return .away(.off, at: nil, attempt: 0)
+        case "online": return connecting(reset: true)
         case "quit", "sleep": return .away(.asleep, at: now + Self.capMS, attempt: 0)
         case "abandoned": return connecting(reset: true)
         default: return state == .awaitingAllow && reason == nil ? .denied("closed") : backoff(now, .unreachable)
@@ -166,8 +172,8 @@ struct NodeMachine: Equatable {
         return .connecting
     }
 
-    private mutating func backoff(_ now: Int64, _ why: AwayWhy) -> State {
-        let base = min(Double(Self.capMS), 1000.0 * Double(1 << min(attempt, 16)))
+    private mutating func backoff(_ now: Int64, _ why: AwayWhy, cap: Int64 = NodeMachine.capMS) -> State {
+        let base = min(Double(cap), 1000.0 * Double(1 << min(attempt, 16)))
         attempt += 1
         return .away(why, at: now + Int64(base), attempt: attempt)
     }
@@ -187,7 +193,13 @@ struct PhoneRow: Equatable, CustomStringConvertible {
         case .up: ""
         case .connecting: "● Reconnecting"
         case .awaitingAllow: "● Waiting for Allow"
-        case .away(let why, _, _): why == .asleep ? "● Asleep" : why == .off ? "● Offline" : "● Offline · retrying"
+        case .away(let why, _, _):
+            switch why {
+            case .asleep: "● Asleep"
+            case .off: "● Offline"
+            case .unreachable: "● Offline · retrying"
+            case .waiting: "● Waiting for MacBook"
+            }
         case .denied: "● Not allowed"
         case .removed: "● Removed"
         case .signedOut: "● Signed out"
@@ -237,7 +249,12 @@ final class PhoneEmu {
         var hostName: String?
         var rev: Int?
         var wake: Task<Void, Never>?
-        init(_ record: DeviceRecord) { self.record = record }
+        /// Taken offline on the Mac: the link stays, parked, until its `bye online`.
+        var parked = false
+        init(_ record: DeviceRecord) {
+            self.record = record
+            machine.box = record.kind == .box
+        }
     }
 
     let label: String
@@ -351,7 +368,7 @@ final class PhoneEmu {
 
     private func knock(_ mine: Int) async {
         let started = clock.now
-        while generation == mine, !Task.isCancelled, clock.now - started < .seconds(120) {
+        while generation == mine, !Task.isCancelled, clock.now - started < .seconds(600) {
             let status = net.status(of: ip)
             let macs = status.peers.filter { $0.os == "macOS" && $0.online && $0.tags.isEmpty && $0.userID == status.selfNode?.userID }
             for mac in macs {
@@ -431,9 +448,28 @@ final class PhoneEmu {
         known = [mac] + boxes
         for box in boxes where clients[box.id] == nil {
             let c = client(box)
-            if running { c.machine.on(.start, now: clock.nowMS) }
+            if running {
+                c.machine.on(.start, now: clock.nowMS)
+                drive(c)
+            }
         }
         for box in boxes { clients[box.id]?.record = box }
+        // A box the Mac names now holds this phone, or can be reached: tried again at once
+        // (`NodeClient.named`); boxes that said `paused` hear the Mac took it back.
+        for box in boxes {
+            guard let c = clients[box.id], running, !c.parked else { continue }
+            switch c.machine.state {
+            case .denied, .away(.waiting, _, _), .away(.unreachable, _, _), .away(.off, _, _):
+                c.machine.on(.trigger, now: clock.nowMS)
+                drive(c)
+            case .removed:
+                // Named again by the Mac: allowed again (`NodeClient.named` on a box).
+                c.ticket = nil
+                c.machine.on(.allowed, now: clock.nowMS)
+                drive(c)
+            default: break
+            }
+        }
     }
 
     private func client(_ record: DeviceRecord) -> Client {
@@ -454,7 +490,7 @@ final class PhoneEmu {
             let id = c.record.id
             c.wake = Task { [weak self] in
                 await self?.clock.wait(wait)
-                guard !Task.isCancelled, let self, let c = self.clients[id] else { return }
+                guard !Task.isCancelled, let self, let c = self.clients[id], !c.parked else { return }
                 c.machine.on(.tick, now: self.clock.nowMS)
                 self.drive(c)
             }
@@ -512,10 +548,16 @@ final class PhoneEmu {
         case .message(let m):
             if case .string("welcome")? = m["t"], case .object(let host)? = m["host"], case .string(let n)? = host["name"] { c.hostName = n }
             if case .string("snapshot")? = m["t"], case .int(let rev)? = m["rev"] { c.rev = Int(rev) }
+            if c.record.kind == .mac, case .string("paused")? = m["t"], c.wire != nil {
+                c.parked = true
+                c.machine.on(.ended("paused"), now: now)
+            }
+            if c.record.kind == .mac, case .string("devices.set")? = m["t"], let records = Self.records(m["records"]) { keepDirectory(records) }
         case .closed(let why):
             let wasUp = !c.dialing
             c.dialing = false
             c.wire = nil
+            c.parked = false
             let reason: String? = why.hasPrefix("bye ") ? String(why.dropFirst(4)) : nil
             if wasUp {
                 c.machine.on(.ended(reason), now: now)
@@ -536,13 +578,19 @@ final class PhoneEmu {
             for await event in events {
                 guard let self, !Task.isCancelled else { return }
                 if case .peer(_, let key?, let online?) = event, online {
-                    for c in self.clients.values where c.record.nodeKeys.contains(key) {
+                    for c in self.clients.values where c.record.nodeKeys.contains(key) && !c.parked {
                         c.machine.on(.peerOnline, now: self.clock.nowMS)
                         self.drive(c)
                     }
                 }
             }
         }
+    }
+
+    /// A `devices.set`'s records, as the wire carries them.
+    static func records(_ value: JSONValue?) -> [DeviceRecord]? {
+        guard let value, let data = try? JSONEncoder().encode(value) else { return nil }
+        return DevicesWire.decode([DeviceRecord].self, data)
     }
 
     // MARK: What it shows

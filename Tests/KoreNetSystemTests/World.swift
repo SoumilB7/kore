@@ -145,6 +145,8 @@ final class World {
         // Support. The list is only a defaults key here.
         Self.cleanDefaults()
         BoxList.shared.reload()
+        Devices.shared.upgrades = .shared
+        Devices.shared.joinRunner = { BoxUpgrades.shared.runner(for: $0) }
         BoxNetJoin.unreachable = []
         try? FileManager.default.removeItem(at: root)
     }
@@ -311,6 +313,8 @@ final class World {
             }
             for listed in mac.listedBoxes {
                 guard let box = boxes.first(where: { $0.device == listed.id }), box.netOn, box.listening else { continue }
+                // Asleep (the box said `quit`): a bounded wait with its own trigger; the end checks it.
+                if case .away(.asleep, _, _)? = phone.state(of: listed.id) { continue }
                 if phone.state(of: listed.id) != .up { out.append(("I2·E2", "\(phone.label) doesn't reach \(box.alias): \(phone.rows)")) }
             }
         }
