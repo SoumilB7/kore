@@ -277,7 +277,7 @@ private struct SaveCommands: View {
     }
 }
 
-/// ⌘,: the active chat's Account popup, as the / menu's Account opens it.
+/// ⌘,: the active chat's Account popup, as the / menu's Account opens it. ⌥⌘K: its Arsenal.
 private struct AccountCommands: View {
     @FocusedValue(\.workspace) private var workspace
 
@@ -285,6 +285,10 @@ private struct AccountCommands: View {
         // A tab with no chat (the picker) or an agent's has no composer for it: nothing happens.
         Button("Account…") { workspace?.openAccount() }
         .keyboardShortcut(",")
+        .disabled(workspace == nil)
+        // Hard to hit by chance; the tab's right-click shows it.
+        Button("Arsenal") { workspace?.toggleArsenal() }
+        .keyboardShortcut("k", modifiers: [.command, .option])
         .disabled(workspace == nil)
     }
 }

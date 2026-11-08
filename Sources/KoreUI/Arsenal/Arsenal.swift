@@ -11,8 +11,8 @@ package enum ArsenalTier: String, CaseIterable, Sendable {
 }
 
 /// Arsenal: one chat's agent may use Kore itself through `kore` (`z-docs/design/arsenal-button.html`).
-/// This is what the tab, "/" and the Account popup act on; `AgentGrants` (KoreLink, through
-/// `AgentTaps`) opens the socket to match. Grants live for this run only.
+/// This is what the tab's right-click, ⌥⌘K, the K and the Account popup act on; `AgentGrants`
+/// (KoreLink, through `AgentTaps`) opens the socket to match. Grants live for this run only.
 @MainActor @Observable
 package final class Arsenal {
     package static let shared = Arsenal()
@@ -48,9 +48,20 @@ package final class Arsenal {
         anyOn = false
     }
 
-    package func toggle(_ chat: Chat) {
-        if chat.arsenal == nil { turnOn(chat) } else { turnOff(chat) }
+    /// The tab's right-click and ⌥⌘K. With the switch off, the first use turns it on, and the chat
+    /// says in one line where everything turns off.
+    package func flip(_ chat: Chat) {
+        if chat.arsenal != nil { return turnOff(chat) }
+        guard Self.unavailable(chat) == nil else { return }
+        if !allowed {
+            setAllowed(true)
+            chat.note("Chats can use Arsenal now · Account (⌘,) turns it off")
+        }
+        turnOn(chat)
     }
+
+    /// The toggle's key, shown wherever the toggle is.
+    static let key = "⌥⌘K"
 
     /// At the chat's last tier, or Watch the first time.
     package func turnOn(_ chat: Chat) {
@@ -81,6 +92,15 @@ package final class Arsenal {
     package static func unavailable(_ chat: Chat) -> String? {
         chat.provider == .codex && chat.controls.mode != CodexModes.fullAccess
             ? "Codex's sandbox blocks this. It works in Full access." : nil
+    }
+
+    /// Its row in the tab's right-click popup: the tier while on, dim with why when it can't be.
+    func row(_ chat: Chat) -> OptionItem {
+        if let tier = chat.arsenal {
+            return OptionItem("Arsenal · \(tier.title)", tint: Theme.Arsenal.watch, key: Self.key) { [self] in flip(chat) }
+        }
+        if Self.unavailable(chat) != nil { return OptionItem("Arsenal · Codex needs Full access", enabled: false, key: Self.key) }
+        return OptionItem("Arsenal", key: Self.key) { [self] in flip(chat) }
     }
 
     /// The tiers' popup. The last lines are what it reaches: what's built reads only, so the chat's

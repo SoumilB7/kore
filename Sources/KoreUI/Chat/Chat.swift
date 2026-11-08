@@ -1670,6 +1670,9 @@ package final class Chat: Identifiable {
         }
     }
 
+    /// A quiet line of Kore's own in the transcript.
+    func note(_ text: String) { dispatch(.notice(text)) }
+
     /// A mode that can't reach Kore ends its Arsenal.
     private func arsenalFollowMode() {
         if arsenal != nil, Arsenal.unavailable(self) != nil { Arsenal.shared.turnOff(self) }

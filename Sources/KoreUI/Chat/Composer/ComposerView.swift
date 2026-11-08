@@ -576,7 +576,7 @@ struct ComposerView: View {
     private var slashMatches: [SlashCommand] {
         guard !chat.slashClosed, let token = slashToken else { return [] }
         let remote = SlashCommand.remote(on: chat.controls.remote != nil, unavailable: chat.controls.remoteUnavailable)
-        return SlashCommand.matches(chat.controls.commands, sigil: token.sigil, query: token.query, remote: remote, arsenal: .arsenal(chat), link: LinkTaps.slash?() ?? [])
+        return SlashCommand.matches(chat.controls.commands, sigil: token.sigil, query: token.query, remote: remote, link: LinkTaps.slash?() ?? [])
     }
 
     /// An input method is composing (marked text): its keys are its own.
@@ -672,8 +672,6 @@ struct ComposerView: View {
             case SlashCommand.account.name: chat.openAccount()
             case SlashCommand.remoteName: if !command.unavailable { chat.setRemoteControl(!command.on) }
             case SlashCommand.usage.name: chat.openUsage()
-            case SlashCommand.arsenalName:
-                if !Arsenal.shared.allowed { chat.openAccount() } else if !command.unavailable { Arsenal.shared.toggle(chat) }
             default: if !command.unavailable { LinkTaps.slashChosen?(command.name) }
             }
         }

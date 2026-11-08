@@ -87,8 +87,6 @@ extension StoryID {
         /// A chat tab's Arsenal K, and the chevron that opens its tiers.
         package static func arsenal(_ id: UUID) -> StoryID { StoryID(.tabs, "arsenal", key: id.uuidString) }
         package static func arsenalTiers(_ id: UUID) -> StoryID { StoryID(.tabs, "arsenal.tiers", key: id.uuidString) }
-        /// The dim K of a chat that can't have it.
-        package static func arsenalUnavailable(_ id: UUID) -> StoryID { StoryID(.tabs, "arsenal.unavailable", key: id.uuidString) }
         /// The strip the tabs scroll in.
         package static let strip = StoryID(.tabs, "strip")
     }

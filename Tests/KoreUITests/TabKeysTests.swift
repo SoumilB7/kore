@@ -25,6 +25,12 @@ struct TabKeysTests {
         #expect(TabKey.of("\u{19}", keyCode: 48, modifiers: [.control, .shift]) == .previous)
         #expect(TabKey.of("1", keyCode: 18, modifiers: .command) == .number(1))
         #expect(TabKey.of("9", keyCode: 25, modifiers: [.command, .numericPad]) == .number(9))
+        // Arsenal, whatever ⌥ makes of the K; ⌘K, ⇧⌘K (the editor's Delete Line) and ⌃⌥⌘K aren't it.
+        #expect(TabKey.of("k", keyCode: 40, modifiers: [.command, .option]) == .arsenal)
+        #expect(TabKey.of("˚", keyCode: 40, modifiers: [.command, .option]) == .arsenal)
+        #expect(TabKey.of("k", keyCode: 40, modifiers: .command) == nil)
+        #expect(TabKey.of("K", keyCode: 40, modifiers: [.command, .shift]) == nil)
+        #expect(TabKey.of("k", keyCode: 40, modifiers: [.command, .option, .control]) == nil)
         // Not theirs: Close Window, the editor's Replace, Welcome, Actual Size, plain Tab, Match Whole Word.
         #expect(TabKey.of("w", keyCode: 13, modifiers: [.command, .shift]) == nil)
         #expect(TabKey.of("1", keyCode: 18, modifiers: [.command, .shift]) == nil)

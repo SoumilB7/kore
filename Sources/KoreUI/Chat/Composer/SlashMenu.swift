@@ -68,9 +68,7 @@ struct SlashMenu: View {
     @ViewBuilder private static func mark(_ command: SlashCommand) -> some View {
         switch command.kind {
         case .kore:
-            if command.name == SlashCommand.arsenalName {
-                ArsenalMark(color: command.unavailable ? Theme.tertiary : command.on ? Theme.Arsenal.watch : Theme.secondary)
-            } else if let glyph = command.glyph { Image(systemName: glyph).font(Glyph.rowIcon).foregroundStyle(Theme.secondary) }
+            if let glyph = command.glyph { Image(systemName: glyph).font(Glyph.rowIcon).foregroundStyle(Theme.secondary) }
         case .command:
             SlashMark()
                 .stroke(Theme.secondary, style: StrokeStyle(lineWidth: Size.slashStroke, lineCap: .round))
@@ -107,21 +105,6 @@ extension SlashCommand {
 
     static let remoteName = "remote-control"
 
-    /// This chat's Arsenal: a click turns it on or off; dim with why when it can't, or, with the
-    /// switch off, as the way to the switch.
-    @MainActor static func arsenal(_ chat: Chat) -> SlashCommand {
-        let allowed = Arsenal.shared.allowed
-        let reason = Arsenal.unavailable(chat)
-        var command = SlashCommand(
-            name: arsenalName, description: allowed ? reason ?? "Lets this chat's agent use Kore" : "Turn on in Account",
-            hint: allowed ? chat.arsenal?.title ?? "Off" : "", kind: .kore, glyph: nil)
-        command.on = chat.arsenal != nil
-        command.unavailable = !allowed || (reason != nil && chat.arsenal == nil)
-        return command
-    }
-
-    static let arsenalName = "arsenal"
-
     /// "/compact", "$pdf", "Usage".
     var label: String {
         switch kind {
@@ -138,7 +121,6 @@ extension SlashCommand {
         switch name {
         case Self.account.name: return ["login", "logout", "sign", "switch"]
         case Self.remoteName: return ["rc", "phone", "web", "mobile"]
-        case Self.arsenalName: return ["kore", "agent", "access"]
         case Self.usage.name: return ["limits"]
         default: return []
         }
@@ -150,10 +132,9 @@ extension SlashCommand {
     /// `remote`: this chat's Remote control entry, after Account. `link`: a companion's entries,
     /// while one is allowed this run.
     static func matches(
-        _ commands: [SlashCommand], sigil: Character, query: String, remote: SlashCommand? = nil, arsenal: SlashCommand? = nil,
-        link: [SlashCommand] = []
+        _ commands: [SlashCommand], sigil: Character, query: String, remote: SlashCommand? = nil, link: [SlashCommand] = []
     ) -> [SlashCommand] {
-        let own = kore + (remote.map { [$0] } ?? []) + (arsenal.map { [$0] } ?? []) + link
+        let own = kore + (remote.map { [$0] } ?? []) + link
         let listed =
             sigil == "$"
             ? commands.filter { $0.kind == .skill } : own + commands.filter { $0.kind == .skill || !replaced.contains($0.name) }

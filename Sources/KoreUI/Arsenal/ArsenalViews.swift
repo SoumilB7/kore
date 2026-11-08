@@ -31,7 +31,7 @@ struct ArsenalMark: View {
     }
 
     // The K's own 148 × 204 box.
-    private static func point(_ x: CGFloat, _ y: CGFloat, _ size: CGSize) -> CGPoint {
+    nonisolated private static func point(_ x: CGFloat, _ y: CGFloat, _ size: CGSize) -> CGPoint {
         CGPoint(x: (x - 78) / 148 * size.width, y: (y - 26) / 204 * size.height)
     }
 
@@ -52,9 +52,9 @@ struct ArsenalMark: View {
     }
 }
 
-/// The K on a chat's tab. Off, it shows only while the tab is hovered; on, always, in the tier's
-/// colour, with the tier's name and its chevron under the pointer. It reads the switch and the
-/// chat's tier here, so a change redraws this and no more of the bar.
+/// The K on a chat's tab, while it has Arsenal: in the tier's colour, with the tier's name and its
+/// chevron under the pointer, and a click turns it off. The way in is the tab's right-click or
+/// ⌥⌘K. It reads the chat's tier here, so a change redraws this and no more of the bar.
 struct ArsenalTabControl: View {
     let chat: Chat
     let tab: UUID
@@ -62,64 +62,40 @@ struct ArsenalTabControl: View {
     /// The tab has room for the tier's name; otherwise its chevron alone.
     let showsName: Bool
     @StateObject private var hovered = Local(false)
-    /// Just turned on: no × until the pointer has left, so a second click isn't invited.
-    @StateObject private var fresh = Local(false)
 
     private var tabHovered: Bool { hoveredTab || Arsenal.shared.storyHover }
 
     var body: some View {
-        if Arsenal.shared.allowed, chat.arsenal != nil || tabHovered {
+        if let tier = chat.arsenal {
             HStack(spacing: 0) {
-                // The name grows to the left, so the K stays under the pointer: a second click turns it
-                // off, and doesn't land on what appeared.
-                if let tier = chat.arsenal, tabHovered { word(tier) }
-                if chat.arsenal == nil, let reason = Arsenal.unavailable(chat) {
-                    unavailable(reason)
-                } else {
-                    button
-                }
+                // The name grows to the left, so the K stays under the pointer.
+                if tabHovered { word(tier) }
+                button
             }
+            // Fades on; off is instant.
+            .transition(.asymmetric(insertion: .opacity.animation(Motion.fade), removal: .identity))
         }
     }
 
     private var button: some View {
-        let on = chat.arsenal != nil
-        return Button {
-            fresh.value = !on
-            Arsenal.shared.toggle(chat)
+        Button {
+            Arsenal.shared.turnOff(chat)
         } label: {
             Group {
-                if on, hovered.value, !fresh.value {
+                if hovered.value {
                     Image(systemName: "xmark.circle.fill").font(TextStyle.label).foregroundStyle(Theme.Arsenal.watch)
                 } else {
-                    ArsenalMark(color: on ? Theme.Arsenal.watch : Theme.secondary)
+                    ArsenalMark(color: Theme.Arsenal.watch)
                 }
             }
             .frame(width: Size.Arsenal.button, height: Size.Arsenal.button)
             .contentShape(Rectangle())
-            // Fades on; off is instant.
-            .animation(on ? Motion.fade : nil, value: on)
         }
         .buttonStyle(.plain)
-        .onHover {
-            hovered.value = $0
-            if !$0 { fresh.value = false }
-        }
-        .help(on ? "Turn off Arsenal" : "Turn on Arsenal · \(chat.arsenalLast.title)")
+        .onHover { hovered.value = $0 }
+        .help("Turn off Arsenal · \(Arsenal.key)")
         .accessibilityLabel("Arsenal")
         .storyID(StoryID.Tabs.arsenal(tab))
-    }
-
-    /// Dim, and a click says why.
-    private func unavailable(_ reason: String) -> some View {
-        OptionMenuButton(source: "arsenal", items: { [OptionItem(reason, enabled: false)] }, chevron: false) {
-            ArsenalMark(color: Theme.tertiary)
-                .frame(width: Size.Arsenal.button, height: Size.Arsenal.button)
-                .contentShape(Rectangle())
-        }
-        .help(reason)
-        .accessibilityLabel("Arsenal unavailable")
-        .storyID(StoryID.Tabs.arsenalUnavailable(tab))
     }
 
     private func word(_ tier: ArsenalTier) -> some View {
@@ -143,8 +119,8 @@ struct ArsenalOnBadge: View {
     }
 }
 
-/// "Let chats use Arsenal", and Stop agent control while a chat has it on. Kore has no Settings
-/// window: this sits in the Account popup, which ⌘, opens.
+/// "Let chats use Arsenal", and Stop agent control while a chat has it on, in the Account popup
+/// (⌘,): where everything turns off. The tab's right-click or ⌥⌘K turns the switch on with a chat.
 struct ArsenalSettings: View {
     var body: some View {
         let arsenal = Arsenal.shared

@@ -1218,6 +1218,7 @@ private struct TabItem: View {
             var items: [OptionItem] = []
             if tab.isPreview { items.append(OptionItem("Keep Open") { workspace.keep(tab) }) }
             items += [OptionItem("Rename…", enabled: tab.chat != nil && tab.agent == nil) { startRename() }]
+            if let chat = tab.chat, tab.agent == nil { items.append(Arsenal.shared.row(chat)) }
             // A chat moves onto a board: into one of its sections, or a new one.
             if tab.chat != nil, tab.agent == nil {
                 for boardTab in workspace.boardTabs {
@@ -1296,7 +1297,7 @@ private struct TabItem: View {
         .overlay(alignment: .trailing) {
             if label == .letters { close }
         }
-        // No room for a button: the K alone says it's on, and "/" turns it off.
+        // No room for a button: the K alone says it's on, and the right-click or ⌥⌘K turns it off.
         .overlay(alignment: .bottomLeading) {
             if label == .mark, let chat = tab.chat, tab.agent == nil { ArsenalOnBadge(chat: chat) }
         }

@@ -410,5 +410,7 @@ extension StoryID {
         package static let panel = StoryID(.editor, "options")
         package static let back = panel.part(.previous)
         package static func item(_ index: Int) -> StoryID { StoryID(.editor, "options.item", key: String(index)) }
+        /// The open popup's rows, by their words, and whether each can be chosen.
+        @MainActor package static var rows: [(title: String, enabled: Bool)] { OptionsMenu.shared.items.map { ($0.title, $0.enabled) } }
     }
 }

@@ -781,6 +781,13 @@ package final class Workspace {
         activeTab.chat?.openAccount()
     }
 
+    /// ⌥⌘K: the active chat tab's Arsenal, as its right-click row. A board, an agent's tab or a
+    /// file has none.
+    func toggleArsenal() {
+        guard activeTab.agent == nil, let chat = activeTab.chat else { return }
+        Arsenal.shared.flip(chat)
+    }
+
     /// Chats with work a quit would end: a turn or an agent running, or a background command
     /// (or an armed scheduled job) live.
     package var workingChats: Int {

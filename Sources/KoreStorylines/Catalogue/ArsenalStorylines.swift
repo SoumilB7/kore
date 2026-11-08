@@ -2,8 +2,9 @@ import Foundation
 import KoreLink
 import KoreUI
 
-/// The Arsenal button end to end (`z-docs/design/arsenal-button.html`): the switch, the K on the tab,
-/// `kore` through the real binary, last tier, stop all, and Codex's sandbox.
+/// The Arsenal button end to end (`z-docs/design/arsenal-button.html`): the tab's right-click and
+/// ⌥⌘K turn it on (the switch too, the first time), the K on the tab turns it off, `kore` through
+/// the real binary, last tier, stop all, the switch, and Codex's sandbox. "/" has none of it.
 final class ArsenalButton: ChatStoryline {
     override class var tags: Set<Tag> { [.agentChannel, .gate] }
     override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("Ready.")]) }
@@ -16,18 +17,39 @@ final class ArsenalButton: ChatStoryline {
         return id
     }
 
-    /// Clicks the K of `role`'s tab, under the pointer as it would be; `dim`: the K of a chat that
-    /// can't have it. Each has an id of its own, so the click waits for the one wanted to draw.
-    private struct ClickK: Step {
+    /// Right-clicks `role`'s tab and finds its Arsenal row, worded `title`; `choose`: clicks it, else
+    /// expects it dim and closes the popup.
+    private struct TabRow: Step {
         let role: String
-        var dim = false
-        var label: String { "click the \(dim ? "dim " : "")K on \(role)'s tab" }
+        let title: String
+        var choose = true
+        var label: String { "right-click \(role)'s tab: “\(title)”" + (choose ? "" : ", dim") }
         var timeout: Duration? { .seconds(10) }
 
         @MainActor func run(_ story: StoryContext) async throws {
             try await story.idle()
-            let tab = try ArsenalButton.tab(role, story)
-            let k = Locator.id(dim ? StoryID.Tabs.arsenalUnavailable(tab) : StoryID.Tabs.arsenal(tab))
+            try await RightClick(.id(StoryID.Tabs.tab(try ArsenalButton.tab(role, story)))).run(story)
+            try await WaitForElement(.id(StoryID.Options.panel)).run(story)
+            let rows = StoryID.Options.rows
+            guard let index = rows.firstIndex(where: { $0.title.hasPrefix("Arsenal") }) else {
+                throw StoryFailure.expectation("an Arsenal row in \(rows.map(\.title))")
+            }
+            guard rows[index].title == title, rows[index].enabled == choose else {
+                throw StoryFailure.expectation("“\(title)”\(choose ? "" : ", dim"); found “\(rows[index].title)”, enabled \(rows[index].enabled)")
+            }
+            if choose { try await Press(.id(StoryID.Options.item(index))).run(story) } else { try await Key(.escape).run(story) }
+        }
+    }
+
+    /// Clicks the K on `role`'s tab, which shows only while it's on: it turns it off.
+    private struct ClickK: Step {
+        let role: String
+        var label: String { "click the K on \(role)'s tab" }
+        var timeout: Duration? { .seconds(10) }
+
+        @MainActor func run(_ story: StoryContext) async throws {
+            try await story.idle()
+            let k = Locator.id(StoryID.Tabs.arsenal(try ArsenalButton.tab(role, story)))
             try await ExpectHittable(k).run(story)
             try await Click(k).run(story)
         }
@@ -39,6 +61,18 @@ final class ArsenalButton: ChatStoryline {
 
         @MainActor func run(_ story: StoryContext) async throws {
             try await ExpectElement(.id(StoryID.Tabs.arsenal(try ArsenalButton.tab(role, story))), .absent).run(story)
+        }
+    }
+
+    /// `role`'s tab in front, by a click on it.
+    private struct Front: Step {
+        let role: String
+        var label: String { "\(role)'s tab in front" }
+
+        @MainActor func run(_ story: StoryContext) async throws {
+            let tab = try ArsenalButton.tab(role, story)
+            try await Click(.id(StoryID.Tabs.tab(tab))).run(story)
+            try await story.until("\(role) in front") { story.app.workspace?.activeTab.id == tab }
         }
     }
 
@@ -80,6 +114,7 @@ final class ArsenalButton: ChatStoryline {
         let socket = directory.appendingPathComponent(AgentChannel.socketName).path
         let codex = variant == .codex
         let a = KoreCaller.chat("a")
+        let key = Key(.cmdOption("k"))
         func closed(_ what: String) -> Expect {
             Expect("\(what): no channel, no socket") { _ in AgentChannel.current == nil && !FileManager.default.fileExists(atPath: socket) }
         }
@@ -96,43 +131,52 @@ final class ArsenalButton: ChatStoryline {
             },
             SendTo("a", "hello"), TurnsDone("a", 1),
 
-            // The switch off: no button, no socket, one dim row to the switch.
+            // The switch off: no K, no socket; "/" has no Arsenal.
             NoK(role: "a"),
             closed("switch off"),
             KoreAs(["ls"], a, "switch off: nothing to reach", status: 5, says: "agent control is off"),
             Press(.id(StoryID.Composer.slash)),
-            Press(.id(StoryID.Composer.command("arsenal"))),
-            ExpectElement(.id(StoryID.Composer.arsenalSwitch)),
-            Press(.id(StoryID.Composer.arsenalSwitch)),
+            ExpectElement(.id(StoryID.Composer.command("account"))),
+            ExpectElement(.id(StoryID.Composer.command("arsenal")), .absent),
             Key(.escape),
-            Expect("the switch is on") { _ in Arsenal.shared.allowed },
-            closed("switch on, no chat on"),
         ] + (codex ? [
-            // Codex's default sandbox: the K says why, and nothing turns on.
-            ClickK(role: "a", dim: true),
-            ExpectElement(.id(StoryID.Options.panel)),
-            Key(.escape),
+            // Codex's default sandbox: the row is dim and says why; nothing turns on, the switch stays off.
+            TabRow(role: "a", title: "Arsenal · Codex needs Full access", choose: false),
+            key,
             tier("a", nil, "default sandbox"),
+            Expect("the switch is still off") { _ in !Arsenal.shared.allowed },
             closed("default sandbox"),
             Full(role: "a"),
         ] : []) + [
-            // One click on: Watch, and `kore` works through the real binary.
-            ClickK(role: "a"),
-            tier("a", .watch, "first click"),
+            // The right-click, with the switch off: the switch on and Watch, said once in the chat.
+            TabRow(role: "a", title: "Arsenal"),
+            Expect("the switch is on") { _ in Arsenal.shared.allowed },
+            tier("a", .watch, "right-click"),
+            Expect.rows("the chat says so once") { rows in rows.filter { $0.kind == "notice" && $0.text.hasPrefix("Chats can use Arsenal") }.count == 1 },
             open,
             KoreAs(["whoami"], a, "whoami names the chat", expect: ["{a}", "· watch"]),
             KoreAs(["ls"], a, "ls lists it", expect: ["{a}"]),
 
-            // One click off: follows end, the socket closes.
+            // The right-click again: off, follows end, the socket closes.
             StartFollower("f", ["log", ".", "-f"], a),
-            ClickK(role: "a"),
-            tier("a", nil, "second click"),
+            TabRow(role: "a", title: "Arsenal · Watch"),
+            tier("a", nil, "right-click again"),
             Followed("f", "the follow ended", timeout: .seconds(5)) { _, status, _ in status != nil },
             closed("off"),
             KoreAs(["ls"], a, "off: nothing to reach", status: 5, says: "agent control is off"),
 
-            // Last tier, and the popup: Watch can be chosen, what isn't built can't.
+            // ⌥⌘K: the chat in front, on and off; the K on the tab turns it off too.
+            key,
+            tier("a", .watch, "⌥⌘K"),
+            key,
+            tier("a", nil, "⌥⌘K again"),
+            key,
             ClickK(role: "a"),
+            tier("a", nil, "the K"),
+            NoK(role: "a"),
+
+            // Last tier, and the popup: Watch can be chosen, what isn't built can't.
+            key,
             tier("a", .watch, "back on at its last tier"),
             OpenTiers(role: "a"),
             ExpectElement(.id(StoryID.Options.item(3))),
@@ -143,14 +187,15 @@ final class ArsenalButton: ChatStoryline {
             Press(.id(StoryID.Options.item(0))),
             tier("a", nil, "Off in the popup"),
             closed("off in the popup"),
-            ClickK(role: "a"),
+            key,
             tier("a", .watch, "on again"),
 
             // Stop agent control: every chat off, the switch as it was.
             CastChat("b"),
         ] + (codex ? [Full(role: "b")] : []) + [
-            ClickK(role: "b"),
-            tier("b", .watch, "b on"),
+            key,
+            tier("b", .watch, "⌥⌘K on b, in front"),
+            tier("a", .watch, "a as it was"),
             Do("Account, from the chat in front") { story in try story.activeChat().storyOpenAccount() },
             Press(.id(StoryID.Composer.arsenalStop)),
             Key(.escape),
@@ -159,15 +204,15 @@ final class ArsenalButton: ChatStoryline {
             closed("stop all"),
 
             // The switch off clears every chat, and the K goes.
-            ClickK(role: "a"), ClickK(role: "b"),
+            key, Front(role: "a"), key,
             tier("a", .watch, "on"), tier("b", .watch, "on"),
         ] + flipSwitch() + [
             tier("a", nil, "switch off"), tier("b", nil, "switch off"),
             closed("switch off again"),
             NoK(role: "b"),
-        ] + (codex ? flipSwitch() + [
+        ] + (codex ? [
             // Leaving Full access ends it: the sandbox would refuse it anyway.
-            ClickK(role: "b"),
+            TabRow(role: "b", title: "Arsenal"),
             tier("b", .watch, "Full access"),
             Do("b back to the default sandbox") { story in try AgentCast.of(story).chat("b").storySetMode("askForApproval") },
             tier("b", nil, "left Full access"),
