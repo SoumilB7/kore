@@ -6,7 +6,7 @@ import Testing
 struct TurnRetryTests {
     private func retryRows(_ script: Script) -> [String] {
         script.sections.flatMap(\.items).compactMap {
-            if case .outcome(let turn, _, _, _, true) = $0.row { turn } else { nil }
+            if case .outcome(let turn, _, _, _, true, _) = $0.row { turn } else { nil }
         }
     }
 

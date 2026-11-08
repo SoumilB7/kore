@@ -7,6 +7,12 @@ struct TranscriptActions {
     /// A stalled turn's Retry and Stop (its spinner row's buttons).
     var retry: () -> Void = {}
     var retryTurn: (String) -> Void = { _ in }
+    /// Where a refused turn could go on: an earlier model from the chat's list.
+    var fallback: (Refusal) -> ModelOption? = { _ in nil }
+    /// A refused turn again on that model.
+    var retryOn: (String, ModelOption) -> Void = { _, _ in }
+    /// A refused turn's message back in the composer with a line of context first.
+    var addContext: (String) -> Void = { _ in }
     var stop: () -> Void = {}
     /// Opens or closes a tool body, thinking, a file inside an edit ("id/path"), or an agent.
     var toggle: (String) -> Void = { _ in }
@@ -85,6 +91,14 @@ private struct SignInNotice: View {
     }
 }
 
+/// A refused turn's two ways on.
+struct RefusedChoices {
+    /// The fallback model's name, as the CLI lists it; nil when there's none to go to.
+    let fallback: String?
+    let retryOn: () -> Void
+    let addContext: () -> Void
+}
+
 /// A failed turn's notice in the CLI's words. When the turn ended on its plan's limit and Stay
 /// awake continues it, one quiet part follows on the same line, or under it when the row is
 /// narrow: "Continues at 3:00 PM" and its ×, or, for a message set to go then, "“…” · sends at
@@ -96,6 +110,7 @@ private struct OutcomeLine: View {
     var sends: String?
     let cancel: () -> Void
     var retry: (() -> Void)?
+    var refused: RefusedChoices?
 
     var body: some View {
         if let continues {
@@ -124,7 +139,22 @@ private struct OutcomeLine: View {
                 // Not a failure when it continues on its own: in secondary, as "Interrupted" is.
                 .foregroundStyle(text == "Interrupted" || continues != nil ? Theme.secondary : Theme.danger)
                 .selectableOnHover()
-            if let retry {
+            if let refused {
+                // Safeguards flag routine work too: on the model the CLI would fall back to, or
+                // the message again with what the work is said first.
+                if let fallback = refused.fallback {
+                    Button("Retry on \(fallback)", action: refused.retryOn)
+                        .smallButton(prominent: true)
+                        .fixedSize()
+                        .storyID(StoryID.Transcript.retryOn(turn))
+                        .help("Switch this chat to \(fallback) and go on")
+                }
+                Button("Add context", action: refused.addContext)
+                    .smallButton(prominent: refused.fallback == nil)
+                    .fixedSize()
+                    .storyID(StoryID.Transcript.addContext(turn))
+                    .help("Your message back in the composer, a line of context first")
+            } else if let retry {
                 Button("Retry", action: retry)
                     .smallButton(prominent: true)
                     .storyID(StoryID.Transcript.retry(turn))
@@ -354,9 +384,16 @@ struct RowContent: View {
             MessageHeader(entry: entry, open: open, expanded: expanded, actions: actions)
         case .rule:
             Rule()
-        case .outcome(let turn, let text, let continues, let sends, let retry):
+        case .outcome(let turn, let text, let continues, let sends, let retry, let refusal):
             OutcomeLine(turn: turn, text: text, continues: continues, sends: sends, cancel: actions.cancelContinue,
-                        retry: retry ? { actions.retryTurn(turn) } : nil)
+                        retry: retry ? { actions.retryTurn(turn) } : nil,
+                        refused: refusal.map { refusal in
+                            let fallback = actions.fallback(refusal)
+                            return RefusedChoices(
+                                fallback: fallback?.name,
+                                retryOn: { if let fallback { actions.retryOn(turn, fallback) } },
+                                addContext: { actions.addContext(turn) })
+                        })
         case .signIn(let turn, let said):
             SignInNotice(turn: turn, said: said, provider: actions.provider, signIn: actions.signIn)
         case .slept(let turn, let said):

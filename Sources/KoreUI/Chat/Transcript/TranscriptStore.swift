@@ -127,6 +127,8 @@ package final class TranscriptStore {
         var endMode: String?
         /// The entry before it began: where it shows when it has none of its own.
         var after: UUID?
+        /// The model's safeguards refused it (a failed turn).
+        var refusal: Refusal?
     }
 
     /// One drawn row.
@@ -144,7 +146,7 @@ package final class TranscriptStore {
         case fold(Fold)
         case rule(turn: String)
         /// `continues`: the turn ended on its plan's limit, and the chat continues at the reset.
-        case outcome(turn: String, text: String, continues: Date? = nil, sends: String? = nil, retry: Bool = false)
+        case outcome(turn: String, text: String, continues: Date? = nil, sends: String? = nil, retry: Bool = false, refusal: Refusal? = nil)
         /// A turn the CLI's login refused: Kore's words, the CLI's line, and Sign in.
         case signIn(turn: String, said: String)
         /// A turn that failed while the Mac slept: Kore's words, the CLI's line, and Continue.
@@ -172,7 +174,7 @@ package final class TranscriptStore {
             case .queued(let e): "queued-\(e.id.uuidString)"
             case .fold(let f): "fold-\(f.turn)"
             case .rule(let t): "rule-\(t)"
-            case .outcome(let t, _, _, _, _), .signIn(let t, _), .slept(let t, _): "outcome-\(t)"
+            case .outcome(let t, _, _, _, _, _), .signIn(let t, _), .slept(let t, _): "outcome-\(t)"
             case .changes(let t, _, _, _): "changes-\(t)"
             // The first call's: a read-only call that becomes a group keeps its identity.
             case .explored(let entries, _): entries.first?.id.uuidString ?? "explored"
@@ -2029,7 +2031,7 @@ package final class TranscriptStore {
         case .spinner, .message, .summary, .queued: return nil
         case .rule: return TimelineDot.none
         // A limit that continues on its own at its reset isn't a failure: red only when nothing will.
-        case .outcome(_, let text, let continues, _, _): return text == "Interrupted" || continues != nil ? .warning : .failure
+        case .outcome(_, let text, let continues, _, _, _): return text == "Interrupted" || continues != nil ? .warning : .failure
         case .signIn: return .failure
         // The Mac slept: the turn was cut short, as an interrupted one is, not failed.
         case .slept: return .warning
@@ -2208,6 +2210,17 @@ package final class TranscriptStore {
         return .entry(settled)
     }
 
+    /// The model's safeguards refused the turn: its notice offers the ways on.
+    func refused(_ id: String, _ refusal: Refusal) { turns[id]?.refusal = refusal }
+
+    /// The message that started a turn: the last of the user's before the turn's first entry.
+    func prompt(of turn: String) -> String? {
+        guard let first = entries.firstIndex(where: { $0.turn == turn }) ?? turns[turn]?.after.flatMap({ after in
+            entries.firstIndex { $0.id == after }.map { $0 + 1 }
+        }) else { return nil }
+        return entries[..<min(first, entries.count)].last { $0.kind == .user }?.text
+    }
+
     /// The latest failed/interrupted attempt can be resumed until another message starts.
     var retryableTurn: String? {
         guard !turnIsOpen, pendingSendSince == nil, let latestTurn, latestTurn != retryDismissed,
@@ -2226,7 +2239,9 @@ package final class TranscriptStore {
         case .interrupted: if !folded || retry { rows.append(.outcome(turn: turn.id, text: "Interrupted", retry: retry)) }
         case .failed(let message):
             let continues = continuation.flatMap { $0.turn == turn.id ? $0 : nil }
-            rows.append(.outcome(turn: turn.id, text: message, continues: continues?.at, sends: continues?.sends, retry: retry))
+            rows.append(.outcome(
+                turn: turn.id, text: message, continues: continues?.at, sends: continues?.sends, retry: retry,
+                refusal: retry ? turn.refusal : nil))
         case .authFailed(let said): rows.append(.signIn(turn: turn.id, said: said))
         case .slept(let said): rows.append(.slept(turn: turn.id, said: said))
         }

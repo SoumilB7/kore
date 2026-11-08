@@ -744,6 +744,34 @@ package final class Chat: Identifiable {
         continueTurn()
     }
 
+    /// A refused turn's "Retry on …": the chat takes the fallback model, then goes on. The CLI is
+    /// fine (a refusal isn't a hang), so it stays; the message waits for the switch.
+    func retryOn(_ id: String, model option: ModelOption) {
+        guard !closed, !accountRestartPending, !isBusy, approvals.pending.isEmpty,
+              transcript.retryableTurn == id, let backend else { return }
+        SessionLog.shared.rescue(provider.id, chat: sessionId, action: "retry-on")
+        controls.modelId = option.id
+        let level = EffortScale.fallback(controls.effort, offered: option.efforts, scale: controls.effortScale)
+        if let level, level != controls.effort { setEffort(level) }
+        Task {
+            do {
+                try await backend.setModel(option.id)
+            } catch {
+                return fail("Couldn't switch model: \(error)")
+            }
+            guard transcript.retryableTurn == id, !isBusy else { return }
+            continueTurn()
+        }
+    }
+
+    /// A refused turn's "Add context": its message back in the composer, a line saying what the
+    /// work is before it, for the owner to read, change and send. A draft already there stays,
+    /// after it.
+    func addContext(_ id: String) {
+        let message = transcript.prompt(of: id) ?? ""
+        draft = [Refusal.context, message, draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
+    }
+
     /// Ends the CLI under a turn that won't end by itself and starts it again: the turn ends
     /// here, at once, and nothing waits for the send that hangs on it.
     private func restartCLI(reason: String, clearingWork: Bool = false) {

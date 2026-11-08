@@ -203,7 +203,7 @@ extension StoryTranscript {
             case .agent(let e, _, let open): "agent|\(e.agent?.id ?? "")|\(e.agent?.name ?? "")|\(e.agent?.index ?? -1)|\(e.agent.map { "\($0.status)" } ?? "")|\(e.agent?.result ?? "")|\(open)"
             case .fold(let f): "fold|\(f.label)|\(f.denied)|\(f.open)|\(f.count ?? "")|\(f.failed)"
             case .rule: "rule"
-            case .outcome(_, let text, _, _, _): "outcome|\(text)"
+            case .outcome(_, let text, _, _, _, let refusal): "outcome|\(text)" + (refusal == nil ? "" : "|refused")
             case .signIn(_, let said): "signIn|\(said)"
             case .slept(_, let said): "slept|\(said)"
             case .changes(_, let files, let added, let removed): "changes|\(files)|\(added)|\(removed)"

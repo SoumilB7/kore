@@ -408,6 +408,9 @@ struct AccountPopup: View {
                     }
                     Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.sm)
                     ArsenalSettings()
+                    if chat.provider.id == "claude" {
+                        RefusalSettings().padding(.top, Space.sm)
+                    }
                 }
                 .transition(.opacity.animation(Motion.fade))
             }

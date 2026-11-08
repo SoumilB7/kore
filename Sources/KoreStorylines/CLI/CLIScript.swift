@@ -83,6 +83,8 @@ package enum Beat: Sendable {
     case remotePrompt(String)
     /// Ends it.
     case finishTurn(TurnOutcome)
+    /// The model's safeguards refused the turn, no fallback run: says so before its failure.
+    case refuse(Refusal)
     /// A tool call that starts, then finishes with `output`. `wait` holds it running until Kore
     /// makes that call (`.interrupt`: Stop), then it ends as stopped.
     case tool(name: String, detail: String, output: String? = nil, isError: Bool = false, wait: Call? = nil)

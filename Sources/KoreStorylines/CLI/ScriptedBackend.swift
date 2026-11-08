@@ -466,6 +466,8 @@ package final class ScriptedBackend: ChatBackend {
                 await emit(.userMessage(text: text, attachments: [], id: id))
             case .finishTurn(let outcome):
                 await emit(.turnFinished(turn, outcome, duration: nil))
+            case .refuse(let refusal):
+                if let turn { await emit(.refused(turn, refusal)) }
             case .tool(let name, let detail, let output, let isError, let wait):
                 let id = ToolID.make()
                 await emit(.toolStarted(ToolCall(id: id, name: name, detail: detail)))

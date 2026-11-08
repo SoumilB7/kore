@@ -34,6 +34,9 @@ public actor ClaudeSession {
         public var environment: [String: String]
         /// Put at the front of PATH (where `kore` is, `KoreReach`).
         public var pathFirst: String?
+        /// The CLI's `switchModelsOnFlag`: a turn the model's safeguards refuse goes again on the
+        /// CLI's fallback model. Nil leaves the user's settings to say.
+        public var switchModelsOnFlag: Bool?
 
         public init(
             cwd: URL,
@@ -77,7 +80,11 @@ public actor ClaudeSession {
             if let model { args += ["--model", model] }
             if let effort { args += ["--effort", effort] }
             if let resume { args += ["--resume", resume] }
-            if let fastMode { args += ["--settings", fastMode ? #"{"fastMode":true}"# : #"{"fastMode":false}"#] }
+            // Flag settings: over the user's own, for this process only.
+            var settings: [String] = []
+            if let fastMode { settings.append(#""fastMode":\#(fastMode)"#) }
+            if let switchModelsOnFlag { settings.append(#""switchModelsOnFlag":\#(switchModelsOnFlag)"#) }
+            if !settings.isEmpty { args += ["--settings", "{" + settings.joined(separator: ",") + "}"] }
             if thinkingSummaries { args += ["--thinking-display", "summarized"] }
             return args + extraArgs
         }

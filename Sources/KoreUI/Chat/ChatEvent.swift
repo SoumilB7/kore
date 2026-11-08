@@ -33,6 +33,9 @@ package enum ChatEvent: Sendable {
     /// `turn` is nil when the CLI ended a turn Kore never saw start. `duration` is the CLI's own
     /// measure when it gives one.
     case turnFinished(TurnID?, TurnOutcome, duration: Duration?)
+    /// The model's safeguards refused the turn and nothing went on with another model: its
+    /// failure notice offers that. Just before the turn's `turnFinished`.
+    case refused(TurnID, Refusal)
     /// Every file the turn changed, at its end: a git snapshot diff in git repos, else what the
     /// CLI reported.
     case turnChanges(TurnID, [FileChange])

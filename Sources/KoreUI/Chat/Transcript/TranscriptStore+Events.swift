@@ -23,6 +23,8 @@ extension TranscriptStore {
             case .slept(let said): .slept(said)
             }
             turnFinished(id, outcome, duration: duration.map(Self.seconds), preserving: observed)
+        case .refused(let id, let refusal):
+            refused(id, refusal)
         case .turnChanges(let id, let changes):
             turnChanges(id, changes)
 

@@ -103,6 +103,7 @@ extension StoryID {
     package enum Composer {
         /// In the Account popup.
         package static let arsenalSwitch = StoryID(.composer, "arsenal.switch")
+        package static let refusalSwitch = StoryID(.composer, "refusal.switch")
         package static let arsenalStop = StoryID(.composer, "arsenal.stop")
         package static let field = StoryID(.composer, "field")
         package static let send = StoryID(.composer, "send")
@@ -214,6 +215,8 @@ extension StoryID {
         package static let spinner = StoryID(.transcript, "spinner")
         /// A stalled turn's spinner row: Retry and Stop.
         package static func retry(_ turn: String) -> StoryID { StoryID(.transcript, "retry", key: turn) }
+        package static func retryOn(_ turn: String) -> StoryID { StoryID(.transcript, "retry.on", key: turn) }
+        package static func addContext(_ turn: String) -> StoryID { StoryID(.transcript, "retry.context", key: turn) }
         package static let stalledRetry = StoryID(.transcript, "stalled-retry")
         package static let stalledStop = StoryID(.transcript, "stalled-stop")
         /// A refused login's notice, by its turn; `.part(.signIn)` is its Sign in.

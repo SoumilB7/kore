@@ -150,6 +150,7 @@ final class ClaudeBackend: ChatBackend {
             cwd: options.folder, model: options.model, effort: options.effort,
             permissionMode: ClaudeSession.PermissionMode(rawValue: options.mode) ?? .default,
             fastMode: options.fastMode ?? false, resume: fork?.from ?? sessionId)
+        launch.switchModelsOnFlag = RefusalFallback.saved
         if let fork {
             launch.extraArgs += ["--fork-session", "--resume-session-at", fork.at]
             // The new session takes the id Kore lists the fork under (`KoreForks`) before it exists.

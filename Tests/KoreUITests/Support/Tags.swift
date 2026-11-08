@@ -17,6 +17,7 @@ func tag(_ event: ChatEvent) -> String {
     case .turnStarted(_, let origin, _): "turnStarted \(origin)"
     case .turnOrigin(_, let origin): "turnOrigin \(origin)"
     case .turnFinished(_, let outcome, _): "turnFinished \(outcome)"
+    case .refused(_, let refusal): "refused \(refusal.category ?? "")"
     case .turnChanges: "turnChanges"
     case .queuedMessage(_, let delivery):
         switch delivery {

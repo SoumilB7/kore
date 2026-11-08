@@ -76,3 +76,24 @@ struct ArsenalSettings: View {
         }
     }
 }
+
+/// "Switch models when flagged", in the Account popup (⌘,), under Arsenal: a Claude turn its
+/// model's safeguards refuse goes again on the CLI's fallback model. A chat's CLI takes it when
+/// it next starts.
+struct RefusalSettings: View {
+    var body: some View {
+        let fallback = RefusalFallback.shared
+        HStack(spacing: Space.md) {
+            Text("Switch models when flagged").font(TextStyle.body).foregroundStyle(Theme.text).lineLimit(1)
+            Spacer(minLength: Space.xl)
+            Toggle("", isOn: Binding(get: { fallback.on }, set: { fallback.on = $0 }))
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .tint(Theme.accent)
+                .accessibilityLabel("Switch models when flagged")
+                .storyID(StoryID.Composer.refusalSwitch, press: { fallback.on.toggle() })
+        }
+        .help("A turn the model's safeguards refuse goes on with an earlier model, as the CLI picks")
+    }
+}

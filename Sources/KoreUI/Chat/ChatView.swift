@@ -381,6 +381,9 @@ extension TranscriptActions {
         actions.toggleTurn = { chat.transcript.toggle(turn: $0) }
         actions.retry = { chat.retryStalled() }
         actions.retryTurn = { chat.retryTurn($0) }
+        actions.fallback = { $0.fallback(in: chat.controls.models) }
+        actions.retryOn = { chat.retryOn($0, model: $1) }
+        actions.addContext = { chat.addContext($0) }
         actions.stop = { chat.stop() }
         actions.toggle = { key in
             chat.transcript.toggle(key)

@@ -31,6 +31,8 @@ package final class ClaudeTranslator {
     private var authRefused: String?
     /// The reset a `rate_limit_event` gave as it refused this turn's request (the plan's limit).
     private var limitRejected: Date?
+    /// The turn's refusal, when no fallback took it on (`model_refusal_no_fallback`).
+    private var refused: Refusal?
     private var replayChanges: [FileChange] = []
     /// Reading a sub-agent's own transcript: its edits belong to no turn of this chat.
     private var reading = false
@@ -364,6 +366,8 @@ package final class ClaudeTranslator {
                 outcome = .limited(message, resetsAt: hit.resetsAt)
             }
             limitRejected = nil
+            if case .failed = outcome, let refused, let turn { out.append(.refused(turn, refused)) }
+            refused = nil
             finishTurn(outcome, duration: result.durationMs.map { .milliseconds($0) })
         case .raw(let json):
             raw(json)
@@ -512,6 +516,18 @@ package final class ClaudeTranslator {
             }
         case "system":
             switch json["subtype"]?.string {
+            case "model_refusal_no_fallback":
+                // stdout's keys are snake_case, the transcript's camelCase.
+                refused = Refusal(
+                    category: (json["api_refusal_category"] ?? json["apiRefusalCategory"])?.string,
+                    model: (json["original_model"] ?? json["originalModel"])?.string)
+            case "model_refusal_fallback":
+                // The CLI went on with another model by itself: one quiet line says so.
+                if let from = (json["original_model"] ?? json["originalModel"])?.string,
+                    let to = (json["fallback_model"] ?? json["fallbackModel"])?.string
+                {
+                    out.append(.notice("\(Refusal.name(from)) flagged this · \(Refusal.name(to)) took it on"))
+                }
             case "api_retry":
                 // No network, or the API not answering: the CLI tries again, ten times over minutes.
                 retrying = true
