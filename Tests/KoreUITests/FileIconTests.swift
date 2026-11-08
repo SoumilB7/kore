@@ -43,13 +43,15 @@ struct FileIconTests {
 
     @Test func tenThousandLookupsStayWithinBudget() {
         let names = ["foo.test.tsx", ".env.local", "yarn.lock", "Dockerfile", "README.md", "main.go", "notes", "a.swift"]
-        let clock = ContinuousClock()
         var hits = 0
-        let took = clock.measure {
-            for i in 0..<10_000 where FileGlyph.of(names[i % names.count]) != .file { hits += 1 }
-        }
+        // The work itself, as this thread's CPU time: a busy Mac (a gate's parallel run) stretches
+        // the clock, not this.
+        let start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID)
+        for i in 0..<10_000 where FileGlyph.of(names[i % names.count]) != .file { hits += 1 }
+        let took = Duration.nanoseconds(Int64(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - start))
         #expect(hits == 8750)
-        // A row's icon is a lookup: 10k well under a frame's worth of work, debug build included.
-        #expect(took < .milliseconds(50), "\(took)")
+        // A row's icon is a lookup: 10k measured 3.6–5 ms of CPU alone, 4.5–8 under a gate's load
+        // (debug build). A lookup that went linear over the names would be many times that.
+        #expect(took < .milliseconds(25), "\(took)")
     }
 }
