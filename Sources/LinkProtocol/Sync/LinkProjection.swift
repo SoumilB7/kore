@@ -50,7 +50,8 @@ package enum LinkProjection {
             tool = LinkEntry.Tool(
                 name: name, summary: e.summary, input: input?.text, inputLen: e.input?.unicodeScalars.count ?? 0,
                 path: e.path.map { relative($0, to: folder) }, readOnly: e.readOnly, result: result,
-                resultLen: e.result?.unicodeScalars.count ?? 0)
+                // Kept as it streamed: a running tool's output isn't walked at each change.
+                resultLen: e.resultScalars ?? e.result?.unicodeScalars.count ?? 0)
         }
         let doc = formatted && !e.text.isEmpty ? reading.blocks(text.text) : nil
         return LinkEntry(
@@ -113,14 +114,16 @@ package enum LinkProjection {
     }
 
     /// A tool's output, its start and end when it's long.
+    /// Reads only the ends: a running tool's output is projected at each change, and counting
+    /// all of it each time made a long one quadratic.
     package static func headAndTail(_ text: String) -> String {
+        guard text.utf8.count > resultHead + resultTail else { return text }
         let scalars = text.unicodeScalars
-        guard scalars.count > resultHead + resultTail else { return text }
-        var head = String.UnicodeScalarView()
-        head.append(contentsOf: scalars.prefix(resultHead))
-        var tail = String.UnicodeScalarView()
-        tail.append(contentsOf: scalars.suffix(resultTail))
-        return String(head) + "\n…\n" + String(tail)
+        guard let headEnd = scalars.index(scalars.startIndex, offsetBy: resultHead, limitedBy: scalars.endIndex),
+            let tailStart = scalars.index(scalars.endIndex, offsetBy: -resultTail, limitedBy: scalars.startIndex),
+            headEnd < tailStart
+        else { return text }
+        return String(scalars[..<headEnd]) + "\n…\n" + String(scalars[tailStart...])
     }
 
     package static func relative(_ path: String, to folder: URL) -> String {

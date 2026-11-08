@@ -59,7 +59,10 @@ package final class TranscriptLog {
         package var input: String?
         package var summary: String?
         package var path: String?
-        package var result: String?
+        package var result: String? { didSet { resultScalars = nil } }
+        /// `result`'s length in Unicode scalars, kept as output streams in (nil: not known), so
+        /// a long one isn't walked again each time its row is sent.
+        package var resultScalars: Int?
         package var done = false
         package var isError = false
         package var attachments: [SentAttachment] = []
@@ -614,8 +617,24 @@ package final class TranscriptLog {
         append(entry)
     }
 
+    /// Streamed output kept on a running tool's row: its last `streamedKept` bytes, trimmed once
+    /// it's twice that, so a command printing without end costs memory and time in step with what
+    /// it prints now, not with all it has printed.
+    package static let streamedKept = 256 * 1024
+    static let streamedCut = "… (earlier output cut)\n"
+
     package func toolOutput(id: String, _ text: String) {
-        update(tool: id, files: false) { $0.result = ($0.result ?? "") + text }
+        update(tool: id, files: false) { entry in
+            let known = entry.result.map { entry.resultScalars ?? $0.unicodeScalars.count } ?? 0
+            // Appended in place: a copy of all so far at each piece made a long output quadratic.
+            if entry.result == nil { entry.result = text } else { entry.result!.append(text) }
+            if entry.result!.utf8.count > Self.streamedKept * 2 {
+                entry.result = Self.streamedCut + OutputTail.tail(entry.result!, bytes: Self.streamedKept)
+                entry.resultScalars = entry.result!.unicodeScalars.count
+            } else {
+                entry.resultScalars = known + text.unicodeScalars.count
+            }
+        }
     }
 
     /// `output` nil keeps what streamed. On an agent's spawning call (Claude's foreground Agent

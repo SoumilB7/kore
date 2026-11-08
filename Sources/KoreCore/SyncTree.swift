@@ -44,7 +44,12 @@ package final class SyncTree: @unchecked Sendable {
     package let root: URL
     private let lock = NSLock()
     /// Each folder's `.gitignore` rules, by its path from the root ("" for the root), read once.
-    private var rules: [String: [Rule]] = [:]
+    private var rules: [String: RuleSet] = [:]
+    /// Whether each folder met so far is left out (it, or a folder above it), by its path from
+    /// the root: a path is then judged by its own name alone, not every folder's rules again for
+    /// each part above it. Cleared when any `.gitignore` changes.
+    private var folderVerdicts: [String: Bool] = [:]
+    private static let verdictsMax = 200_000
 
     package static let skipped: Set<String> = [".git", ".build", "node_modules", ".DS_Store"]
 
@@ -213,27 +218,43 @@ package final class SyncTree: @unchecked Sendable {
     /// Whether a path is left out: by the fixed names, or a `.gitignore` here or above, or a
     /// folder above it being left out.
     package func ignored(_ relative: String) -> Bool {
-        let parts = relative.split(separator: "/").map(String.init)
-        guard !parts.isEmpty else { return false }
-        var path = ""
-        for (i, part) in parts.enumerated() {
-            path = path.isEmpty ? part : path + "/" + part
-            let last = i == parts.count - 1
-            let dir = last ? isDirectoryNow(path) : true
-            if ignoredHere(path, isDirectory: dir) { return true }
+        guard !relative.isEmpty else { return false }
+        guard let slash = relative.lastIndex(of: "/") else { return ignoredHere(relative, isDirectory: isDirectoryNow(relative)) }
+        if folderIgnored(String(relative[..<slash])) { return true }
+        return ignoredHere(relative, isDirectory: isDirectoryNow(relative))
+    }
+
+    /// Whether a folder is left out, by its own rules or a folder's above it: each folder judged
+    /// once (kept), so a path costs its own name's rules, however deep and however many paths.
+    private func folderIgnored(_ folder: String) -> Bool {
+        if folder.isEmpty { return false }
+        if let known = lock.withLock({ folderVerdicts[folder] }) { return known }
+        let parent = folder.lastIndex(of: "/").map { String(folder[..<$0]) } ?? ""
+        let verdict = folderIgnored(parent) || ignoredHere(folder, isDirectory: true)
+        lock.withLock {
+            if folderVerdicts.count >= Self.verdictsMax { folderVerdicts = [:] }
+            folderVerdicts[folder] = verdict
         }
-        return false
+        return verdict
     }
 
     /// A `.gitignore` changed: its rules are read again on next use.
     package func forget(_ relative: String) {
         guard relative == ".gitignore" || relative.hasSuffix("/.gitignore") else { return }
         let folder = relative == ".gitignore" ? "" : String(relative.dropLast("/.gitignore".count))
-        _ = lock.withLock { rules.removeValue(forKey: folder) }
+        lock.withLock {
+            rules.removeValue(forKey: folder)
+            folderVerdicts = [:]
+        }
     }
 
     /// Every `.gitignore` is read again on next use.
-    package func forgetAll() { lock.withLock { rules = [:] } }
+    package func forgetAll() {
+        lock.withLock {
+            rules = [:]
+            folderVerdicts = [:]
+        }
+    }
 
     /// The path alone (its folders above already let through).
     private func ignoredHere(_ relative: String, isDirectory dir: Bool) -> Bool {
@@ -248,18 +269,58 @@ package final class SyncTree: @unchecked Sendable {
             folders.append(walked)
         }
         for folder in folders {
+            let set = rules(in: folder)
+            guard !set.isEmpty else { continue }
             let inside = folder.isEmpty ? relative : String(relative.dropFirst(folder.count + 1))
-            for rule in rules(in: folder) where rule.matches(inside, name: name, isDirectory: dir) { verdict = !rule.negated }
+            if let said = set.verdict(inside, name: name, isDirectory: dir) { verdict = said }
         }
         return verdict
     }
 
-    private func rules(in folder: String) -> [Rule] {
+    private func rules(in folder: String) -> RuleSet {
         if let known = lock.withLock({ rules[folder] }) { return known }
         let text = (try? String(contentsOf: url(folder).appendingPathComponent(".gitignore"), encoding: .utf8)) ?? ""
-        let read = Self.parse(text)
+        let read = RuleSet(Self.parse(text))
         lock.withLock { rules[folder] = read }
         return read
+    }
+
+    /// One `.gitignore`'s rules, the plain names and paths among them (most of a long file) found
+    /// by lookup, the patterns tried in turn: the last that matches wins, as in git.
+    package struct RuleSet: Sendable {
+        let rules: [Rule]
+        private var byName: [String: [Int]] = [:]
+        private var byPath: [String: [Int]] = [:]
+        private var patterns: [Int] = []
+
+        package init(_ rules: [Rule]) {
+            self.rules = rules
+            for (i, rule) in rules.enumerated() {
+                if rule.pattern.contains(where: { "*?[\\".contains($0) }) {
+                    patterns.append(i)
+                } else if rule.anchored {
+                    byPath[rule.pattern, default: []].append(i)
+                } else {
+                    byName[rule.pattern, default: []].append(i)
+                }
+            }
+        }
+
+        var isEmpty: Bool { rules.isEmpty }
+
+        /// Left out (true), taken back (false), or no rule matches (nil).
+        package func verdict(_ inside: String, name: String, isDirectory dir: Bool) -> Bool? {
+            var last = -1
+            for i in byName[name] ?? [] where i > last && (dir || !rules[i].folderOnly) { last = i }
+            for i in byPath[inside] ?? [] where i > last && (dir || !rules[i].folderOnly) { last = i }
+            for i in patterns.reversed() where i > last {
+                if rules[i].matches(inside, name: name, isDirectory: dir) {
+                    last = i
+                    break
+                }
+            }
+            return last < 0 ? nil : !rules[last].negated
+        }
     }
 
     package static func parse(_ text: String) -> [Rule] {

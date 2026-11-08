@@ -71,10 +71,14 @@ package final class StdioProcess: @unchecked Sendable {
         self.output = output
 
         let (chunks, chunkSink) = AsyncStream<Data>.makeStream()
+        // At EOF each read end is closed here: the parent holds no write end (Foundation closes
+        // its copies once the child runs), and the pipe's own descriptor otherwise stayed open
+        // as long as anything kept this process's objects (two per CLI that had ended, on a box).
         stdoutPipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
+                try? handle.close()
                 chunkSink.finish()
             } else {
                 chunkSink.yield(data)
@@ -85,6 +89,7 @@ package final class StdioProcess: @unchecked Sendable {
             let data = handle.availableData
             if data.isEmpty {
                 handle.readabilityHandler = nil
+                try? handle.close()
                 stderrEnd.finish()
             } else {
                 let text = String(decoding: data, as: UTF8.self)

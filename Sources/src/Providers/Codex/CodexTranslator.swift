@@ -56,7 +56,7 @@ package final class CodexTranslator {
     private var phases: [String: String] = [:]
     private var streamedText: Set<String> = []
     private var streamedOutput: Set<String> = []
-    /// What a running command printed in its turn, its last `inTurnTail` characters: a command
+    /// What a running command printed in its turn, its last `inTurnTail` bytes or so: a command
     /// that outlives the turn starts its row's output with it.
     private var inTurnOutput: [String: String] = [:]
     private static let inTurnTail = 16_384
@@ -224,8 +224,11 @@ package final class CodexTranslator {
         case .commandOutputDelta(let item, let text):
             if !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { streamedOutput.insert(item) }
             if !replaying {
-                let kept = inTurnOutput[item, default: ""] + text
-                inTurnOutput[item] = kept.count > Self.inTurnTail ? String(kept.suffix(Self.inTurnTail)) : kept
+                // In place, trimmed once twice over: no copy or count of all so far per piece.
+                inTurnOutput[item, default: ""].append(text)
+                if let kept = inTurnOutput[item], kept.utf8.count > Self.inTurnTail * 2 {
+                    inTurnOutput[item] = OutputTail.tail(kept, bytes: Self.inTurnTail)
+                }
             }
             out.append(.toolOutput(id: item, text, agent: agent))
         case .itemStarted(let item):

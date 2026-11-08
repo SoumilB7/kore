@@ -167,6 +167,8 @@ package final class ChatEngine {
 
     /// Waits before each start again of a CLI that wouldn't start. A storyline sets them shorter.
     package static let startRetries = HostSetting<[Duration]>([.seconds(2), .seconds(5), .seconds(10)])
+    /// How long the event pump runs before it gives way to the main actor's other work.
+    static let slice: Duration = .milliseconds(4)
 
     package init(provider: ProviderDescriptor, services: any ChatServices) {
         self.provider = provider
@@ -191,6 +193,7 @@ package final class ChatEngine {
         let backend = services.makeBackend(provider, options)
         self.backend = backend
         pump = Task {
+            var ran = ContinuousClock.now
             for await event in backend.events {
                 guard !Task.isCancelled, !closed else { break }
                 rawTap?(event)
@@ -201,6 +204,13 @@ package final class ChatEngine {
                     after()
                 }
                 handle(event)
+                // Events already waiting are taken without suspending: a CLI printing faster than
+                // they're handled would hold the main actor, and every other chat, for as long as
+                // it prints. Past a slice, the rest wait their turn behind what else is queued.
+                if ContinuousClock.now - ran > Self.slice {
+                    await Task.yield()
+                    ran = .now
+                }
             }
         }
         return backend

@@ -570,9 +570,26 @@ public enum ClaudeHistory {
     /// Where the CLI writes a background task's output (a shell's or a Monitor's) when it doesn't
     /// say: `claude-<uid>/<project key>/<session>/tasks/<task id>.output` in its temp folder. Its
     /// Bash result and the task's notification name it.
-    public static func taskOutput(task: String, sessionId: String, in folder: URL) -> URL {
-        URL(fileURLWithPath: "/private/tmp/claude-\(getuid())/\(projectKey(for: folder))/\(sessionId)/tasks/\(task).output")
+    public static func taskOutput(
+        task: String, sessionId: String, in folder: URL, environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> URL {
+        tempRoot(environment).appendingPathComponent("claude-\(getuid())/\(projectKey(for: folder))/\(sessionId)/tasks/\(task).output")
     }
+
+    /// The CLI's temp folder: `CLAUDE_CODE_TMPDIR` when set, else `/tmp` (not `TMPDIR`), as the
+    /// CLI resolves it (2.1.322): `/private/tmp` on macOS, `/tmp` on Linux.
+    public static func tempRoot(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        let set = environment["CLAUDE_CODE_TMPDIR"].flatMap { $0.isEmpty ? nil : $0 }
+        let path = set ?? "/tmp"
+        let real = realpath(path, nil).map { defer { free($0) }; return String(cString: $0) }
+        return URL(fileURLWithPath: real ?? (set == nil ? defaultTemp : path), isDirectory: true)
+    }
+
+    #if canImport(Darwin)
+    static let defaultTemp = "/private/tmp"
+    #else
+    static let defaultTemp = "/tmp"
+    #endif
 
     /// A transcript's title as the history list shows it: the newest rename, else the newest AI
     /// title, else the first prompt's first line.

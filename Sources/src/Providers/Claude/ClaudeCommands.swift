@@ -73,7 +73,7 @@ package struct ClaudeCommands {
                         owner: call.agent, toolId: id, folder: folder, at: call.at, file: Self.outputPath(in: text), into: &out)
                 }
                 if moved { background(task, at: at, into: &out) }
-                if let file = Self.outputPath(in: text) { out.append(.commandChanged(id: task, .outputFile(file))) }
+                if let file = Self.outputPath(in: text), !file.isEmpty { out.append(.commandChanged(id: task, .outputFile(file))) }
             } else if let task = tracked.first(where: { $0.value.toolId == id && $0.value.foreground })?.key {
                 // A long foreground command's call returned: its end, unless its task said it.
                 let state: ActiveCommand.State =
@@ -154,7 +154,8 @@ package struct ClaudeCommands {
     /// A Monitor's events notify too, with no status.
     package mutating func notification(task: String, status: String?, summary: String?, file: String?, at: Date, into out: inout [ChatEvent]) {
         guard tracked[task] != nil else { return }
-        if let file { out.append(.commandChanged(id: task, .outputFile(file))) }
+        // An empty path (a foreground command's notification) would hide the one known.
+        if let file, !file.isEmpty { out.append(.commandChanged(id: task, .outputFile(file))) }
         guard let status else { return }
         if let summary { out.append(.commandChanged(id: task, .summary(summary))) }
         let lowered = summary?.lowercased() ?? ""

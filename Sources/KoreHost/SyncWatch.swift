@@ -10,7 +10,9 @@ import Musl
 /// folder's whole list goes (`sync.changed` with `all`, in pieces), then what changes, gathered for
 /// `settle` and sent as one `sync.changed {folder, paths}`. Linux watches with inotify (a watch per
 /// carried folder, added as folders appear), macOS with FSEvents (for tests). Nothing polls; it all
-/// ends with `sync.unwatch` or the client's link.
+/// ends with `sync.unwatch` or the client's link. Reading the tree, its ignore rules and the
+/// messages' JSON all happen off the main thread, one batch at a time: a flood of files (a clone
+/// into the folder) never holds up the box's chats.
 @MainActor
 final class SyncWatch {
     let folder: String
@@ -21,6 +23,8 @@ final class SyncWatch {
     private var everything = false
     private var flush: DispatchWorkItem?
     private let settle: TimeInterval
+    /// A batch is being read off the main thread: the next waits for it.
+    private var working = false
     #if canImport(Darwin)
     private var watcher: FolderWatcher?
     #else
@@ -28,7 +32,7 @@ final class SyncWatch {
     #endif
 
     /// How many files one `sync.changed` carries at most.
-    static let piece = 2000
+    nonisolated static let piece = 2000
 
     init(folder: String, settle: TimeInterval = 0.3, push: @escaping (Data) -> Void) {
         self.folder = folder
@@ -84,15 +88,17 @@ final class SyncWatch {
     #if canImport(Darwin)
     private func begin(_ files: [String: SyncStat]?) {
         guard !stopped else { return }
-        send(all: files)
+        sendAll(files)
     }
     #else
     private func begin(_ files: [String: SyncStat]?, inotify: Inotify?, unwatched: (limit: Int?, folders: Int)?) {
         guard !stopped else { return inotify?.stop() ?? () }
         if let unwatched { watching = (false, unwatched.limit, unwatched.folders) }
         self.inotify = inotify
-        inotify?.resume { [weak self] relative in self?.noted(relative) }
-        send(all: files)
+        inotify?.resume { [weak self] paths in
+            for relative in paths { self?.noted(relative) }
+        }
+        sendAll(files)
     }
     #endif
 
@@ -117,63 +123,104 @@ final class SyncWatch {
     private func noted(_ relative: String) {
         if relative.isEmpty { everything = true } else { pending.insert(relative) }
         tree.forget(relative)
-        guard flush == nil else { return }
+        guard flush == nil, !working else { return }
         let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.send() } }
         flush = work
         DispatchQueue.main.asyncAfter(deadline: .now() + settle, execute: work)
     }
 
+    /// What changed since the last batch, read and encoded off the main thread; one batch at a
+    /// time, and what comes meanwhile goes in the next.
     private func send() {
         flush = nil
+        guard !working, !stopped else { return }
+        let tree = tree, folder = folder, watching = watching
         if everything {
             everything = false
             pending = []
-            let tree = tree
+            working = true
             Task.detached(priority: .utility) { [weak self] in
                 guard tree.rootExists else {
-                    await self?.missing()
+                    await self?.done([], missing: true)
                     return
                 }
-                let files = tree.list(cap: Self.fileCap)
-                await self?.relisted(files)
+                let messages = Self.all(tree.list(cap: Self.fileCap), folder: folder, watching: watching)
+                await self?.done(messages)
             }
             return
         }
+        guard !pending.isEmpty else { return }
+        let paths = pending
+        pending = []
+        working = true
+        Task.detached(priority: .utility) { [weak self] in
+            let messages = Self.changes(paths, tree: tree, folder: folder)
+            await self?.done(messages)
+        }
+    }
+
+    /// A batch read: its messages go, and the next starts if more came meanwhile.
+    private func done(_ messages: [Data], missing: Bool = false) {
+        working = false
+        guard !stopped else { return }
+        if missing { self.missing() }
+        messages.forEach(push)
+        guard everything || !pending.isEmpty, flush == nil else { return }
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.send() } }
+        flush = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + settle, execute: work)
+    }
+
+    /// The whole list as it first goes, built off the main thread.
+    private func sendAll(_ files: [String: SyncStat]?) {
+        let folder = folder, watching = watching
+        working = true
+        Task.detached(priority: .utility) { [weak self] in
+            let messages = Self.all(files, folder: folder, watching: watching)
+            await self?.done(messages)
+        }
+    }
+
+    /// The changed paths' files now (a folder's whole tree), and the ones gone, in pieces.
+    nonisolated static func changes(_ paths: Set<String>, tree: SyncTree, folder: String) -> [Data] {
         var entries: [[String: Any]] = []
         var seen: Set<String> = []
-        for relative in pending.sorted() where !tree.ignored(relative) {
+        for relative in paths.sorted() where !tree.ignored(relative) {
             let now = tree.list(at: relative)
             if now.isEmpty, !(FileManager.default.fileExists(atPath: tree.url(relative).path) && tree.exact(relative)) {
                 if seen.insert(relative).inserted { entries.append(["p": relative, "gone": true]) }
             }
-            for (path, stat) in now where seen.insert(path).inserted { entries.append(Self.entry(path, stat)) }
+            for (path, stat) in now where seen.insert(path).inserted { entries.append(entry(path, stat)) }
         }
-        pending = []
-        for start in stride(from: 0, to: entries.count, by: Self.piece) {
-            push(message(Array(entries[start..<min(start + Self.piece, entries.count)]), all: false, more: false))
+        return stride(from: 0, to: entries.count, by: piece).map {
+            message(Array(entries[$0..<min($0 + piece, entries.count)]), folder: folder, all: false, more: false)
         }
-    }
-
-    private func relisted(_ files: [String: SyncStat]?) {
-        guard !stopped else { return }
-        send(all: files)
     }
 
     /// The whole list, in pieces; past the cap, one empty piece saying so.
-    private func send(all files: [String: SyncStat]?) {
-        guard let files else { return push(message([], all: true, more: false, extra: ["capped": Self.fileCap])) }
-        let entries = files.keys.sorted().map { Self.entry($0, files[$0]!) }
+    nonisolated static func all(_ files: [String: SyncStat]?, folder: String, watching: (on: Bool, limit: Int?, folders: Int?)) -> [Data] {
+        guard let files else { return [message([], folder: folder, all: true, more: false, watching: watching, extra: ["capped": fileCap])] }
+        let entries = files.keys.sorted().map { entry($0, files[$0]!) }
+        var messages: [Data] = []
         var start = 0
         repeat {
-            let end = min(start + Self.piece, entries.count)
-            push(message(Array(entries[start..<end]), all: true, more: end < entries.count))
+            let end = min(start + piece, entries.count)
+            messages.append(message(Array(entries[start..<end]), folder: folder, all: true, more: end < entries.count, watching: watching))
             start = end
         } while start < entries.count
+        return messages
     }
 
-    private static func entry(_ path: String, _ stat: SyncStat) -> [String: Any] { ["p": path, "s": stat.size, "m": stat.mtime] }
+    private nonisolated static func entry(_ path: String, _ stat: SyncStat) -> [String: Any] { ["p": path, "s": stat.size, "m": stat.mtime] }
 
     private func message(_ paths: [[String: Any]], all: Bool, more: Bool, extra: [String: Any] = [:]) -> Data {
+        Self.message(paths, folder: folder, all: all, more: more, watching: watching, extra: extra)
+    }
+
+    private nonisolated static func message(
+        _ paths: [[String: Any]], folder: String, all: Bool, more: Bool, watching: (on: Bool, limit: Int?, folders: Int?) = (true, nil, nil),
+        extra: [String: Any] = [:]
+    ) -> Data {
         var object: [String: Any] = ["t": "sync.changed", "folder": folder, "paths": paths]
         object.merge(extra) { _, new in new }
         if all {
@@ -191,12 +238,15 @@ final class SyncWatch {
 
 #if !canImport(Darwin)
 /// inotify over a carried tree: a watch on each real folder sync carries (never through a link),
-/// one more as each appears, up to `cap`. Made off the main thread; its events are read on it.
+/// one more as each appears, up to `cap`. Made off the main thread, and read on a queue of its own
+/// (a new folder's tree is walked there): the main thread gets each read's paths as one batch.
 private final class Inotify: @unchecked Sendable {
     private let fd: Int32
     private let tree: SyncTree
     private let cap: Int
-    private var changed: (@MainActor (String) -> Void)?
+    /// `folders` and `changed` are touched on `queue` only, once reading starts.
+    private let queue = DispatchQueue(label: "kore-host.sync.inotify")
+    private var changed: (@MainActor ([String]) -> Void)?
     private var folders: [Int32: String] = [:]
     private var source: DispatchSourceRead?
 
@@ -223,25 +273,28 @@ private final class Inotify: @unchecked Sendable {
         }
     }
 
-    /// Starts reading its events on the main thread.
-    @MainActor func resume(_ changed: @escaping @MainActor (String) -> Void) {
-        self.changed = changed
+    /// Starts reading its events (on its queue); each read's paths go to `changed` together.
+    @MainActor func resume(_ changed: @escaping @MainActor ([String]) -> Void) {
         let fd = fd
-        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
-        source.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.read() } }
+        let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+        source.setEventHandler { [weak self] in self?.read() }
         source.setCancelHandler { _ = close(fd) }
+        queue.sync { self.changed = changed }
         source.resume()
         self.source = source
     }
 
-    func stop() {
+    @MainActor func stop() {
         if let source {
             source.cancel()
         } else {
             _ = close(fd)
         }
         source = nil
-        folders = [:]
+        queue.async { [self] in
+            changed = nil
+            folders = [:]
+        }
     }
 
     /// `fs.inotify.max_user_watches`.
@@ -262,8 +315,16 @@ private final class Inotify: @unchecked Sendable {
         }
     }
 
-    @MainActor private func read() {
+    /// On `queue`: everything inotify holds now, handed to the main thread as one batch.
+    private func read() {
         guard let changed else { return }
+        var batch: [String] = []
+        defer {
+            if !batch.isEmpty {
+                let paths = batch
+                DispatchQueue.main.async { MainActor.assumeIsolated { changed(paths) } }
+            }
+        }
         var buffer = [UInt8](repeating: 0, count: 64 * 1024)
         while true {
             let count = buffer.withUnsafeMutableBytes { raw in Glibc_read(fd, raw.baseAddress, raw.count) }
@@ -278,7 +339,7 @@ private final class Inotify: @unchecked Sendable {
                 let name = String(decoding: nameBytes, as: UTF8.self)
                 offset += 16 + length
                 if mask & Self.overflow != 0 {
-                    changed("")
+                    batch.append("")
                     continue
                 }
                 if mask & Self.ignored != 0 {
@@ -288,12 +349,12 @@ private final class Inotify: @unchecked Sendable {
                 guard let folder = folders[wd] else { continue }
                 if name.isEmpty {
                     // The folder itself went or moved.
-                    if mask & (Self.deleteSelf | Self.moveSelf) != 0, !folder.isEmpty { changed(folder) }
+                    if mask & (Self.deleteSelf | Self.moveSelf) != 0, !folder.isEmpty { batch.append(folder) }
                     continue
                 }
                 let relative = folder.isEmpty ? name : folder + "/" + name
                 if mask & Self.isDir != 0, mask & (Self.create | Self.movedTo) != 0 { add(relative) }
-                changed(relative)
+                batch.append(relative)
             }
         }
     }

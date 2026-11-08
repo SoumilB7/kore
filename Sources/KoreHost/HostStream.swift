@@ -7,8 +7,11 @@ import src
 /// (`events.jsonl`): a header line naming the log, then one `StreamItem` per line. It starts at the
 /// chat's first history (a resumed session's replay) or its first event, and starts again (a new
 /// log id) when a rollback cuts the history or it grows past `cap`. Text, tool and command output
-/// arriving together goes as one item, at most `perSecond` times a second; anything else goes at
-/// once. Nothing runs while the chat is quiet.
+/// arriving together goes as one item (appended in place, so a flood costs what it carries), at
+/// most `perSecond` times a second; anything else goes at once. A tool's or a command's output
+/// past `outputBudget` is kept as its last `heldKept` bytes and written at most once a second: a
+/// command printing without end can't fill the log, or the main thread with its writing.
+/// Nothing runs while the chat is quiet.
 @MainActor
 package final class StreamLog {
     let url: URL
@@ -28,14 +31,69 @@ package final class StreamLog {
     /// A resumed session's history while the log already holds the chat: the clients have it,
     /// so it isn't sent again (nor its correction).
     private var skippingHistory = false
-    private var pending: [(event: ChatEvent, by: String?)] = []
+    private var pending: [Waiting] = []
     private var flushQueued = false
+    /// Output bytes logged so far, by tool or command id; past `outputBudget`, its latest is held.
+    private var logged: [String: Int] = [:]
+    private var held: [String: Waiting] = [:]
+    private var heldOrder: [String] = []
+    private var heldQueued = false
     /// New items to send, or a log started again (`reset`).
     package var flushed: ((_ items: [StreamItem], _ reset: Bool) -> Void)?
 
     /// Past this, the next resumed history starts the log again.
     package static let cap = 16 * 1024 * 1024
     package static let perSecond = 30.0
+    /// A tool's or a command's output logged in full, then its tail once a second.
+    package static let outputBudget = 1024 * 1024
+    package static let heldKept = 64 * 1024
+    /// A streamed item's text at most: a longer run of pieces goes as several items.
+    nonisolated static let pieceMax = 256 * 1024
+
+    /// An event waiting to be logged; a streamed one's text so far in `text`, appended in place.
+    struct Waiting {
+        var event: ChatEvent
+        var by: String?
+        var text: String?
+
+        init(_ event: ChatEvent, by: String?) {
+            self.event = event
+            self.by = by
+            text = StreamLog.streamed(event)?.text
+        }
+
+        /// The event with its text as gathered.
+        var gathered: ChatEvent { text.map { StreamLog.with($0, event) } ?? event }
+
+        /// Takes `next` into this one when it's the same stream: true if it did.
+        mutating func take(_ next: ChatEvent, by: String?) -> Bool {
+            guard self.by == by, let piece = StreamLog.streamed(next), let mine = StreamLog.streamed(event), mine.key == piece.key,
+                (text?.utf8.count ?? 0) < StreamLog.pieceMax
+            else { return false }
+            text!.append(piece.text)
+            return true
+        }
+    }
+
+    /// A streamed event's text, and what its pieces share (kind, id, agent).
+    nonisolated static func streamed(_ event: ChatEvent) -> (key: String, id: String, text: String)? {
+        switch event {
+        case .text(let id, let kind, let text, let agent): ("t|\(id)|\(kind)|\(agent)", id, text)
+        case .toolOutput(let id, let text, let agent): ("o|\(id)|\(agent)", id, text)
+        case .commandOutput(let id, let text): ("c|\(id)", id, text)
+        default: nil
+        }
+    }
+
+    /// `event` with `text` in place of its own.
+    nonisolated static func with(_ text: String, _ event: ChatEvent) -> ChatEvent {
+        switch event {
+        case .text(let id, let kind, _, let agent): .text(id, kind, text, agent: agent)
+        case .toolOutput(let id, _, let agent): .toolOutput(id: id, text, agent: agent)
+        case .commandOutput(let id, _): .commandOutput(id: id, text)
+        default: event
+        }
+    }
 
     init(url: URL) { self.url = url }
 
@@ -118,10 +176,15 @@ package final class StreamLog {
     /// call made it.
     package func add(_ event: ChatEvent, by: String?) {
         load()
-        if let last = pending.last, last.by == by, let merged = Self.merge(last.event, event) {
-            pending[pending.count - 1].event = merged
-        } else {
-            pending.append((event, by))
+        if let output = Self.output(event) {
+            if logged[output.id, default: 0] >= Self.outputBudget { return hold(event, id: output.id, by: by) }
+            logged[output.id, default: 0] += output.text.utf8.count
+        } else if !held.isEmpty {
+            // What's held of a tool goes before anything else of the chat (its end, say).
+            releaseHeld()
+        }
+        if pending.isEmpty || !pending[pending.count - 1].take(event, by: by) {
+            pending.append(Waiting(event, by: by))
         }
         if Self.streams(event) {
             guard !flushQueued else { return }
@@ -134,17 +197,53 @@ package final class StreamLog {
         }
     }
 
-    /// Streamed pieces that go together as one.
-    static func merge(_ a: ChatEvent, _ b: ChatEvent) -> ChatEvent? {
-        switch (a, b) {
-        case (.text(let id, let kind, let x, let agent), .text(let id2, let kind2, let y, let agent2)) where id == id2 && kind == kind2 && agent == agent2:
-            .text(id, kind, x + y, agent: agent)
-        case (.toolOutput(let id, let x, let agent), .toolOutput(let id2, let y, let agent2)) where id == id2 && agent == agent2:
-            .toolOutput(id: id, x + y, agent: agent)
-        case (.commandOutput(let id, let x), .commandOutput(let id2, let y)) where id == id2:
-            .commandOutput(id: id, x + y)
+    /// A tool's or a command's streamed output.
+    static func output(_ event: ChatEvent) -> (id: String, text: String)? {
+        switch event {
+        case .toolOutput(let id, let text, _): (id, text)
+        case .commandOutput(let id, let text): (id, text)
         default: nil
         }
+    }
+
+    /// Output past its budget: only its last `heldKept` bytes are kept, written once a second.
+    private func hold(_ event: ChatEvent, id: String, by: String?) {
+        if held[id] == nil {
+            var first = Waiting(event, by: by)
+            first.text = Self.cutMark + (first.text ?? "")
+            held[id] = first
+            heldOrder.append(id)
+        } else if let piece = Self.output(event)?.text {
+            held[id]!.text!.append(piece)
+        }
+        if held[id]!.text!.utf8.count > Self.heldKept * 2 {
+            held[id]!.text = Self.cutMark + OutputTail.tail(held[id]!.text!, bytes: Self.heldKept)
+        }
+        guard !heldQueued else { return }
+        heldQueued = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.heldQueued = false
+                self.releaseHeld()
+                self.flush()
+            }
+        }
+    }
+
+    static let cutMark = "\n… (output cut)\n"
+
+    /// The held tails go into the log now, in the order they began.
+    private func releaseHeld() {
+        for id in heldOrder {
+            guard var waiting = held.removeValue(forKey: id) else { continue }
+            if let text = waiting.text, text.utf8.count > Self.heldKept + Self.cutMark.utf8.count {
+                waiting.text = Self.cutMark + OutputTail.tail(text, bytes: Self.heldKept)
+            }
+            pending.append(waiting)
+        }
+        held = [:]
+        heldOrder = []
     }
 
     static func streams(_ event: ChatEvent) -> Bool {
@@ -161,7 +260,7 @@ package final class StreamLog {
         let waiting = pending
         pending = []
         var items: [StreamItem] = []
-        for (event, by) in waiting { items += StreamItem.items(event, seq: &seq, by: by) }
+        for one in waiting { items += StreamItem.items(one.gathered, seq: &seq, by: one.by) }
         write(items)
         flushed?(items, false)
         if bytes > rotateAt, case .turnFinished? = waiting.last?.event { rotate() }
@@ -172,17 +271,17 @@ package final class StreamLog {
         var assembler = StreamAssembler()
         let events = assembler.take(read())
         let start = events.lastIndex { if case .replayed = $0 { true } else if case .historyReplaced = $0 { true } else { false } }
-        var history: [ChatEvent] = []
+        var history: [Waiting] = []
         var earlier: ChatEvent?
         for (i, event) in events.enumerated() where start.map({ i >= $0 }) ?? true {
             switch event {
-            case .replayed(let inner), .historyReplaced(let inner): history = inner
+            case .replayed(let inner), .historyReplaced(let inner): history = inner.map { Waiting($0, by: nil) }
             case .earlierHistory: earlier = event
             default:
-                if let last = history.last, let merged = Self.merge(last, event) { history[history.count - 1] = merged } else { history.append(event) }
+                if history.isEmpty || !history[history.count - 1].take(event, by: nil) { history.append(Waiting(event, by: nil)) }
             }
         }
-        restart(with: [.replayed(history)] + (earlier.map { [$0] } ?? []))
+        restart(with: [.replayed(history.map(\.gathered))] + (earlier.map { [$0] } ?? []))
         // A history that stays large isn't rebuilt at every turn's end.
         rotateAt = max(Self.cap, bytes * 2)
     }
@@ -192,6 +291,9 @@ package final class StreamLog {
     package func restart(with events: [ChatEvent], announce: Bool = true) {
         loaded = true
         pending = []
+        logged = [:]
+        held = [:]
+        heldOrder = []
         skippingHistory = false
         try? handle?.close()
         handle = nil

@@ -20,6 +20,17 @@ public struct OutputTail: Sendable, Equatable {
     /// counts or a zero byte budget return no lines. Empty complete LF lines are skipped.
     /// A UTF-8 scalar cut by the suffix boundary is omitted; malformed file bytes are decoded
     /// with replacement characters, so decoded text can use more bytes than the file suffix.
+    /// The last `bytes` UTF-8 bytes of `text` (fewer when the cut would split a character's
+    /// bytes), copying only those: what a bounded live output keeps.
+    public static func tail(_ text: String, bytes: Int) -> String {
+        let utf8 = text.utf8
+        guard bytes > 0 else { return "" }
+        guard utf8.count > bytes else { return text }
+        var start = utf8.index(utf8.endIndex, offsetBy: -bytes)
+        while start < utf8.endIndex, utf8[start] & 0xC0 == 0x80 { start = utf8.index(after: start) }
+        return String(decoding: utf8[start...], as: UTF8.self)
+    }
+
     public static func read(_ file: URL, lines count: Int, maxBytes: UInt64 = 256 * 1024) -> OutputTail? {
         guard let handle = try? FileHandle(forReadingFrom: file) else { return nil }
         defer { try? handle.close() }
