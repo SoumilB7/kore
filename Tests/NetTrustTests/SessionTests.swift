@@ -279,6 +279,12 @@ struct PathsListenerTests {
         #expect(throws: SocketError.wildcard(address)) { try Sockets.listenTCP(address, port: 0) }
     }
 
+    @Test func netPortComesFromTheEnvironmentOnlyWhenItIsAPort() {
+        #expect(NetListener.configured(["KORE_NET_PORT": "47571"]) == 47571)
+        for bad in ["", "0", "-1", "65536", "port"] { #expect(NetListener.configured(["KORE_NET_PORT": bad]) == NetListener.port) }
+        #expect(NetListener.configured([:]) == NetListener.port)
+    }
+
     @Test func onlyGivenAndAllowedAddressesBind() throws {
         #expect(throws: SocketError.wildcard("")) { try NetListener(addresses: [], port: 0) }
         #expect(throws: SocketError.badAddress("127.0.0.1")) { try NetListener(addresses: ["127.0.0.1"], port: 0, allowed: ["100.64.0.1"]) }

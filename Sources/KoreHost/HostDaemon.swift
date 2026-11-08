@@ -79,7 +79,7 @@ package final class HostDaemon {
     /// installed Tailscale's; tests make a fake, or none.
     package var makeTailnet: () -> (any Tailnet)? = { KoreLog.isTestProcess ? nil : TailnetLocal() }
     /// KoreNet's port (tests take the kernel's pick, 0).
-    package var netPort = HostNet.port
+    package var netPort = NetListener.configured()
     /// Phase 18 §4: what this box's chats spent, a week of it (`usage/ledger.jsonl`).
     package private(set) lazy var usage = UsageLedger(url: paths.usageLedger, now: { [weak self] in self?.now() ?? Date() })
 

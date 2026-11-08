@@ -53,7 +53,7 @@ package final class MacNet {
     /// Kore's, while KoreNet is on (set by the switch).
     package static var shared: MacNet?
 
-    nonisolated package static let port = NetListener.port
+    nonisolated package static let port = NetListener.macPort
     /// The Add device window's length.
     package static var addWindowLength: TimeInterval = 600
     /// How long a held stranger waits (a little past its card).

@@ -7,6 +7,21 @@ package final class NetListener: Sendable {
     /// Port 47470 until the owner settles it (plan §11 q2).
     package static let port: UInt16 = 47470
 
+    /// `KORE_NET_PORT` when it names a port (an isolated test daemon, `scripts/tests/korenet-e2e.sh`),
+    /// else `port`.
+    package static func configured(_ env: [String: String] = ProcessInfo.processInfo.environment) -> UInt16 {
+        env["KORE_NET_PORT"].flatMap(UInt16.init).flatMap { $0 == 0 ? nil : $0 } ?? port
+    }
+
+    /// The Mac's phones port: `configured()` in debug builds, always `port` in release.
+    package static var macPort: UInt16 {
+        #if DEBUG
+        configured()
+        #else
+        port
+        #endif
+    }
+
     package let sockets: [TailnetListenSocket]
     private let limiter: PreAuthLimiter
 
