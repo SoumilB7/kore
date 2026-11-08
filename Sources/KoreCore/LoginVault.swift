@@ -9,8 +9,8 @@ import Security
 #endif
 
 /// Where a CLI keeps one login's credential on this device, read and written only to move it
-/// (`LoginMove`) or to fingerprint it (`LoginFingerprint`): never shown, logged or put on a
-/// command line. Claude on a Mac keeps it in the login Keychain, in an item named for its config
+/// (`LoginMove`, a Claude Keychain item only for a move the owner asked for at this Mac), or
+/// fingerprinted on a box (`LoginFingerprint`): never shown, logged or put on a command line. Claude on a Mac keeps it in the login Keychain, in an item named for its config
 /// folder; elsewhere in `.credentials.json` there. Codex keeps `auth.json` in its folder. A file
 /// is written 0600, through a temporary file renamed into place.
 package enum LoginVault {
@@ -173,10 +173,17 @@ package final class MemoryLoginVault: LoginVaultStore, @unchecked Sendable {
     /// Reads that may not prompt are denied (Kore isn't trusted for the item).
     package var denySilent = false
 
+    /// Every read so far, by place: what a test counts (Kore reads a Claude item only for a move).
+    private var readPlaces: [LoginVault.Place] = []
+
     package init() {}
+
+    /// Reads so far, of every CLI or of one.
+    package func reads(_ cli: String? = nil) -> Int { lock.withLock { readPlaces.filter { cli == nil || $0.cli == cli }.count } }
 
     package func read(_ place: LoginVault.Place, prompt: Bool) throws -> Data? {
         try lock.withLock {
+            readPlaces.append(place)
             if (prompt && denyPrompts) || (!prompt && denySilent) { throw LoginMove.Failure.keychainDenied }
             return items[place]
         }

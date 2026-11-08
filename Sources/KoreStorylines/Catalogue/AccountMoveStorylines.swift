@@ -149,7 +149,9 @@ final class AccountMove: ChatStoryline {
 /// A Claude or Codex login moved to another of the owner's Macs and back, from its row's ⋯:
 /// "Move to MacBook Air" beside a Mac that needs a newer Kore (dimmed, its reason as the hint);
 /// moved, it's a new login on MacBook Air (its active one unchanged), none left here, the row
-/// "On MacBook Air"; "Move back here" brings it back and leaves none there. MacBook Air is this
+/// "On MacBook Air"; "Move back here" brings a Codex login back and leaves none there, while a
+/// Claude one stays there, "Move it from MacBook Air" (its Keychain is read only for a move the
+/// owner clicks at that Mac). Nothing reads MacBook Air's vault. MacBook Air is this
 /// app's own `MacLoginMoves` over a vault in memory and a scratch folder, reached as its link
 /// would carry it.
 final class AccountMoveToMac: ChatStoryline {
@@ -256,12 +258,16 @@ final class AccountMoveToMac: ChatStoryline {
                 LoginMoves.shared.targets(provider).contains { $0.name == "Mac mini" && $0.why == "Mac mini needs a newer Kore" }
             },
             FadesEnd(), Snapshot("account-move-mac-menu"),
+            Do("Count this Mac's vault reads from here") { _ in holder.reads = vault.reads() },
             Press(.id(StoryID.Composer.accountMethod("Move to MacBook Air"))),
             Expect("moved: a new login on MacBook Air, read there once, none left here", found: { _ in String(describing: other().added) }) { _ in
                 guard let id = work(), let there = onOther() else { return false }
                 return LoginMoves.shared.line(provider, id) == nil && place().flatMap(vault.held) == nil
                     && other().vault.held(LoginVault.Place(cli: provider, folder: other().folder(provider, there.id))) == credential
                     && other().reads == 1 && CLIProfiles.movedTo(provider, email: "work@acme.dev") == LoginMoves.macKey(UUID(uuidString: "6A0E7A1B-0000-4000-8000-00000000A1A1")!)
+            },
+            Expect("the move read this Mac's login twice (to send, to see it unchanged), none on MacBook Air", found: { _ in "\(vault.reads() - holder.reads) here, \(other().vault.reads()) there" }) { _ in
+                vault.reads() - holder.reads == 2 && other().vault.reads() == 0
             },
             Expect("its row is on MacBook Air, never signed out", found: { $0.app.chat?.storyLogins.joined(separator: " | ") }) { story in
                 story.app.chat?.storyLogins.contains { $0.contains("work@acme.dev") && !$0.contains("Signed out") } == true
@@ -271,11 +277,18 @@ final class AccountMoveToMac: ChatStoryline {
         ] + openMenu + [
             WaitForElement(.id(StoryID.Composer.accountMethod("Move back here"))),
             Press(.id(StoryID.Composer.accountMethod("Move back here"))),
-            Expect("back: here only, none left on MacBook Air", found: { _ in String(describing: other().added) }) { _ in
-                guard let id = work() else { return false }
-                return LoginMoves.shared.line(provider, id) == nil && place().flatMap(vault.held) == credential
-                    && onOther() == nil && CLIProfiles.movedTo(provider, email: "work@acme.dev") == nil
-            },
+            provider == "claude"
+                ? Expect("Claude's stays on MacBook Air: moved from there, its Keychain unread", found: { _ in String(describing: work().flatMap { LoginMoves.shared.line(provider, $0) }) }) { _ in
+                    guard let id = work(), let there = onOther() else { return false }
+                    return LoginMoves.shared.line(provider, id) == .failed("Move it from MacBook Air") && place().flatMap(vault.held) == nil
+                        && other().vault.held(LoginVault.Place(cli: provider, folder: other().folder(provider, there.id))) == credential
+                        && other().vault.reads() == 0 && !other().moves.paused(provider, there.id)
+                }
+                : Expect("back: here only, none left on MacBook Air", found: { _ in String(describing: other().added) }) { _ in
+                    guard let id = work() else { return false }
+                    return LoginMoves.shared.line(provider, id) == nil && place().flatMap(vault.held) == credential
+                        && onOther() == nil && CLIProfiles.movedTo(provider, email: "work@acme.dev") == nil
+                },
             FadesEnd(), Snapshot("account-move-mac-back"),
             Do("MacBook Air's scratch folder goes") { _ in try? FileManager.default.removeItem(at: other().root) },
         ]
@@ -284,6 +297,8 @@ final class AccountMoveToMac: ChatStoryline {
     @MainActor
     final class Holder {
         var mac: OtherMac?
+        /// This Mac's vault reads before the move.
+        var reads = 0
     }
 }
 

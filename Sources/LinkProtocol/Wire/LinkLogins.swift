@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 import src
 
 // KoreLink 1.14: a CLI login moved between the owner's devices (`account-move.html` §8), and the
@@ -15,7 +16,9 @@ import src
 // - `account.export` (prepare | commit | abort): prepare pauses the device's `login` (nothing
 //   starts on it until commit or abort), checks nothing runs on it, and answers its bytes and
 //   sha. Commit deletes it there; abort un-pauses it.
-// - `account.fingerprints` (`key`, base64): each login's `LoginFingerprint` under that key.
+// - `account.fingerprints` (`key`, base64): each login's `LoginFingerprint` under that key, and
+//   who it is (`email`, `account`): what tells one account held on two devices. A Mac answers
+//   who only (its Claude logins are in the Keychain, never read for this); a box both.
 
 /// A `account.*` move's answer (raw on the link, as `MoveResult` is).
 package struct LoginMoveResult: Codable, Sendable, Equatable {
@@ -48,17 +51,23 @@ package struct LoginMoveResult: Codable, Sendable, Equatable {
     }
 }
 
-/// One login's fingerprint on a device: which CLI, its name there ("main" or its folder's), who
-/// it is, and the keyed fingerprint of its refresh token. Never the token.
+/// One login on a device: which CLI, its name there ("main" or its folder's), who it is (its
+/// email, its account's id), and the keyed fingerprint of its refresh token where the device
+/// reads it from a file (empty from a Mac). Never the token.
 package struct LoginPrint: Codable, Sendable, Equatable {
     package var cli: String
     package var login: String
     package var email: String?
     package var fingerprint: String
+    /// The account's id (Claude's `accountUuid`, Codex's `account_id`); absent from older peers.
+    package var account: String?
 
-    package init(cli: String, login: String, email: String?, fingerprint: String) {
-        (self.cli, self.login, self.email, self.fingerprint) = (cli, login, email, fingerprint)
+    package init(cli: String, login: String, email: String?, fingerprint: String, account: String? = nil) {
+        (self.cli, self.login, self.email, self.fingerprint, self.account) = (cli, login, email, fingerprint, account)
     }
+
+    /// Who it is, as the same-account rule compares it.
+    package var identity: LoginIdentity { LoginIdentity(email: email, account: account) }
 }
 
 package enum LinkLogins {

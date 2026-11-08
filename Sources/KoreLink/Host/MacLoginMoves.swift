@@ -15,9 +15,12 @@ import LinkProtocol
 ///   reads it. Staging is never removed here on its own: after the other Mac's delete it's the
 ///   only copy.
 /// - A login going out is paused first (locked in `AccountStore`: no read, no switch, no CLI
-///   start on it; kept in a file through a restart), refused while a chat works on it, read
-///   without a prompt and sent; deleted on commit (an added login's folder goes too), un-paused
-///   on abort. Never a logout.
+///   start on it; kept in a file through a restart), refused while a chat works on it, read and
+///   sent; deleted on commit (an added login's folder goes too), un-paused on abort. Never a
+///   logout. A Claude login is refused: it's in this Mac's Keychain, which Kore reads only for a
+///   move the owner asks for at this Mac ("Move it from MacBook Air").
+/// - Nothing here reads the Keychain to compare: who a login is (email, account id) comes from
+///   files and Kore's own lists.
 @MainActor
 package final class MacLoginMoves {
     /// What it touches, swapped whole by tests.
@@ -38,6 +41,8 @@ package final class MacLoginMoves {
         package var chatsUsing: (String, String?) -> Int = { cli, id in CLIProfiles.active(cli) == id ? AccountStore.shared.workingChats(cli) : 0 }
         /// Whether its CLI reads a placed login signed in: asked only after a commit.
         package var signedIn: (String, String?) async -> Bool = { await AccountStore.shared.readsSignedIn($0, $1) }
+        /// This Mac's name, as another Mac's row says where to move a login from.
+        package var name: () -> String = { Host.current().localizedName ?? "the other Mac" }
 
         package init() {}
     }
@@ -54,6 +59,10 @@ package final class MacLoginMoves {
         package var mainEmail: (String) -> String?
         /// Main's place in the vault.
         package var main: (String) -> LoginVault.Place
+        /// A login with this email that's on another device now, not here.
+        package var moved: (_ cli: String, _ email: String?) -> Bool
+        /// A login's account id, from its file (`LoginMoves.identityFile`); never a token.
+        package var account: (_ cli: String, _ login: String) -> String?
 
         package static var live: Profiles { Profiles(
             prepare: { try CLIProfiles.prepare($0) }, folder: { CLIProfiles.folder($0, $1) },
@@ -63,15 +72,21 @@ package final class MacLoginMoves {
                 let main = CLIProfiles.mainFolder(cli)
                 let home = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(cli == "codex" ? ".codex" : ".claude")
                 return LoginVault.Place(cli: cli, folder: main.standardizedFileURL.path == home.standardizedFileURL.path ? nil : main)
+            },
+            moved: { CLIProfiles.movedTo($0, email: $1) != nil },
+            account: { cli, login in
+                let held = LoginMoves.Held(id: nil, email: nil, file: LoginMoves.identityFile(cli, login == LinkAccount.main ? nil : login))
+                return LoginMoves.identity(cli, held).account
             }) }
 
         package init(
             prepare: @escaping (String) throws -> String, folder: @escaping (String, String) -> URL,
             adopt: @escaping (String, String, String?, String?) -> Void, remove: @escaping (String, String) -> Void,
-            added: @escaping (String) -> [CLIProfiles.Profile], mainEmail: @escaping (String) -> String?, main: @escaping (String) -> LoginVault.Place
+            added: @escaping (String) -> [CLIProfiles.Profile], mainEmail: @escaping (String) -> String?, main: @escaping (String) -> LoginVault.Place,
+            moved: @escaping (String, String?) -> Bool = { _, _ in false }, account: @escaping (String, String) -> String? = { _, _ in nil }
         ) {
             (self.prepare, self.folder, self.adopt, self.remove) = (prepare, folder, adopt, remove)
-            (self.added, self.mainEmail, self.main) = (added, mainEmail, main)
+            (self.added, self.mainEmail, self.main, self.moved, self.account) = (added, mainEmail, main, moved, account)
         }
     }
 
@@ -91,6 +106,9 @@ package final class MacLoginMoves {
 
     private let seams: Seams
     private var saved: Saved
+    /// Staged logins' bytes by move, as sent: a commit places these without reading the staged
+    /// item back. Gone at commit or abort; after a restart the commit reads Kore's own item.
+    private var staged: [String: Data] = [:]
 
     package init(_ seams: Seams = Seams()) {
         self.seams = seams
@@ -144,9 +162,16 @@ package final class MacLoginMoves {
 
     private func stagingDir(_ moveId: String) -> URL { seams.staging.appendingPathComponent(moveId, isDirectory: true) }
 
-    /// This Mac's logins of a CLI: main first, then the added ones, with their emails.
+    /// This Mac's logins of a CLI held here (not on another device): main first, then the added
+    /// ones, with their emails.
     private func logins(_ cli: String) -> [(login: String, email: String?)] {
-        [(LinkAccount.main, seams.profiles.mainEmail(cli))] + seams.profiles.added(cli).map { ($0.id, $0.email) }
+        ([(LinkAccount.main, seams.profiles.mainEmail(cli))] + seams.profiles.added(cli).map { ($0.id, $0.email) })
+            .filter { !seams.profiles.moved(cli, $0.1) }
+    }
+
+    /// Who a login here is: its listed email, its account's id from its file.
+    private func identity(_ cli: String, _ login: String, _ email: String?) -> LoginIdentity {
+        LoginIdentity(email: email, account: seams.profiles.account(cli, login))
     }
 
     // MARK: Coming in
@@ -160,8 +185,8 @@ package final class MacLoginMoves {
         // The bytes are the ones sent, and a whole login: read as bytes, never by a CLI.
         guard LoginMove.sha(data) == sha else { return .refused(id, .invalid, "sentWrong") }
         guard LoginCredential.complete(data, cli: cli) else { return .refused(id, .invalid, "notALogin") }
-        // The same sign-in here already: two copies would log one out. A Keep replaces it.
-        if args.force != true, let held = sameSignIn(data, cli: cli) {
+        // The same account here already: two copies would log one out. A Keep replaces it.
+        if args.force != true, let held = sameAccount(data, text: args.text, cli: cli) {
             return .refused(id, .invalid, "This login is already on this Mac as “\(held)”.")
         }
         let dir = stagingDir(moveId)
@@ -177,12 +202,7 @@ package final class MacLoginMoves {
             try? FileManager.default.removeItem(at: dir)
             return .refused(id, .invalid, "Couldn't keep the login here.")
         }
-        // What the vault holds now is what was sent.
-        guard let written = try? vault.read(staged, prompt: false), LoginMove.sha(written) == sha else {
-            try? vault.delete(staged)
-            try? FileManager.default.removeItem(at: dir)
-            return .refused(id, .invalid, "sentWrong")
-        }
+        self.staged[moveId] = data
         return LoginMoveResult(id: id, ok: true)
     }
 
@@ -198,7 +218,8 @@ package final class MacLoginMoves {
         let cli = meta.cli
         let staged = LoginVault.Place(cli: cli, folder: dir)
         let vault = seams.vault()
-        guard let data = try? vault.read(staged, prompt: false), LoginMove.sha(data) == meta.sha else {
+        // The bytes kept at prepare; after a restart, Kore's own staged item (it made it).
+        guard let data = self.staged[moveId] ?? (try? vault.read(staged, prompt: false)) ?? nil, LoginMove.sha(data) == meta.sha else {
             return .refused(id, .invalid, "Couldn't read the staged login.")
         }
         let text = cli == "claude" ? try? Data(contentsOf: dir.appendingPathComponent(".claude.json")) : nil
@@ -227,6 +248,7 @@ package final class MacLoginMoves {
         saved.placed[moveId] = cli + "/" + login
         if saved.placed.count > 64, let oldest = saved.placed.keys.sorted().first { saved.placed[oldest] = nil }
         save()
+        self.staged[moveId] = nil
         try? vault.delete(staged)
         try? FileManager.default.removeItem(at: dir)
         let signedIn = await seams.signedIn(cli, Self.id(login))
@@ -237,6 +259,7 @@ package final class MacLoginMoves {
         guard let moveId = args.moveId else { return .refused(id, .invalid, "Name the move.") }
         // A commit that landed is never undone by an abort: the other Mac deleted its copy first.
         if saved.placed[moveId] != nil { return LoginMoveResult(id: id, ok: true) }
+        staged[moveId] = nil
         let dir = stagingDir(moveId)
         let cli = (try? Data(contentsOf: dir.appendingPathComponent(".kore-from"))).flatMap { try? JSONDecoder().decode(Staged.self, from: $0) }?.cli
         if let cli { try? seams.vault().delete(LoginVault.Place(cli: cli, folder: dir)) }
@@ -244,15 +267,12 @@ package final class MacLoginMoves {
         return LoginMoveResult(id: id, ok: true)
     }
 
-    /// The login here holding this same sign-in (its refresh token), by email or id.
-    private func sameSignIn(_ data: Data, cli: String) -> String? {
-        let key = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
-        guard let incoming = LoginFingerprint.of(data, cli: cli, key: key) else { return nil }
-        let vault = seams.vault()
-        for (login, email) in logins(cli) {
-            guard let held = try? vault.read(place(cli, login), prompt: false) else { continue }
-            if LoginFingerprint.of(held, cli: cli, key: key) == incoming { return email ?? login }
-        }
+    /// The login here of the same account as the one coming in (its email or account id, from
+    /// what was sent and this Mac's lists), by email or id. Nothing here is read from the Keychain.
+    private func sameAccount(_ data: Data, text: String?, cli: String) -> String? {
+        // Claude's who is in the account file sent with it; Codex's in its own id token.
+        let incoming = cli == "codex" ? LoginIdentity.of(data, cli: cli) : text.map { LoginIdentity.of(Data($0.utf8), cli: cli) } ?? LoginIdentity(email: nil, account: nil)
+        for (login, email) in logins(cli) where identity(cli, login, email).same(as: incoming) { return email ?? login }
         return nil
     }
 
@@ -286,6 +306,9 @@ package final class MacLoginMoves {
     package func exportPrepare(_ args: ControlArgs, id: String) -> LoginMoveResult {
         guard let cli = args.provider, LinkLogins.clis.contains(cli) else { return .refused(id, .invalid, "That CLI's logins don't move here.") }
         guard let moveId = args.moveId, let login = args.login, exists(cli, login) else { return .refused(id, .goneLogin, "notThere") }
+        // Claude's logins here are in the Keychain: read only for a move the owner asks for at
+        // this Mac, never for another Mac's ask (nobody may be here to answer the Keychain).
+        if cli == "claude" { return .refused(id, .invalid, "Move it from \(seams.name())") }
         let key = cli + "/" + login
         if let other = saved.paused[key] { return other == moveId ? exportRead(cli, login, id: id) : .refused(id, .invalid, "busy") }
         let running = seams.chatsUsing(cli, Self.id(login))
@@ -297,8 +320,8 @@ package final class MacLoginMoves {
         return exportRead(cli, login, id: id)
     }
 
-    /// The paused login's bytes, read without a prompt (nobody may be at this Mac); un-paused
-    /// when there's nothing to send.
+    /// The paused login's bytes (a file: Codex's), read without a prompt; un-paused when there's
+    /// nothing to send.
     private func exportRead(_ cli: String, _ login: String, id: String) -> LoginMoveResult {
         let failure: String
         do {
@@ -344,16 +367,14 @@ package final class MacLoginMoves {
 
     // MARK: Fingerprints
 
-    /// Each login's fingerprint under the key, read without a prompt (one Kore isn't trusted
-    /// for is left out); never the token.
+    /// Who each login here is (email, account id), for another Mac's same-account check and its
+    /// login names. No credential is read: the fingerprint is left empty.
     package func fingerprints(_ args: ControlArgs, id: String) -> LoginMoveResult {
-        guard let cli = args.provider, LinkLogins.clis.contains(cli), let key = args.key.flatMap({ Data(base64Encoded: $0) }) else {
+        guard let cli = args.provider, LinkLogins.clis.contains(cli), args.key.flatMap({ Data(base64Encoded: $0) }) != nil else {
             return .refused(id, .invalid, "Send the CLI and the key.")
         }
-        let vault = seams.vault()
-        let prints = logins(cli).compactMap { login, email -> LoginPrint? in
-            guard let data = try? vault.read(place(cli, login), prompt: false), let print = LoginFingerprint.of(data, cli: cli, key: key) else { return nil }
-            return LoginPrint(cli: cli, login: login, email: email, fingerprint: print)
+        let prints = logins(cli).map { login, email in
+            LoginPrint(cli: cli, login: login, email: email, fingerprint: "", account: seams.profiles.account(cli, login))
         }
         return LoginMoveResult(id: id, ok: true, prints: prints)
     }
