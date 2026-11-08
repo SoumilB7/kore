@@ -57,6 +57,10 @@ let package = Package(
             swiftSettings: releaseForSize),
         // Tailnet: Tailscale's LocalAPI (installed tailscaled) or the `kore-tailnet` sidecar's fds.
         .target(name: "Tailnet", dependencies: ["KoreTrust", "KoreHostSys"], swiftSettings: releaseForSize),
+        // KoreNet: link 2.0 framing, the session handshake and scheduler, paths, the listener.
+        // Payloads are opaque here: it never imports LinkProtocol.
+        .target(name: "KoreNet", dependencies: ["KoreTrust", "Tailnet", "KoreHostSys"], swiftSettings: releaseForSize),
+        .target(name: "KoreLink", dependencies: ["KoreUI", "LinkProtocol", "HostClient", "AgentTools", "src", "KoreCore"], swiftSettings: releaseForSize),
         // kore-host: Kore's chats on a headless machine (phase 17), served over the link. It
         // never links KoreUI or KoreLink, and the Mac app never links it.
         // `VERSION` links to the package's own: the version kore-host says (`--version`, the welcome).
