@@ -19,7 +19,7 @@ extension HostDaemon {
         }
         let before = devices.all()
         do {
-            let next = try devices.set(rev: set.rev, records: set.records, from: peer)
+            let next = set.merge == true ? try devices.merge(records: set.records, from: peer) : try devices.set(rev: set.rev, records: set.records, from: peer)
             let ids = Set(next.devices.map(\.id))
             for gone in before where !ids.contains(gone.id) {
                 HostJournal.audit("revoke", ["device": gone.id.uuidString.lowercased(), "kind": gone.kind.rawValue, "by": peer.device.uuidString.lowercased()])

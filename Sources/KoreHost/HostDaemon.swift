@@ -422,7 +422,7 @@ package final class HostDaemon {
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
             caps: ["tx", "attn", "commands", "control", "box"] + (control != .watch ? ["history"] : [])
-                + (control == .full ? ["stream", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap] : []))
+                + (control == .full ? ["stream", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, DevicesWire.mergeCap] : []))
     }
 
     var windows: [LinkWindow] {

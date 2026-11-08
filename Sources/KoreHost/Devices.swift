@@ -276,6 +276,19 @@ package struct DeviceStore: Sendable {
         return next
     }
 
+    /// A merging `devices.set`: the phones this owner Mac issued, capped to their kind's abilities.
+    package func merge(records: [DeviceRecord], from peer: VerifiedPeer) throws -> DeviceBook.Contents {
+        let capped = records.map { record -> DeviceRecord in
+            var record = record
+            record.abilities = record.abilities.effective.intersection(Self.abilities(record.kind).effective)
+            return record
+        }
+        let next = try book.applyIssued(capped, from: peer)
+        let ids = Set(next.devices.map(\.id))
+        _ = try? lockedPending { list in list.removeAll { $0.device.map(ids.contains) ?? false } }
+        return next
+    }
+
     private func lockedPending<T>(_ body: (inout [PendingDevice]) throws -> T) throws -> T {
         let folder = pendingFile.deletingLastPathComponent()
         try PrivateFile.folder(folder)

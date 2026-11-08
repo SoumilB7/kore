@@ -597,6 +597,25 @@ final class NetLinkWire: LinkWire {
 
     var backlog: Int { session.backlog }
 
+    /// B: what a phone's raises on this session sign over.
+    var bindingDigest: Data? { session.bindingDigest }
+
+    /// The hello's ticket was honoured: the client's cursors (`resume`) are on their way.
+    var resumed: Bool {
+        if case .established(let peer) = session.state { return peer.resumed }
+        return false
+    }
+
+    /// The client's cursors once they came (or nil once anything else came first).
+    var cursors: [String: JSONValue]? { session.cursors }
+
+    /// Whether the cursors may still come.
+    var awaitingCursors: Bool { session.awaitingCursors }
+
+    /// Called once, when nothing more is awaited before the client's first answer (its cursors
+    /// came, or anything else did).
+    var cursorsSettled: (@MainActor () -> Void)?
+
     func start(max: Int, frame: @escaping @MainActor (Data) -> Void, ended: @escaping @MainActor () -> Void) {
         self.frame = frame
         self.ended = ended
@@ -638,7 +657,12 @@ final class NetLinkWire: LinkWire {
 
     private func pump() {
         guard !done else { return }
-        for message in session.pump() where !done { frame?(message.payload) }
+        let messages = session.pump()
+        if let settled = cursorsSettled, !session.awaitingCursors {
+            cursorsSettled = nil
+            settled()
+        }
+        for message in messages where !done { frame?(message.payload) }
         if case .closed = session.state { return finish() }
         arm()
         if session.backlog < HostSocket.lowWater { drained?() }

@@ -50,6 +50,8 @@ final class LinkClient {
     private(set) var onScreen = true
     private(set) var lookingAt: String?
     private var missed = false
+    /// Phase 18: a phone's raises on this session (over its binding B), made at its first ask.
+    private var raises: LinkRaiseGate?
 
     init(socket: any LinkWire, host: HostDaemon) {
         self.socket = socket
@@ -111,7 +113,20 @@ final class LinkClient {
             proven = true
             host.replace(self)
             HostJournal.audit("connect", ["device": device.id.uuidString.lowercased(), "name": device.name, "route": route.rawValue, "control": control?.rawValue])
-            welcomed()
+            if let wire = socket as? NetLinkWire, wire.resumed, wire.awaitingCursors {
+                // A resume: its cursors come first, then the welcome answers them. A client
+                // with none sends something else first; at most a second goes by.
+                wire.cursorsSettled = { [weak self] in self?.welcomed() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak wire] in
+                    MainActor.assumeIsolated {
+                        guard let wire, let settled = wire.cursorsSettled else { return }
+                        wire.cursorsSettled = nil
+                        settled()
+                    }
+                }
+            } else {
+                welcomed()
+            }
             if ownerMac { host.sendPending(to: self) }
             return
         }
@@ -317,6 +332,8 @@ final class LinkClient {
                 return end(.rateLimited)
             }
         }
+        // Phase 18: a phone's raises, read before the link's own messages.
+        if device != nil, let incoming = LinkRaiseWire.incoming(data) { return raise(incoming) }
         switch message {
         case .bye:
             host.terminals.closeAll(of: self)
@@ -385,6 +402,9 @@ final class LinkClient {
             files(kind, args, id: id)
         case .cmd(let id, let command):
             guard let control = current() else { return }
+            if signs, let digest = LinkAsk.proofNeeded(command, command.chatId.flatMap(host.chat).map { HostMeta.facts($0) }) {
+                guard approved(id: id, digest: digest, data) else { return }
+            }
             let result = host.apply(command, id: id, control: control) { [weak self] result in self?.send(.result(result)) }
             if let result {
                 if result.code == .deniedControl { denied(command.type) }
@@ -427,8 +447,74 @@ final class LinkClient {
         let full = control == .full
         let clis = full && !host.clis.isEmpty ? host.clis : nil
         send(.snapshot(rev: rev, windows: host.windows, chats: host.chats.map { HostMeta.meta($0, raise: full) }, extras: LinkExtras(clis: clis, ghSignedIn: host.ghSignedIn)))
-        send(host.attention.ledger.state(after: 0))
+        send(host.attention.ledger.state(after: attentionAfter()))
         if control == .full, let node = host.netNode(enrolled: deviceId) { sendRaw(StreamWire.encode(node)) }
+    }
+
+    /// A resume's attention cursor (`{"attn":{"aid":N}}`): the turn ends after it are told again,
+    /// unless it's from before this daemon started (an id past the ledger's), then all of them.
+    private func attentionAfter() -> Int {
+        guard let wire = socket as? NetLinkWire, let aid = LinkResume.aid(wire.cursors), aid <= host.attention.ledger.aid else { return 0 }
+        return aid
+    }
+
+    // MARK: Raises (phase 18)
+
+    /// A device that may ask but not run (a phone): its raises and risky Allows take its fingerprint.
+    var signs: Bool { device.map { !$0.abilities.effective.contains(.run) } ?? false }
+
+    private func gate() -> LinkRaiseGate? {
+        if let raises { return raises }
+        guard let binding = (socket as? NetLinkWire)?.bindingDigest else { return nil }
+        let made = LinkRaiseGate(binding: binding, clock: { [host] in MainActor.assumeIsolated { host.now() } })
+        raises = made
+        return made
+    }
+
+    /// `raise.chal`, `raise` and `raise.key` from a phone: a nonce, a signed mode or Arsenal tier
+    /// (up to Auto, never Bypass or Full access), and a new key (taken on the Mac only).
+    private func raise(_ incoming: LinkRaiseWire.Incoming) {
+        guard current() != nil else { return }
+        let who = deviceId.map { $0.uuidString.lowercased() }
+        switch incoming {
+        case .challenge(let ask):
+            guard let gate = gate() else { return send(.result(.init(id: "raise.chal:" + ask.id, ok: false, code: .raiseMode))) }
+            sendRaw(gate.challenge(ask))
+        case .raise(let id, let signed):
+            guard let gate = gate() else { return send(.result(.init(id: id, ok: false, code: .raiseMode))) }
+            if case .refused(let code, let message) = gate.verify(signed, raiseKey: device?.raiseKey) {
+                HostJournal.audit("raise", ["device": who, "mode": signed.modeId, "ok": "0"])
+                return send(.result(.init(id: id, ok: false, code: code, message: message)))
+            }
+            HostJournal.audit("raise", ["device": who, "mode": signed.modeId, "ok": "1"])
+            let command: LinkCommand =
+                if let tier = LinkRaiseGate.arsenalTier(signed.modeId) {
+                    .control(.chatSetArsenal, ControlArgs(chatId: signed.chatId, tier: tier))
+                } else {
+                    .setMode(chatId: signed.chatId, modeId: signed.modeId)
+                }
+            if let result = host.apply(command, id: id, control: .full, reply: { [weak self] result in self?.send(.result(result)) }) { send(.result(result)) }
+        case .key(let id, _):
+            send(.result(.init(id: "raise.key:" + id, ok: false, code: .deniedControl, message: "A new fingerprint key is allowed on your Mac.")))
+        case .malformed(let id, let type):
+            send(.result(.init(id: type == LinkRaiseWire.raise ? id : "\(type):\(id)", ok: false, code: .invalid)))
+        }
+    }
+
+    /// A risky card's Allow from a phone: its signature over `approve.<digest>`, or refused.
+    private func approved(id: String, digest: String, _ data: Data) -> Bool {
+        let who = deviceId.map { $0.uuidString.lowercased() }
+        guard let proof = LinkRaiseWire.answerProof(data), proof.modeId == LinkRaiseWire.approveMode(digest), let gate = gate() else {
+            send(.result(.init(id: id, ok: false, code: .raiseMode, message: "Allowing this takes your fingerprint.")))
+            return false
+        }
+        if case .refused(let code, let message) = gate.verify(proof, raiseKey: device?.raiseKey) {
+            HostJournal.audit("risky", ["device": who, "ok": "0"])
+            send(.result(.init(id: id, ok: false, code: code, message: message)))
+            return false
+        }
+        HostJournal.audit("risky", ["device": who, "ok": "1"])
+        return true
     }
 
     // MARK: Presence (1.12)
