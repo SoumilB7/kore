@@ -198,7 +198,19 @@ Whatever the source, the box runs the new binary's `--version` before it replace
 
 ## Setting it up by hand
 
-Build kore-host from a checkout of Kore with the same toolchain and SDK (see above), or take the
+From a release (once releases carry kore-host), on the box:
+
+```sh
+curl -fsSL https://github.com/SoumilB7/kore/releases/latest/download/kore-host.sh | sh
+```
+
+It downloads the box's kore-host (x86_64 or aarch64), checks it against the release's
+`SHA256SUMS` and that file's Ed25519 signature (`SHA256SUMS.sig`, Kore's release key, with
+OpenSSL 3; where openssl can't, kore-host checks it), puts it in `~/.local/bin` and runs
+`install-service`. `kore-host update` does the same later; `kore-host verify SHA256SUMS` checks a
+downloaded release.
+
+Or build kore-host from a checkout of Kore with the same toolchain and SDK (see above), or take the
 one Set up kept in `~/Library/Application Support/Kore/kore-host/`.
 
 ```sh
@@ -291,6 +303,8 @@ What both sides last agreed on (each file's size and mtime) is kept in
 | `kore-host start` | Starts the daemon as it was installed. |
 | `kore-host facts` | Prints the CLIs' MCP servers, skills, plugins, agents and default models, by name only, as JSON. |
 | `kore-host uninstall [--purge]` | Stops and removes the service, the LaunchAgent or the on-demand daemon. `--purge` also removes the state, grants and config. |
+| `kore-host update [--file <kore-host-linux-ARCH.xz>] [--force]` | Takes the latest release (or that file, with `SHA256SUMS` and `SHA256SUMS.sig` beside it): checks the signature, the hash and the new binary's version, refuses an older one without `--force`, swaps it in with one rename and restarts the daemon. A failure leaves the old binary. |
+| `kore-host verify <file>` | Checks `SHA256SUMS` beside the file against its signature, then the file (or, for `SHA256SUMS`, every listed file beside it). |
 | `kore-host --version` | Prints the version and the link version. |
 | `kore-host mcp` | The `kore_app` MCP server a chat's CLI starts with while its Arsenal is on. kore-host runs it; it isn't run by hand. |
 

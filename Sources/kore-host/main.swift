@@ -26,6 +26,8 @@ let usage = """
            kore-host start
            kore-host uninstall [--purge]
            kore-host facts
+           kore-host update [--file <kore-host-linux-ARCH.xz>] [--force]
+           kore-host verify <file>
            kore-host --version
     """
 
@@ -142,6 +144,34 @@ case "uninstall":
     if arguments.contains("--purge") { lines += HostService.purge(paths) }
     for line in lines { print(line) }
     print("the binary stays at \(HostService.executable()): delete it to finish")
+case "update":
+    // The file's SHA256SUMS and SHA256SUMS.sig are beside it; without one, the latest release's.
+    let updater = HostUpdate(target: URL(fileURLWithPath: HostService.executable()))
+    var file: URL?
+    if let at = arguments.firstIndex(of: "--file") {
+        guard at + 1 < arguments.count else { fail(usage) }
+        file = URL(fileURLWithPath: arguments[at + 1])
+    }
+    let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("kore-host-update-\(getpid())")
+    defer { try? FileManager.default.removeItem(at: scratch) }
+    do {
+        if file == nil {
+            try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+            file = try updater.download(into: scratch)
+        }
+        switch try updater.apply(file!, force: arguments.contains("--force")) {
+        case .same(let version):
+            print("kore-host \(version) is this release already")
+        case .updated(let from, let to):
+            print("kore-host \(from) → \(to) (\(updater.target.path))")
+            print(HostUpdate.restart(paths: paths, home: home))
+        }
+    } catch { try? FileManager.default.removeItem(at: scratch); fail("kore-host: \(error)") }
+case "verify":
+    guard arguments.count == 2 else { fail(usage) }
+    do {
+        for line in try HostUpdate(target: URL(fileURLWithPath: HostService.executable())).verify(URL(fileURLWithPath: arguments[1])) { print(line) }
+    } catch { fail("kore-host: \(error)", code: 1) }
 case "--version", "-v", "version":
     print("kore-host \(HostVersion.string) (link \(HostVersion.link))")
 default:
