@@ -21,13 +21,16 @@ class FakeLink(
     abilities: List<String> = listOf("read", "ask"),
     /** Answers a sent message, as the node would. */
     var respond: (JsonObject) -> JsonObject? = { null },
+    /** As a real link: once closed it has no peer (NetConnection's "not established"). */
+    private val strict: Boolean = false,
 ) : LinkSession {
     val sent = mutableListOf<JsonObject>()
     private val channel = Channel<ByteArray>(Channel.UNLIMITED)
     private val end = CompletableDeferred<String>()
     override val incoming get() = channel
     override val ended get() = end
-    override val peer = NetClientSession.State.Established.Peer(record, abilities, false, byteArrayOf(4, 2), null, null)
+    private val established = NetClientSession.State.Established.Peer(record, abilities, false, byteArrayOf(4, 2), null, null)
+    override val peer get() = if (strict && end.isCompleted) error("not established") else established
     override var lastInbound: Long = clock()
 
     override fun send(payload: ByteArray): Boolean {

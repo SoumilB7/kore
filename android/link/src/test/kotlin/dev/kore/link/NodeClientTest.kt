@@ -137,6 +137,23 @@ class NodeClientTest {
         assertEquals(1, rig.dials.size)
     }
 
+    /** Removed on the Mac, then Join again (same phone, new enroll, allowed): Up, not "removed". */
+    @Test fun revokedThenAllowedAgainDialsAndIsUp() = runTest {
+        val first = link()
+        val second = link()
+        val rig = Rig(this, listOf({ first }, { second }))
+        rig.client.start()
+        runCurrent()
+        first.drop("revoked")
+        runCurrent()
+        assertEquals(State.Removed, rig.client.state.value)
+        rig.client.allowed(mac())
+        runCurrent()
+        assertEquals(State.Up, rig.client.state.value)
+        assertEquals(2, rig.dials.size)
+        assertEquals("presence", second.types().first())
+    }
+
     @Test fun aQuietLinkGetsOneKoreNetPingAndIsAbandonedWithoutItsPong() = runTest {
         val dead = link().apply { pongs = false }
         val fresh = link()

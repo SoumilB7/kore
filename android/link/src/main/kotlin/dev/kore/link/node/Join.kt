@@ -213,8 +213,10 @@ class JoinFlow(
                     null
                 }
                 if (link != null) {
+                    // Read before [joined]: it ends the link, and a closed link has no peer.
+                    val record = link.peer.record
                     joined(link)
-                    stepFlow.value = Step.Joined(link.peer.record)
+                    stepFlow.value = Step.Joined(record)
                     return true
                 }
             }

@@ -47,6 +47,8 @@ class NodeMachine(private val random: Random = Random.Default) {
         data object Trigger : Event()
         data object SignedOut : Event()
         data object SignedIn : Event()
+        /** A Join's welcome from this node: it allows this phone (again, after a revoke or a no). */
+        data object Allowed : Event()
         data object Tick : Event()
     }
 
@@ -80,6 +82,10 @@ class NodeMachine(private val random: Random = Random.Default) {
             }
             Event.SignedOut -> if (s is State.Idle || s is State.Removed) s else State.SignedOut
             Event.SignedIn -> if (s is State.SignedOut) connecting(reset = true) else s
+            Event.Allowed -> when (s) {
+                is State.Removed, is State.Denied, is State.Away, is State.SignedOut -> connecting(reset = true)
+                else -> s
+            }
             Event.Tick -> if (s is State.Away && s.at != null && now >= s.at) connecting(reset = false) else s
         }
         return state

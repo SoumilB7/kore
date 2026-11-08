@@ -23,6 +23,7 @@ import kotlin.concurrent.thread
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -48,7 +49,8 @@ class NetConnectionTest {
         override val input = PipedInputStream(toClient, 1 shl 16)
         override val output = PipedOutputStream()
         val fromClient = PipedInputStream(output, 1 shl 16)
-        override fun close() { runCatching { output.close() }; runCatching { toClient.close() } }
+        val closed = kotlinx.coroutines.CompletableDeferred<Unit>()
+        override fun close() { runCatching { output.close() }; runCatching { toClient.close() }; closed.complete(Unit) }
     }
 
     private fun frame(m: NetControl) = NetFrame(NetFrame.Queue.INTERACTIVE, false, 0, m.encoded()).encoded()
@@ -100,6 +102,21 @@ class NetConnectionTest {
         withTimeout(5_000) { link.ping()!!.await() }
         link.close("quit")
         assertEquals("quit", withTimeout(5_000) { link.ended.await() })
+        scope.cancel()
+    }
+
+    /** The dialer gave up mid-handshake (Join screen gone, the card still up on the Mac): the socket closes. */
+    @Test fun aCancelledHandshakeClosesTheSocket() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val pipe = Pipe()
+        // Challenges, then holds the hello, as a Mac whose owner hasn't answered the card.
+        pipe.toClient.write(frame(NetControl.Challenge("tailnet", serverId, hex(bind.s("nonceS")))))
+        val hello = kotlinx.coroutines.CompletableDeferred<Unit>()
+        thread(isDaemon = true) { pipe.fromClient.read(ByteArray(1)); hello.complete(Unit) }
+        val shaking = scope.async { NetConnection(pipe, session(), scope).handshake(60_000) }
+        withTimeout(5_000) { hello.await() }
+        shaking.cancel()
+        withTimeout(5_000) { pipe.closed.await() }
         scope.cancel()
     }
 

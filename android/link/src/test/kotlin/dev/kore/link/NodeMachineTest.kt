@@ -85,6 +85,20 @@ class NodeMachineTest {
         for (e in listOf(Event.Trigger, Event.PeerOnline, Event.Tick, Event.Failed, Event.Ended(null))) assertEquals(State.Removed, m.on(e, 1))
     }
 
+    @Test fun allowedAgainStartsOverFromRemovedOrDenied() {
+        for (bye in listOf("revoked", "refused", "quit")) {
+            val m = machine()
+            m.on(Event.Start, 0)
+            m.on(Event.Connected, 0)
+            m.on(Event.Ended(bye), 0)
+            assertEquals(State.Connecting, m.on(Event.Allowed, 1))
+            assertEquals(State.Up, m.on(Event.Connected, 2))
+        }
+        val up = machine().apply { on(Event.Start, 0); on(Event.Connected, 0) }
+        assertEquals(State.Up, up.on(Event.Allowed, 1))
+        assertEquals(State.Idle, machine().on(Event.Allowed, 0))
+    }
+
     @Test fun enrollingWaitsForAllowAndADropThereIsDenied() {
         val m = machine()
         m.on(Event.Start, 0)

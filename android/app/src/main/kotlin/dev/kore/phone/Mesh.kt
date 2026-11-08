@@ -150,6 +150,8 @@ class Mesh(private val app: KoreApp) {
         // The first link is the join's: end it, the node client makes its own.
         link.close()
         syncNodes()
+        // Joined again with a client already here (it was removed, or refused): it starts over.
+        node(mac.id)?.allowed(mac)
         apply()
     }
 

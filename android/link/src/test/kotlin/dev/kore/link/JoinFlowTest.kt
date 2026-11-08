@@ -36,11 +36,32 @@ class JoinFlowTest {
     }
 
     /** A flow over [tailnet]; [answer] says what each Mac does when dialled. */
-    private class Rig(scope: TestScope, val tailnet: FakeTailnet, val answer: suspend (TailnetNode, () -> Unit) -> LinkSession) {
+    private class Rig(
+        scope: TestScope, val tailnet: FakeTailnet,
+        /** What the app does with the join's link (Mesh ends it: its node client dials its own). */
+        onJoined: (LinkSession) -> Unit = {},
+        val answer: suspend (TailnetNode, () -> Unit) -> LinkSession,
+    ) {
         val knocks = mutableListOf<Pair<String, Long>>()
         var joined: LinkSession? = null
         val flow = JoinFlow(tailnet, { mac, enrolling -> knocks += mac.shortName to scope.testScheduler.currentTime; answer(mac, enrolling) },
-            scope.backgroundScope, { joined = it }, { scope.testScheduler.currentTime }, StandardTestDispatcher(scope.testScheduler))
+            scope.backgroundScope, { joined = it; onJoined(it) }, { scope.testScheduler.currentTime }, StandardTestDispatcher(scope.testScheduler))
+    }
+
+    /** The owner's allow: Home at once, though the app ends the join's link straight away (it was stuck on "Allow on"). */
+    @Test fun allowGoesHomeWhenTheAppEndsTheJoinLink() = runTest {
+        val tailnet = FakeTailnet(Tailnet.RUNNING).apply { me = this@JoinFlowTest.me; others = listOf(node("mbp")) }
+        val allowed = CompletableDeferred<Unit>()
+        val link = FakeLink(mac(), { testScheduler.currentTime }, strict = true)
+        val rig = Rig(this, tailnet, onJoined = { it.close() }) { _, enrolling -> enrolling(); allowed.await(); link }
+        rig.flow.visible(true)
+        rig.flow.begin()
+        runCurrent()
+        assertTrue(rig.flow.step.value is Step.Allowing)
+        allowed.complete(Unit)
+        runCurrent()
+        assertEquals(Step.Joined(mac()), rig.flow.step.value)
+        assertEquals("quit", link.ended.getCompleted())
     }
 
     @Test fun signInThenFindThenAllowThenHome() = runTest {

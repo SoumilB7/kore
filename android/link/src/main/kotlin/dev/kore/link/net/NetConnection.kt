@@ -74,11 +74,17 @@ class NetConnection(
     suspend fun handshake(windowMs: Long = NetClientSession.CLIENT_WINDOW_MS, helloSent: () -> Unit = {}): LinkSession {
         scope.launch(io) { readLoop(helloSent) }
         scope.launch(io) { writeLoop() }
-        val peer = withTimeoutOrNull(windowMs) {
-            kotlinx.coroutines.selects.select {
-                established.onAwait { it }
-                endedDeferred.onAwait { null }
+        val peer = try {
+            withTimeoutOrNull(windowMs) {
+                kotlinx.coroutines.selects.select<NetClientSession.State.Established.Peer?> {
+                    established.onAwait { it }
+                    endedDeferred.onAwait { null }
+                }
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // The dialer gave up (the Join screen went away): no link left open that nobody holds.
+            close()
+            throw e
         }
         if (peer == null) {
             val reason = if (endedDeferred.isCompleted) endedDeferred.getCompleted() else NetControl.Companion.Reason.TIMEOUT

@@ -129,6 +129,7 @@ class NodeClient(
         class LinkDown(val link: LinkSession, val reason: String?) : Internal()
         class DialFailed(val error: Throwable) : Internal()
         data object Enrolling : Internal()
+        class Allowed(val record: Device) : Internal()
     }
 
     private val events = Channel<Any>(Channel.UNLIMITED)
@@ -151,6 +152,14 @@ class NodeClient(
     fun start() {
         if (actor == null) actor = scope.launch { run() }
         events.trySend(NodeMachine.Event.Start)
+    }
+
+    /**
+     * The node welcomed this phone through Join (a new enroll, allowed): whatever it said before
+     * (revoked, refused) is over, and the old resume ticket with it; it dials at once.
+     */
+    fun allowed(record: Device) {
+        events.trySend(Internal.Allowed(record))
     }
 
     /** Stops dialing and ends the link (the app went off screen with background mode off). */
@@ -208,6 +217,11 @@ class NodeClient(
                 )
             }
             Internal.Enrolling -> machine.on(NodeMachine.Event.Enrolling, clock())
+            is Internal.Allowed -> {
+                ticket = null
+                if (event.record != deviceFlow.value) deviceFlow.value = event.record
+                machine.on(NodeMachine.Event.Allowed, clock())
+            }
             NodeMachine.Event.Stop, NodeMachine.Event.SignedOut -> {
                 dialing?.cancel()
                 dialing = null
