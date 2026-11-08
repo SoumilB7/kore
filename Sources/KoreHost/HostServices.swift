@@ -23,8 +23,17 @@ package final class HostServices: ChatServices {
 
     package init() {}
 
-    package static func instructions(host: String) -> String {
-        "This chat runs on \(host), a Linux machine, through kore-host. The user sees it as a tab in Kore on their Mac. "
+    /// What kind of machine the CLIs are told they're on.
+    nonisolated package static var machine: String {
+        #if os(macOS)
+        "a Mac"
+        #else
+        "a Linux machine"
+        #endif
+    }
+
+    nonisolated package static func instructions(host: String, machine: String = machine) -> String {
+        "This chat runs on \(host), \(machine), through kore-host. The user sees it as a tab in Kore on their Mac. "
             + "Kore's own tools (new tabs, other chats) aren't available here."
     }
 

@@ -22,7 +22,9 @@ let usage = """
            kore-host status
            kore-host attach --as <name>
            kore-host install-service
+           kore-host start
            kore-host uninstall [--purge]
+           kore-host facts
            kore-host --version
     """
 
@@ -102,21 +104,37 @@ case "attach":
     guard let grant = grants.load(arguments[2]) else { fail("kore-host: no grant named \(arguments[2])", code: AttachExit.noGrant.rawValue) }
     signal(SIGPIPE, SIG_IGN)
     MainActor.assumeIsolated {
-        do {
-            let attach = try Attach(grant: grant, socket: paths.socket) { code in exit(code) }
-            attach.start()
-            keep.append(attach)
-        } catch {
-            fail("kore-host isn't running (systemctl --user start kore-host)", code: AttachExit.notRunning.rawValue)
+        @MainActor func connect() -> Attach? { try? Attach(grant: grant, socket: paths.socket) { code in exit(code) } }
+        var attach = connect()
+        // Without systemd, nothing else starts the daemon: the first attach does, and it stays.
+        if attach == nil, let kind = HostService.installed(paths) {
+            HostService.start(kind, executable: HostService.executable(), home: home, paths: paths)
+            if HostService.waitForDaemon(paths) { attach = connect() }
         }
+        guard let attach else {
+            let how = HostService.installed(paths) == nil ? " (systemctl --user start kore-host)" : " (see \(paths.state.path)/kore-host.log)"
+            fail("kore-host isn't running" + how, code: AttachExit.notRunning.rawValue)
+        }
+        attach.start()
+        keep.append(attach)
     }
     dispatchMain()
 case "install-service":
     do {
-        for line in try HostService.install(executable: HostService.executable(), home: home, user: HostService.user()) { print(line) }
+        let kind = HostService.kind()
+        for line in try HostService.install(kind, executable: HostService.executable(), home: home, user: HostService.user(), paths: paths) { print(line) }
     } catch { fail("kore-host: \(error)") }
+case "start":
+    let kind = HostService.installed(paths)
+    guard HostService.start(kind, executable: HostService.executable(), home: home, paths: paths) else {
+        fail("kore-host: systemctl --user start kore-host failed (see `journalctl --user -u kore-host`)")
+    }
+    print(HostService.waitForDaemon(paths) ? "kore-host is running" : "kore-host is starting")
+case "facts":
+    // Names only, never a value from inside a config: the Mac compares them with its own.
+    print(String(decoding: AgentFacts.read(home: home).json(), as: UTF8.self))
 case "uninstall":
-    var lines = HostService.uninstall(home: home)
+    var lines = HostService.uninstall(home: home, paths: paths)
     if arguments.contains("--purge") { lines += HostService.purge(paths) }
     for line in lines { print(line) }
     print("the binary stays at \(HostService.executable()): delete it to finish")

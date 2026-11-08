@@ -57,6 +57,7 @@ struct OpsTests {
         let env = [
             "HOME": home.path, "PATH": bin.path + ":/usr/bin:/bin", "XDG_STATE_HOME": root.appendingPathComponent("state").path,
             "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
+            "KORE_HOST_SERVICE": "systemd",
         ]
         let unit = HostService.unitFile(home: home)
         let realUnit = HostService.unitFile(home: URL(fileURLWithPath: NSHomeDirectory()))
@@ -234,6 +235,159 @@ struct OpsTests {
         #expect(purged.count == 2)
         #expect(!FileManager.default.fileExists(atPath: paths.state.path))
         #expect(!FileManager.default.fileExists(atPath: paths.config.path))
+    }
+
+    // MARK: launchd and on demand
+
+    private static func paths(_ root: URL) -> HostPaths {
+        HostPaths(environment: [
+            "HOME": root.path, "XDG_STATE_HOME": root.appendingPathComponent("state").path,
+            "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
+        ])
+    }
+
+    @Test func theKindIsForcedByTheEnvironmentElseTheMachines() {
+        #expect(HostService.kind(environment: ["KORE_HOST_SERVICE": "on-demand"]) { _ in HostRan(status: 0) } == .onDemand)
+        #expect(HostService.kind(environment: ["KORE_HOST_SERVICE": "systemd"]) { _ in HostRan(status: 1) } == .systemd)
+        #if os(macOS)
+        #expect(HostService.kind(environment: [:]) { _ in HostRan(status: 127) } == .launchd)
+        #else
+        #expect(HostService.kind(environment: [:]) { _ in HostRan(status: 0) } == .systemd)
+        // systemctl there, but no user manager answers (a container): on demand.
+        #expect(HostService.kind(environment: [:]) { _ in HostRan(status: 1, output: "Failed to connect to bus") } == .onDemand)
+        #endif
+    }
+
+    @Test func aMacGetsALaunchAgentLoadedInItsSessionAndRemovedAgain() throws {
+        let home = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let paths = Self.paths(home)
+        let ran = Lines()
+        let lines = try HostService.install(.launchd, executable: "/Users/u/.local/bin/kore-host", home: home, user: "u", paths: paths) { args in
+            ran.add(args.joined(separator: " "))
+            // No desktop session (an ssh login): the user's own domain.
+            return HostRan(status: args.starts(with: ["launchctl", "print"]) ? 113 : 0)
+        }
+        let uid = getuid()
+        let file = HostService.agentFile(home: home)
+        #expect(ran.all == ["launchctl print gui/\(uid)", "launchctl bootout user/\(uid)/dev.kore.kore-host", "launchctl bootstrap user/\(uid) \(file.path)"])
+        #expect(lines == ["installed \(file.path)", "kore-host is running (/Users/u/.local/bin/kore-host)"])
+        let plist = try #require(PropertyListSerialization.propertyList(from: Data(contentsOf: file), format: nil) as? [String: Any])
+        #expect(plist["ProgramArguments"] as? [String] == ["/Users/u/.local/bin/kore-host", "run"])
+        #expect((plist["EnvironmentVariables"] as? [String: String])?["PATH"]?.hasPrefix(home.path + "/.local/bin:") == true)
+        #expect((plist["KeepAlive"] as? [String: Bool])?["SuccessfulExit"] == false)
+        #expect(HostService.installed(paths) == .launchd)
+        let gone = Lines()
+        let removed = HostService.uninstall(home: home, paths: paths) { args in
+            gone.add(args.joined(separator: " "))
+            return HostRan(status: 0)
+        }
+        #expect(gone.all.contains("launchctl bootout gui/\(uid)/dev.kore.kore-host"))
+        #expect(removed.contains("removed \(file.path)"))
+        #expect(!FileManager.default.fileExists(atPath: file.path))
+        #expect(HostService.installed(paths) == nil)
+        #expect(throws: HostServiceError.self) { try HostService.agent(executable: "kore-host", home: home, log: home) }
+    }
+
+    @Test func launchdRefusingFallsBackToStartingOnDemand() throws {
+        let home = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let paths = Self.paths(home)
+        let ran = Lines()
+        let lines = try HostService.install(.launchd, executable: "/opt/kore-host", home: home, user: "u", paths: paths) { args in
+            ran.add(args.joined(separator: " "))
+            return HostRan(status: args.starts(with: ["launchctl", "bootstrap"]) ? 5 : 0, output: "Bootstrap failed: 5: Input/output error")
+        }
+        #expect(lines.first?.hasPrefix("launchd refused kore-host") == true)
+        #expect(lines.contains("no service manager here: kore-host starts when Kore connects"))
+        #expect(HostService.installed(paths) == .onDemand)
+        // Started now, detached, its lines in the state folder.
+        let spawned = try #require(ran.all.last)
+        #expect(spawned.hasPrefix("sh -c "))
+        #expect(spawned.contains("nohup \"$0\" run"))
+        #expect(spawned.hasSuffix(" /opt/kore-host \(paths.state.path)/kore-host.log"))
+    }
+
+    @Test func noServiceManagerStartsOnDemandAndStartSaysHowEachKindStarts() throws {
+        let home = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: home) }
+        let paths = Self.paths(home)
+        let ran = Lines()
+        let record: HostRunner = { args in
+            ran.add(args.prefix(2).joined(separator: " "))
+            return HostRan(status: 0)
+        }
+        let lines = try HostService.install(.onDemand, executable: "/opt/kore-host", home: home, user: "u", paths: paths, run: record)
+        #expect(lines == ["no service manager here: kore-host starts when Kore connects", "kore-host is running (/opt/kore-host)"])
+        #expect(ran.all == ["sh -c"])
+        #expect(HostService.start(.onDemand, executable: "/opt/kore-host", home: home, paths: paths, run: record))
+        #expect(HostService.start(nil, executable: "/opt/kore-host", home: home, paths: paths, run: record))
+        #expect(ran.all == ["sh -c", "sh -c", "systemctl --user"])
+        // A systemd install over it forgets the on-demand kind.
+        _ = try HostService.install(.systemd, executable: "/opt/kore-host", home: home, user: "u", paths: paths) { _ in HostRan(status: 0, output: "yes") }
+        #expect(HostService.installed(paths) == nil)
+    }
+
+    @Test(.enabled(if: binary != nil)) func onDemandTheFirstAttachStartsTheDaemonAndUninstallStopsIt() throws {
+        let root = try Self.scratch()
+        let env = [
+            "HOME": root.path, "XDG_STATE_HOME": root.appendingPathComponent("state").path,
+            "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
+            "KORE_HOST_SERVICE": "on-demand", "PATH": "/usr/bin:/bin",
+        ]
+        let paths = HostPaths(environment: env)
+        defer {
+            _ = try? Self.run(["uninstall", "--purge"], env: env)
+            try? FileManager.default.removeItem(at: root)
+        }
+        #expect(try Self.run(["install-service"], env: env).0 == 0)
+        #expect(HostService.waitForDaemon(paths))
+        // Stopped by hand: the next attach starts it again.
+        let pid = try #require(Int32(String(contentsOf: paths.pid, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
+        kill(pid, SIGTERM)
+        for _ in 0..<50 where HostLock.held(paths.lock) { usleep(100_000) }
+        #expect(!HostLock.held(paths.lock))
+        #expect(try Self.run(["allow", "mac", "--control", "full"], env: env).0 == 0)
+        let attached = try Self.run(["attach", "--as", "mac"], env: env)
+        #expect(attached.0 == AttachExit.ended.rawValue)
+        #expect(HostLock.held(paths.lock))
+        #expect(try Self.run(["uninstall"], env: env).0 == 0)
+        #expect(!HostLock.held(paths.lock))
+    }
+
+    @Test func factsAreNamesOnlyFromEachCLIsOwnFiles() throws {
+        let home = try Self.scratch()
+        defer { try? FileManager.default.removeItem(at: home) }
+        func write(_ path: String, _ text: String) throws {
+            let url = home.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(text.utf8).write(to: url)
+        }
+        try write(".claude.json", #"{"mcpServers": {"linear": {"env": {"TOKEN": "s3cret"}}, "files": {}}, "projects": {}}"#)
+        try write(".claude/settings.json", #"{"model": "opus", "enabledPlugins": {"a@m": true, "b@m": false}}"#)
+        try write(".claude/skills/review/SKILL.md", "x")
+        try write(".claude/skills/empty/notes.txt", "x")
+        try write(".claude/agents/planner.md", "x")
+        try write(".codex/config.toml", "model = \"gpt-6\"\n[mcp_servers.linear]\ncommand = \"x\"\n[mcp_servers.linear.env]\nTOKEN = \"s3cret\"\n[mcp_servers.\"a.b\"]\n[profiles.x]\nmodel = \"other\"\n")
+        let facts = AgentFacts.read(home: home, environment: [:])
+        #expect(facts.claudeMCP == ["files", "linear"])
+        #expect(facts.claudePlugins == ["a@m"])
+        #expect(facts.claudeModel == "opus")
+        #expect(facts.claudeSkills == ["review"])
+        #expect(facts.claudeAgents == ["planner"])
+        #expect(facts.codexMCP == ["a.b", "linear"])
+        #expect(facts.codexModel == "gpt-6")
+        #expect(!String(decoding: facts.json(), as: UTF8.self).contains("s3cret"))
+        #expect(AgentFacts.read(home: home.appendingPathComponent("none"), environment: [:]) == AgentFacts())
+    }
+
+    @Test func theCLIsAreToldWhatKindOfMachineThisIs() {
+        #expect(HostServices.instructions(host: "mini", machine: "a Mac").hasPrefix("This chat runs on mini, a Mac, through kore-host."))
+        #if os(macOS)
+        #expect(HostServices.machine == "a Mac")
+        #else
+        #expect(HostServices.machine == "a Linux machine")
+        #endif
     }
 
     // MARK: Journal and status

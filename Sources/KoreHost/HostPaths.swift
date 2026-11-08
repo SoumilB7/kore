@@ -23,9 +23,41 @@ package struct HostPaths: Sendable {
         runtimeProblem = nil
         #else
         state = (xdg("XDG_STATE_HOME") ?? home.appendingPathComponent(".local/state")).appendingPathComponent("kore-host")
-        (runtime, runtimeProblem) = Self.runtimeFolder(xdg: env["XDG_RUNTIME_DIR"], uid: uid, runUser: runUser)
+        if Self.startsOnDemand(state) {
+            // No service manager: the daemon and every command agree on a folder of its own,
+            // whatever session (or none) each runs in.
+            (runtime, runtimeProblem) = (state.appendingPathComponent("run"), nil)
+        } else {
+            (runtime, runtimeProblem) = Self.runtimeFolder(xdg: env["XDG_RUNTIME_DIR"], uid: uid, runUser: runUser)
+        }
         #endif
         config = (xdg("XDG_CONFIG_HOME") ?? home.appendingPathComponent(".config")).appendingPathComponent("kore-host/config.json")
+    }
+
+    private init(config: URL, state: URL, runtime: URL) {
+        self.config = config
+        self.state = state
+        self.runtime = runtime
+        runtimeProblem = nil
+    }
+
+    /// These paths as an on-demand daemon has them (its runtime folder under the state).
+    package var onDemand: HostPaths {
+        #if os(macOS)
+        self
+        #else
+        HostPaths(config: config, state: state, runtime: state.appendingPathComponent("run"))
+        #endif
+    }
+
+    /// How kore-host was installed here when it isn't a systemd unit: `launchd` or `on-demand`
+    /// (`HostService.Kind`), in `state/service`. Nothing there for systemd.
+    package var serviceKind: URL { Self.serviceKind(state) }
+    static func serviceKind(_ state: URL) -> URL { state.appendingPathComponent("service") }
+
+    /// Whether `install-service` found no service manager here, so `attach` starts the daemon.
+    static func startsOnDemand(_ state: URL) -> Bool {
+        (try? String(contentsOf: serviceKind(state), encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) == "on-demand"
     }
 
     /// This user's home: `$HOME` first, as a shell sets it (and a test or a scratch run overrides
