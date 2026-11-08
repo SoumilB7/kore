@@ -309,6 +309,177 @@ final class TabOverflow: ChatStoryline {
     }
 }
 
+/// Eleven chat tabs with long names, the window narrowed from wide to small 20 points at a time:
+/// every tab wholly in view shows at least the first few characters of its name, its title
+/// taking the tab's room to its end (an inactive tab keeps nothing back for its hidden ×); the
+/// active one's name shows before the strip once the tabs show first letters; and once even
+/// those won't fit, the strip scrolls, `»N` counting the rest. Never a letter or two beside
+/// empty room. Each width's numbers go to `tab-fit.txt`, three widths' windows to snapshots.
+final class TabFit: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    /// The owner's tabs the day the strip cut them to two letters.
+    static let titles = [
+        "CM-main-review", "CM-MP sync", "CM-data checks", "Ncdex sync", "Evidence portal", "Orders plan",
+        "MP_ACCESS fix", "Bugs-list", "Helm chart", "Asana import", "Bugs triage",
+    ]
+    /// The fewest characters of its name a tab in view shows: its mark and four.
+    static let least = 4
+    static let widths: [CGFloat] = Array(stride(from: 1800, through: 640, by: -20))
+    static let shots: Set<CGFloat> = [1340, 1440, 1560]
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            OpenTabs(Self.titles.count - 1),
+            Do("Name the tabs") { story in
+                guard let workspace = story.app.workspace else { throw StoryFailure.modelMissing("the workspace") }
+                for (tab, title) in zip(workspace.tabs, Self.titles) { tab.chat?.adoptName(title) }
+            },
+            Expect("eleven named tabs") { story in story.app.workspace?.tabs.map(\.title) == Self.titles },
+            FitAcross(widths: Self.widths, least: Self.least, shots: Self.shots),
+            Do("Restore the window size") { story in story.window?.setContentSize(story.windowSize) },
+        ]
+    }
+}
+
+/// Sets each window width in turn, waits for the title row to settle, and checks the tabs in view.
+private struct FitAcross: Step {
+    let widths: [CGFloat]
+    let least: Int
+    let shots: Set<CGFloat>
+    var label: String { "Narrow the window from \(Int(widths.first ?? 0)) to \(Int(widths.last ?? 0)), reading every tab's title" }
+    var timeout: Duration? { .seconds(120) }
+
+    func run(_ story: StoryContext) async throws {
+        guard let window = story.window else { throw StoryFailure.modelMissing("the window") }
+        var lines: [String] = []
+        var problems: [String] = []
+        for width in widths {
+            window.setContentSize(CGSize(width: width, height: story.windowSize.height))
+            let fit = try await TabFitReading.settled(story, width: width)
+            lines.append("\(Int(width)): " + fit.line)
+            problems += fit.problems(least).map { "\(Int(width)): \($0)" }
+            if shots.contains(width) { try await Snapshot("width-\(Int(width))").run(story) }
+        }
+        try lines.joined(separator: "\n").write(to: story.outputs.appendingPathComponent("tab-fit.txt"), atomically: true, encoding: .utf8)
+        guard problems.isEmpty else {
+            throw StoryFailure.expectation(
+                "every tab in view showing \(least)+ characters of its name, nothing kept back (\(problems.count) problems): "
+                    + problems.prefix(6).joined(separator: "; "))
+        }
+    }
+}
+
+/// The title row as drawn: the tabs wholly in the strip, the room each one's title got, the
+/// active name before the strip, and `»N`.
+@MainActor
+struct TabFitReading: Equatable {
+    struct Tab: Equatable {
+        let title: String
+        let active: Bool
+        /// The tab with its ×, and its title's room.
+        let frame: CGRect
+        let room: CGRect?
+    }
+
+    var count = 0
+    var strip = CGRect.zero
+    var tabs: [Tab] = []
+    var name: CGRect?
+    var counted: Int?
+    var controls = ""
+
+    static func read(_ story: StoryContext) -> TabFitReading {
+        var reading = TabFitReading()
+        guard let workspace = story.app.workspace, let strip = StoryElement(StoryID.Tabs.strip)?.frame else { return reading }
+        reading.count = workspace.tabs.count
+        reading.strip = strip
+        for (i, tab) in workspace.tabs.enumerated() {
+            guard let id = workspace.storyTabID(at: i), let frames = StripCheck.frames(story, i + 1), StripCheck.inside(frames.tab, frames.strip)
+            else { continue }
+            reading.tabs.append(Tab(title: tab.title, active: tab === workspace.activeTab, frame: frames.tab, room: StoryElement(id.part(.title))?.frame))
+        }
+        reading.name = StoryElement(StoryID.Titlebar.tabName)?.frame
+        reading.counted = StoryElement(StoryID.Titlebar.overflow) == nil ? nil : StripCheck.shownCount()
+        let named: [(String, StoryID)] = [("+", StoryID.Titlebar.newtab), ("agents", StoryID.Titlebar.agents), ("history", StoryID.Titlebar.history)]
+        reading.controls = named.compactMap { label, id in StoryElement(id)?.frame.map { "\(label) \(Int($0.minX))+\(Int($0.width))" } }.joined(separator: ", ")
+        return reading
+    }
+
+    /// The reading once the same one has held for 100 ms (a resize lays out over a few passes).
+    static func settled(_ story: StoryContext, width: CGFloat) async throws -> TabFitReading {
+        final class Last {
+            var reading: TabFitReading?
+            var since = ContinuousClock.now
+        }
+        let last = Last()
+        return try await story.wait("the title row to settle at \(Int(width))") {
+            let now = read(story)
+            if now != last.reading {
+                last.reading = now
+                last.since = .now
+                return nil
+            }
+            return ContinuousClock.now - last.since >= .milliseconds(100) && !now.tabs.isEmpty ? now : nil
+        }
+    }
+
+    /// While the tabs show their names, a cut name ends in an ellipsis; first letters are clipped.
+    var named: Bool { name == nil }
+
+    /// What's wrong: a tab showing fewer than `least` characters of its name (the active one's
+    /// name before the strip, when there), an inactive tab's cut name stopping short of its end,
+    /// or tabs out of view with no `»N` counting them.
+    func problems(_ least: Int) -> [String] {
+        var problems: [String] = []
+        for tab in tabs {
+            if tab.active, let name {
+                let shown = Self.visible(tab.title, in: name.width - 6, ellipsis: true)
+                if shown < min(least, tab.title.count) { problems.append("the active name before the strip shows \(shown) characters in \(Int(name.width))") }
+                continue
+            }
+            guard let room = tab.room else {
+                problems.append("“\(tab.title)” shows no name (tab \(Int(tab.frame.width)))")
+                continue
+            }
+            let shown = Self.visible(tab.title, in: room.width, ellipsis: named)
+            if shown < min(least, tab.title.count) {
+                problems.append("“\(tab.title)” shows \(shown) characters in \(fmt(room.width)) of a \(fmt(tab.frame.width)) tab")
+            }
+            let kept = tab.frame.maxX - room.maxX
+            if !tab.active, shown < tab.title.count, kept > 8.5 {
+                problems.append("“\(tab.title)” keeps \(fmt(kept)) back after its cut name")
+            }
+        }
+        let out = count - tabs.count
+        if out > 0, counted != out { problems.append("\(out) tabs out of view, »\(counted.map(String.init) ?? "none")") }
+        return problems
+    }
+
+    /// One width's numbers: the strip, the tabs' width and the title room an inactive one got,
+    /// how many show, the fewest characters any shows, and the controls after the strip.
+    var line: String {
+        let inactive = tabs.first { !$0.active }
+        let fewest = tabs.filter { !$0.active }.compactMap { tab in tab.room.map { (Self.visible(tab.title, in: $0.width, ellipsis: named), tab.title) } }.min { $0.0 < $1.0 }
+        return "strip \(fmt(strip.width)), \(named ? "names" : "letters, name \(fmt(name?.width ?? 0))"), tab \(fmt(inactive?.frame.width ?? 0)), "
+            + "room \(fmt(inactive?.room?.width ?? 0)), \(tabs.count)/\(count) in view\(counted.map { ", »\($0)" } ?? ""), "
+            + "fewest \(fewest.map { "\($0.0) (\($0.1))" } ?? "-"); \(controls)"
+    }
+
+    private func fmt(_ v: CGFloat) -> String { String(format: "%.1f", v) }
+
+    /// How many whole characters of `title` show in `width` at the tabs' 13 pt: cut with an
+    /// ellipsis after them, or clipped.
+    static func visible(_ title: String, in width: CGFloat, ellipsis: Bool) -> Int {
+        let font = NSFont.systemFont(ofSize: 13)
+        func measure(_ s: String) -> CGFloat { (s as NSString).size(withAttributes: [.font: font]).width }
+        if measure(title) <= width + 0.5 { return title.count }
+        let dots = ellipsis ? measure("…") : 0
+        var shown = 0
+        for k in 1..<max(title.count, 1) where measure(String(title.prefix(k))) + dots <= width + 0.5 { shown = k }
+        return shown
+    }
+}
+
 /// ⌘W on the last tab, made the active one: it closes.
 private struct CloseLast: Step {
     var label: String { "Close the last tab" }

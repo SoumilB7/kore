@@ -54,6 +54,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case input
         /// A hover card, while it shows.
         case card
+        /// A tab's title: the room its name gets in the strip.
+        case title
     }
 }
 
