@@ -729,3 +729,56 @@ extension AgentID {
         return nil
     }
 }
+
+extension Approval {
+    enum CodingKeys: String, CodingKey {
+        case id, title, detail, body, canAlwaysAllow, questions, plan, changes, agent, signIn, alwaysAllowNote, tool, targets, held,
+            allowNote, autoStop, retryMessage, exactRule
+    }
+
+    // Written by hand only so `autoStop` (0.3.3) is optional on the wire: an older box or phone
+    // sends approvals without it, and a card that isn't one leaves it out.
+    package init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        detail = try c.decodeIfPresent(String.self, forKey: .detail)
+        body = try c.decodeIfPresent(String.self, forKey: .body)
+        canAlwaysAllow = try c.decode(Bool.self, forKey: .canAlwaysAllow)
+        questions = try c.decode([Question].self, forKey: .questions)
+        plan = try c.decodeIfPresent(String.self, forKey: .plan)
+        changes = try c.decodeIfPresent([FileChange].self, forKey: .changes) ?? []
+        agent = try c.decodeIfPresent(AgentID.self, forKey: .agent) ?? .main
+        signIn = try c.decodeIfPresent(Bool.self, forKey: .signIn) ?? false
+        alwaysAllowNote = try c.decodeIfPresent(String.self, forKey: .alwaysAllowNote)
+        tool = try c.decodeIfPresent(String.self, forKey: .tool)
+        targets = try c.decodeIfPresent([String].self, forKey: .targets)
+        held = try c.decodeIfPresent([HeldSender].self, forKey: .held)
+        allowNote = try c.decodeIfPresent(String.self, forKey: .allowNote)
+        autoStop = try c.decodeIfPresent(Bool.self, forKey: .autoStop) ?? false
+        retryMessage = try c.decodeIfPresent(String.self, forKey: .retryMessage)
+        exactRule = try c.decodeIfPresent(String.self, forKey: .exactRule)
+    }
+
+    package func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encodeIfPresent(detail, forKey: .detail)
+        try c.encodeIfPresent(body, forKey: .body)
+        try c.encode(canAlwaysAllow, forKey: .canAlwaysAllow)
+        try c.encode(questions, forKey: .questions)
+        try c.encodeIfPresent(plan, forKey: .plan)
+        try c.encode(changes, forKey: .changes)
+        try c.encode(agent, forKey: .agent)
+        try c.encode(signIn, forKey: .signIn)
+        try c.encodeIfPresent(alwaysAllowNote, forKey: .alwaysAllowNote)
+        try c.encodeIfPresent(tool, forKey: .tool)
+        try c.encodeIfPresent(targets, forKey: .targets)
+        try c.encodeIfPresent(held, forKey: .held)
+        try c.encodeIfPresent(allowNote, forKey: .allowNote)
+        if autoStop { try c.encode(autoStop, forKey: .autoStop) }
+        try c.encodeIfPresent(retryMessage, forKey: .retryMessage)
+        try c.encodeIfPresent(exactRule, forKey: .exactRule)
+    }
+}
