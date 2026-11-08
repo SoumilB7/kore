@@ -41,7 +41,7 @@ package enum AgentSecrets {
 
     private static func regex(_ pattern: String) -> NSRegularExpression {
         // Fixed patterns, checked by the tests: one that didn't compile matches nothing.
-        (try? NSRegularExpression(pattern: pattern)) ?? NSRegularExpression()
+        (try? NSRegularExpression(pattern: pattern)) ?? (try! NSRegularExpression(pattern: "(?!)"))
     }
 
     package static func mask(_ text: String) -> String {
