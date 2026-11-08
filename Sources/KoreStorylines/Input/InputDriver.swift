@@ -320,6 +320,9 @@ package final class InputDriver {
         let clip = scrollView.contentView
         let center = NotificationCenter.default
         center.post(name: NSScrollView.willStartLiveScrollNotification, object: scrollView)
+        // A pass before the move, as a scroller's drag goes: SwiftUI can put the offset back where
+        // the interaction began when it begins in the same turn as the move.
+        await pass()
         clip.scroll(to: CGPoint(x: clip.bounds.origin.x, y: y))
         scrollView.reflectScrolledClipView(clip)
         center.post(name: NSScrollView.didLiveScrollNotification, object: scrollView)
