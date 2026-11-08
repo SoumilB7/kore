@@ -140,7 +140,7 @@ package struct CarryJournals: Sendable {
         return found.sorted { $0.updated < $1.updated }
     }
 
-    private func read(_ url: URL) -> CarryJournal? {
+    func read(_ url: URL) -> CarryJournal? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .secondsSince1970

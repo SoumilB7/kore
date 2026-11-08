@@ -14,6 +14,15 @@ struct BoxPlace: Codable, Hashable {
     var folder: String?
 }
 
+extension BoxPlace {
+    /// A window restored from before its box was rekeyed opens under the box's id now.
+    init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        alias = NodeRenames().map(try c.decode(String.self, forKey: .alias))
+        folder = try c.decodeIfPresent(String.self, forKey: .folder)
+    }
+}
+
 /// One box folder's window: its connection, its chats made and closed there, and the title row's
 /// one cue.
 @MainActor
