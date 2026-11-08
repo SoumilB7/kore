@@ -42,7 +42,11 @@ import kotlinx.serialization.json.JsonObject
 class Mesh(private val app: KoreApp) {
     private val prefs = app.getSharedPreferences("kore", android.content.Context.MODE_PRIVATE)
 
-    val tailnet: Tailnet by lazy { EmbeddedTailnet(app, hostname()).also { it.onNetworkChanged = { nodes.value.forEach(NodeClient::reconnectNow) } } }
+    /** A stand-in's (a debug build's demo), else the phone's own embedded one. */
+    private val standIn = StandIns.current
+    val tailnet: Tailnet by lazy {
+        standIn?.tailnet ?: EmbeddedTailnet(app, hostname()).also { it.onNetworkChanged = { nodes.value.forEach(NodeClient::reconnectNow) } }
+    }
     val raiseKey = RaiseKey({ app.frontActivity }, ::renewRaiseKey)
     private val raiseSigner = SingleFlight(raiseKey)
 
@@ -57,7 +61,7 @@ class Mesh(private val app: KoreApp) {
         PhoneIdentity(deviceId, IdentityKey, name, Build.MODEL ?: "Android", runCatching { raiseKey.publicKey }.getOrNull())
 
     private val bookFile = File(app.noBackupFilesDir, "devices.json")
-    val book = DeviceBook(load(), ::save)
+    val book = DeviceBook(standIn?.devices ?: load()) { if (standIn == null) save(it) }
     val dialer by lazy { NetDialer(tailnet, ::identity, app.scope) }
     private val switch by lazy { TailnetSwitch(tailnet) }
     val join by lazy {
@@ -198,7 +202,7 @@ class Mesh(private val app: KoreApp) {
         val have = nodesFlow.value.associateBy { it.id }
         val next = devices.map { d ->
             have[d.id]?.also { if (it.device.value != d) it.recordChanged(d) } ?: NodeClient(
-                d, app.scope, dialer, raiseSigner = raiseSigner,
+                d, app.scope, standIn?.dialer ?: dialer, raiseSigner = raiseSigner,
                 onRecord = { book.put(it) },
                 onDirectory = { records ->
                     book.applyDirectory(d.id, deviceId, records)

@@ -133,20 +133,24 @@ object DocViews {
 
         private fun columns(): Int = maxOf(header.size, rows.maxOfOrNull { it.size } ?: 0)
 
-        /** Each column's one-line width: its widest cell, padding included. */
-        private fun natural(): List<Int> {
+        /** Each column's one-line width (its widest cell) and longest word, padding included. */
+        private fun measure(): Pair<List<Int>, List<Int>> {
             val paint = TextView(context).apply { textSize = CELL_SP }.paint
             val bold = TextView(context).apply { textSize = CELL_SP; setTypeface(typeface, Typeface.BOLD) }.paint
-            return (0 until columns()).map { c ->
-                val cells = listOfNotNull(header.getOrNull(c)?.let { bold.measureText(it.toString()) }) +
-                    rows.mapNotNull { it.getOrNull(c)?.let { cell -> paint.measureText(cell.toString()) } }
-                (cells.maxOrNull() ?: 0f).toInt() + 2 * pad + 1
+            val natural = ArrayList<Int>()
+            val words = ArrayList<Int>()
+            for (c in 0 until columns()) {
+                val cells = listOfNotNull(header.getOrNull(c)?.let { it.toString() to bold }) + rows.mapNotNull { it.getOrNull(c)?.let { cell -> cell.toString() to paint } }
+                natural += (cells.maxOfOrNull { (t, p) -> p.measureText(t) } ?: 0f).toInt() + 2 * pad + 1
+                words += (cells.maxOfOrNull { (t, p) -> t.split(' ', '\n').maxOfOrNull { w -> p.measureText(w) } ?: 0f } ?: 0f).toInt() + 2 * pad + 1
             }
+            return natural to words
         }
 
         private fun build(width: Int) {
             removeAllViews()
-            when (val fit = TableFit.fit(natural(), width, context.dp(COL_MIN))) {
+            val (natural, words) = measure()
+            when (val fit = TableFit.fit(natural, words, width, context.dp(COL_MIN))) {
                 is TableFit.Fit.Grid -> grid(fit.widths)
                 TableFit.Fit.Stacked -> stacked()
             }

@@ -115,7 +115,7 @@ class HomeActivity : Activity() {
             val trouble = troubleWords(s, n.device.value.kind == NodeKind.MAC, n.name, mac)
             val fact = when {
                 trouble != null -> trouble.fact
-                up || (s == NodeMachine.State.Connecting && snap != null) -> "${chats.size} chats" + if (running > 0) " · $running running" else ""
+                up || (s == NodeMachine.State.Connecting && snap != null) -> (if (chats.size == 1) "1 chat" else "${chats.size} chats") + if (running > 0) " · $running running" else ""
                 s is NodeMachine.State.Away -> awayFact(s.why, n.name, mac, n.lastSeen)
                 else -> stateWords(s, mac).first.removePrefix("● ").lowercase()
             }
@@ -131,7 +131,7 @@ class HomeActivity : Activity() {
         minimumHeight = dp(48)
         setPadding(dp(14), 0, dp(14), 0)
         background = rounded(Color.parseColor("#2A2618"), 12)
-        addView(label("${cue.count} need you", 14f, K.warn).apply { typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL) })
+        addView(label((if (cue.count == 1) "1 needs you" else "${cue.count} need you"), 14f, K.warn).apply { typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL) })
         addView(label("${cue.title} · ${cue.nodeName}", 12.5f, K.dim).apply {
             gravity = Gravity.END
             maxLines = 1

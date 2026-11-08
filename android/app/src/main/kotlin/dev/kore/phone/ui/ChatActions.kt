@@ -847,10 +847,18 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         sheetScroll.visibility = View.VISIBLE
         val cardId = card.str("id") ?: return
         sheet.addView(activity.label(card.str("title") ?: "Needs you", 15f, K.text, bold = true))
-        (card.str("detail") ?: card.str("body"))?.let { body ->
-            sheet.addView(activity.label(body.take(600), 13f, K.dim, mono = card.str("kind") == "permission").apply {
-                setPadding(0, activity.dp(6), 0, activity.dp(4))
-            })
+        // What it asks ("Run a command"), then what exactly (the command itself, mono, in a box):
+        // the owner never allows a permission without seeing what it runs.
+        val detail = card.str("detail")?.takeIf { it.isNotBlank() }
+        val body = card.str("body")?.takeIf { it.isNotBlank() && it != detail }
+        detail?.let { sheet.addView(activity.label(it, 13f, K.dim).apply { setPadding(0, activity.dp(4), 0, activity.dp(2)) }) }
+        body?.let {
+            val permission = card.str("kind") == "permission"
+            sheet.addView(activity.label(it.take(600), 13f, if (permission) K.text else K.dim, mono = permission).apply {
+                setPadding(activity.dp(if (permission) 10 else 0), activity.dp(8), activity.dp(if (permission) 10 else 0), activity.dp(8))
+                if (permission) background = activity.rounded(K.bg, 10, K.line)
+                setTextIsSelectable(true)
+            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = activity.dp(4); bottomMargin = activity.dp(4) })
         }
         if (card.str("kind") == "signIn") {
             sheet.addView(activity.label("Answer this on the Mac.", 13f, K.faint))

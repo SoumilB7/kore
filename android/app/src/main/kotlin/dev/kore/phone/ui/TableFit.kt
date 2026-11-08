@@ -14,23 +14,26 @@ object TableFit {
     }
 
     /**
-     * [natural]: each column's width on one line (its widest cell, padding included); [width]:
-     * what the table has; [min]: the least a column may get. A grid gives each column what it
-     * needs when all fit; otherwise each gets [min] and the rest is shared in proportion to how
-     * much more each one wants, so a wide column wraps more than a narrow one.
+     * [natural]: each column's width on one line (its widest cell, padding included); [words]:
+     * each column's longest word (a cell may wrap between words, never inside one); [width]: what
+     * the table has; [min]: the least a column may get. A column needs at least [min] and its
+     * longest word; when those don't all fit, the table stacks (nothing is cut mid-word, spec §9).
+     * Otherwise each column gets what it needs when all fit, or its least plus a share of the rest
+     * in proportion to how much more it wants, so a wide column wraps more than a narrow one.
      */
-    fun fit(natural: List<Int>, width: Int, min: Int): Fit {
+    fun fit(natural: List<Int>, words: List<Int>, width: Int, min: Int): Fit {
         if (natural.isEmpty() || width <= 0) return Fit.Stacked
-        if (natural.size * min > width) return Fit.Stacked
+        val least = natural.indices.map { maxOf(min, words.getOrElse(it) { 0 }) }
+        if (least.sum() > width) return Fit.Stacked
         if (natural.sum() <= width) return Fit.Grid(natural.map { maxOf(it, 1) })
-        val wants = natural.map { maxOf(0, it - min) }
-        val room = width - natural.size * min
+        val wants = natural.indices.map { maxOf(0, natural[it] - least[it]) }
+        val room = width - least.sum()
         val asked = wants.sum()
-        val widths = wants.map { want -> min + if (asked == 0) 0 else (want.toLong() * room / asked).toInt() }.toMutableList()
+        val widths = natural.indices.map { least[it] + if (asked == 0) 0 else (wants[it].toLong() * room / asked).toInt() }.toMutableList()
         // Rounding leaves a few pixels: the widest column takes them, never past what it wants.
         val left = width - widths.sum()
         val widest = natural.indices.maxBy { natural[it] }
-        widths[widest] = minOf(natural[widest], widths[widest] + left)
+        widths[widest] = minOf(maxOf(natural[widest], least[widest]), widths[widest] + left)
         return Fit.Grid(widths)
     }
 }
