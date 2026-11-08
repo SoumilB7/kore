@@ -106,7 +106,8 @@ SWIFT
     [[ ! -d "$DIR/.build" ]] || mv "$DIR/.build" "$DIR.new/.build"
     rm -rf "$DIR"
     mv "$DIR.new" "$DIR"
-    export KORE_BUILD_SHA="${commit:0:7}" KORE_SOURCE_COMMIT="$commit"
+    # KORE_RELEASE_TAG: build-app.sh takes kore-tailnet from this release when it can't build it.
+    export KORE_BUILD_SHA="${commit:0:7}" KORE_SOURCE_COMMIT="$commit" KORE_RELEASE_TAG="$TAG"
 else
     # One note when a release was named or found but can't be checked.
     if [[ "$KORE_RELEASE_KEY" == PLACEHOLDER* ]]; then
@@ -144,7 +145,7 @@ step "Building and installing Kore (first time ~5–10 min)…"
 # terminal, that closes this one: the install goes on, through tee, with nowhere left to print.
 trap '' HUP
 set +eo pipefail
-( cd "$DIR" && ./scripts/build-app.sh --install ) 2>&1 | tee "$DIR/install.log"
+( cd "$DIR" && KORE_RELEASES="$RELEASES" ./scripts/build-app.sh --install ) 2>&1 | tee "$DIR/install.log"
 status=${PIPESTATUS[0]}
 set -eo pipefail
 (( status == 0 )) || fail "Kore didn't install (see $DIR/install.log). Nothing was changed if it's still running."

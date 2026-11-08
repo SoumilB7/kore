@@ -18,7 +18,6 @@ if [[ ! -x $GO ]]; then
     print "skipped kore-tailnet: no Go (brew install go, or KORE_GO=<path>)"
     exit 0
 fi
-command -v xz >/dev/null || { print -u2 "needs xz (brew install xz)"; exit 1; }
 mkdir -p "$OUT"
 tags="$(paste -sd, tools/kore-tailnet/build-tags)"
 
@@ -29,6 +28,7 @@ for target in $targets; do
         linux-aarch64) os=linux arch=arm64 ;;
         *) print -u2 "unknown target $target: macos-arm64, linux-x86_64 or linux-aarch64"; exit 1 ;;
     esac
+    [[ $os == darwin ]] || command -v xz >/dev/null || { print -u2 "$target needs xz (brew install xz)"; exit 1; }
     bin="$OUT/kore-tailnet-$target"
     (cd tools/kore-tailnet && CGO_ENABLED=0 GOOS=$os GOARCH=$arch "$GO" build -trimpath -buildvcs=false \
         -ldflags "-s -w" -tags "$tags" -o "$bin" .)

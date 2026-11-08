@@ -64,7 +64,9 @@ package struct NetEnvironment: @unchecked Sendable {
         return NetEnvironment(
             installed: { installedTailscale(LocalAPIClient()) },
             sidecar: { key in
-                guard let helper = NetSidecar.helper() else { throw TailnetError.sidecar("Kore's tailnet helper isn't here") }
+                guard let helper = NetSidecar.helper() else {
+                    throw TailnetError.sidecar("no helper in Kore.app/Contents/Helpers (built without Go or a signed release copy)")
+                }
                 let sidecar = try NetSidecar.start(helper: helper, folder: support.appendingPathComponent("net/tailnet", isDirectory: true), key: key)
                 return (sidecar.tailnet, { sidecar.stop() })
             },
@@ -246,7 +248,12 @@ package final class KoreNetSwitch: NetRouter {
                 state = .unavailable(problem ?? "no tailnet")
             }
         }
-        HostLog.note("korenet", "chose", "\(state)")
+        // Unavailable reads plainly: `chose unavailable detail="kore-tailnet: no helper in …"`.
+        if case .unavailable(let why) = state {
+            HostLog.note("korenet", "chose unavailable", why)
+        } else {
+            HostLog.note("korenet", "chose", "\(state)")
+        }
         readStatus()
         if !holders.isEmpty { holdBus() }
         if state.reaches { for connection in connections() { connection.peerOnline() } }

@@ -87,19 +87,26 @@ check "the real kore-host.sh refuses to run with the placeholder key" '(( code !
 dry=$tmp/dry
 mkdir -p $dry
 for a in x86_64 aarch64; do print "fake $a" | xz -c > $dry/kore-host-linux-$a.xz; done
-out=$(KORE_RELEASE_DIR=$dry scripts/release.sh --dry-run 2>&1); code=$?
+# No Go (nothing built); kore-tailnet builds left in build/release are taken, as release.sh would.
+out=$(KORE_RELEASE_DIR=$dry KORE_GO=/var/empty/no-go scripts/release.sh --dry-run 2>&1); code=$?
+tailnets=$(ls $dry | grep -c '^kore-tailnet-')
+tailnet_skipped() { local n; for n in kore-tailnet-linux-x86_64.xz kore-tailnet-linux-aarch64.xz kore-tailnet-macos-arm64; do [[ -f $dry/$n || $out == *"skipped $n"* ]] || return 1; done }
 check "release.sh --dry-run plans without publishing" '(( code == 0 )) && [[ $out == *"dry run: would publish v$(<VERSION)"* ]]'
-check "  SHA256SUMS: the version line, then every asset" '[[ $(head -1 $dry/SHA256SUMS) == "# kore $(<VERSION) $commit" ]] && (( $(wc -l < $dry/SHA256SUMS) == 5 ))'
+check "  SHA256SUMS: the version line, then every asset" '[[ $(head -1 $dry/SHA256SUMS) == "# kore $(<VERSION) $commit" ]] && (( $(wc -l < $dry/SHA256SUMS) == 5 + tailnets ))'
 check "  kore-host.sh is listed with its hash" 'grep -qx "$(sha scripts/kore-host.sh)  kore-host.sh" $dry/SHA256SUMS'
 check "  signed (64 bytes)" '[[ $(stat -f %z $dry/SHA256SUMS.sig) == 64 ]]'
-check "  absent kore-tailnet and kore.apk are skipped" '[[ $out == *"skipped kore.apk (not built)"* && $out == *"skipped kore-tailnet-linux-x86_64"* ]]'
+check "  absent kore-tailnet and kore.apk are skipped" '[[ $out == *"skipped kore.apk (not built)"* ]] && tailnet_skipped'
 check "  old releases go only after the new one is up" '[[ $out == *"only then delete every other release"* ]]'
 check "  the source tarball holds this commit" '[[ $(tar -xzOf $dry/kore-src.tar.gz kore/VERSION) == $(<VERSION) ]]'
 
 # install.sh: a signed release v9.9.9 from a file:// "GitHub".
 gh=$tmp/gh/download/v9.9.9
-mkdir -p $gh $tmp/src/kore
+mkdir -p $gh $tmp/src/kore/scripts
 print 9.9.9 > $tmp/src/kore/VERSION
+# A build-app.sh that only says what install.sh handed it.
+print -r -- '#!/bin/sh
+echo "build-app $1 releases=$KORE_RELEASES tag=$KORE_RELEASE_TAG"' > $tmp/src/kore/scripts/build-app.sh
+chmod +x $tmp/src/kore/scripts/build-app.sh
 tar -czf $gh/kore-src.tar.gz -C $tmp/src kore
 signed_install() { # version in SHA256SUMS
     print "# kore $1 $commit\n$(sha $gh/kore-src.tar.gz)  kore-src.tar.gz" > $gh/SHA256SUMS
@@ -119,6 +126,8 @@ plist 0.2.3; fresh
 out=$(mac); code=$?
 check "install.sh builds a signed release from its checked source" '(( code == 0 )) && [[ $(<$kdir/VERSION) == 9.9.9 ]]'
 check "  keeping the build cache" '[[ $(<$kdir/.build/kept) == cache ]]'
+out=$(mac KORE_NO_BUILD= KORE_NO_OPEN=1); code=$?
+check "  build-app.sh gets the release and its tag (kore-tailnet's fallback)" '(( code == 0 )) && [[ $out == *"build-app --install releases=file://$tmp/gh tag=v9.9.9"* ]]'
 cp $tmp/src/kore/VERSION $tmp/v.good
 print 9.9.9-evil > $tmp/src/kore/VERSION; tar -czf $tmp/evil.tar.gz -C $tmp/src kore; cp $tmp/v.good $tmp/src/kore/VERSION
 cp $gh/kore-src.tar.gz $tmp/src.good; cp $tmp/evil.tar.gz $gh/kore-src.tar.gz; fresh

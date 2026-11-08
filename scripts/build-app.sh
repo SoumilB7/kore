@@ -26,16 +26,10 @@ cp -R "${BIN:h}"/*.bundle "$APP/Contents/Resources/"
 
 # kore-host isn't built here: box Set up builds it on this Mac from the same source, when first needed.
 
-# Kore's own tailnet helper (KoreNet without installed Tailscale): scripts/build-tailnet.sh builds
-# it when Go is here (Go's cache keeps a rebuild quick) and says so when not. Without it KoreNet
-# offers SSH only, and the build goes on either way.
-scripts/build-tailnet.sh macos-arm64 || echo "note: kore-tailnet didn't build"
-TAILNET="build/release/kore-tailnet-macos-arm64"
-if [[ -x $TAILNET ]]; then
-    cp "$TAILNET" "$APP/Contents/Helpers/kore-tailnet"
-else
-    echo "note: no $TAILNET (scripts/build-tailnet.sh): Kore.app ships without kore-tailnet"
-fi
+# Kore's own tailnet helper (KoreNet without installed Tailscale): built from source with Go, else
+# the release's, checked against its signed SHA256SUMS (scripts/tailnet-helper.sh), signed there.
+# Without it KoreNet offers SSH only, and the build goes on either way.
+scripts/tailnet-helper.sh "$APP/Contents/Helpers/kore-tailnet" || echo "note: Kore.app ships without kore-tailnet"
 
 # App icon, rendered from the SVGs in Resources/.
 ICONSET="build/AppIcon.iconset"
@@ -77,7 +71,6 @@ EOF
 
 # Ad-hoc signature: enough to run locally. Not sandboxed, since it must spawn `claude`.
 codesign --force --options runtime --sign - "$APP/Contents/Helpers/kore"
-[[ -f "$APP/Contents/Helpers/kore-tailnet" ]] && codesign --force --options runtime --sign - "$APP/Contents/Helpers/kore-tailnet"
 codesign --force --options runtime --sign - "$APP"
 echo "built $APP ($BUILD_SHA)"
 
