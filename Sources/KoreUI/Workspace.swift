@@ -1083,15 +1083,23 @@ package final class Workspace {
     }
 
     private static let explorerKey = "explorer"
+    /// The panes of folders that leave nothing behind (temporary folders, dev runs), by path: a
+    /// window closed and opened again in the same run comes back as it was, nothing written.
+    private static var unsavedExplorer: [String: ExplorerState] = [:]
 
     private func saveExplorer() {
-        guard box == nil, Self.persists(folder) else { return }
-        UserDefaults.standard.set(
-            try? JSONEncoder().encode(ExplorerState(open: explorerOpen, width: explorerWidth, devices: devicesOpen, devicesWidth: devicesWidth)),
-            forKey: Self.key(Self.explorerKey, folder))
+        guard box == nil else { return }
+        let state = ExplorerState(open: explorerOpen, width: explorerWidth, devices: devicesOpen, devicesWidth: devicesWidth)
+        guard Self.persists(folder) else {
+            Self.unsavedExplorer[folder.standardizedFileURL.path] = state
+            return
+        }
+        UserDefaults.standard.set(try? JSONEncoder().encode(state), forKey: Self.key(Self.explorerKey, folder))
     }
 
     private static func savedExplorer(for folder: URL) -> ExplorerState? {
+        // Kept this run where nothing is written; else what was saved (a dev run reads it too).
+        if !persists(folder), let kept = unsavedExplorer[folder.standardizedFileURL.path] { return kept }
         let data = stored(explorerKey, folder)
         return data.flatMap { try? JSONDecoder().decode(ExplorerState.self, from: $0) }
     }
