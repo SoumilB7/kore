@@ -262,8 +262,9 @@ package final class FileCarry {
     package private(set) var steps: [String] = []
     /// How often the bytes said so far are read for the progress.
     package var tick: Duration = .milliseconds(250)
-    /// How often the bytes landed at an rsync's destination are measured while it runs (macOS's
-    /// rsync prints no progress into a pipe): `fs.count` on a box, a walk on this Mac.
+    /// How often the bytes landed at a copy's destination are measured while it runs (a Mac copy
+    /// says nothing as it goes; an rsync's progress lines are read too): `fs.count` on a box, a
+    /// walk on this Mac.
     package var pollEvery: Duration = .seconds(2)
     /// How often the checkpoint is written while the bytes move.
     package var saveEvery: TimeInterval = 5
@@ -700,14 +701,18 @@ package final class FileCarry {
         switch route {
         case .macCopy:
             let (from, to) = (source.path, staged.path)
-            let why = await Task.detached(priority: .userInitiated) { () -> String? in
-                // What a stopped copy left: made again (a copy on one Mac is quick).
-                try? FileManager.default.removeItem(atPath: to)
-                do {
-                    try FileManager.default.copyItem(atPath: from, toPath: to)
-                    return nil
-                } catch { return error.localizedDescription }
-            }.value
+            // Measured where it lands as it goes: one volume clones at once, another (an external
+            // disk) can take a while.
+            let why = await metering(landing: staged) {
+                await Task.detached(priority: .userInitiated) { () -> String? in
+                    // What a stopped copy left: made again.
+                    try? FileManager.default.removeItem(atPath: to)
+                    do {
+                        try FileManager.default.copyItem(atPath: from, toPath: to)
+                        return nil
+                    } catch { return error.localizedDescription }
+                }.value
+            }
             return why.map { .failed($0) }
         case .boxCopy:
             guard let alias = source.alias, let box = boxes[alias] else { return stop("\(source.device) can't be reached.") }

@@ -139,8 +139,7 @@ package struct ChatMoves {
     package var progress: (@MainActor (_ bytes: Int64, _ total: Int64?) -> Void)?
     /// Stops a running rsync (the bar's Cancel): the move fails before its commit, nothing changes.
     package var stopper: Spawn?
-    /// How often a pull's staged bytes are measured while rsync runs (it prints no progress
-    /// into a pipe on macOS).
+    /// How often a pull's staged bytes are measured while rsync runs, beside its progress lines.
     package var pollEvery: Duration = .seconds(2)
 
     package init(connection: HostConnection, box: SyncBox, staging: URL? = nil, name: String? = nil, store: MovedChats? = nil) {
