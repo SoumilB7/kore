@@ -4,8 +4,9 @@ import Tailnet
 
 /// Kore's own `kore-tailnet` (phase 18 step 5a): started only while KoreNet is on and installed
 /// Tailscale is absent or its LocalAPI unreadable, stopped when KoreNet turns off. Its state is
-/// sealed under a key from the Keychain, handed over its socket (never argv or env); the
-/// connection that sent it keeps the node up, and closing it ends the program.
+/// sealed under a key from the Keychain, handed over its socket (`TailnetSidecar.start`, never
+/// argv or env); the connection that sent it keeps the node up, and `stop` (or closing it) ends
+/// the program.
 package final class NetSidecar: @unchecked Sendable {
     /// What the helper is called in `Kore.app/Contents/Helpers`.
     package static let helperName = "kore-tailnet"
@@ -74,28 +75,17 @@ package final class NetSidecar: @unchecked Sendable {
             throw TailnetError.sidecar("didn't start")
         }
         do {
-            let fd = try Sockets.connectUnix(socket)
-            guard Sockets.peerIsUser(fd) else {
-                Sockets.closeFD(fd)
-                throw SocketError.notThisUser
-            }
-            do {
-                let start: [String: JSONValue] = ["v": .int(Int64(TailnetSidecar.version)), "op": .string("start"), "key": .string(key.base64EncodedString())]
-                try SidecarWire.send(fd, JSONEncoder().encode(start))
-                let (data, passed) = try SidecarWire.receive(fd)
-                if let passed { Sockets.closeFD(passed) }
-                let reply = try data.map(SidecarWire.decode)
-                guard reply?.ok == true else { throw TailnetError.sidecar(reply?.error ?? "start refused") }
-            } catch {
-                Sockets.closeFD(fd)
-                throw error
-            }
-            return NetSidecar(tailnet: TailnetSidecar(path: socket), process: process, owner: fd)
+            let tailnet = TailnetSidecar(path: socket)
+            let owner = try tailnet.start(key: key)
+            return NetSidecar(tailnet: tailnet, process: process, owner: owner)
         } catch {
             process.terminate()
             throw error
         }
     }
+
+    /// Whether the program still runs.
+    package var running: Bool { process.isRunning }
 
     /// The node goes down and the program ends (its owner connection closes). Blocks briefly.
     package func stop() {
@@ -104,6 +94,9 @@ package final class NetSidecar: @unchecked Sendable {
             return !stopped
         }
         guard first else { return }
+        // `stop` takes the node down cleanly and the program ends; closing the owner connection
+        // ends it too when it can't answer.
+        try? tailnet.stop()
         Sockets.closeFD(owner)
         if process.isRunning { process.terminate() }
     }

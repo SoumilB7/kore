@@ -346,6 +346,74 @@ struct NetLinkTests {
         switcher.set(false)
     }
 
+    @Test func anEnrolledBoxIsReachedOverSSHWithThisMacsProofKoreNetOnOrOff() async throws {
+        let root = netScratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = suite()
+        let secrets = MemorySecrets()
+        let identity = try MacIdentity.loadOrCreate(secrets: secrets, defaults: defaults)
+        let box = FakeNetBox(root: root)
+        try box.allow(mac: identity.device, key: identity.signer.publicKey)
+        let calls = EnvCalls()
+        let env = fakeEnv(.state(.stopped), local: FakeTailnet(), box: box, root: root, defaults: defaults, calls: calls, secrets: secrets)
+        try DeviceBook(url: env.support.appendingPathComponent("net/devices.json")).update { $0 = [box.pinned] }
+        let directory = NodeDirectory(defaults: defaults)
+        directory.upsert(.init(device: box.device, name: "box-1", ssh: "proof-box", nodeKey: box.nodeKey, identityKey: box.identity.publicKey, enrolled: true))
+        let switcher = KoreNetSwitch(
+            defaults: defaults, directory: directory, rekeyer: NodeRekeyer(migration: NodeMigration(root: root, defaults: defaults)), global: false,
+            connections: { [] }, environment: { env })
+        // KoreNet off: no tailnet, but the SSH route is `attach --proto 2` with the identity proof.
+        let dials = Dials()
+        let connection = link("proof-box", router: FakeRouter(), dials: dials, clock: VirtualClock(), root: root)
+        connection.router = switcher
+        connection.retain()
+        #expect(await until { connection.isOnline })
+        #expect(connection.route == .ssh(alias: "proof-box", grant: HostConnection.defaultGrant))
+        #expect(box.dialled == [.ssh] && dials.hosts.isEmpty && calls.held.withLock { $0.upgrades } == 1)
+        #expect(switcher.state == .off && switcher.tailnet == nil && calls.held.withLock { $0.installed } == 0)
+        connection.release()
+        // Not enrolled there: today's `attach` with the grant.
+        let other = link("grant-box", router: FakeRouter(), dials: dials, clock: VirtualClock(), root: root)
+        other.router = switcher
+        other.retain()
+        #expect(await until { dials.hosts.count == 1 })
+        other.release()
+    }
+
+    @Test func aPathChangeBetweenWorkingNetworksIsDebouncedIntoOneRedial() async throws {
+        let clock = VirtualClock()
+        let changes = PathChanges(wait: .seconds(1)) {}
+        changes.sleep = clock.sleep
+        func path(_ satisfied: Bool, _ names: String...) -> PathChanges.Path { .init(satisfied: satisfied, interfaces: Set(names)) }
+        changes.observe(path(true, "en0", "gw 192.168.1.1"))
+        changes.observe(path(true, "en0", "gw 192.168.1.1"))
+        #expect(clock.waiting == 0)
+        // Wi-Fi to another Wi-Fi: the same interface, another gateway; a roam says it twice.
+        changes.observe(path(true, "en0", "gw 10.0.0.1"))
+        changes.observe(path(true, "en0", "gw 10.0.0.254"))
+        #expect(await until { clock.waiting == 1 })
+        clock.advance(.seconds(1))
+        #expect(await until { changes.fired == 1 })
+        // Wi-Fi to Ethernet.
+        changes.observe(path(true, "en7", "gw 10.0.0.254"))
+        #expect(await until { clock.waiting == 1 })
+        clock.advance(.seconds(1))
+        #expect(await until { changes.fired == 2 })
+        // Offline, then offline on other interfaces: once.
+        changes.observe(path(false))
+        changes.observe(path(false, "en0"))
+        #expect(await until { clock.waiting == 1 })
+        clock.advance(.seconds(1))
+        #expect(await until { changes.fired == 3 })
+        // Back online: once more.
+        changes.observe(path(true, "en0", "gw 10.0.0.1"))
+        #expect(await until { clock.waiting == 1 })
+        clock.advance(.milliseconds(500))
+        #expect(changes.fired == 3)
+        clock.advance(.milliseconds(500))
+        #expect(await until { changes.fired == 4 })
+    }
+
     // MARK: Usage
 
     @Test(arguments: ["claude", "codex"])

@@ -26,8 +26,10 @@ cp -R "${BIN:h}"/*.bundle "$APP/Contents/Resources/"
 
 # kore-host isn't built here: box Set up builds it on this Mac from the same source, when first needed.
 
-# Kore's own tailnet helper (KoreNet without installed Tailscale), when scripts/build-tailnet.sh
-# built it; without it KoreNet offers SSH only, and the build goes on.
+# Kore's own tailnet helper (KoreNet without installed Tailscale): scripts/build-tailnet.sh builds
+# it when Go is here (Go's cache keeps a rebuild quick) and says so when not. Without it KoreNet
+# offers SSH only, and the build goes on either way.
+scripts/build-tailnet.sh macos-arm64 || echo "note: kore-tailnet didn't build"
 TAILNET="build/release/kore-tailnet-macos-arm64"
 if [[ -x $TAILNET ]]; then
     cp "$TAILNET" "$APP/Contents/Helpers/kore-tailnet"

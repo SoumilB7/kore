@@ -1,4 +1,5 @@
 import Foundation
+import HostClient
 import Network
 import Observation
 
@@ -13,11 +14,18 @@ package final class NetworkWatch {
     /// Set by a test or storyline: the monitor's word no longer counts.
     @ObservationIgnored private var pinned: Bool?
     @ObservationIgnored private let monitor = NWPathMonitor()
+    /// Box links look again when the path changes enough (`PathChanges`), debounced.
+    @ObservationIgnored package let paths = PathChanges()
 
     private init() {
         monitor.pathUpdateHandler = { path in
             let online = path.status == .satisfied
-            Task { @MainActor in NetworkWatch.shared.observed(online) }
+            let seen = PathChanges.Path(
+                satisfied: online, interfaces: Set(path.availableInterfaces.map(\.name) + path.gateways.map { "gw " + $0.debugDescription }))
+            Task { @MainActor in
+                NetworkWatch.shared.observed(online)
+                NetworkWatch.shared.paths.observe(seen)
+            }
         }
         monitor.start(queue: DispatchQueue(label: "kore.network"))
     }

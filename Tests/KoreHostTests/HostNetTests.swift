@@ -387,6 +387,40 @@ struct HostUpgradeTests {
         #expect(still.up)
     }
 
+    @Test func anExpiredGrantCarriesOnlyItsDevicesProofOverAttachProto2() async throws {
+        let rig = try NetRig()
+        defer { rig.finish() }
+        let grants = GrantStore(rig.rig.paths.grants)
+        let grant = try grants.allow("laptop", control: .full, socket: rig.rig.paths.socket)
+        let mac = Device("mac")
+        _ = try await upgraded(rig, mac, grant: grant)
+        rig.clock.advance(Grant.upgradeGrace + 1)
+        let expired = try #require(grants.load("laptop"))
+        #expect(expired.expired(at: rig.clock.now))
+        // `attach` starts for it with `--proto 2` only, never 1.11; a grant never upgraded, no way.
+        #expect(NetAttach.admits(expired, proto2: true, at: rig.clock.now))
+        #expect(!NetAttach.admits(expired, proto2: false, at: rig.clock.now))
+        var plain = expired
+        plain.device = nil
+        #expect(!NetAttach.admits(plain, proto2: true, at: rig.clock.now))
+        // The enrolled device's proof gets in.
+        let mine = try rig.dialAttach(mac, grant: expired, enroll: nil)
+        try await mine.until { mine.types.contains("snapshot") || mine.closed != nil }
+        #expect(mine.up)
+        mine.session.close("quit")
+        // No proof of that device: the same id with another key, or an enroll on the old secret.
+        var forger = Device("mac")
+        forger.id = mac.id
+        let forged = try rig.dialAttach(forger, grant: expired, enroll: nil)
+        try await forged.until { forged.closed != nil }
+        #expect(forged.closed == "bye unknown")
+        let other = Device("other")
+        let enrolling = try rig.dialAttach(other, grant: expired, enroll: .init(name: "x", kind: .mac, identityKey: other.key.publicKey))
+        try await enrolling.until { enrolling.closed != nil }
+        let kept = try rig.store.book.record(other.id)
+        #expect(enrolling.closed == "bye grant" && kept == nil)
+    }
+
     @Test func theFirstTailnetLinkOfAnUpgradedMacTakesItsNodeKey() async throws {
         let rig = try NetRig()
         defer { rig.finish() }

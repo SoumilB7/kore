@@ -122,6 +122,13 @@ package final class NetAttach {
         fd = try Sockets.connectUnix(path.path)
     }
 
+    /// Whether `attach --as <grant>` starts at all. An expired grant whose Mac enrolled (`device`)
+    /// still carries `--proto 2`: the session then admits only that device's identity proof
+    /// against its record (the expired secret is honoured for nothing, `upgrade` refuses it).
+    nonisolated package static func admits(_ grant: Grant, proto2: Bool, at now: Date) -> Bool {
+        !grant.expired(at: now) || (proto2 && grant.device != nil)
+    }
+
     package func start() {
         let fromHost = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
         fromHost.setEventHandler { [weak self] in

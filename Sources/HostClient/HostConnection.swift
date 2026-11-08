@@ -47,9 +47,9 @@ package final class HostConnection {
         /// The words a box's window and chats say for it.
         package func line(_ alias: String) -> String {
             switch self {
-            case .auth: "\(alias) doesn't know this Mac"
-            case .version: "\(alias) and this Kore don't match · update one"
-            case .replaced: "Another Kore here holds \(alias)"
+            case .auth: "\(NodeNames.name(alias)) doesn't know this Mac"
+            case .version: "\(NodeNames.name(alias)) and this Kore don't match · update one"
+            case .replaced: "Another Kore here holds \(NodeNames.name(alias))"
             }
         }
     }
@@ -104,6 +104,10 @@ package final class HostConnection {
     /// This connection's own router (tests); a connection with a test transport uses no other.
     @ObservationIgnored package var router: (any NetRouter)?
     private var activeRouter: (any NetRouter)? { router ?? (makeTransport == nil ? Self.net : nil) }
+    /// The SSH route's chooser, KoreNet on or off (an enrolled box is reached with this Mac's
+    /// identity); nil: today's `attach` with the grant.
+    package static var sshNet: (any NetRouter)?
+    private var sshRouter: (any NetRouter)? { router ?? (makeTransport == nil ? Self.sshNet : nil) }
     /// Waits (the backoff, the handshake, probes, the unanswered check): a test's virtual clock.
     @ObservationIgnored package var sleep: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
     /// How long a probe waits for any word from the box before the link counts as dead.
@@ -375,7 +379,7 @@ package final class HostConnection {
 
     private func askEvents(_ follower: any HostFollower) {
         guard streams else {
-            return follower.refused(control == .full ? "\(alias) needs an update to open its chats" : "\(alias) lets this Mac only watch: set it up again")
+            return follower.refused(control == .full ? "\(NodeNames.name(alias)) needs an update to open its chats" : "\(NodeNames.name(alias)) lets this Mac only watch: set it up again")
         }
         if let ask = follower.following { transport?.send(StreamWire.encode(ask)) }
     }
@@ -444,7 +448,7 @@ package final class HostConnection {
 
     /// Uploads a file to the box (1.1's `blob.put.*`): its blob id, or why not.
     package func upload(_ data: Data, name: String, mime: String) async -> Result<String, HostRefusal> {
-        guard ready, let transport else { return .failure(HostRefusal(message: "\(alias) can't be reached")) }
+        guard ready, let transport else { return .failure(HostRefusal(message: "\(NodeNames.name(alias)) can't be reached")) }
         serial += 1
         let uploadId = "u\(serial).\(tag)"
         transport.send(HostWire.encode(.blobPutBegin(uploadId: uploadId, name: name, mime: mime, size: data.count, sha256: HostWire.sha256(data))))
@@ -475,12 +479,12 @@ package final class HostConnection {
         let path = absolute(typed.trimmingCharacters(in: .whitespacesAndNewlines))
         let (result, raw) = await commandRaw { HostWire.addFolder(id: $0, path: path) }
         guard result.ok, let list = HostWire.folders(raw) else {
-            return .failure(HostRefusal(message: result.code == .goneFolder ? "Not found on \(alias)" : result.message ?? "\(alias) refused it"))
+            return .failure(HostRefusal(message: result.code == .goneFolder ? "Not found on \(NodeNames.name(alias))" : result.message ?? "\(NodeNames.name(alias)) refused it"))
         }
         folders = list
         saveSoon()
         let wanted = path.hasSuffix("/") ? String(path.dropLast()) : path
-        guard let folder = list.first(where: { $0.path == wanted }) ?? list.last else { return .failure(HostRefusal(message: "Not found on \(alias)")) }
+        guard let folder = list.first(where: { $0.path == wanted }) ?? list.last else { return .failure(HostRefusal(message: "Not found on \(NodeNames.name(alias))")) }
         return .success(folder)
     }
 
@@ -568,7 +572,7 @@ package final class HostConnection {
             transport = net
             route = .net
         } else {
-            transport = makeTransport?() ?? SSHTransport(alias: alias, grant: grant, command: command)
+            transport = sshRouter?.sshTransport(for: self) ?? makeTransport?() ?? SSHTransport(alias: alias, grant: grant, command: command)
             route = .ssh(alias: sshAlias, grant: grant)
         }
         dials += 1
@@ -615,10 +619,10 @@ package final class HostConnection {
         transport?.close()
         phase = .idle
         // Whatever waits gets its answer: nothing will carry it now.
-        for (id, _) in outbox { finish(id, ok: false, message: "\(alias) closed") }
+        for (id, _) in outbox { finish(id, ok: false, message: "\(NodeNames.name(alias)) closed") }
         outbox = []
-        for id in Array(waiting.keys) { finish(id, ok: false, message: "\(alias) closed") }
-        endUploads("\(alias) closed")
+        for id in Array(waiting.keys) { finish(id, ok: false, message: "\(NodeNames.name(alias)) closed") }
+        endUploads("\(NodeNames.name(alias)) closed")
     }
 
     private func endUploads(_ why: String) {
@@ -661,12 +665,12 @@ package final class HostConnection {
         // Sent, never answered: the box may or may not have it. A forwarded call goes again (the box
         // runs it once); anything else says so.
         for id in inFlight.sorted() {
-            if let data = resend[id] { outbox.append((id, data)) } else { finish(id, ok: false, message: "Lost \(alias) before it answered") }
+            if let data = resend[id] { outbox.append((id, data)) } else { finish(id, ok: false, message: "Lost \(NodeNames.name(alias)) before it answered") }
         }
         inFlight = []
-        endUploads("Lost \(alias)")
+        endUploads("Lost \(NodeNames.name(alias))")
         // A sign-in's end won't come over a link that's gone.
-        for id in waiting.keys where id.hasSuffix(HostWire.doneSuffix) { finish(id, ok: false, message: "Lost \(alias) before it answered") }
+        for id in waiting.keys where id.hasSuffix(HostWire.doneSuffix) { finish(id, ok: false, message: "Lost \(NodeNames.name(alias)) before it answered") }
         if case .refused = phase { return }
         if quiet {
             phase = .connecting
@@ -740,14 +744,14 @@ package final class HostConnection {
             // Kore, so it dials again at once.
             case .replaced where transportDial < ownUp:
                 redialNow = true
-                drop("\(alias) took this Mac's newer link")
+                drop("\(NodeNames.name(alias)) took this Mac's newer link")
             case .replaced: refuse(.replaced)
             // The box's own wait for this Mac's hello ran out (a Mac that slept mid-handshake): it
             // dials again.
             case .slow:
                 lateHello = true
-                drop("\(alias) waited too long for this Mac")
-            default: drop("\(alias) said \(reason.rawValue)")
+                drop("\(NodeNames.name(alias)) waited too long for this Mac")
+            default: drop("\(NodeNames.name(alias)) said \(reason.rawValue)")
             }
         case .snapshot(_, let windows, let chats, let extras):
             self.windows = windows
@@ -786,7 +790,7 @@ package final class HostConnection {
             historyAsks.removeValue(forKey: id)?.resume(returning: sessions)
         case .result(let result):
             if result.id.hasPrefix("chat.follow:") {
-                followers[String(result.id.dropFirst("chat.follow:".count))]?.follower?.refused(result.message ?? "This chat isn't on \(alias) any more")
+                followers[String(result.id.dropFirst("chat.follow:".count))]?.follower?.refused(result.message ?? "This chat isn't on \(NodeNames.name(alias)) any more")
             } else if let wait = uploadWaits.removeValue(forKey: result.id) {
                 wait.resume(returning: result)
             } else if resend[result.id] != nil, waiting[result.id] == nil {

@@ -195,9 +195,6 @@ case "devices":
 case "attach":
     guard arguments.count >= 3, arguments[1] == "--as" else { fail(usage, code: AttachExit.usage.rawValue) }
     if let problem = paths.runtimeProblem { fail("kore-host: \(problem)", code: AttachExit.noRuntime.rawValue) }
-    guard let grant = grants.load(arguments[2]), !grant.expired(at: Date()) else {
-        fail("kore-host: no grant named \(arguments[2])", code: AttachExit.noGrant.rawValue)
-    }
     // `--proto 2`: link 2.0 over SSH (the KoreNet upgrade); 1.11 stays the default.
     let proto2: Bool
     if let at = arguments.firstIndex(of: "--proto") {
@@ -205,6 +202,9 @@ case "attach":
         proto2 = arguments[at + 1] == "2"
     } else {
         proto2 = false
+    }
+    guard let grant = grants.load(arguments[2]), NetAttach.admits(grant, proto2: proto2, at: Date()) else {
+        fail("kore-host: no grant named \(arguments[2])", code: AttachExit.noGrant.rawValue)
     }
     signal(SIGPIPE, SIG_IGN)
     MainActor.assumeIsolated {

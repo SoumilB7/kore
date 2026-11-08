@@ -37,7 +37,8 @@ package struct NetEnvironment: @unchecked Sendable {
     package var defaults: UserDefaults
     /// Kore's Application Support folder (`Kore/`).
     package var support: URL
-    /// `ssh <alias> kore-host attach --as <grant> --proto 2`, as a connected socket.
+    /// `ssh <alias> kore-host attach --as <grant> --proto 2`, as a connected socket (the upgrade,
+    /// and an enrolled box's SSH route).
     package var upgradeDial: @Sendable (_ alias: String, _ grant: String, _ command: String) throws -> (fd: Int32, onClose: @Sendable () -> Void)
     /// This Mac's name, as a box's enroll shows it.
     package var macName: @Sendable () -> String
@@ -332,6 +333,33 @@ package final class KoreNetSwitch: NetRouter {
                     await self.welcomed(connection, id: entry.id)
                 }
             })
+    }
+
+    /// Made for the SSH route while KoreNet is off (closures only: nothing runs until a dial).
+    @ObservationIgnored private var sshEnvironment: NetEnvironment?
+
+    package func sshTransport(for connection: HostConnection) -> (any HostTransport)? {
+        guard let entry = directory.entry(forKey: connection.alias), entry.enrolled else { return nil }
+        let env: NetEnvironment
+        if let on = self.env {
+            env = on
+        } else if let made = sshEnvironment {
+            env = made
+        } else {
+            env = environment()
+            sshEnvironment = env
+        }
+        let book = book(env)
+        let identities = identities
+        let (alias, grant, command, server) = (connection.sshAlias, connection.grant, connection.sshCommand, entry.device)
+        return NetTransport(route: .ssh) {
+            let identity = try identities.get(env)
+            let (fd, onClose) = try env.upgradeDial(alias, grant, command)
+            let setup = NetSession.Client(
+                local: NetLocal(device: identity.device, kind: .mac, nodeKey: Binding.Route.sshNodeKey, signer: identity.signer), route: .ssh, peer: .ssh,
+                book: book, server: server, service: "link")
+            return NetTransport.Opened(fd: fd, setup: setup, onClose: onClose)
+        }
     }
 
     /// The box's first KoreNet welcome: its stores move from its alias to its id.

@@ -25,6 +25,13 @@ package protocol NetRouter: AnyObject {
     func using(_ connection: HostConnection, _ inUse: Bool)
     /// The box said who it is on KoreNet (`net.node`, after the welcome).
     func said(_ node: NetNodeWire.Node, on connection: HostConnection)
+    /// The SSH route for a box this Mac enrolled at: `attach --proto 2` with this Mac's identity
+    /// proof (no grant needed once it expired); nil: today's `attach` with the grant.
+    func sshTransport(for connection: HostConnection) -> (any HostTransport)?
+}
+
+extension NetRouter {
+    package func sshTransport(for connection: HostConnection) -> (any HostTransport)? { nil }
 }
 
 extension HostConnection {
@@ -85,5 +92,50 @@ package final class LinkWake {
 
     isolated deinit {
         if let observer { center.removeObserver(observer) }
+    }
+}
+
+/// When the Mac's network path changed enough for box links to look again (phase 18 §1
+/// "Liveness"): online ↔ offline, or, between two working paths, another set of interfaces or
+/// gateways (Wi-Fi to another Wi-Fi, Wi-Fi to Ethernet). A burst of updates (a roam says several
+/// things in a row) fires once, `wait` after the last.
+@MainActor
+package final class PathChanges {
+    package struct Path: Equatable, Sendable {
+        package var satisfied: Bool
+        /// Interface names and gateways, as `NWPath` gives them.
+        package var interfaces: Set<String>
+
+        package init(satisfied: Bool, interfaces: Set<String>) {
+            self.satisfied = satisfied
+            self.interfaces = interfaces
+        }
+    }
+
+    package var wait: Duration
+    package var sleep: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
+    private let fire: @MainActor () -> Void
+    private var last: Path?
+    private var pending: Task<Void, Never>?
+    /// Times it fired (tests).
+    package private(set) var fired = 0
+
+    package init(wait: Duration = .seconds(1), fire: @escaping @MainActor () -> Void = { HostConnection.networkChanged() }) {
+        self.wait = wait
+        self.fire = fire
+    }
+
+    package func observe(_ path: Path) {
+        defer { last = path }
+        guard let last, last.satisfied != path.satisfied || (path.satisfied && last.interfaces != path.interfaces) else { return }
+        pending?.cancel()
+        let (sleep, wait) = (sleep, wait)
+        pending = Task { [weak self] in
+            await sleep(wait)
+            guard let self, !Task.isCancelled else { return }
+            self.pending = nil
+            self.fired += 1
+            self.fire()
+        }
     }
 }
