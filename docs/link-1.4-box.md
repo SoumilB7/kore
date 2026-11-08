@@ -119,10 +119,10 @@ window is open. The Mac moves the files with rsync over SSH; the box only says w
 
 | `type` | fields | |
 |---|---|---|
-| `sync.watch` | `folder` | A folder the box serves (or one inside it); `act` or `full` grant. Result: `ok`. Then the folder's whole list follows as `sync.changed` with `all: true` (in pieces of at most 2000, `more: true` on all but the last), then its changes while this connection lasts. Sent again, it lists again. |
+| `sync.watch` | `folder` | An absolute folder the box serves (or one inside it); `act` or `full` grant; at most 4 per connection (`busy` past that). Result: `ok`. Then the folder's whole list follows as `sync.changed` with `all: true` (in pieces of at most 2000, `more: true` on all but the last, each sent once the socket has drained), then its changes while this connection lasts. Sent again, it lists again. |
 | `sync.unwatch` | `folder` | Ends that watch. A connection's watches also end with it. |
 
-`sync.changed {folder, paths: [{p, s, m} | {p, gone: true}], all?, more?, watching?, limit?, folders?}`
+`sync.changed {folder, paths: [{p, s, m} | {p, gone: true}], all?, more?, watching?, limit?, folders?, missing?, capped?}`
 goes from the box unasked. `p` is the path from `folder`, `s` the size in bytes, `m` the mtime in
 whole seconds; a folder that went is one `gone` entry. Changes are gathered for 300 ms and sent
 as one message.
@@ -135,6 +135,14 @@ as one message.
   sends `sync.watch` again when it wants a fresh list (its window comes forward, a turn ends).
   Nothing polls.
 - macOS (tests) watches with FSEvents.
+- The list is built in one walk off the daemon's main thread. A folder that isn't there sends one
+  `all` with `missing: true` and no paths; one with more than 200,000 files sends `capped: 200000`
+  and no paths. Neither is an empty list.
+- Nothing is listed or watched through a symlink: links are skipped at every level.
+- The Mac checks every `p` before using it: relative, no empty, `.` or `..` part, no control
+  character, and no symlinked folder on its own side. Anything else is dropped. It never deletes in
+  bulk on its own: a missing or empty side, or a round that would delete more than half of what
+  was agreed (10 files or more), waits for the user.
 
 ## GitHub
 

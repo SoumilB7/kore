@@ -180,6 +180,15 @@ struct BoxPopup: View {
         var pieces: [Piece] = []
         if let box = workspace?.box {
             pieces.append(.view("cue", AnyView(line(box.cue.line, tint: box.cue.marked ? Theme.secondary : Theme.tertiary))))
+            // A round that stopped before a bulk delete goes on only with this.
+            if let sync = box.sync, let count = sync.askDeletes {
+                pieces.append(.view("deletes", AnyView(HStack(spacing: Space.sm) {
+                    Spacer(minLength: 0)
+                    Button("Delete \(count.formatted()) files") { sync.allowDeletes() }.smallButton(danger: true)
+                }
+                .padding(.horizontal, Space.sm)
+                .padding(.bottom, Space.xs))))
+            }
             pieces.append(rule)
         }
         if mac != nil, !list.boxes.isEmpty {
