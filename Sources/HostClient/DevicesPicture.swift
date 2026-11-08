@@ -106,6 +106,9 @@ package struct DeviceRow: Identifiable, Equatable, Sendable {
     package var needsTailscale = false
     /// A box on KoreNet whose Tailscale is off: SSH only until it's back.
     package var tailscaleOff = false
+    /// A Mac box (its lines never Linux ones), and one on Kore's own tailnet.
+    package var macOS = false
+    package var koreTailnet = false
     /// A box that said another identity key under its id: refused until it's forgotten.
     package var identityChanged = false
     /// A box's SSH → KoreNet upgrade under way: "Upgrading mybox… · joining the tailnet".
@@ -285,8 +288,11 @@ extension DevicesPicture {
                 row.upgradeFix = upgrade.fix
                 row.joinedAt = upgrade.joinedAt
             }
-            // Its Tailscale off: one line, one action (the line that starts it, copied).
-            if row.tailscaleOff, row.upgradeFix == nil { row.upgradeFix = .copy(BoxNetJoin.sudoLine) }
+            // Its Tailscale off: one line, one action (the line that starts it, copied). A Mac
+            // box's owner opens Tailscale there; Kore's own tailnet waits for its sign-in.
+            row.macOS = box.entry?.macOS ?? false
+            row.koreTailnet = box.entry?.tailnet == "kore"
+            if row.tailscaleOff, row.upgradeFix == nil, !row.macOS, !row.koreTailnet { row.upgradeFix = .copy(BoxNetJoin.sudoLine) }
             if box.online {
                 switch box.route {
                 case .net?:
@@ -454,7 +460,8 @@ package enum DevicesWords {
         case .notSetUp: return "not set up"
         case .offline: return row.lastSeen.map { "last seen " + ago($0, now: now) } ?? "offline"
         case .unknown where row.tailscaleOff, .connected where row.tailscaleOff:
-            return "Tailscale is off on \(row.name)"
+            if row.koreTailnet { return "Sign in for \(row.name)" }
+            return row.macOS ? BoxNetJoin.openLine(row.name) : "Tailscale is off on \(row.name)"
         case .unknown: return row.route == .ssh ? "via SSH" : nil
         case .connected: break
         }

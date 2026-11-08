@@ -285,6 +285,8 @@ struct DevicesPopup: View {
             })
         case .signIn(let page)?:
             if let url = URL(string: page) { items.append(OptionItem("Sign in ↗") { devices.openURL(url) }) }
+        case .relogin?:
+            items.append(OptionItem(BoxFix.relogin.title) { devices.relogin(row) })
         case .tryAgain? where !row.canJoin:
             items.append(OptionItem("Try again") { join(row) })
         case .update?, .setUp?:

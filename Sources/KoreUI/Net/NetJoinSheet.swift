@@ -77,10 +77,13 @@ struct NetJoinSheet: View {
             switch join.ending {
             case .working:
                 button("Cancel") { NetJoinSheet.close() }
+            case .needsSudo where join.fix == nil:
+                // A Mac box: its owner opens Tailscale there; nothing to copy.
+                button("Cancel") { NetJoinSheet.close() }
             case .needsSudo:
                 Button {
                     NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(BoxNetJoin.sudoLine, forType: .string)
+                    if case .copy(let line)? = join.fix { NSPasteboard.general.setString(line, forType: .string) }
                     copied.value = true
                     Task { @MainActor in
                         try? await Task.sleep(for: Size.Net.copiedFor)

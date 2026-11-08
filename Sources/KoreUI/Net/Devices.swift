@@ -363,6 +363,10 @@ package final class Devices {
         changed()
     }
 
+    /// "Sign in again ↗": the box's Kore tailnet signs in afresh, with this Mac's account.
+    @ObservationIgnored package var reloginBox: @MainActor (String) -> Void = { BoxUpgrades.shared.relogin($0) }
+    package func relogin(_ row: DeviceRow) { reloginBox(row.id) }
+
     package func setPaused(_ row: DeviceRow, _ paused: Bool) {
         switch row.kind {
         case .phone: if let id = UUID(uuidString: row.id) { phones?.setPaused(id, paused) }

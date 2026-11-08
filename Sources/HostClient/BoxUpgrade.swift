@@ -29,6 +29,14 @@ package struct BoxUpgradeReport: Equatable, Sendable {
     package var state: String { fields["state"] ?? "" }
     package var error: String? { fields["error"] }
     package var login: String? { fields["login"].flatMap { $0.hasPrefix("https://") ? $0 : nil } }
+    /// The box's system (`macos`, `linux`; a box before it said is Linux).
+    package var macOS: Bool { fields["os"] == "macos" }
+    /// Its tailnet is Kore's own (`kore-tailnet`, no root).
+    package var kore: Bool { fields["tailnet"] == "kore" }
+    /// The account its tailnet is signed in as, while it runs.
+    package var account: String? { fields["account"].flatMap { $0.isEmpty ? nil : $0 } }
+    /// The line its owner runs there, as the box says it for its system.
+    package var action: String? { fields["action"].flatMap { $0.isEmpty ? nil : $0 } }
     /// The box's link minor ("1.12" → 12).
     package var linkMinor: Int? { fields["link"].flatMap { $0.split(separator: ".").last }.flatMap { Int($0) } }
 
@@ -47,17 +55,22 @@ package struct BoxUpgradeShell: Sendable {
     package var upgrade: @Sendable (_ alias: String, _ command: String, _ grant: String, _ want: String?) async -> BoxRan
     /// This Mac's kore-host put on the box (Set up's Update path); why not, or nil.
     package var push: @Sendable (_ alias: String, _ grant: String) async -> BoxSetup.Failure?
+    /// The same upgrade with Kore's own tailnet there signed out first (`--relogin`: "Sign in
+    /// again", for this Mac's account). Nil: the plain upgrade.
+    package var relogin: (@Sendable (_ alias: String, _ command: String, _ grant: String, _ want: String?) async -> BoxRan)?
 
     package init(
-        upgrade: @escaping @Sendable (String, String, String, String?) async -> BoxRan, push: @escaping @Sendable (String, String) async -> BoxSetup.Failure?
+        upgrade: @escaping @Sendable (String, String, String, String?) async -> BoxRan, push: @escaping @Sendable (String, String) async -> BoxSetup.Failure?,
+        relogin: (@Sendable (String, String, String, String?) async -> BoxRan)? = nil
     ) {
         self.upgrade = upgrade
         self.push = push
+        self.relogin = relogin
     }
 
     /// The command line (a grant's name is letters, digits and `._-`; a version digits and dots).
-    package static func line(command: String, grant: String, want: String?) -> String {
-        "\(command) upgrade --grant '\(grant)'" + (want.map { " --want '\($0)'" } ?? "")
+    package static func line(command: String, grant: String, want: String?, relogin: Bool = false) -> String {
+        "\(command) upgrade --grant '\(grant)'" + (want.map { " --want '\($0)'" } ?? "") + (relogin ? " --relogin" : "")
     }
 
     package static let standard = BoxUpgradeShell(
@@ -69,7 +82,8 @@ package struct BoxUpgradeShell: Sendable {
             } catch {
                 return (error as? BoxSetup.Failure) ?? BoxSetup.Failure(message: "\(error)")
             }
-        })
+        },
+        relogin: { alias, command, grant, want in await BoxShell().run(alias, line(command: command, grant: grant, want: want, relogin: true)) })
 }
 
 /// A box row's upgrade, as the Devices popup says it.
@@ -229,6 +243,19 @@ package final class BoxUpgrades {
         let key = current(key)
         guard let join = joins[key], let runner = runners[key], !join.ending.over else { return nil }
         return (join, runner)
+    }
+
+    /// "Sign in again ↗" on a box whose tailnet is on another account: Kore's own there signs out,
+    /// and its new sign-in page opens here once (asked for, so opened).
+    package func relogin(_ key: String) {
+        let key = current(key)
+        guard let net = net(), running(key) == nil else { return }
+        automatic.remove(key)
+        let join = BoxNetJoin(key: key, name: NodeNames.name(key))
+        let runner = BoxNetJoinRun(connection: link(key), net: net, directory: book, shell: shell, auto: false, openURL: openURL, sleep: sleep, want: want)
+        runner.relogin = true
+        adopt(join, runner)
+        runner.start(join)
     }
 
     /// A runner for "Join KoreNet" (it turns KoreNet on itself when it's off).

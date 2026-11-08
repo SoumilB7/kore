@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 import LinkProtocol
 import SystemConfiguration
 
@@ -106,6 +107,8 @@ package enum BoxFix: Equatable, Sendable {
     case showLog(String)
     /// Open a box's Tailscale sign-in page here (only when asked: never by itself).
     case signIn(String)
+    /// Kore's own tailnet on the box signs out, and its new sign-in page opens here (asked for).
+    case relogin
 
     package var title: String {
         switch self {
@@ -121,6 +124,7 @@ package enum BoxFix: Equatable, Sendable {
         case .install, .installLinuxKit: "Install"
         case .showLog: "Show log"
         case .signIn: "Sign in ↗"
+        case .relogin: "Sign in again ↗"
         }
     }
 }
@@ -140,21 +144,28 @@ package struct BoxSetup: Sendable {
     package var binary: @Sendable (BoxBinary.Request) async throws -> (url: URL, temporary: Bool)
     /// The user said yes to installing Swift's Linux kit, for a build that needs it.
     package var mayInstallKit = false
+    /// `kore-tailnet` for a platform (Kore's own tailnet on a box without a usable Tailscale), and
+    /// whether it's a temp file; nil when there's none (the box offers Tailscale's lines then).
+    package var tailnet: @Sendable (_ platform: String) async -> (url: URL, temporary: Bool)?
 
     package init(
         alias: String, grant: String, shell: BoxShell = BoxShell(),
-        binary: @escaping @Sendable (BoxBinary.Request) async throws -> (url: URL, temporary: Bool) = { try await BoxBinary.local($0) }
+        binary: @escaping @Sendable (BoxBinary.Request) async throws -> (url: URL, temporary: Bool) = { try await BoxBinary.local($0) },
+        tailnet: @escaping @Sendable (String) async -> (url: URL, temporary: Bool)? = { KoreLog.isTestProcess ? nil : await BoxTailnetBinary.local($0) }
     ) {
         self.alias = alias
         self.grant = grant
         self.shell = shell
         self.binary = binary
+        self.tailnet = tailnet
     }
 
     /// What a Linux box's first Set up asks before installing the kit that builds kore-host.
     package static let kitLine = "Building kore-host needs Swift's Linux kit (about 2 GB)"
     /// Where it goes, under the box's home (what `SSHTransport.defaultCommand` runs).
     static let target = ".local/bin/kore-host"
+    /// Kore's own tailnet, beside it.
+    static let tailnetTarget = ".local/bin/kore-tailnet"
     /// Room it needs in the box's home, in KB: the binary, unpacked, and its state.
     static let room = 150 * 1024
 
@@ -221,6 +232,8 @@ package struct BoxSetup: Sendable {
         }
         let moved = await shell.run(alias, "mv -f \(Self.target).new \(Self.target)")
         guard moved.ok else { throw fail(moved, "Couldn't put kore-host in place on \(NodeNames.name(alias))", retry) }
+        // Before the daemon starts: it runs Kore's own tailnet when the box has no Tailscale.
+        await putTailnet(platform, step: step)
 
         await step("Starting kore-host (\(machine.service))…")
         let installed = await shell.run(alias, "\(Self.target) install-service")
@@ -234,6 +247,25 @@ package struct BoxSetup: Sendable {
         found.koreHost = checked.output.split(whereSeparator: \.isNewline).first { $0.hasPrefix("kore-host ") }.map(String.init)
         let warning = installed.output.contains("linger is off") ? "\(NodeNames.name(alias)) stops kore-host when you log out · sudo loginctl enable-linger" : nil
         return Done(machine: found, warning: warning)
+    }
+
+    /// `kore-tailnet` beside kore-host, unless the same one is there already: copied beside it,
+    /// checked that it runs there, then moved over. Never a failure of Set up: without it the box
+    /// offers Tailscale's own lines.
+    private func putTailnet(_ platform: String, step: @escaping @MainActor @Sendable (String) -> Void) async {
+        guard let file = await tailnet(platform) else { return }
+        defer { if file.temporary { try? FileManager.default.removeItem(at: file.url) } }
+        guard let hash = try? ReleaseManifest.sha256(file.url) else { return }
+        let target = Self.tailnetTarget
+        let there = await shell.run(alias, "sha256sum \(target) 2>/dev/null || shasum -a 256 \(target) 2>/dev/null")
+        if there.ok, there.output.hasPrefix(hash) { return }
+        await step("Copying kore-tailnet to \(NodeNames.name(alias))…")
+        let copied = await shell.copy(file.url, to: alias, path: target + ".new")
+        guard copied.ok else { return }
+        // It answers with its usage when run bare: then it runs there.
+        let checked = await shell.run(
+            alias, "chmod 755 \(target).new && case \"$(\(target).new 2>&1)\" in *'usage: kore-tailnet'*) mv -f \(target).new \(target) ;; *) rm -f \(target).new; exit 1 ;; esac")
+        if !checked.ok { HostLog.note(alias, "kore-tailnet", "didn't run there: " + checked.lastLine) }
     }
 
     /// `kore-host start`: the daemon started again, however it was installed there.

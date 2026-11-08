@@ -33,6 +33,12 @@ package final class NodeDirectory: Sendable {
         /// The devices waiting there for an Allow, as the box last said (`devices.pending`): the
         /// Waiting list with no window open.
         package var pending: [PendingDevice]?
+        /// The box's system as it last said (`linux`, `macos`; nil before it did).
+        package var os: String?
+        /// Its tailnet as it last said: `tailscale` or `kore` (Kore's own).
+        package var tailnet: String?
+        /// A Mac box: its owner opens Tailscale there, never a Linux line.
+        package var macOS: Bool { os == "macos" }
 
         package init(
             device: UUID, name: String, ssh: String?, nodeKey: String?, identityKey: Data, enrolled: Bool = false, rekeyed: Bool = false, on: Bool? = nil
@@ -63,6 +69,8 @@ package final class NodeDirectory: Sendable {
             identityChanged = try c.decodeIfPresent(Bool.self, forKey: .identityChanged) ?? false
             pushed = try c.decodeIfPresent(Pushed.self, forKey: .pushed)
             pending = try c.decodeIfPresent([PendingDevice].self, forKey: .pending)
+            os = try c.decodeIfPresent(String.self, forKey: .os)
+            tailnet = try c.decodeIfPresent(String.self, forKey: .tailnet)
         }
 
         package var id: NodeID { NodeID(device.uuidString.lowercased()) }
@@ -263,6 +271,8 @@ extension NodeDirectory.Entry {
         entry.on = node.on
         entry.nodeKey = node.on ? node.nodeKey : nil
         if let key = entry.nodeKey { entry.lastNodeKey = key }
+        if let os = node.os { entry.os = os }
+        if let tailnet = node.tailnet { entry.tailnet = tailnet }
         return entry
     }
 }

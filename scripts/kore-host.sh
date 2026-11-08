@@ -82,6 +82,14 @@ mkdir -p "$BIN"
 mv -f "$tmp/kore-host" "$BIN/.kore-host.new"
 mv -f "$BIN/.kore-host.new" "$BIN/kore-host"
 say "▸ Installed kore-host $version in $BIN"
+# Kore's own tailnet, for a box without Tailscale: the same signed SHA256SUMS lists it. Never
+# fatal: without it the box uses installed Tailscale.
+tn="kore-tailnet-linux-$arch.xz"
+tnwant="$(sed -n "s/^\([0-9a-f]\{64\}\)  $tn\$/\1/p" "$tmp/SHA256SUMS")"
+if [ -n "$tnwant" ] && curl -fsSL --retry 2 -o "$tmp/$tn" "$BASE/$tn" && [ "$(sha "$tmp/$tn")" = "$tnwant" ] \
+    && xz -dc "$tmp/$tn" > "$tmp/kore-tailnet" && chmod 755 "$tmp/kore-tailnet"; then
+    mv -f "$tmp/kore-tailnet" "$BIN/.kore-tailnet.new" && mv -f "$BIN/.kore-tailnet.new" "$BIN/kore-tailnet"
+fi
 "$BIN/kore-host" install-service || fail "kore-host is installed but its service didn't start (see above)"
 case ":$PATH:" in
     *":$BIN:"*) ;;

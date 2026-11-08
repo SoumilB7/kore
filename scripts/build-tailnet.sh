@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Builds kore-tailnet (tools/kore-tailnet, Go tsnet) into build/release/: kore-tailnet-macos-arm64
-# for Kore.app's Helpers, kore-tailnet-linux-{x86_64,aarch64}.xz for boxes without tailscaled (not
-# released yet: boxes don't run it).
+# for Kore.app's Helpers (and Mac boxes), kore-tailnet-linux-{x86_64,aarch64}.xz for boxes without a
+# usable Tailscale (released; Set up and kore-host update put it beside kore-host).
 # Static (no cgo), stripped, with tsnet features Kore doesn't use left out (build-tags). Without
 # Go it says so and builds nothing.
 #

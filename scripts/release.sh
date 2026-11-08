@@ -13,7 +13,10 @@
 #
 # The files, each with one reader:
 #   kore-src.tar.gz             this commit's source: install.sh builds Kore.app from it
-#   kore-tailnet-macos-arm64    Kore.app's tailnet helper, for a Mac without Go (tailnet-helper.sh)
+#   kore-tailnet-macos-arm64    Kore.app's tailnet helper, for a Mac without Go (tailnet-helper.sh),
+#                               and Mac boxes' (Set up)
+#   kore-tailnet-linux-*.xz     Kore's own tailnet for boxes without Tailscale (Set up, `kore-host
+#                               update`, host.update, `kore-host upgrade`)
 #   kore-host-linux-*.xz        kore-host for boxes (kore-host.sh, `kore-host update`, host.update)
 #   kore-host.sh                the box install line
 #   kore.apk                    the phone app, signed with the owner's keystore
@@ -100,6 +103,9 @@ for arch in ${=${KORE_HOST_ARCHS:-x86_64 aarch64}}; do
     [[ -f "$OUT/kore-host-linux-$arch.xz" ]] || { scripts/build-host.sh $arch; built kore-host-linux-$arch.xz; }
 done
 [[ -f "$OUT/kore-tailnet-macos-arm64" ]] || { scripts/build-tailnet.sh macos-arm64; built kore-tailnet-macos-arm64; }
+for arch in ${=${KORE_HOST_ARCHS:-x86_64 aarch64}}; do
+    [[ -f "$OUT/kore-tailnet-linux-$arch.xz" ]] || { scripts/build-tailnet.sh linux-$arch; built kore-tailnet-linux-$arch.xz; }
+done
 # The phone app, signed with the owner's keystore (a dry run leaves it out: no Keychain).
 [[ -f "$OUT/kore.apk" || -n $DRY ]] || android/scripts/sign-release.sh "$OUT"
 if [[ -f "$OUT/kore.apk" ]]; then
@@ -110,7 +116,8 @@ fi
 cp scripts/kore-host.sh "$OUT/kore-host.sh"
 git archive --format=tar.gz --prefix=kore/ -o "$OUT/kore-src.tar.gz" HEAD
 assets=()
-for name in kore-src.tar.gz kore-tailnet-macos-arm64 kore-host-linux-x86_64.xz kore-host-linux-aarch64.xz kore-host.sh kore.apk; do
+for name in kore-src.tar.gz kore-tailnet-macos-arm64 kore-tailnet-linux-x86_64.xz kore-tailnet-linux-aarch64.xz \
+    kore-host-linux-x86_64.xz kore-host-linux-aarch64.xz kore-host.sh kore.apk; do
     if [[ -f "$OUT/$name" ]]; then assets+=($name)
     elif [[ -n $DRY ]]; then print "skipped $name (not built)"
     else print -u2 "$name wasn't built: nothing published"; exit 1; fi
