@@ -31,6 +31,12 @@ let usage = """
                                  fork a chat (. for this one) into a tab in front (Act unlimited)
            kore wait <chat> [--timeout s]
                                  until its turn ends or a card asks: its answer
+           kore ask <short id> "question"
+                                 ask another Act unlimited chat; kore wait --ask <id> for the answer
+           kore reply <ask id> "answer" [file]
+                                 answer an ask this chat was asked, a file of its folder with it
+           kore fetch <device:path | path>
+                                 copy a file from an open folder into .kore/inbox/ (50 MB, no secrets)
            kore send <chat> "message"
                                  send to another chat, queued while it works
            kore stop <chat>      stop its turn
@@ -57,7 +63,7 @@ let usage = """
 let arguments = Array(CommandLine.arguments.dropFirst())
 let reads: Set = [
     "ls", "show", "log", "pending", "history", "whoami", "caps", "mcp", "options", "rename", "model", "effort", "fast", "mode", "compact", "new", "fork",
-    "send", "stop", "tab", "answer", "wait", "open", "close",
+    "send", "stop", "tab", "answer", "wait", "open", "close", "ask", "reply", "fetch",
 ]
 
 switch arguments.first {

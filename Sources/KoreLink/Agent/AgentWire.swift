@@ -58,10 +58,15 @@ package struct AgentCommand: Sendable, Equatable {
     package static let open = Self(name: "chat.open", tier: .drive)
     /// A chat closed as its tab's close closes it, named by its id only.
     package static let close = Self(name: "chat.close", tier: .drive)
+    /// Chat to chat (the owner, 2026-11-17): a question to another Act unlimited chat, queued as its
+    /// next message; that chat's answer to one; a file from another open folder into the inbox.
+    package static let ask = Self(name: "chat.ask", tier: .drive)
+    package static let reply = Self(name: "chat.reply", tier: .drive)
+    package static let fetch = Self(name: "file.fetch", tier: .drive)
 
     package static let all: [Self] = [
         whoami, caps, chats, show, read, follow, unfollow, cards, history, wait, options, rename, model, effort, fast, mode, compact,
-        new, fork, send, stop, showTab, answer, open, close,
+        new, fork, send, stop, showTab, answer, open, close, ask, reply, fetch,
     ]
 
     /// Why `tier` may not run `name`; nil when it may.
@@ -149,6 +154,10 @@ package struct AgentArgs: Codable, Sendable, Equatable {
     package var place: String?
     /// `chat.open`: the past chat's session id, or the start of it only one has.
     package var session: String?
+    /// `chat.reply` and `chat.wait`: an ask's id, as `chat.ask` answered it.
+    package var ask: String?
+    /// `file.fetch` and `chat.reply`: a file, `device:path` or a path on the caller's device.
+    package var path: String?
 
     package init(
         chat: String? = nil, last: Int? = nil, before: String? = nil, folder: String? = nil, query: String? = nil,
@@ -166,6 +175,8 @@ package struct AgentArgs: Codable, Sendable, Equatable {
         self.timeout = nil
         self.place = nil
         self.session = nil
+        self.ask = nil
+        self.path = nil
         self.chat = chat
         self.last = last
         self.before = before
@@ -379,6 +390,29 @@ package struct AgentWaited: Encodable, Sendable {
     package var answer: String?
     package var cards: Int
     package var timedOut: Bool
+}
+
+/// `chat.ask`: the ask's id, for `chat.wait`, and the chat asked.
+package struct AgentAskSent: Encodable, Sendable {
+    package var chat: String
+    package var ask: String
+    package var message: String
+}
+
+/// `chat.wait` on an ask: `answered`, `waiting` (timed out), or `expired`, with the answer and
+/// where its file landed.
+package struct AgentAskWaited: Encodable, Sendable {
+    package var ask: String
+    package var state: String
+    package var answer: String?
+    package var file: String?
+    package var timedOut: Bool
+}
+
+/// `file.fetch`: where the copy landed.
+package struct AgentFetched: Encodable, Sendable {
+    package var file: String
+    package var message: String
 }
 
 package struct AgentDone: Encodable, Sendable {

@@ -6,7 +6,8 @@ enum Drive {
 
     static let usage = [
         "new": "[--claude|--codex] [--model M] [--mode X] [\"message\"]", "send": "<chat> \"message\"", "stop": "<chat>", "tab": "<chat>",
-        "fork": "<chat> [--at -N|<message>] [--claude|--codex] [--model M] [\"message\"]", "wait": "<chat> [--timeout s]",
+        "fork": "<chat> [--at -N|<message>] [--claude|--codex] [--model M] [\"message\"]", "wait": "<chat> | --ask <id> [--timeout s]",
+        "ask": "<short id> \"question\"", "reply": "<ask id> \"answer\" [file]", "fetch": "<device:path | path>",
         "answer": "<chat> <card> <answer>... | <chat> <card> --deny | <chat> <card> --allow", "open": "<session> [--folder F]", "close": "<short id>",
     ]
 
@@ -15,7 +16,10 @@ enum Drive {
         switch name {
         case "new": return n <= 1
         case "fork": return (1...2).contains(n)
-        case "wait": return n == 1
+        case "wait": return o.ask != nil ? n == 0 : n == 1
+        case "ask": return n == 2
+        case "reply": return (2...3).contains(n)
+        case "fetch": return n == 1
         case "send": return n == 2
         case "stop", "tab", "open", "close": return n == 1
         default: return o.deny || o.allow ? n == 2 : n >= 3
@@ -45,15 +49,35 @@ enum Drive {
         case "wait":
             let seconds = min(o.timeout ?? 300, 300)
             client.timeout(seconds + 15)
-            var args: Object = ["chat": p[0]]
+            var args: Object = o.ask.map { ["ask": $0] } ?? ["chat": p[0]]
             if let t = o.timeout { args["timeout"] = t }
             data = try client.run("chat.wait", args)
             if o.json { return Reads.printJSON(data) }
+            if o.ask != nil {
+                Reads.say("· \(Reads.str(data["state"]))" + (data["timedOut"] as? Bool == true ? " (no answer yet at the timeout)" : ""))
+                if let file = data["file"] as? String { Reads.say("file: \(file)") }
+                if let answer = data["answer"] as? String { Reads.say(answer) }
+                return
+            }
             let timedOut = data["timedOut"] as? Bool == true
             Reads.say("· \(Reads.str(data["state"]))" + (timedOut ? " (still working at the timeout)" : ""))
             if let answer = data["answer"] as? String { Reads.say(answer) }
             return
         case "send": data = try client.run("chat.send", ["chat": p[0], "text": p[1]])
+        case "ask":
+            data = try client.run("chat.ask", ["chat": p[0], "text": p[1]])
+            if o.json { return Reads.printJSON(data) }
+            return Reads.say("\(Reads.str(data["ask"]))  \(Reads.str(data["message"]))")
+        case "reply":
+            var args: Object = ["ask": p[0], "text": p[1]]
+            if p.count > 2 { args["path"] = p[2] }
+            client.timeout(120)
+            data = try client.run("chat.reply", args)
+        case "fetch":
+            client.timeout(120)
+            data = try client.run("file.fetch", ["path": p[0]])
+            if o.json { return Reads.printJSON(data) }
+            return Reads.say(Reads.str(data["message"]))
         case "stop": data = try client.run("chat.stop", ["chat": p[0]])
         case "tab": data = try client.run("tab.show", ["chat": p[0]])
         case "close": data = try client.run("chat.close", ["chat": p[0]])

@@ -99,7 +99,10 @@ package enum AgentTools {
         Tool(
             name: "kore_wait", command: "chat.wait",
             description: "Wait until another chat's current turn ends, or a card asks the user: returns its state and last answer. Use after kore_send or kore_new_chat to get the reply (Read).",
-            args: [chatArg, ("timeout", "integer", "Seconds, 300 at most (default 300).")], required: ["chat"]),
+            args: [
+                chatArg, ("ask", "string", "Instead of a chat: an ask this chat made (kore_ask's id); returns its answer and where its file landed."),
+                ("timeout", "integer", "Seconds, 300 at most (default 300)."),
+            ], required: []),
         Tool(
             name: "kore_send", command: "chat.send", description: "Send a message to another chat, as the user would type it, queued while it works. It shows who sent it. Only chats at this chat's mode or lower (Act unlimited).",
             args: [chatArg, ("text", "string", "The message. A \"/\" command that chat's CLI has goes too, except sign-in, account, permission and settings ones (mode and model: their own tools); never a \"!\" line.")], required: ["chat", "text"]),
@@ -113,6 +116,19 @@ package enum AgentTools {
             name: "kore_close", command: "chat.close",
             description: "Close another chat as its tab's close does; History keeps it, and kore_open_chat brings it back. By its id only (short or full), never a title. Refused while it works or anything in it would be lost (Act unlimited).",
             args: [("chat", "string", "Its short id (kore_list_chats) or full id.")], required: ["chat"]),
+        Tool(
+            name: "kore_ask", command: "chat.ask",
+            description: "Ask another chat a question. Kore sends it as that chat's next message once it's idle, marked as from this chat, and its answer comes back with kore_wait (ask) and as a line here. Both chats need Act unlimited; by id only; one hop (a chat answering an ask can't ask); 20 an hour; ends after 30 min.",
+            args: [("chat", "string", "Its short id (kore_list_chats) or full id."), ("text", "string", "The question.")], required: ["chat", "text"]),
+        Tool(
+            name: "kore_reply", command: "chat.reply",
+            description: "Answer an ask this chat was asked (its id is in Kore's note with the question). A file from this chat's folder can go with it, into the asker's .kore/inbox/ (fetch's rules) (Act unlimited).",
+            args: [("ask", "string", "The ask's id."), ("text", "string", "The answer."), ("path", "string", "A file in this chat's folder to send with it.")],
+            required: ["ask", "text"]),
+        Tool(
+            name: "kore_fetch", command: "file.fetch",
+            description: "Copy one file from a folder a Kore window has open (this Mac's, or a box's as device:path) into this chat's .kore/inbox/. Copies only, 50 MB at most, never a secret-looking path (.env, keys, credentials, .ssh); 50 an hour (Act unlimited).",
+            args: [("path", "string", "device:path (a box's name, then its path), or a path on this chat's device.")], required: ["path"]),
         Tool(name: "kore_show_tab", command: "tab.show", description: "Bring a chat's tab to the front (Act unlimited).", args: [chatArg], required: ["chat"]),
         Tool(
             name: "kore_answer", command: "cards.answer",
@@ -132,7 +148,7 @@ package enum AgentTools {
 
     /// The tier each command needs, lowest first: wire ids (`tierName` names them).
     package static func tierNeeded(_ command: String) -> String {
-        if ["chat.new", "chat.fork", "chat.send", "chat.stop", "tab.show", "cards.answer", "chat.open", "chat.close"].contains(command) { return "drive" }
+        if ["chat.new", "chat.fork", "chat.send", "chat.stop", "tab.show", "cards.answer", "chat.open", "chat.close", "chat.ask", "chat.reply", "file.fetch"].contains(command) { return "drive" }
         if ownCommands.contains(command) { return "own" }
         return "watch"
     }

@@ -884,8 +884,10 @@ package final class Chat: Identifiable {
     /// A message from outside the composer (the local link): sent as the composer's would be,
     /// queued while a turn runs, without touching the draft or its attachments on the Mac.
     /// False when it can't go now (a compaction, an account switch, a chat closed).
+    /// `note`: a line its agent reads with this message only (`noteNextTurn`), never shown: an
+    /// Arsenal ask's how-to-answer.
     @discardableResult
-    package func sendFromLink(_ text: String, files: [URL] = []) -> Bool {
+    package func sendFromLink(_ text: String, files: [URL] = [], note: String? = nil) -> Bool {
         guard !closed, !accountRestartPending else { return false }
         let sent = services.attachments(files)
         // During a compaction a phone's message waits for it, shown queued, as the composer's does.
@@ -901,7 +903,7 @@ package final class Chat: Identifiable {
             return true
         }
         cancelContinue()
-        deliver(text, sent)
+        deliver(text, sent, note: note)
         return true
     }
 
@@ -938,7 +940,7 @@ package final class Chat: Identifiable {
 
     /// Sends a message the composer has given up (or Kore's own "Continue").
     private func deliver(
-        _ text: String, _ sent: [Attachment], id given: String? = nil, queued forced: String?? = nil,
+        _ text: String, _ sent: [Attachment], id given: String? = nil, queued forced: String?? = nil, note: String? = nil,
         done: (@MainActor (Result<Bool, Error>) -> Void)? = nil
     ) {
         let done = done.map(CallOnce.init)
@@ -1013,11 +1015,14 @@ package final class Chat: Identifiable {
                     }
                 }
                 guard currentWork(epoch), !Task.isCancelled else { return }
-                // Arsenal changed since the agent was last told: this message carries a line saying so.
+                // Arsenal changed since the agent was last told: this message carries a line saying so,
+                // with the message's own note after it.
+                var notes = note.map { [$0] } ?? []
                 if services.agentTools, arsenal != arsenalTold {
                     arsenalTold = arsenal
-                    backend.noteNextTurn(KoreReach.note(tier: arsenal?.title, chat: String(self.id.uuidString.prefix(8)).lowercased()))
+                    notes.insert(KoreReach.note(tier: arsenal?.title, chat: String(self.id.uuidString.prefix(8)).lowercased()), at: 0)
                 }
+                if !notes.isEmpty { backend.noteNextTurn(notes.joined(separator: "\n")) }
                 let turn = try await backend.send(text, files: Attachments.files(sent), queued: queued, id: id)
                 done?(.success(turn))
                 // A fork's CLI has its session once a message went out, not when it was shown.

@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import HostClient
 import KoreCore
 import KoreUI
 import LinkProtocol
@@ -514,6 +515,12 @@ package final class AgentChannel {
             return chat.id.uuidString
         case AgentCommand.close.name:
             return closeChat(args, client, id)
+        case AgentCommand.ask.name:
+            return askChat(args, client, id)
+        case AgentCommand.reply.name:
+            return replyAsk(args, client, id)
+        case AgentCommand.fetch.name:
+            return fetchFile(args, client, id)
         case AgentCommand.showTab.name:
             guard let chat = changeable(args, client, id) else { return nil }
             guard let workspace = AgentReads.workspace(of: chat), workspace.arsenalShow(chat) else {
@@ -583,6 +590,216 @@ package final class AgentChannel {
         case .success(let said): send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chatId, message: said, short: short)))
         }
         return chatId
+    }
+
+    // MARK: Chat to chat
+
+    /// Why a chat named for an ask names none.
+    private struct RefWhy: Error {
+        let text: String
+        init(_ text: String) { self.text = text }
+    }
+
+    /// A chat named by its id only, as close names one; why not (for "Not asked: ") otherwise.
+    private func byID(_ ref: String?, _ client: Client) -> Result<Chat, RefWhy> {
+        guard let ref, !ref.isEmpty, ref.utf8.count <= 128 else { return .failure(RefWhy("name the chat by its short id (kore ls) or its full id")) }
+        let chats = Dictionary(AgentReads.readable(own: client.chat).map { ($0.id.uuidString, $0) }, uniquingKeysWith: { a, _ in a })
+        let named = { (ids: [String]) in ids.compactMap { chats[$0] }.map { "\(AgentReads.short($0.id.uuidString)) “\(AgentReads.title($0.title))”" }.joined(separator: ", ") }
+        switch AgentRefs.resolveID(ref, chats: chats.values.map { (id: $0.id.uuidString, title: $0.title) }) {
+        case .chat(let found): return chats[found].map(Result.success) ?? .failure(RefWhy("\(ref) is closed"))
+        case .itself: return .failure(RefWhy("a chat doesn't ask itself"))
+        case .none: return .failure(RefWhy("\(ref.prefix(40)) is closed"))
+        case .byTitle(let ids): return .failure(RefWhy("ask takes an id, never a title: " + named(ids)))
+        case .ambiguous(let ids): return .failure(RefWhy("several chats have that short id, give the full one: " + named(ids)))
+        }
+    }
+
+    /// A refusal the asker's chat shows as a line, in the same words the agent reads.
+    private func refuseLine(_ chat: Chat?, _ client: Client, _ id: String, _ what: String, _ why: String) {
+        let text = "Not \(what): \(why)"
+        chat?.note("⊘ " + text)
+        fail(client, id, .refused, text)
+    }
+
+    /// `chat.ask`: a question to another Act unlimited chat, by its id, sent once it's idle
+    /// (`ArsenalAsks`). Answers with the ask's id at once; the answer comes to `chat.wait`.
+    private func askChat(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
+        guard let asker = callerChat(client) else {
+            fail(client, id, .noWindow, "Only a chat in Kore asks another.")
+            return nil
+        }
+        guard let question = args.text?.trimmingCharacters(in: .whitespacesAndNewlines), !question.isEmpty, question.utf8.count <= Self.textMax else {
+            fail(client, id, .invalid, "Say the question, \(Self.textMax / 1024) KiB at most.")
+            return nil
+        }
+        let target: Chat
+        switch byID(args.chat, client) {
+        case .failure(let why):
+            refuseLine(asker, client, id, "asked", why.text)
+            return nil
+        case .success(let chat): target = chat
+        }
+        let targetId = target.id.uuidString
+        let name = AgentReads.title(target.title)
+        if target === asker {
+            refuseLine(asker, client, id, "asked", "a chat doesn't ask itself")
+            return targetId
+        }
+        if asker.boxPlace != nil, target.boxPlace == nil, !ArsenalAsks.boxReachesMac {
+            refuseLine(asker, client, id, "asked", "a box can't reach into the Mac")
+            return targetId
+        }
+        guard target.noFreer(than: asker) else {
+            refuseLine(asker, client, id, "asked", "\(name)'s mode lets it do more on its own than this chat's")
+            return targetId
+        }
+        let shared = ArsenalAsks.shared
+        if let why = shared.askRefusal(asker: asker.id.uuidString, target: targetId, targetName: name, targetTier: AgentGrants.tier(chat: targetId)) {
+            refuseLine(asker, client, id, "asked", why)
+            return targetId
+        }
+        let ask = shared.ask(asker, target, question: question)
+        send(client, AgentResult(id: id, ok: true, data: AgentAskSent(
+            chat: targetId, ask: ask.id,
+            message: "Asked “\(name)” (ask \(ask.id)): it goes as its next message once it's idle. The answer comes to kore_wait with ask \(ask.id), and as a line in this chat; an ask ends after \(Int(ArsenalAsks.lifetime / 60)) min.")))
+        return targetId
+    }
+
+    /// `chat.reply`: the answer to an ask this chat was asked, with a file from its own folder if
+    /// given (fetch's rules), into the asker's inbox.
+    private func replyAsk(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
+        guard let replier = callerChat(client), let home = AgentReads.workspace(of: replier) else {
+            fail(client, id, .noWindow, "Only a chat in Kore answers an ask.")
+            return nil
+        }
+        guard let askId = args.ask?.trimmingCharacters(in: .whitespaces).lowercased(), !askId.isEmpty,
+            let text = args.text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty, text.utf8.count <= Self.textMax
+        else {
+            fail(client, id, .invalid, "Name the ask and say the answer, \(Self.textMax / 1024) KiB at most.")
+            return nil
+        }
+        let shared = ArsenalAsks.shared
+        if let why = shared.replyRefusal(askId, from: replier.id.uuidString) {
+            refuseLine(replier, client, id, "answered", why)
+            return nil
+        }
+        guard let ask = shared.asks[askId] else { return nil }
+        guard let path = args.path, !path.isEmpty else {
+            if let done = shared.answer(askId, text: text, file: nil) { shared.answered(done) }
+            send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: ask.asker, message: "Answered “\(ask.askerName)”.")))
+            return ask.asker
+        }
+        guard let asker = AgentReads.chatsByID()[ask.asker], let window = AgentReads.workspace(of: asker) else {
+            refuseLine(replier, client, id, "answered", "\(ask.askerName) is closed")
+            return ask.asker
+        }
+        if let why = shared.fetchRefusal(replier.id.uuidString) {
+            refuseLine(replier, client, id, "answered", why)
+            return ask.asker
+        }
+        let own = home.arsenalPlace
+        let source: FilePlace
+        switch ArsenalFetch.place(path, base: own, names: Workspace.arsenalBoxNames()) {
+        case .failure(let refusal):
+            refuseLine(replier, client, id, "answered", refusal.line)
+            return ask.asker
+        case .success(let place): source = place
+        }
+        let inbox = window.arsenalInbox
+        let held = Workspace.arsenalBoxes(Set([source.alias, inbox.alias].compactMap { $0 }))
+        Task { @MainActor [weak self, weak client] in
+            // Its own folder only, on its own device.
+            let roots = source.alias == own.alias ? [own.path] : []
+            let result = await ArsenalFetch.run(source, roots: roots, into: inbox, boxes: held.boxes, allowBoxToMac: true)
+            held.release()
+            guard let self, let client else { return }
+            switch result {
+            case .failure(let refusal):
+                self.refuseLine(replier, client, id, "answered", refusal.line)
+            case .success(let landed):
+                shared.spentFetch(replier.id.uuidString)
+                guard let done = shared.answer(askId, text: text, file: landed.path) else {
+                    return self.refuseLine(replier, client, id, "answered", shared.replyRefusal(askId, from: replier.id.uuidString) ?? "that ask ended")
+                }
+                shared.answered(done, file: .init(name: landed.name, where: ArsenalFetch.inbox + "/" + landed.name))
+                self.send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: ask.asker, message: "Answered “\(ask.askerName)”, with \(landed.name).")))
+            }
+        }
+        return ask.asker
+    }
+
+    /// `file.fetch`: one file from a folder a Kore window has open, on this Mac or a box, into
+    /// this chat's `.kore/inbox/` (`ArsenalFetch`).
+    private func fetchFile(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
+        guard let asker = callerChat(client), let window = AgentReads.workspace(of: asker) else {
+            fail(client, id, .noWindow, "Only a chat in Kore fetches, into its own folder.")
+            return nil
+        }
+        guard let path = args.path, !path.isEmpty, path.utf8.count <= 4096 else {
+            fail(client, id, .invalid, "Name the file: device:path, or a path on this chat's device.")
+            return nil
+        }
+        let shared = ArsenalAsks.shared
+        if let why = shared.fetchRefusal(asker.id.uuidString) {
+            refuseLine(asker, client, id, "fetched", why)
+            return nil
+        }
+        let inbox = window.arsenalInbox
+        let source: FilePlace
+        switch ArsenalFetch.place(path, base: window.arsenalPlace, names: Workspace.arsenalBoxNames()) {
+        case .failure(let refusal):
+            refuseLine(asker, client, id, "fetched", refusal.line)
+            return nil
+        case .success(let place): source = place
+        }
+        let held = Workspace.arsenalBoxes(Set([source.alias, inbox.alias].compactMap { $0 }))
+        let roots = Workspace.arsenalRoots(on: source.alias)
+        Task { @MainActor [weak self, weak client] in
+            let result = await ArsenalFetch.run(source, roots: roots, into: inbox, boxes: held.boxes, allowBoxToMac: ArsenalAsks.boxReachesMac)
+            held.release()
+            guard let self, let client else { return }
+            switch result {
+            case .failure(let refusal):
+                self.refuseLine(asker, client, id, "fetched", refusal.line)
+            case .success(let landed):
+                shared.spentFetch(asker.id.uuidString)
+                let line = "Fetched \(source.name) from \(source.device) → \(ArsenalFetch.inbox)/\(landed.name)"
+                asker.note("↓ " + line)
+                self.send(client, AgentResult(id: id, ok: true, data: AgentFetched(file: landed.path, message: line + ".")))
+            }
+        }
+        return nil
+    }
+
+    /// `chat.wait` on an ask this chat made: its answer once it comes (or `timeout`), or how it ended.
+    private func waitAsk(_ askId: String, _ args: AgentArgs, _ client: Client, _ id: String) -> String? {
+        let askId = askId.trimmingCharacters(in: .whitespaces).lowercased()
+        guard let ask = ArsenalAsks.shared.asks[askId], ask.asker == client.chat else {
+            fail(client, id, .noChat, "This chat made no ask with that id.")
+            return nil
+        }
+        final class Once { var sent = false }
+        let once = Once()
+        let reply = { [weak self, weak client] (ask: ArsenalAsks.Ask, timedOut: Bool) in
+            guard let self, let client, !once.sent else { return }
+            once.sent = true
+            let state = switch ask.ended {
+            case .answered: "answered"
+            case .expired: "expired"
+            case .gone: "gone"
+            case nil: "waiting"
+            }
+            self.send(client, AgentResult(id: id, ok: true, data: AgentAskWaited(ask: ask.id, state: state, answer: ask.answer, file: ask.file, timedOut: timedOut)))
+        }
+        ArsenalAsks.shared.whenEnded(askId) { reply($0, false) }
+        guard !once.sent else { return ask.target }
+        let seconds = min(max(args.timeout ?? Self.waitMax, 1), Self.waitMax)
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(seconds)) {
+            MainActor.assumeIsolated {
+                if let now = ArsenalAsks.shared.asks[askId] { reply(now, true) }
+            }
+        }
+        return ask.target
     }
 
     /// The caller's own chat, when it's one of Kore's.
@@ -773,6 +990,7 @@ package final class AgentChannel {
     /// Until the chat's turn ends or a card asks (or `timeout`, 300 s at most): its state and last
     /// answer. Held by the follow taps, so nothing polls; only the command counts toward the limit.
     private func wait(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
+        if let ask = args.ask { return waitAsk(ask, args, client, id) }
         guard let chat = resolve(args.chat, client, id) else { return nil }
         let chatId = chat.id.uuidString
         guard chatId != client.chat else {

@@ -430,7 +430,7 @@ final class AgentChannelAll: ChatStoryline {
     static let forbidden = [
         "chat.send", "chat.new", "chat.stop", "chat.queue", "chat.rename", "chat.model", "chat.effort", "chat.mode", "chat.compact",
         "chat.fork", "chat.rollback", "chat.close", "chat.archive", "cards.answer", "window.open", "file.open", "terminal.open",
-        "usage.read", "tx.search", "agent.setTier", "agent.grant", "agent.enable", "agent.stopAll",
+        "usage.read", "tx.search", "agent.setTier", "agent.grant", "agent.enable", "agent.stopAll", "chat.ask", "chat.reply", "file.fetch",
     ]
 
     override class var script: CLIScript {
@@ -673,7 +673,7 @@ final class AgentChannelAll: ChatStoryline {
                 }
                 let tools = (AgentJSON.path(replies[2], "result", "tools") as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
                 return try status == 0 && AgentJSON.path(replies[1], "result", "serverInfo", "name") as? String == "kore"
-                    && tools.count == 23 && tools.contains("kore_new_chat") && tools.contains("kore_read_chat")
+                    && tools.count == 26 && tools.contains("kore_new_chat") && tools.contains("kore_read_chat")
                     && replies[3]?["result"] != nil
                     && AgentJSON.path(text(10), "caller", "chat") as? String == cast.id("a")
                     && text(11)?["tier"] as? String == "watch"

@@ -29,7 +29,7 @@ enum Reads {
             case "history": try history(client, options)
             case "options": try Own.options(client, options)
             case "fast", "compact", "rename", "model", "effort", "mode": try Own.set(name, client, options)
-            case "new", "fork", "send", "stop", "tab", "answer", "wait", "open", "close": try Drive.run(name, client, options)
+            case "new", "fork", "send", "stop", "tab", "answer", "wait", "open", "close", "ask", "reply", "fetch": try Drive.run(name, client, options)
             default: return fail(usage, code: 2)
             }
             return 0
@@ -63,6 +63,8 @@ enum Reads {
         var deny = false
         /// `answer --allow`: a permission card allowed once.
         var allow = false
+        /// `wait --ask`: an ask's id.
+        var ask: String?
         /// `fork --at`, `wait --timeout`.
         var at: String?
         var timeout: Int?
@@ -97,6 +99,9 @@ enum Reads {
                 case "--at":
                     guard let m = rest.popFirst() else { problem = "--at takes a message"; return }
                     at = m
+                case "--ask":
+                    guard let a = rest.popFirst() else { problem = "--ask takes an ask's id"; return }
+                    ask = a
                 case "--timeout":
                     guard let n = rest.popFirst().flatMap({ Int($0) }), n > 0 else { problem = "--timeout takes seconds"; return }
                     timeout = n
