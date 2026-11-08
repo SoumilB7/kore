@@ -112,6 +112,30 @@ Answering a plan card into the chat's own mode, or "Implement this plan?" throug
 leaves plan: it follows `chat.planReady`'s rule (only where tools still ask, or up to Auto with
 full control).
 
+## Two-way sync
+
+A Mac folder can have a copy on the box that the Mac keeps in sync both ways while that copy's
+window is open. The Mac moves the files with rsync over SSH; the box only says what changed.
+
+| `type` | fields | |
+|---|---|---|
+| `sync.watch` | `folder` | A folder the box serves (or one inside it); `act` or `full` grant. Result: `ok`. Then the folder's whole list follows as `sync.changed` with `all: true` (in pieces of at most 2000, `more: true` on all but the last), then its changes while this connection lasts. Sent again, it lists again. |
+| `sync.unwatch` | `folder` | Ends that watch. A connection's watches also end with it. |
+
+`sync.changed {folder, paths: [{p, s, m} | {p, gone: true}], all?, more?, watching?, limit?, folders?}`
+goes from the box unasked. `p` is the path from `folder`, `s` the size in bytes, `m` the mtime in
+whole seconds; a folder that went is one `gone` entry. Changes are gathered for 300 ms and sent
+as one message.
+
+- Left out on both ends: `.git/`, `.build/`, `node_modules/`, `.DS_Store`, and what each folder's
+  `.gitignore` names. Only regular files are listed.
+- Linux watches with inotify, one watch per folder. When the folder has more folders than half of
+  `fs.inotify.max_user_watches`, the box doesn't watch it: the whole list carries
+  `watching: false`, `limit` and `folders` (counted up to half the limit plus one), and the Mac
+  sends `sync.watch` again when it wants a fresh list (its window comes forward, a turn ends).
+  Nothing polls.
+- macOS (tests) watches with FSEvents.
+
 ## GitHub
 
 `ghSignedIn` (whether `gh auth status` succeeds for github.com) is in `welcome.host` and in the

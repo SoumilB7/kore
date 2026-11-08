@@ -58,13 +58,34 @@ final class BoxBinding {
         return connection.windows.first { $0.id == window }?.path ?? folder
     }
 
+    /// The folder's two-way sync with a Mac folder, while this window is open.
+    private(set) var sync: HostSync?
+    private var focus: NSObjectProtocol?
+
     func windowOpened() {
         connection.onSnapshot(key) { [weak self] in self?.adoptChats() }
         connection.retain()
+        if let pair = SyncPairs.pair(alias: alias, box: folder) {
+            let sync = HostSync(pair: pair, connection: connection)
+            self.sync = sync
+            sync.start()
+            // A box that can't watch its copy lists it again as the window comes forward.
+            focus = NotificationCenter.default.addObserver(forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main) { [weak self] note in
+                let window = ObjectIdentifier(note.object as AnyObject)
+                MainActor.assumeIsolated {
+                    guard let self, let mine = self.workspace?.window, ObjectIdentifier(mine) == window else { return }
+                    self.sync?.refresh()
+                }
+            }
+        }
     }
 
     func windowClosed() {
         connection.onSnapshot(key, nil)
+        sync?.stop()
+        sync = nil
+        if let focus { NotificationCenter.default.removeObserver(focus) }
+        focus = nil
         connection.release()
     }
 
@@ -205,7 +226,11 @@ final class BoxChatServices: ChatServices {
     var watchesStall: Bool { false }
     var onBox: Bool { true }
     func arsenalFollowMode(_ chat: Chat) { app.arsenalFollowMode(chat) }
-    func tap(_ chat: Chat, _ event: ChatEvent) { app.tap(chat, event) }
+    func tap(_ chat: Chat, _ event: ChatEvent) {
+        app.tap(chat, event)
+        // A turn may have changed files on a box that can't watch its copy.
+        if case .turnFinished = event { binding?.sync?.refresh() }
+    }
     func log(_ name: String, _ fields: KeyValuePairs<String, String?>) { app.log(name, fields) }
     var timeReplay: Bool { app.timeReplay }
     func logReplay(_ took: Duration) { app.logReplay(took) }
@@ -365,12 +390,14 @@ struct BoxCue: View {
     let box: BoxBinding
 
     var body: some View {
-        Text(box.line)
+        // A synced folder's one notice (both kept, or why it paused) stands in for the name.
+        let notice = box.sync?.notice
+        Text(notice.map { box.alias + " · " + $0 } ?? (box.sync != nil && box.online ? box.alias + " · in sync" : box.line))
             .font(Chrome.label)
-            .foregroundStyle(box.online ? Theme.secondary : Theme.tertiary)
+            .foregroundStyle(box.online && notice == nil ? Theme.secondary : Theme.tertiary)
             .lineLimit(1)
             .truncationMode(.middle)
             .layoutPriority(-1)
-            .help(box.folder)
+            .help(box.sync.map { $0.pair.mac + " ⇄ " + box.folder } ?? box.folder)
     }
 }

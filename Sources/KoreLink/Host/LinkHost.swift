@@ -527,7 +527,7 @@ package final class LinkHost {
         case .accountPrivacy: "Changed email privacy"
         case .chatSetArsenal: "Changed Arsenal"
         case .arsenalStopAll: "Stopped agent control"
-        case .foldersList, .folderAdd, .authGh: "Acted"
+        case .foldersList, .folderAdd, .authGh, .syncWatch, .syncUnwatch: "Acted"
         }
     }
 

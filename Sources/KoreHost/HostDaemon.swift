@@ -84,6 +84,13 @@ package final class HostDaemon {
 
     func folder(windowId: String) -> String? { config.folders.first { Self.windowID($0) == windowId } }
 
+    static func standard(_ path: String) -> String { URL(fileURLWithPath: path).standardizedFileURL.path }
+
+    /// A folder served, or one inside a served folder.
+    func serves(_ path: String) -> Bool {
+        config.folders.contains { path == $0 || path.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }
+    }
+
     /// Adds a folder to `config.json`: a folder that exists, by its absolute path or under `~`
     /// (this box's home). While `config.json` can't be read it's served until the next start, and
     /// the file is left as it is.

@@ -20,6 +20,8 @@ final class LinkClient {
     private var uploads = LinkUploads()
     /// Catch-ups still to send, a part at a time as the socket drains (a log can be megabytes).
     private var catchUps: [(chatId: String, log: String, reset: Bool, items: ArraySlice<StreamItem>)] = []
+    /// `sync.watch`es, by folder; they end with the link.
+    private var syncs: [String: SyncWatch] = [:]
 
     init(socket: HostSocket, host: HostDaemon) {
         self.socket = socket
@@ -53,6 +55,8 @@ final class LinkClient {
 
     private func gone() {
         helloWait?.cancel()
+        for watch in syncs.values { watch.stop() }
+        syncs = [:]
         host.ended(self)
         for chatId in streaming { host.unfollowed(chatId) }
         streaming = []
@@ -181,6 +185,10 @@ final class LinkClient {
                 guard let blob = host.keep(file) else { return uploadFailed(uploadId, .init(.busy, "The box couldn't keep the file.")) }
                 send(.result(.init(id: "blob.put:" + uploadId, ok: true, blobId: blob)))
             }
+        case .cmd(let id, .control(let kind, let args)) where kind == .syncWatch || kind == .syncUnwatch:
+            guard current() != nil else { return }
+            send(.result(sync(kind, folder: args.folder, id: id)))
+            if kind == .syncWatch, let folder = args.folder.map(HostDaemon.standard) { syncs[folder]?.start() }
         case .cmd(let id, let command):
             guard let grant = current() else { return }
             let result = host.apply(command, id: id, control: grant.control) { [weak self] result in self?.send(.result(result)) }
@@ -215,6 +223,20 @@ final class LinkClient {
         let clis = full && !host.clis.isEmpty ? host.clis : nil
         send(.snapshot(rev: rev, windows: host.windows, chats: host.chats.map { HostMeta.meta($0, raise: full) }, extras: LinkExtras(clis: clis, ghSignedIn: host.ghSignedIn)))
         send(.attnState(aid: 0, open: [], recent: []))
+    }
+
+    // MARK: Sync
+
+    /// `sync.watch` / `sync.unwatch` for a folder the box serves (or one inside it). A watch
+    /// starts after its result goes, so the list follows the result.
+    private func sync(_ kind: ControlKind, folder: String?, id: String) -> LinkMessage.Result {
+        guard grant?.control != .watch else { return .init(id: id, ok: false, code: .deniedControl, message: "This grant only watches.") }
+        guard let folder = folder.map(HostDaemon.standard), host.serves(folder) else {
+            return .init(id: id, ok: false, code: .goneFolder, message: "That folder isn't on this box.")
+        }
+        syncs.removeValue(forKey: folder)?.stop()
+        if kind == .syncWatch { syncs[folder] = SyncWatch(folder: folder) { [weak self] data in self?.socket.send(data) } }
+        return .init(id: id, ok: true)
     }
 
     // MARK: Out

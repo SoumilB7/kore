@@ -102,6 +102,8 @@ package final class HostConnection {
     @ObservationIgnored private var early: [String: LinkMessage.Result] = [:]
     @ObservationIgnored private var saveQueued = false
     @ObservationIgnored private var snapshotWatchers: [String: @MainActor () -> Void] = [:]
+    /// `sync.changed`'s readers, by the box folder they sync.
+    @ObservationIgnored private var syncReaders: [String: @MainActor (Data) -> Void] = [:]
 
     private struct Weak {
         weak var follower: (any HostFollower)?
@@ -176,6 +178,9 @@ package final class HostConnection {
 
     /// Runs `action` after each snapshot (each time the link comes up); nil stops it.
     package func onSnapshot(_ key: String, _ action: (@MainActor () -> Void)?) { snapshotWatchers[key] = action }
+
+    /// Hands each `sync.changed` for a box folder to `read` (its frame's bytes); nil stops it.
+    package func onSync(_ folder: String, _ read: (@MainActor (Data) -> Void)?) { syncReaders[folder] = read }
 
     // MARK: Following chats
 
@@ -523,6 +528,8 @@ package final class HostConnection {
                 // A sign-in's end, before anyone waits on it.
                 early[result.id] = result
             }
+        case .unknown(let type) where type == HostWire.syncChanged:
+            if let folder = HostWire.syncFolder(raw) { syncReaders[folder]?(raw) }
         default:
             break
         }

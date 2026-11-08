@@ -21,6 +21,7 @@ import LinkProtocol
 //   the code from Claude's page; `account.refresh` says who's signed in, in `message`.
 // - GitHub on the box: `auth.gh` answers `{url, authCode}` (a device code to enter on the page); the
 //   box says `ghSignedIn` on its welcome's `host` (or a snapshot's or delta's).
+// - Two-way sync: `sync.watch` / `sync.unwatch {folder}`; the box pushes `sync.changed`.
 // - Liveness: the box has no ping. One is sent as a command of a type the box doesn't know, which
 //   any 1.x host answers with a `result` (`invalid`); every frame counts as a sign of life.
 
@@ -104,6 +105,42 @@ package enum HostWire {
     }
 
     package static func bye() -> Data { encode(.bye(.quit)) }
+
+    // MARK: Two-way sync
+
+    /// `sync.watch {folder}`: the box sends the folder's whole list, then its changes, as
+    /// `sync.changed`, while this link lasts. `sync.unwatch {folder}` ends it.
+    package static func syncWatch(id: String, folder: String) -> Data { command(id: id, type: "sync.watch", ["folder": folder]) }
+    package static func syncUnwatch(id: String, folder: String) -> Data { command(id: id, type: "sync.unwatch", ["folder": folder]) }
+
+    package static let syncChanged = "sync.changed"
+
+    /// `sync.changed`'s folder, to find its reader.
+    package static func syncFolder(_ raw: Data) -> String? { (try? JSONDecoder().decode(SyncPeek.self, from: raw))?.folder }
+
+    /// `sync.changed {folder, paths, all?, more?, watching?, limit?}`.
+    package struct SyncChanged: Decodable, Sendable {
+        package struct Path: Decodable, Sendable {
+            package var p: String
+            package var s: Int64?
+            package var m: Int64?
+            package var gone: Bool?
+        }
+        package var folder: String
+        package var paths: [Path]
+        /// The folder's whole list (in pieces while `more`), not changes.
+        package var all: Bool?
+        package var more: Bool?
+        /// With the whole list: false when the box can't watch the folder (too many folders for
+        /// inotify's `limit`); it lists again when asked.
+        package var watching: Bool?
+        package var limit: Int?
+        package var folders: Int?
+    }
+
+    package static func syncChanged(_ raw: Data) -> SyncChanged? { try? JSONDecoder().decode(SyncChanged.self, from: raw) }
+
+    private struct SyncPeek: Decodable { var folder: String? }
 
     // MARK: Sign-in on the box
 

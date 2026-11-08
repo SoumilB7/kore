@@ -54,10 +54,22 @@ struct BoxPopup: View {
         case boxes
         /// A box's folders.
         case box(String)
+        /// Which box the window's folder opens on.
+        case pick
+    }
+
+    /// The top row's way through a first copy.
+    enum Copy: Equatable {
+        case idle, checking
+        /// Big: one line, then Copy or Cancel.
+        case ask(String, alias: String)
+        case copying(String)
+        case failed(String)
     }
 
     @Environment(\.openWindow) private var openWindow
     @StateObject private var level = Local(Level.boxes)
+    @StateObject private var copy = Local(Copy.idle)
     /// Add a box…'s field while it's open.
     @StateObject private var typed = Local<String?>(nil)
     @FocusState private var typing: Bool
@@ -70,8 +82,14 @@ struct BoxPopup: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             switch level.value {
-            case .boxes: boxes
+            case .boxes:
+                if mac != nil, !list.boxes.isEmpty {
+                    syncRow
+                    Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.xxs)
+                }
+                boxes
             case .box(let alias): folders(alias)
+            case .pick: pick
             }
         }
         .padding(Space.xs)
@@ -92,6 +110,77 @@ struct BoxPopup: View {
     }
 
     // MARK: Levels
+
+    /// The window's folder on this Mac; nil in a box's window and the new window.
+    private var mac: URL? { workspace.flatMap { $0.box == nil ? $0.folder : nil } }
+
+    /// "Open <folder> on <box>", or where it stands: checking, the one question, copying, why not.
+    @ViewBuilder private var syncRow: some View {
+        let glyph = Image(systemName: "arrow.triangle.2.circlepath").font(Chrome.caption).foregroundStyle(Theme.accent).frame(width: Size.statusPoint)
+        let name = mac?.lastPathComponent ?? ""
+        switch copy.value {
+        case .idle:
+            if let pair = mac.flatMap({ SyncPairs.pair(mac: $0.standardizedFileURL.path) }) {
+                row(story: StoryID.Boxes.sync, action: { openPair(pair) }) {
+                    glyph
+                    Text("Open on \(pair.alias) · in sync").font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1)
+                }
+                .help(pair.box)
+            } else if list.boxes.count == 1, let only = list.boxes.first {
+                row(story: StoryID.Boxes.sync, action: { begin(only.alias) }) {
+                    glyph
+                    Text("Open \(name) on \(only.alias)").font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                }
+            } else {
+                row(story: StoryID.Boxes.sync, action: { level.value = .pick }) {
+                    glyph
+                    Text("Open \(name) on…").font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 0)
+                    Image(systemName: "chevron.right").font(Chrome.glyphCrumb).foregroundStyle(Theme.tertiary)
+                }
+            }
+        case .checking:
+            status(glyph, "Checking \(name)…")
+        case .copying(let alias):
+            status(glyph, "Copying \(name) to \(alias)…")
+        case .failed(let why):
+            status(glyph, why, tint: Theme.danger)
+        case .ask(let line, let alias):
+            VStack(alignment: .leading, spacing: Space.xs) {
+                status(glyph, line)
+                HStack(spacing: Space.sm) {
+                    Spacer(minLength: 0)
+                    Button("Cancel") { copy.value = .idle }.smallButton()
+                    Button("Copy") { Task { await makeCopy(alias) } }.smallButton(prominent: true)
+                }
+                .padding(.horizontal, Space.sm)
+                .padding(.bottom, Space.xs)
+            }
+        }
+    }
+
+    private func status(_ glyph: some View, _ line: String, tint: Color = Theme.secondary) -> some View {
+        HStack(spacing: Space.sm) {
+            glyph
+            Text(line).font(Chrome.label).foregroundStyle(tint).lineLimit(2)
+        }
+        .padding(.horizontal, Space.sm)
+        .frame(maxWidth: .infinity, minHeight: Layout.Options.row, alignment: .leading)
+    }
+
+    /// The boxes the folder could open on.
+    @ViewBuilder private var pick: some View {
+        row(action: { level.value = .boxes }) {
+            Image(systemName: "chevron.left").font(Chrome.glyphCrumb).foregroundStyle(Theme.secondary).frame(width: Size.statusPoint)
+            Text("Open \(mac?.lastPathComponent ?? "") on…").font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(1)
+        }
+        ForEach(list.boxes) { box in
+            row(story: StoryID.Boxes.box(box.alias), action: { begin(box.alias) }) {
+                StatusDot(state: box.dotState)
+                Text(box.alias).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1)
+            }
+        }
+    }
 
     @ViewBuilder private var boxes: some View {
         ForEach(list.boxes) { box in
@@ -183,6 +272,43 @@ struct BoxPopup: View {
         openWindow(value: BoxPlace(alias: alias, folder: folder.path))
     }
 
+    private func openPair(_ pair: SyncPair) {
+        close()
+        openWindow(value: BoxPlace(alias: pair.alias, folder: pair.box))
+    }
+
+    /// The first copy: counted and checked against the box's room, asked once when big.
+    private func begin(_ alias: String) {
+        guard let mac else { return }
+        level.value = .boxes
+        copy.value = .checking
+        Task {
+            switch await HostSync.preflight(mac: mac, box: .ssh(alias)) {
+            case .refuse(let why): copy.value = .failed(why)
+            case .ask(let line): copy.value = .ask(line, alias: alias)
+            case .go: await makeCopy(alias)
+            }
+        }
+    }
+
+    /// Makes the box copy and opens its window, which keeps the two in sync.
+    private func makeCopy(_ alias: String) async {
+        guard let mac else { return }
+        copy.value = .copying(alias)
+        let connection = BoxBinding.connection(alias)
+        connection.retain()
+        let made = await HostSync.firstCopy(mac: mac, connection: connection, box: .ssh(alias))
+        // A moment later, so the window takes the link over without it dropping.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { connection.release() }
+        switch made {
+        case .success(let pair):
+            copy.value = .idle
+            openPair(pair)
+        case .failure(let refusal):
+            copy.value = .failed(refusal.message)
+        }
+    }
+
     private func addBox(_ alias: String) {
         let alias = alias.trimmingCharacters(in: .whitespaces)
         guard !alias.isEmpty, !alias.contains(" ") else { return }
@@ -195,7 +321,7 @@ struct BoxPopup: View {
         if event.type == .keyDown {
             // Esc: the field's own first (it closes the field), then a level up, then the popup.
             guard event.keyCode == 53, !typing else { return event }
-            if level.value != .boxes { level.value = .boxes } else { close() }
+            if level.value != .boxes { level.value = .boxes } else if copy.value != .idle, copy.value != .checking { copy.value = .idle } else { close() }
             return nil
         }
         let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)

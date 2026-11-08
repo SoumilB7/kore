@@ -62,6 +62,9 @@ package enum ControlKind: String, Sendable, CaseIterable {
     case folderAdd = "folder.add"
     /// 1.4: `gh` signs in to github.com on the box, by its device code.
     case authGh = "auth.gh"
+    /// 1.4: a served folder's changes, pushed to this client as `sync.changed` while it's linked.
+    case syncWatch = "sync.watch"
+    case syncUnwatch = "sync.unwatch"
 
     /// It acts on a CLI's account.
     package var onAccount: Bool { rawValue.hasPrefix("account.") }
