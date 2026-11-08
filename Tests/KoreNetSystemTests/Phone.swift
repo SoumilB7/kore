@@ -22,6 +22,10 @@ final class Wire: @unchecked Sendable {
     private var toldUp = false
     private var toldClosed = false
     private let told: @Sendable (Event) -> Void
+    private let lock = NSLock()
+    private var note: String?
+    /// What the trace should know of how it ended.
+    var ending: String? { lock.withLock { note } }
 
     init(_ session: NetSession, told: @escaping @Sendable (Event) -> Void) {
         self.session = session
@@ -69,6 +73,7 @@ final class Wire: @unchecked Sendable {
             told(.message(object))
         }
         if case .closed(let why) = session.state {
+            if !toldUp, session.verified != nil { lock.withLock { note = "welcomed, then closed in the same read" } }
             toldClosed = true
             reader?.cancel()
             writer?.cancel()
@@ -437,9 +442,13 @@ final class PhoneEmu {
             case .message: break
             }
         }
-        trail.append("enroll \(device.uuidString.prefix(4)) at \(clock.nowMS)")
+        trail.append("enroll \(device.uuidString.prefix(4)) at \(clock.nowMS / 1000)s")
+        // The wire (and its session, which owns the socket) lives until the handshake ends: a
+        // local used on one path only after the await may be released at it, closing the socket
+        // under the Mac's welcome (a plain EOF: the Mac logged `connect`, the phone saw `closed`).
         let event = await ended.next()
-        trail.append("enroll ended \(event) at \(clock.nowMS)")
+        withExtendedLifetime(wire) {}
+        trail.append("enroll ended \(String(describing: event).prefix(40)) at \(clock.nowMS / 1000)s" + (wire.ending.map { " (\($0))" } ?? ""))
         switch event {
         case .up(let peer, let directory):
             wire.close("quit")
@@ -570,6 +579,11 @@ final class PhoneEmu {
     private func heard(_ event: Wire.Event, id: UUID, generation mine: Int, wire: Wire?) {
         guard mine == generation, let c = clients[id], c.wire === wire else { return }
         let now = clock.nowMS
+        switch event {
+        case .up: trail.append("\(c.record.name) up at \(now / 1000)s")
+        case .closed(let why): trail.append("\(c.record.name) closed \(why) at \(now / 1000)s")
+        case .message(let m): if case .string(let t)? = m["t"], ["paused", "devices.set"].contains(t) { trail.append("\(c.record.name) said \(t)") }
+        }
         switch event {
         case .up(let peer, let directory):
             c.dialing = false

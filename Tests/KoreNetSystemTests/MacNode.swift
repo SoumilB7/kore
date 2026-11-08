@@ -55,6 +55,9 @@ final class MacNode {
     /// Allow cards shown and not answered.
     private(set) var cards: [DeviceCardInfo] = []
     private(set) var audits: [String] = []
+    /// Traced events, audit lines among them, at their virtual times (KNS_DEBUG prints them).
+    private(set) var traced: [String] = []
+    func trace(_ line: String) { traced.append("\(clock.nowMS / 1000)s \(line)") }
     private(set) var starts = 0
     /// Windows open now, by box key.
     private(set) var windows: [String: HostConnection] = [:]
@@ -127,6 +130,22 @@ final class MacNode {
         macNet = MacNetSwitch.follow(switcher, feed: LinkFeed(source: EmptySource(), taps: false), asks: asks) {
             base.addingTimeInterval(Double(clock.nowMS) / 1000)
         }
+        // Traced (KNS_DEBUG): box links' catch-ups and the holds for a push.
+        let catchUp = HostConnection.devicesCatchUp
+        HostConnection.devicesCatchUp = { [weak self] link in
+            self?.trace("catchUp \(link.alias.prefix(6)) online=\(link.isOnline) merge=\(link.takesMerge) peer=\(link.boxPeer != nil) route=\(String(describing: link.route)) dial=\(link.dialNumber)")
+            catchUp?(link)
+        }
+        let reach = macNet.reachBox
+        macNet.reachBox = { [weak self] key in
+            let release = reach(key)
+            self?.trace("reach \(key.prefix(6)) held=\(release != nil)")
+            guard let release else { return nil }
+            return { [weak self] in
+                self?.trace("release \(key.prefix(6))")
+                release()
+            }
+        }
         // Its timers (the Add window's end, a resumed phone's cursor wait) on virtual time too.
         macNet.schedule = { seconds, work in
             let task = Task { @MainActor in
@@ -148,6 +167,7 @@ final class MacNode {
         macNet.changed = { _ in pulse.beat() }
         NetAudit.watch = { [weak self] line in
             self?.audits.append(line)
+            self?.trace("audit " + line)
             pulse.beat()
         }
         Devices.shared.phones = MacNetDevices()
@@ -170,7 +190,12 @@ final class MacNode {
         connection.router = switcher
         connection.sleep = clock.sleep
         let pulse = pulse
-        connection.onLink("world") { _ in pulse.beat() }
+        connection.onLink("world") { [weak self, weak connection] up in
+            if let connection {
+                self?.trace("link \(connection.alias.prefix(6)) \(up ? "up" : "down") phase=\(connection.phase) route=\(String(describing: connection.route)) users=\(connection.inUse) reason=\(connection.lastReason ?? "-")")
+            }
+            pulse.beat()
+        }
         HostConnection.adopt(connection)
         // Made, but no window holds it: asleep.
         connection.release()

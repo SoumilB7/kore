@@ -208,6 +208,14 @@ final class World {
                 print("DEBUG \(label): switch \(mac.switcher.state) addOpen \(m.addOpen) listening \(m.listening) binds \(m.binds) bound \(m.bound) cards \(mac.cards.count) audits \(mac.audits.suffix(4)) phones \(phones.map { "\($0.step) \($0.trail.suffix(8))" }) cardsShown \(mac.cards.map(\.title)) asking \(mac.asks.showing != nil)")
             }
         }
+        if ProcessInfo.processInfo.environment["KNS_DEBUG"] != nil, !problems().isEmpty || !held {
+            print("TRACE after \(label):\n  mac: " + mac.traced.suffix(25).joined(separator: "\n  mac: "))
+            for p in phones { print("  \(p.label): " + p.trail.suffix(40).joined(separator: " | ")) }
+            for b in boxes {
+                let l = mac.link(b)
+                print("  link \(b.alias): phase=\(String(describing: l?.phase)) route=\(String(describing: l?.route)) inUse=\(l?.inUse ?? false) online=\(l?.isOnline ?? false) reason=\(l?.lastReason ?? "-") probes=\(l?.probes ?? 0)")
+            }
+        }
         steps.append((label, ContinuousClock.now - wall))
         return held
     }
@@ -220,11 +228,16 @@ final class World {
         // Quiet windows in a row with nothing left to advance: work off the main actor (a WhoIs, a
         // bind) may still be under way, so a few go by before the world counts as settled.
         var idle = 0
+        var dialing = 0
         while ContinuousClock.now < wallEnd {
             if await pulse.quiet(.milliseconds(10)) {
                 await drainMain()
                 if done() { return true }
-                if pulse.busy {
+                // A box link mid-dial (its handshake is real work): time waits for it, a while
+                // at most (a box that never answers ends on the link's own virtual limit).
+                let linking = mac.links.contains { $0.inUse && $0.phase == .connecting }
+                dialing = linking ? dialing + 1 : 0
+                if pulse.busy || (linking && dialing < 30) {
                     idle = 0
                 } else if clock.advanceToNext(limit: end - clock.now) != nil {
                     idle = 0
