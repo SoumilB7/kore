@@ -293,7 +293,7 @@ public struct UsagePaths: Sendable {
         let files = FileManager.default
         let support = files.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ?? home.appendingPathComponent("Library/Application Support")
         let caches = files.urls(for: .cachesDirectory, in: .userDomainMask).first ?? home.appendingPathComponent("Library/Caches")
-        let testing = KoreLog.isTestProcess
+        let testing = KoreLog.keepsNothing
         return UsagePaths(
             support: testing ? nil : support.appendingPathComponent("Kore/usage"),
             caches: testing ? nil : caches.appendingPathComponent("Kore/usage"),

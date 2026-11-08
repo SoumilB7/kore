@@ -112,6 +112,12 @@ package enum LinkPolicy {
             let taken = actions(card.kind).union(control == .full && card.kind == .plan ? [.approvePlanAcceptEdits] : [])
             guard taken.contains(action) else { return .deny(.action, "That card doesn't take that answer.") }
             guard digest == card.digest else { return .deny(.staleCard, "The card changed; look again.") }
+            // Implementing a plan, or approving one into the chat's own mode, leaves plan: the same
+            // rule as `chat.planReady` and `chat.setPlan`. Approving into Accept edits (full
+            // control only, above) goes to a mode under Auto.
+            if (card.kind == .planReady && action == .implement) || (card.kind == .plan && action == .approvePlan), !mayLeavePlan(chat, control: control) {
+                return .deny(.raiseMode, "Leaving plan raises the mode; do it in Kore.")
+            }
             return .allow
         case .setMode(_, let modeId):
             guard let target = chat.modes[modeId] else { return .deny(.invalid, "This chat doesn't offer that mode.") }
@@ -120,15 +126,21 @@ package enum LinkPolicy {
         case .setPlan(_, let on):
             // Plan is the lowest level: on lowers. Off goes back to the chat's own mode, which the
             // link may do only where tools still ask, or with full control.
-            return on || !chat.planOn || chat.level <= leavePlanMaxLevel || (control == .full && chat.level <= raiseCap)
+            return on || !chat.planOn || mayLeavePlan(chat, control: control)
                 ? .allow : .deny(.raiseMode, "Leaving plan raises the mode; do it in Kore.")
         case .planReady(_, let choice):
             guard chat.cards.values.contains(where: { $0.kind == .planReady }) else { return .deny(.goneCard, "No plan is waiting.") }
-            return choice == .stay || chat.level <= leavePlanMaxLevel || (control == .full && chat.level <= raiseCap)
+            return choice == .stay || mayLeavePlan(chat, control: control)
                 ? .allow : .deny(.raiseMode, "Implementing leaves plan, which raises the mode; do it in Kore.")
         case .new, .unknown, .control:
             return .allow
         }
+    }
+
+    /// Leaving plan goes back to the chat's own mode: allowed where tools still ask, or up to Auto
+    /// with full control.
+    package static func mayLeavePlan(_ chat: ChatFacts, control: LinkControlLevel) -> Bool {
+        chat.level <= leavePlanMaxLevel || (control == .full && chat.level <= raiseCap)
     }
 
     /// A 1.2 command: only with full control granted on the Mac this run. Full control widens
@@ -175,7 +187,7 @@ package enum LinkPolicy {
         return .allow
     }
 
-    /// A relayed backend call (1.5 `chat.call`): full control only, each case decided here, so a
+    /// A forwarded backend call (1.5 `chat.call`): full control only, each case decided here, so a
     /// new one can't compile without its rule. Raises stop at Auto, `!` lines and Always allow are
     /// refused, and no call carries a key. `card` is the approval's card when it has one.
     package static func check(_ command: ChatCommand, _ chat: ChatFacts?, control: LinkControlLevel) -> Verdict {
@@ -185,11 +197,14 @@ package enum LinkPolicy {
         switch command {
         case .send(let text, let files, _, _):
             return check(.send(chatId: "", text: text, blobs: files.map(\.blob)), chat, control: control)
-        case .respond(_, let decision):
+        case .respond(let approval, let decision):
+            if chat.cards[approval]?.kind == .signIn { return .deny(.signIn, "Sign-ins are answered on the box itself.") }
             switch decision {
-            case .allowAlways: return .deny(.alwaysAllow, "Always allow can only be set on the box.")
-            // Approving into Accept edits raises the mode, within Auto: full control may.
-            case .allow, .deny, .approvePlan, .keepPlanning, .answers: return .allow
+            case .allowAlways: return .deny(.alwaysAllow, "Always allow is set on the box itself.")
+            // Into the chat's own mode: leaving plan's rule. Into Accept edits: under Auto.
+            case .approvePlan(let acceptEdits):
+                return acceptEdits || mayLeavePlan(chat, control: control) ? .allow : .deny(.raiseMode, "Leaving plan into that mode is set on the box itself.")
+            case .allow, .deny, .keepPlanning, .answers: return .allow
             }
         case .setMode(let mode):
             return check(.setMode(chatId: "", modeId: mode), chat, control: control)
@@ -206,7 +221,7 @@ package enum LinkPolicy {
             return .deny(.command, "Remote control of a box's chat is turned on on the box.")
         case .interrupt, .setModel, .setEffort, .setFastMode, .stopAgent, .stopCommand, .backgroundCommand, .commandOutput, .watchCommands,
             .agentHistory, .fork, .forkAtEnd, .rollback, .earlier, .earlierMessages, .unloadPoint, .unloaded, .usage, .useReset, .relaunch,
-            .listModels:
+            .listModels, .close:
             return .allow
         case .unknown:
             return .deny(.invalid, "The box doesn't know that call.")
@@ -214,7 +229,55 @@ package enum LinkPolicy {
     }
 
     /// The calls a full grant may make (1.5): every one but those this policy always refuses.
-    package static let relayed = ChatCommand.tags.filter { $0 != "setRemoteControl" }
+    package static let callable = ChatCommand.tags.filter { $0 != "setRemoteControl" }
+
+    /// The sign-ins a box runs: the ones with no browser on the box. Never a key: no message
+    /// carries one.
+    package static let boxSignIns: Set<String> = ["claudeai", "chatgptDeviceCode"]
+
+    /// A model or effort as a box takes it: a short plain id, so nothing odd reaches the CLI's
+    /// arguments (the box also checks it against its CLI's list when it has one).
+    package static func plainID(_ id: String?) -> Bool {
+        guard let id, (1...128).contains(id.count) else { return false }
+        return id.unicodeScalars.allSatisfy { CharacterSet.alphanumerics.contains($0) || "._:[]-".unicodeScalars.contains($0) } && id.allSatisfy(\.isASCII)
+    }
+
+    /// A box's own control commands (1.4), each kind with its rule; anything else is refused.
+    /// `levels`: the levels of the new chat's CLI's modes, for `chat.new`. A new chat starts at
+    /// most where tools still ask, or at Auto with full control.
+    package static func checkBox(_ kind: ControlKind, _ args: ControlArgs, _ chat: ChatFacts?, control: LinkControlLevel, levels: [String: ModeLevel] = [:]) -> Verdict {
+        func full() -> Verdict { control == .full ? .allow : .deny(.deniedControl, "That needs a grant with full control.") }
+        if kind.onChat, chat == nil { return .deny(.goneChat, "That chat isn't on the box any more.") }
+        switch kind {
+        case .chatNew:
+            if let mode = args.mode, (levels[mode] ?? .danger) > (control == .full ? raiseCap : leavePlanMaxLevel) {
+                return .deny(.raiseMode, "A new chat can't start in that mode from here.")
+            }
+            if args.modelId != nil, !plainID(args.modelId) { return .deny(.invalid, "That isn't a model.") }
+            if args.level != nil, !plainID(args.level) { return .deny(.invalid, "That isn't an effort.") }
+            if let title = args.title, title.count > maxTitle || title.contains(where: \.isNewline) { return .deny(.invalid, "A title is one line, up to 200 characters.") }
+            return .allow
+        case .chatSetModel:
+            return plainID(args.modelId) ? .allow : .deny(.invalid, "Name the chat and the model.")
+        case .chatSetEffort:
+            return plainID(args.level) ? .allow : .deny(.invalid, "Name the chat and the effort.")
+        case .chatSetFast:
+            return args.on != nil ? .allow : .deny(.invalid, "Name the chat and on or off.")
+        case .chatClose, .foldersList, .folderAdd:
+            return .allow
+        case .authGh:
+            return full()
+        case .accountSignIn:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            if let method = args.method, !boxSignIns.contains(method) { return .deny(.invalid, "That sign-in runs only on the box itself.") }
+            return check(kind, args, chat, control: control)
+        case .accountSubmit, .accountCancel, .accountSignOut, .accountRefresh:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            return check(kind, args, chat, control: control)
+        default:
+            return .deny(.invalid, "The box doesn't take that command.")
+        }
+    }
 
     /// The answers each kind of card takes over the link. `approvePlan` starts the work in Manual.
     package static func actions(_ kind: LinkCard.Kind) -> Set<CardAction.ID> {

@@ -16,8 +16,10 @@ final class LinkClient {
     private var following: [String: (last: Int, txRev: Int)] = [:]
     private var helloWait: DispatchWorkItem?
     /// Chats whose events this full grant follows (link 1.5), and its uploads.
-    private var relaying: Set<String> = []
+    private var streaming: Set<String> = []
     private var uploads = LinkUploads()
+    /// Catch-ups still to send, a part at a time as the socket drains (a log can be megabytes).
+    private var catchUps: [(chatId: String, log: String, reset: Bool, items: ArraySlice<StreamItem>)] = []
 
     init(socket: HostSocket, host: HostDaemon) {
         self.socket = socket
@@ -26,6 +28,7 @@ final class LinkClient {
 
     func begin() {
         socket.start(max: LinkFrame.inboundMax, frame: { [weak self] data in self?.received(data) }, ended: { [weak self] in self?.gone() })
+        socket.drained = { [weak self] in self?.sendCatchUps() }
         send(.challenge(nonce: nonce))
         // A client that hasn't proven itself in 10 s is closed: the one wait while it connects.
         let wait = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { if self?.proven == false { self?.end(.auth) } } }
@@ -45,8 +48,8 @@ final class LinkClient {
     private func gone() {
         helloWait?.cancel()
         host.ended(self)
-        for chatId in relaying { host.unfollowed(chatId) }
-        relaying = []
+        for chatId in streaming { host.unfollowed(chatId) }
+        streaming = []
     }
 
     private func uploadFailed(_ uploadId: String, _ failure: LinkUploads.Failure) {
@@ -55,32 +58,73 @@ final class LinkClient {
 
     func follows(_ chatId: String) -> Bool { following[chatId] != nil }
 
-    func relays(_ chatId: String) -> Bool { relaying.contains(chatId) }
+    func streams(_ chatId: String) -> Bool { streaming.contains(chatId) }
 
     func sendRaw(_ data: Data) { socket.send(data) }
 
-    /// A chat's items, in frames; this client's own rows are marked `by` it, which it skips live.
-    func events(_ hc: HostChat, _ items: [RelayItem], reset: Bool) {
+    /// A chat's items, in frames; this client's own rows are marked `by` it. Live items go at once
+    /// (a part at most); a catch-up goes a part at a time, each once the socket has drained, and
+    /// live items for that chat wait behind it.
+    func events(_ hc: HostChat, _ items: [StreamItem], reset: Bool) {
         guard reset || !items.isEmpty else { return }
-        for frame in RelayWire.frames(chatId: hc.id, log: hc.relay.id, reset: reset, items: items) { socket.send(frame) }
+        if reset { catchUps.removeAll { $0.chatId == hc.id } }
+        if let at = catchUps.firstIndex(where: { $0.chatId == hc.id }) {
+            catchUps[at].items += items
+        } else {
+            catchUps.append((hc.id, hc.stream.id, reset, items[...]))
+        }
+        sendCatchUps()
+    }
+
+    /// Sends waiting catch-ups while the socket's queue is short.
+    private func sendCatchUps() {
+        while !catchUps.isEmpty, socket.backlog < HostSocket.lowWater {
+            var next = catchUps.removeFirst()
+            var part: [StreamItem] = []
+            var size = 0
+            while let item = next.items.first, size < StreamWire.frameBudget * 2 || part.isEmpty {
+                part.append(item)
+                size += item.e.map { _ in 256 } ?? 64
+                next.items = next.items.dropFirst()
+                if part.count >= 2000 { break }
+            }
+            for frame in StreamWire.frames(chatId: next.chatId, log: next.log, reset: next.reset, items: part) { socket.send(frame) }
+            if !next.items.isEmpty {
+                next.reset = false
+                catchUps.insert(next, at: 0)
+            }
+        }
+    }
+
+    /// The grant as its file says now: a revoked or changed one ends the connection, a lowered one
+    /// takes effect at once.
+    private func current() -> Grant? {
+        guard let grant else { return nil }
+        guard let now = GrantStore(host.paths.grants).load(grant.name), now.secret == grant.secret else {
+            end(.auth)
+            return nil
+        }
+        self.grant = now
+        return now
     }
 
     /// 1.5's messages, read by their type: full grants only.
-    private func relay(_ type: String, _ data: Data) {
-        guard grant?.control == .full else {
+    private func stream(_ type: String, _ data: Data) {
+        guard let grant = current() else { return }
+        guard grant.control == .full else {
             if type == "chat.call" {
-                sendRaw(RelayWire.encode(ChatCallResult(id: "", ok: false, code: .deniedControl, message: "Driving a chat needs a grant with full control.")))
+                sendRaw(StreamWire.encode(ChatCallResult(id: "", ok: false, code: .deniedControl, message: "Driving a chat needs a grant with full control.")))
             }
             return
         }
         switch type {
         case "chat.follow":
             guard let request = try? JSONDecoder().decode(ChatFollow.self, from: data) else { return }
-            relaying.insert(request.chatId)
+            streaming.insert(request.chatId)
             host.follow(self, request)
         case "chat.unfollow":
             guard let request = try? JSONDecoder().decode(ChatUnfollow.self, from: data) else { return }
-            relaying.remove(request.chatId)
+            streaming.remove(request.chatId)
             host.unfollowed(request.chatId)
         case "chat.call":
             host.call(data, from: self)
@@ -117,9 +161,9 @@ final class LinkClient {
             let piece = LinkProjection.piece(text, from: offset)
             send(.cardChunk(id: id, text: piece.text, offset: piece.offset, total: piece.total))
         case .unknown(let type):
-            relay(type, data)
+            stream(type, data)
         case .blobPutBegin(let uploadId, let name, let mime, let size, let sha256):
-            guard grant?.control == .full else { return uploadFailed(uploadId, .init(.deniedControl, "Uploads need a grant with full control.")) }
+            guard current()?.control == .full else { return uploadFailed(uploadId, .init(.deniedControl, "Uploads need a grant with full control.")) }
             if let failure = uploads.begin(uploadId, name: name, mime: mime, size: size, sha256: sha256) { uploadFailed(uploadId, failure) }
         case .blobPutChunk(let uploadId, let index, let data):
             if let failure = uploads.chunk(uploadId, index: index, base64: data) { uploadFailed(uploadId, failure) }
@@ -131,7 +175,8 @@ final class LinkClient {
                 send(.result(.init(id: "blob.put:" + uploadId, ok: true, blobId: blob)))
             }
         case .cmd(let id, let command):
-            let result = host.apply(command, id: id, control: grant?.control ?? .watch) { [weak self] result in self?.send(.result(result)) }
+            guard let grant = current() else { return }
+            let result = host.apply(command, id: id, control: grant.control) { [weak self] result in self?.send(.result(result)) }
             if let result { send(.result(result)) }
         default:
             break
@@ -144,7 +189,9 @@ final class LinkClient {
         guard let name, let grant = GrantStore(host.paths.grants).load(name), let secret = Data(base64Encoded: grant.secret),
             LinkProof.check(proof, secret: secret, nonce: nonce)
         else { return end(.auth) }
-        guard host.admit(self, grant: grant) else { return end(.invalid) }
+        // The newest proven connection of a grant wins: the older one (a link that died while the
+        // Mac slept) is told it was replaced.
+        host.replace(self, grant: grant)
         helloWait?.cancel()
         self.grant = grant
         proven = true

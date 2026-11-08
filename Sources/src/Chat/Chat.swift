@@ -612,7 +612,7 @@ package final class Chat: Identifiable {
 
     private func checkStall() {
         let quiet = Date().timeIntervalSince(lastHeard)
-        guard quiet > Self.stallAfter.value, services.isOnline, !waitingForNetwork,
+        guard services.watchesStall, quiet > Self.stallAfter.value, services.isOnline, !waitingForNetwork,
             approvals.pending.isEmpty, !context.compacting, connection != .stalled else { return }
         // A command or agent still running is busy, not stalled, however long it stays quiet.
         guard !transcriptView.workRunning else { return }
@@ -723,6 +723,7 @@ package final class Chat: Identifiable {
         case .offline: "offline"
         case .retrying: "retrying"
         case .stalled: "stalled"
+        case .away: "away"
         }
     }
 
@@ -848,10 +849,10 @@ package final class Chat: Identifiable {
     /// A message another Kore's chat sent through this one (a Mac driving a box's chat): it goes
     /// as that chat sent it, under its id and queued as it was, and `done` says whether a turn is
     /// under way once the CLI has it, or why it didn't go.
-    package func sendFromRelay(
+    package func sendForwarded(
         _ text: String, files: [URL], queued: String?, id: String?, done: @escaping @MainActor (Result<Bool, Error>) -> Void
     ) {
-        guard !closed, !accountRestartPending else { return done(.failure(RelayRefusal("The chat can't take a message right now."))) }
+        guard !closed, !accountRestartPending else { return done(.failure(CallRefusal("The chat can't take a message right now."))) }
         cancelContinue()
         deliver(text, services.attachments(files), id: id, queued: .some(queued), done: done)
     }
@@ -864,9 +865,9 @@ package final class Chat: Identifiable {
         _ text: String, _ sent: [Attachment], id given: String? = nil, queued forced: String?? = nil,
         done: (@MainActor (Result<Bool, Error>) -> Void)? = nil
     ) {
-        let done = done.map(RelayOnce.init)
+        let done = done.map(CallOnce.init)
         guard !closed, !accountRestartPending else {
-            done?(.failure(RelayRefusal("The chat can't take a message right now.")))
+            done?(.failure(CallRefusal("The chat can't take a message right now.")))
             return
         }
         // A rollback under way: the CLI it would reach is ending, and the rows are about to be
@@ -953,14 +954,16 @@ package final class Chat: Identifiable {
             } catch {
                 done?(.failure(error))
                 guard currentWork(epoch), !Task.isCancelled else { return }
-                // A queued message that couldn't go goes back to the composer.
+                // A message that couldn't go goes back to the composer, with its files.
                 if let queued {
                     dispatch(.queuedMessage(id: queued, .dropped))
+                    fail(Self.reason(error))
                 } else {
                     transcriptView.sending(false)
                     status.setRunning(false)
+                    giveBackToComposer(text, sent)
+                    fail("Not sent: \(Self.reason(error)). The message is back in the composer.")
                 }
-                fail(Self.reason(error))
             }
         }
     }
@@ -1731,17 +1734,17 @@ extension Chat: ModelListHolder {
     package func listModels(_ models: [ModelOption]) { controls.listModels(models) }
 }
 
-/// Why a relayed message didn't go, in a line.
-package struct RelayRefusal: LocalizedError, CustomStringConvertible {
+/// Why a forwarded message didn't go, in a line.
+package struct CallRefusal: LocalizedError, CustomStringConvertible {
     package let message: String
     package init(_ message: String) { self.message = message }
     package var errorDescription: String? { message }
     package var description: String { message }
 }
 
-/// A relayed send's answer, given once: a send whose work ended without one (its chat started
+/// A forwarded send's answer, given once: a send whose work ended without one (its chat started
 /// again, or closed) answers that it didn't go.
-private final class RelayOnce: @unchecked Sendable {
+private final class CallOnce: @unchecked Sendable {
     private var done: (@MainActor (Result<Bool, Error>) -> Void)?
 
     init(_ done: @escaping @MainActor (Result<Bool, Error>) -> Void) { self.done = done }
@@ -1754,6 +1757,6 @@ private final class RelayOnce: @unchecked Sendable {
 
     deinit {
         guard let done else { return }
-        Task { @MainActor in done(.failure(RelayRefusal("The message didn't go: the chat started again."))) }
+        Task { @MainActor in done(.failure(CallRefusal("The message didn't go: the chat started again."))) }
     }
 }

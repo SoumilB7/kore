@@ -3,7 +3,7 @@ import KoreCore
 
 /// Kore's own vocabulary for what happens in a chat. Each provider's backend translates its
 /// CLI into these, so nothing past `Providers/` knows which CLI is talking.
-package enum ChatEvent: Sendable, Codable {
+package enum ChatEvent: Sendable {
     // MARK: Session
 
     /// Claude session id / Codex thread id: what `--resume` / `thread/resume` takes.
@@ -140,7 +140,7 @@ package enum ChatEvent: Sendable, Codable {
 }
 
 /// Who changed a mode.
-package enum ModeSource: Sendable, Equatable, Codable {
+package enum ModeSource: Sendable, Equatable {
     /// The mode a session started or resumed in: not a change anyone made.
     case session
     /// From Kore (the mode menu, Shift+Tab, `/plan`), or between turns in another client.
@@ -151,13 +151,13 @@ package enum ModeSource: Sendable, Equatable, Codable {
     case refused
 }
 
-package enum ModeCause: Sendable, Equatable, Codable {
+package enum ModeCause: String, Sendable, Equatable, Codable {
     /// It started planning (Claude's EnterPlanMode).
-    case enteredPlanMode
+    case enteredPlanMode = "enteredPlanMode"
     /// Its plan was approved (Claude's ExitPlanMode accepted): plan mode left for the chosen mode.
-    case planApproved
+    case planApproved = "planApproved"
     /// The CLI changed it with no call Kore saw.
-    case other
+    case other = "other"
 }
 
 package struct ModeChange: Sendable, Equatable, Codable {
@@ -212,7 +212,7 @@ package struct ContextUsage: Sendable, Equatable, Codable {
 }
 
 /// Where a message sent while a turn ran went (`ChatBackend.send(_:files:queued:id:)`).
-package enum QueuedDelivery: Sendable, Equatable, Codable {
+package enum QueuedDelivery: Sendable, Equatable {
     /// The CLI took it into the running turn, after `after` (the last main tool call or text
     /// block; nil when the turn had none yet).
     case inTurn(after: String?)
@@ -227,21 +227,21 @@ package typealias BlockID = String
 
 /// Who produced something: the chat's own agent, or a sub-agent it spawned (Claude task id /
 /// Codex child thread id).
-package enum AgentID: Hashable, Sendable, Codable {
+package enum AgentID: Hashable, Sendable {
     case main
     case sub(String)
 }
 
 /// Why a turn started. `.cli` is a turn the CLI started itself whose cause isn't known yet.
-package enum TurnOrigin: Sendable, Equatable, Codable {
-    case user, cli, schedule, agentFinished, peer
+package enum TurnOrigin: String, Sendable, Equatable, Codable {
+    case user = "user", cli = "cli", schedule = "schedule", agentFinished = "agentFinished", peer = "peer"
 }
 
-package enum TextKind: Sendable, Equatable, Codable {
-    case answer, thinking, plan
+package enum TextKind: String, Sendable, Equatable, Codable {
+    case answer = "answer", thinking = "thinking", plan = "plan"
 }
 
-package enum TurnOutcome: Sendable, Equatable, Codable {
+package enum TurnOutcome: Sendable, Equatable {
     case completed, interrupted
     case failed(String)
     /// The CLI's login was refused (Claude's `authentication_failed`, Codex's 401): the CLI's
@@ -336,7 +336,7 @@ package struct ModelOption: Identifiable, Hashable, Sendable, Codable {
 /// claude.ai/code and the Claude app, the codex CLI's to its remote clients. Their accounts carry
 /// it; Kore only turns it on and off, and shows it.
 package struct RemoteControl: Sendable, Equatable, Codable {
-    package enum State: Sendable, Equatable, Codable {
+    package enum State: Sendable, Equatable {
         case connecting, connected
         /// The CLI's reason.
         case failed(String)
@@ -387,7 +387,7 @@ package struct FastModeReport: Sendable, Equatable, Codable {
 /// An entry in the `/` menu. Picking it inserts `insertion` into the draft.
 package struct SlashCommand: Identifiable, Hashable, Sendable, Codable {
     /// `kore`: Kore's own entries (Usage, Account), which open a popup and send the CLI nothing.
-    package enum Kind: Sendable, Codable { case command, skill, kore }
+    package enum Kind: String, Sendable, Codable { case command = "command", skill = "skill", kore = "kore" }
     package let name: String
     package let description: String
     package let hint: String
@@ -493,8 +493,8 @@ package struct AgentProgress: Sendable, Codable {
     }
 }
 
-package enum AgentStatus: Sendable, Equatable, Codable {
-    case completed, failed, stopped
+package enum AgentStatus: String, Sendable, Equatable, Codable {
+    case completed = "completed", failed = "failed", stopped = "stopped"
 }
 
 // MARK: - Approvals
@@ -589,7 +589,7 @@ package struct Approval: Identifiable, Sendable, Codable {
     package var isPermission: Bool { plan == nil && questions.isEmpty && !signIn }
 }
 
-package enum Decision: Sendable, Codable {
+package enum Decision: Sendable {
     case allow, allowAlways, deny
     /// Claude's "Ready to code?": approve the plan, optionally switching to Accept edits.
     case approvePlan(autoAcceptEdits: Bool)
@@ -599,7 +599,7 @@ package enum Decision: Sendable, Codable {
 }
 
 /// How a turn's connection to its model stands (`ChatEvent.connection`).
-package enum Connection: Sendable, Equatable, Codable {
+package enum Connection: Sendable, Equatable {
     case ok
     case offline
     /// The CLI's own retry of a request that failed: which try of how many, when it says.
@@ -607,6 +607,8 @@ package enum Connection: Sendable, Equatable, Codable {
     /// Online, waiting on the model, and nothing heard for `Chat.stallAfter` (Kore's watchdog):
     /// the connection likely died without the CLI noticing.
     case stalled
+    /// The box the chat runs on can't be reached: the words its cue says ("mybox offline · 14:32").
+    case away(String)
 
     /// What the running turn's spinner says for it; nil when fine.
     package var word: String? {
@@ -616,12 +618,18 @@ package enum Connection: Sendable, Equatable, Codable {
         case .retrying(let attempt?, let of?): "Connection unstable · retrying (\(attempt) of \(of))"
         case .retrying: "Connection unstable · retrying"
         case .stalled: "No response · the connection may have dropped"
+        case .away(let words): words
         }
     }
 
     /// Offline or stalled: the spinner holds still and the tab shows ⚠. Retrying is the CLI at
     /// work, and keeps moving.
-    package var stuck: Bool { self == .offline || self == .stalled }
+    package var stuck: Bool {
+        switch self {
+        case .offline, .stalled, .away: true
+        case .ok, .retrying: false
+        }
+    }
 }
 
 extension AgentID {

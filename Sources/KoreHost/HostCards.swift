@@ -11,14 +11,14 @@ enum HostMeta {
 
     static func level(_ mode: ModeOption) -> ModeLevel { ModeLevel(rawValue: mode.level) ?? .danger }
 
-    /// `relay`: the calls a full grant may make (1.5).
-    static func providers(relay: Bool = false) -> [ProviderInfo] {
+    /// `calls`: the calls a full grant may make (1.5).
+    static func providers(calls: Bool = false) -> [ProviderInfo] {
         Registry.all.map { p in
             ProviderInfo(
                 id: p.id, name: p.name,
                 modes: p.modes.map { ModeInfo(id: $0.id, label: $0.label, level: level($0), listed: $0.listed) },
                 planToggle: p.planToggle.map { PlanToggleInfo(id: $0.id, label: $0.label) },
-                features: ProviderFeatures(effort: true, fastMode: p.id == "claude"), relay: relay ? LinkPolicy.relayed : nil)
+                features: ProviderFeatures(effort: true, fastMode: p.id == "claude"), calls: calls ? LinkPolicy.callable : nil)
         }
     }
 
@@ -27,7 +27,7 @@ enum HostMeta {
     static func facts(_ hc: HostChat, raise: Bool = false) -> LinkPolicy.ChatFacts {
         let provider = hc.provider
         let modes = Dictionary(provider.modes.map { ($0.id, level($0)) }, uniquingKeysWith: { a, _ in a })
-        let current = modes[modeID(hc)] ?? .manual
+        let current = modes[modeID(hc)] ?? .danger
         let cards = Dictionary(self.cards(hc, raise: raise).map { ($0.id, LinkPolicy.ChatFacts.Card(kind: $0.kind, digest: $0.digest)) }, uniquingKeysWith: { a, _ in a })
         let commands = hc.chat?.controls.commands ?? []
         return LinkPolicy.ChatFacts(

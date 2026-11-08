@@ -54,6 +54,8 @@ final class BoxBinding {
 
     /// The window's workspace, for the chats the box opens in this folder meanwhile.
     weak var workspace: Workspace?
+    /// Chats whose tabs closed here: never adopted again, even before the box confirms.
+    private var closedIds: Set<String> = []
 
     /// The folder as the box's window names it ("~/Code"), else its path.
     var shownFolder: String {
@@ -76,7 +78,7 @@ final class BoxBinding {
     private func adoptChats() {
         guard let workspace, !workspace.isClosed else { return }
         let shown = Set(workspace.tabs.compactMap { ($0.chat?.services as? BoxChatServices)?.chatId })
-        let tabs: [ChatTab] = connection.chats(in: folder).filter { !shown.contains($0.id) }.compactMap { meta in
+        let tabs: [ChatTab] = connection.chats(in: folder).filter { !shown.contains($0.id) && !closedIds.contains($0.id) }.compactMap { meta in
             guard let provider = Registry.provider(meta.provider) else { return nil }
             let tab = ChatTab()
             tab.chat = chat(provider, id: meta.id, title: meta.title)
@@ -151,9 +153,11 @@ final class BoxBinding {
     func tabClosed(_ chat: Chat) {
         guard let id = (chat.services as? BoxChatServices)?.chatId else { return }
         let connection = connection
+        closedIds.insert(id)
         Task {
-            _ = await connection.command { HostWire.command(id: $0, .control(.chatClose, ControlArgs(chatId: id, force: true))) }
-            connection.cache.forget(chat: id)
+            // Through the chat's own call: the box closes it for good, so it doesn't come back.
+            let result = await connection.call(id, .close)
+            if result.ok || result.code == .goneChat { connection.cache.forget(chat: id) } else { closedIds.remove(id) }
         }
     }
 }
@@ -189,7 +193,11 @@ final class BoxChatServices: ChatServices {
         return backend
     }
 
-    func register(_ chat: Chat) { chat.ownPopups() }
+    func register(_ chat: Chat) {
+        chat.ownPopups()
+        // Modes above Auto are set on the box itself: the picker doesn't offer them.
+        chat.controls.levelCap = LinkPolicy.raiseCap.rawValue
+    }
     func closed(_ chat: Chat) { app.closed(chat) }
     func planWindows(_ cli: String, _ snapshot: PlanSnapshot?) {}
     func makeTranscript() -> any ChatTranscript { app.makeTranscript() }
@@ -198,6 +206,9 @@ final class BoxChatServices: ChatServices {
     func modelsListed(_ cli: String, _ models: [ModelOption]) {}
     /// The box's own lists: its chats' pickers never take this Mac's, nor give it theirs.
     var modelScope: String? { connection.alias }
+    /// The box runs the turn and watches it; a link that drops says so as the box's cue.
+    var watchesStall: Bool { false }
+    var onBox: Bool { true }
     func arsenalFollowMode(_ chat: Chat) { app.arsenalFollowMode(chat) }
     func tap(_ chat: Chat, _ event: ChatEvent) { app.tap(chat, event) }
     func log(_ name: String, _ fields: KeyValuePairs<String, String?>) { app.log(name, fields) }

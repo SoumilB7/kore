@@ -186,7 +186,7 @@ struct BoxParityTests {
         let connection = rig.connection()
         connection.retain()
         #expect(await until(5) { connection.isOnline })
-        #expect(connection.relays)
+        #expect(connection.streams)
         let (chat, backend) = rig.chat(connection, id: nil)
         await chat.startOnce()
 
@@ -270,11 +270,11 @@ struct BoxParityTests {
         chat.close()
         connection.release()
 
-        // Meanwhile a phone sends on the box.
+        // Meanwhile another client sends on the box.
         let hc = try #require(rig.host.chat(chatId))
-        let seq = hc.relay.seq
+        let seq = hc.stream.seq
         _ = rig.host.apply(.send(chatId: chatId, text: "two"), id: "p1", control: .act) { _ in }
-        #expect(await until(5) { hc.relay.seq > seq + 3 })
+        #expect(await until(5) { hc.stream.seq > seq + 3 })
 
         // Kore again: the copy shows at once, then only what came since.
         let again = rig.connection()
@@ -314,7 +314,7 @@ struct BoxParityTests {
         let connection = rig.connection()
         connection.retain()
         #expect(await until(5) { connection.isOnline })
-        #expect(!connection.relays)
+        #expect(!connection.streams)
         let backend = LinkChatBackend(connection: connection, provider: .claude, folder: rig.folder.path, chatId: "x", model: nil)
         let log = EventLog(backend.events)
         try await backend.start()

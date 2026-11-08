@@ -22,6 +22,10 @@ package final class HostDaemon {
     private var signIns: [String: SignInHandle] = [:]
     /// Whether `gh` is signed in, as last read: on a connect and after `auth.gh`.
     package private(set) var ghSignedIn = false
+    private var ghRead: Date?
+    /// Each chat's meta as last sent (for act grants, and full ones): a broadcast sends only those
+    /// that changed.
+    private var sentMeta: [String: (lower: ChatMeta, any: ChatMeta)] = [:]
     private var ghLogin: Process?
     /// Each CLI's models as its CLI last listed them (kept in `models.json`): sent to full grants.
     package private(set) var clis: [CLIState] = []
@@ -39,7 +43,7 @@ package final class HostDaemon {
         try? HostPaths.privateFile(Data(HostServices.instructions(host: ProcessInfo.processInfo.hostName).utf8), to: note)
         services.instructions = note
         let dirs = (try? FileManager.default.contentsOfDirectory(at: paths.chats, includingPropertiesForKeys: nil)) ?? []
-        chats = dirs.compactMap(HostChat.load).sorted { $0.record.created < $1.record.created }
+        chats = dirs.compactMap(HostChat.load).filter { $0.record.closed != true }.sorted { $0.record.created < $1.record.created }
         for chat in chats { watch(chat) }
     }
 
@@ -47,6 +51,7 @@ package final class HostDaemon {
     package func start() throws {
         try HostPaths.privateFolder(paths.state)
         listener = try HostListener(path: paths.socket) { [weak self] socket in self?.accepted(socket) }
+        sweepUploads()
         try? HostPaths.privateFile(Data("\(getpid())\n".utf8), to: paths.pid)
     }
 
@@ -103,13 +108,39 @@ package final class HostDaemon {
 
     package func chat(_ id: String) -> HostChat? { chats.first { $0.id == id } }
 
+    /// A model the CLI offers on this box: in its list once it has listed one, else a plain id.
+    func offers(model: String, _ provider: String) -> Bool {
+        guard LinkPolicy.plainID(model) else { return false }
+        guard let listed = clis.first(where: { $0.provider == provider })?.models, !listed.isEmpty else { return true }
+        return listed.contains { $0.id == model }
+    }
+
+    /// An effort on the CLI's scale, once it has listed its models; else a plain id.
+    func offers(effort: String, _ provider: String) -> Bool {
+        guard LinkPolicy.plainID(effort) else { return false }
+        guard let scale = clis.first(where: { $0.provider == provider })?.effortScale, !scale.isEmpty else { return true }
+        return scale.contains(effort)
+    }
+
+    /// A tab closed on a client: the chat leaves the box's windows and its CLI ends. Its record
+    /// and logs stay on disk, marked closed.
+    func close(_ hc: HostChat) {
+        sleep(hc)
+        hc.markClosed()
+        hc.stream.close()
+        chats.removeAll { $0 === hc }
+        for connection in connections where connection.proven {
+            connection.send(.delta(rev: connection.nextRev(), windows: windows, chats: nil, removed: [hc.id]))
+        }
+    }
+
     private func watch(_ chat: HostChat) {
         chat.changed = { [weak self] hc, upserts, removed, order, turns, reset in
             self?.transcriptChanged(hc, upserts: upserts, removed: removed, order: order, turns: turns, reset: reset)
         }
-        chat.relay.flushed = { [weak self, weak chat] items, reset in
+        chat.stream.flushed = { [weak self, weak chat] items, reset in
             guard let self, let chat else { return }
-            self.relayed(chat, items, reset: reset)
+            self.streamed(chat, items, reset: reset)
         }
     }
 
@@ -151,7 +182,7 @@ package final class HostDaemon {
 
     private func noted(_ chat: Chat, _ event: ChatEvent) {
         guard let hc = chats.first(where: { $0.chat === chat }) else { return }
-        relayRow(hc, event)
+        streamRow(hc, event)
         hc.noted(chat)
         armIdle(hc)
         broadcast(chats: [hc])
@@ -190,17 +221,18 @@ package final class HostDaemon {
     }
 
     /// One connection per grant: a newer one for a grant already connected is turned away.
-    func admit(_ connection: LinkClient, grant: Grant) -> Bool {
-        !connections.contains { $0 !== connection && $0.grant?.name == grant.name }
+    /// A newer proven connection of a grant takes over from the older ones.
+    func replace(_ connection: LinkClient, grant: Grant) {
+        for old in connections where old !== connection && old.grant?.name == grant.name { old.end(.replaced) }
     }
 
     func welcome(control: GrantControl) -> LinkMessage.Welcome {
-        ghSignedIn = GitHubLogin.signedIn()
+        readGitHub()
         return LinkMessage.Welcome(
             proto: LinkVersion(major: LinkProto.major, minor: LinkProto.boxMinor), epoch: epoch,
-            host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(relay: control == .full),
+            host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
-            caps: ["tx", "attn", "commands", "control", "box"] + (control == .full ? ["relay"] : []))
+            caps: ["tx", "attn", "commands", "control", "box"] + (control == .full ? ["stream"] : []))
     }
 
     var windows: [LinkWindow] {
@@ -218,8 +250,16 @@ package final class HostDaemon {
         guard !connections.isEmpty else { return }
         let windows = windows ? self.windows : nil
         guard !changed.isEmpty || windows != nil else { return }
-        let lower = changed.map { HostMeta.meta($0) }
-        let any = changed.map { HostMeta.meta($0, raise: true) }
+        var lower: [ChatMeta] = []
+        var any: [ChatMeta] = []
+        for hc in changed {
+            let made = (lower: HostMeta.meta(hc), any: HostMeta.meta(hc, raise: true))
+            if let sent = sentMeta[hc.id], sent.lower == made.lower, sent.any == made.any { continue }
+            sentMeta[hc.id] = made
+            lower.append(made.lower)
+            any.append(made.any)
+        }
+        guard !lower.isEmpty || windows != nil else { return }
         for connection in connections where connection.proven {
             connection.delta(windows: windows, chats: connection.grant?.control == .full ? any : lower)
         }
@@ -259,7 +299,7 @@ package final class HostDaemon {
             hc?.chat?.stop()
             return .init(id: id, ok: true)
         case .answer(_, let cardId, let action, _, let answers):
-            defer { if hc?.chat?.approvals.pending.contains(where: { $0.id == cardId }) == false { hc?.relay.add(.approvalWithdrawn(cardId), by: nil) } }
+            defer { if hc?.chat?.approvals.pending.contains(where: { $0.id == cardId }) == false { hc?.stream.add(.approvalWithdrawn(cardId), by: nil) } }
             guard let hc else { return fail(.goneChat, "") }
             if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
             guard let chat = hc.chat else { return fail(.goneCard, "That was answered or withdrawn.") }
@@ -300,6 +340,13 @@ package final class HostDaemon {
         case .new(let windowId, let provider):
             return newChat(id: id, folder: folder(windowId: windowId), provider: provider, modelId: nil)
         case .control(let kind, let args):
+            // Every box control kind has its rule (`LinkPolicy.checkBox`); nothing skips it.
+            let provider = Registry.provider(args.provider ?? "") ?? hc?.provider
+            let levels = Dictionary((provider?.modes ?? []).map { ($0.id, HostMeta.level($0)) }, uniquingKeysWith: { a, _ in a })
+            let facts = hc.map { HostMeta.facts($0, raise: control == .full) }
+            if case .deny(let code, let message) = LinkPolicy.checkBox(kind, args, facts, control: control == .full ? .full : .standard, levels: levels) {
+                return fail(code, message)
+            }
             return self.control(kind, args, id: id, control: control, reply: reply)
         case .unknown:
             return fail(.invalid, "The box doesn't know that command.")
@@ -308,6 +355,8 @@ package final class HostDaemon {
 
     private func newChat(id: String, folder: String?, provider: String, modelId: String?, args: ControlArgs? = nil) -> LinkMessage.Result {
         guard let folder else { return .init(id: id, ok: false, code: .goneFolder, message: "That folder isn't on this box.") }
+        if let modelId, !offers(model: modelId, provider) { return .init(id: id, ok: false, code: .invalid, message: "The CLI doesn't offer that model.") }
+        if let level = args?.level, !offers(effort: level, provider) { return .init(id: id, ok: false, code: .invalid, message: "The CLI doesn't offer that effort.") }
         // 1.5: a fork's start (`sessionId`, `entryId`), and its title, mode and effort.
         let fork = args?.sessionId.flatMap { from in args?.entryId.map { (from: from, at: $0) } }
         guard let hc = newChat(folder: folder, provider: provider, modelId: modelId, fork: fork, title: args?.title, mode: args?.mode, effort: args?.level) else {
@@ -336,8 +385,14 @@ package final class HostDaemon {
         case .chatNew:
             let folder = args.folder.map { URL(fileURLWithPath: $0).standardizedFileURL.path } ?? args.windowId.flatMap(self.folder(windowId:))
             return newChat(id: id, folder: folder, provider: args.provider ?? "", modelId: args.modelId, args: args)
+        case .chatClose:
+            guard let hc = args.chatId.flatMap(chat) else { return fail(.goneChat, "No such chat on this box.") }
+            close(hc)
+            return .init(id: id, ok: true)
         case .chatSetModel:
-            guard let hc = args.chatId.flatMap(chat), let model = args.modelId, !model.isEmpty else { return fail(.invalid, "Name the chat and the model.") }
+            guard let hc = args.chatId.flatMap(chat), let model = args.modelId, offers(model: model, hc.record.provider) else {
+                return fail(.invalid, "The chat's CLI doesn't offer that model.")
+            }
             if let chat = hc.chat, let option = chat.controls.models.first(where: { $0.id == model }) {
                 chat.setModel(option)
             } else if let chat = hc.chat {
@@ -347,7 +402,9 @@ package final class HostDaemon {
             broadcast(chats: [hc])
             return .init(id: id, ok: true)
         case .chatSetEffort:
-            guard let hc = args.chatId.flatMap(chat), let level = args.level, !level.isEmpty else { return fail(.invalid, "Name the chat and the effort.") }
+            guard let hc = args.chatId.flatMap(chat), let level = args.level, offers(effort: level, hc.record.provider) else {
+                return fail(.invalid, "The chat's CLI doesn't offer that effort.")
+            }
             if let chat = hc.chat {
                 guard chat.controls.models.isEmpty || chat.controls.effortScale.contains(level) else {
                     return fail(.invalid, "The chat's CLI doesn't offer that effort.")
@@ -383,6 +440,21 @@ package final class HostDaemon {
     }
 
     // MARK: GitHub
+
+    /// `gh auth status` runs off the main thread (it can take a while); a change goes out as a
+    /// delta. At most once a minute.
+    private func readGitHub() {
+        guard ghRead.map({ Date().timeIntervalSince($0) > 60 }) ?? true else { return }
+        ghRead = Date()
+        Task { [weak self] in
+            let now = await Task.detached { GitHubLogin.signedIn() }.value
+            guard let self, now != self.ghSignedIn else { return }
+            self.ghSignedIn = now
+            for connection in self.connections where connection.proven {
+                connection.send(.delta(rev: connection.nextRev(), windows: nil, chats: nil, removed: nil, extras: LinkExtras(ghSignedIn: now)))
+            }
+        }
+    }
 
     /// `gh auth login --web` on the box: the result carries the page and code once `gh` prints
     /// them; `<id>:done` says how it ended, and `ghSignedIn` follows in a delta.

@@ -88,7 +88,8 @@ struct ComposerBar: View {
                 RemoteChip(remote: remote, cli: chat.provider.id) { chat.setRemoteControl(false) }
                     .storyID(StoryID.Composer.remote, press: { chat.setRemoteControl(false) })
             }
-            UsageCueMark(provider: chat.provider.id)
+            // This Mac's limits: not a box chat's, whose login is the box's.
+            if !chat.services.onBox { UsageCueMark(provider: chat.provider.id) }
             if let plan = chat.provider.planToggle, chat.controls.planMode {
                 PlanChip(mode: plan) { chat.setPlanMode(false) }
             }

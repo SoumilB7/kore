@@ -61,7 +61,9 @@ extension Chat {
             shares: { [weak self] reading in
                 guard let self else { return nil }
                 return await self.connect().koreShares(for: reading)
-            })
+            },
+            // A box's chat reads the box's login through its CLI there: kept apart from this Mac's.
+            cacheScope: (services as? BoxChatServices).map { "box:" + $0.connection.alias })
     }
 
     /// Opens the Account popup for this chat's CLI.
@@ -81,6 +83,11 @@ extension Chat {
     /// method (the login lapsed), unless one is already under way.
     func signInAgain() {
         openAccount()
+        // A box's login signs in on the box, never this Mac's.
+        if let box = services as? BoxChatServices {
+            box.connection.accounts.signIn(provider.id)
+            return
+        }
         let store = AccountStore.shared
         if case .signedIn(let identity) = store.status(provider.id), !identity.changeable { return }
         account.signIn()

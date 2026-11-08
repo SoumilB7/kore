@@ -122,7 +122,9 @@ package final class SSHTransport: HostTransport, @unchecked Sendable {
     package static let defaultCommand = "~/.local/bin/kore-host"
 
     package static func arguments(alias: String, grant: String, command: String = defaultCommand) -> [String] {
-        ["-T", "-o", "BatchMode=yes", alias, command, "attach", "--as", grant]
+        // SSH notices a dead link itself (two missed keepalives, 15 s apart): the box never
+        // wakes for a ping.
+        ["-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", "--", alias, command, "attach", "--as", grant]
     }
 
     package convenience init(alias: String, grant: String, command: String = defaultCommand) {

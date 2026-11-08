@@ -30,6 +30,11 @@ package protocol ChatServices: AnyObject {
     /// Where the chat's CLI runs, for sharing model lists (`ModelCatalog`): nil for this
     /// machine's own CLIs; a box's chats share only that box's lists.
     var modelScope: String? { get }
+    /// Kore's stall watchdog runs for the chat's turns: not for a box's, whose box watches its own.
+    var watchesStall: Bool { get }
+    /// The chat runs on a box (its window's chats): what's this Mac's alone (Arsenal, its usage,
+    /// its sign-in, modes above Auto) isn't offered.
+    var onBox: Bool { get }
     /// The chat's mode changed: an Arsenal it can't keep goes off.
     func arsenalFollowMode(_ chat: Chat)
     /// Every event, after the chat took it: storylines, the local link, the agent channel.
@@ -69,6 +74,8 @@ package protocol ChatServices: AnyObject {
 
 extension ChatServices {
     package var modelScope: String? { nil }
+    package var watchesStall: Bool { true }
+    package var onBox: Bool { false }
 }
 
 /// What a chat asks of its transcript beyond the log: the rows' side of sending, drawing,

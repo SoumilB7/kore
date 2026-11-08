@@ -77,7 +77,7 @@ public final class KoreLog: @unchecked Sendable {
         if let path = env["KORE_LOG_DIR"] {
             return ["", "0", "off", "no"].contains(path.lowercased()) ? nil : URL(fileURLWithPath: path)
         }
-        if isTestProcess { return nil }
+        if keepsNothing { return nil }
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Kore")
     }()
 
@@ -88,6 +88,10 @@ public final class KoreLog: @unchecked Sendable {
         return ["xctest", "swiftpm-testing-helper", "kore-storylines"].contains(process) || Bundle.main.bundlePath.hasSuffix(".xctest")
             || env["XCTestConfigurationFilePath"] != nil
     }()
+
+    /// A test run, a storyline host, or kore-host on a box: none keeps the Mac's bookkeeping (these
+    /// logs, the usage index, plan snapshots, sessions), which only the Mac's app reads.
+    package static let keepsNothing: Bool = isTestProcess || ProcessInfo.processInfo.processName == "kore-host"
 
     /// One event; fields with no value are left out.
     public func write(_ event: String, _ fields: KeyValuePairs<String, String?>) {

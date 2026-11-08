@@ -58,12 +58,43 @@ package final class HostCache: Sendable {
         }
     }
 
+    // MARK: Sends waiting for the box
+
+    /// A forwarded call not answered yet, as its bytes went.
+    package struct Pending: Codable, Sendable {
+        package var id: String
+        package var payload: Data
+        package init(id: String, payload: Data) {
+            self.id = id
+            self.payload = payload
+        }
+    }
+
+    private var outboxFile: URL { folder.appendingPathComponent("outbox.json") }
+
+    package func outbox() -> [Pending] {
+        guard let data = try? Data(contentsOf: outboxFile) else { return [] }
+        return (try? JSONDecoder().decode([Pending].self, from: data)) ?? []
+    }
+
+    package func saveOutbox(_ pending: [Pending]) {
+        queue.async { [self] in
+            guard !pending.isEmpty else {
+                try? FileManager.default.removeItem(at: outboxFile)
+                return
+            }
+            guard let data = try? JSONEncoder().encode(pending) else { return }
+            make(folder)
+            try? data.write(to: outboxFile, options: .atomic)
+        }
+    }
+
     // MARK: Chats
 
     /// One chat's events as the box sent them (1.5): the box's log id and its items in order.
     package struct Events: Sendable {
         package var log: String?
-        package var items: [RelayItem] = []
+        package var items: [StreamItem] = []
     }
 
     private struct Header: Codable { var log: String }
@@ -73,7 +104,7 @@ package final class HostCache: Sendable {
         var result = Events()
         let decoder = JSONDecoder()
         for line in data.split(separator: 0x0A) {
-            if let item = try? decoder.decode(RelayItem.self, from: line) {
+            if let item = try? decoder.decode(StreamItem.self, from: line) {
                 result.items.append(item)
             } else if let header = try? decoder.decode(Header.self, from: line) {
                 result = Events(log: header.log)
@@ -83,24 +114,24 @@ package final class HostCache: Sendable {
     }
 
     /// The log starts again: the box's log `log`, from `items`.
-    package func restart(log id: String, items: [RelayItem], chat chatId: String) {
+    package func restart(log id: String, items: [StreamItem], chat chatId: String) {
         queue.async { [self] in
             make(chats)
-            var data = RelayWire.encode(Header(log: id)) + Data([0x0A])
-            for item in items { data += RelayWire.encode(item) + Data([0x0A]) }
+            var data = StreamWire.encode(Header(log: id)) + Data([0x0A])
+            for item in items { data += StreamWire.encode(item) + Data([0x0A]) }
             try? data.write(to: log(chatId), options: .atomic)
         }
     }
 
     /// Items that followed.
-    package func append(_ items: [RelayItem], chat chatId: String) {
+    package func append(_ items: [StreamItem], chat chatId: String) {
         guard !items.isEmpty else { return }
         queue.async { [self] in
             guard let handle = try? FileHandle(forWritingTo: log(chatId)) else { return }
             defer { try? handle.close() }
             _ = try? handle.seekToEnd()
             var data = Data()
-            for item in items { data += RelayWire.encode(item) + Data([0x0A]) }
+            for item in items { data += StreamWire.encode(item) + Data([0x0A]) }
             try? handle.write(contentsOf: data)
         }
     }

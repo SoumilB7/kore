@@ -118,7 +118,8 @@ package final class Arsenal {
     /// Why this chat can't have it now. Codex's default sandbox refuses the socket, and Kore doesn't
     /// open a hole in it: only Full access reaches Kore.
     package static func unavailable(_ chat: Chat) -> String? {
-        chat.provider == .codex && chat.controls.mode != CodexModes.fullAccess
+        if chat.services.onBox { return "Not in a chat on a box: Kore's tools aren't there." }
+        return chat.provider == .codex && chat.controls.mode != CodexModes.fullAccess
             ? "Codex's sandbox blocks this. It works in Full access." : nil
     }
 
@@ -127,6 +128,7 @@ package final class Arsenal {
         if let tier = chat.arsenal {
             return OptionItem("Arsenal · \(tier.title)", tint: Theme.Arsenal.color(tier), key: Self.key) { [self] in flip(chat) }
         }
+        if chat.services.onBox { return OptionItem("Arsenal · not on a box", enabled: false, key: Self.key) }
         if Self.unavailable(chat) != nil { return OptionItem("Arsenal · Codex needs Full access", enabled: false, key: Self.key) }
         return OptionItem("Arsenal", key: Self.key) { [self] in flip(chat) }
     }

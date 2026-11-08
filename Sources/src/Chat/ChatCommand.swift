@@ -5,12 +5,11 @@ import KoreCore
 /// real backend there (link 1.5, `chat.call`). One case per call that crosses; the calls that stay
 /// on this side (`start`, `close`, the account change's) have none.
 ///
-/// On the wire it's the synthesized coding: `{"<case>": {<labels>}}`, unlabeled values as `_0`.
-/// The case names and labels are the wire's keys: rename one and older peers stop reading it.
-/// A tag a peer doesn't know reads as `.unknown(tag)` (`ChatCommand.decode`), which is refused.
-package enum ChatCommand: Sendable, Codable {
+/// On the wire: `{"type": <tag>, <field>: …}`, written out in `ChatEvent+Coding.swift`. A tag a
+/// peer doesn't know reads as `.unknown(tag)`, which is refused.
+package enum ChatCommand: Sendable {
     /// `files`: uploaded already, by the blob ids the box gave them.
-    case send(text: String, files: [RelayFile], queued: String?, id: String?)
+    case send(text: String, files: [CallFile], queued: String?, id: String?)
     case interrupt
     case respond(approval: String, decision: Decision)
     case setMode(String)
@@ -39,6 +38,8 @@ package enum ChatCommand: Sendable, Codable {
     case setRemoteControl(Bool)
     case relaunch(reason: String)
     case listModels
+    /// The chat's tab closed: it leaves the box's windows and its CLI ends (not a backend call).
+    case close
     /// A tag this side doesn't know.
     case unknown(String)
 
@@ -73,6 +74,7 @@ package enum ChatCommand: Sendable, Codable {
         case .setRemoteControl: "setRemoteControl"
         case .relaunch: "relaunch"
         case .listModels: "listModels"
+        case .close: "close"
         case .unknown(let tag): tag
         }
     }
@@ -81,20 +83,20 @@ package enum ChatCommand: Sendable, Codable {
     package static let tags = [
         "send", "interrupt", "respond", "setMode", "setPlanMode", "setModel", "setEffort", "setFastMode", "rename", "stopAgent", "stopCommand",
         "backgroundCommand", "commandOutput", "watchCommands", "agentHistory", "fork", "forkAtEnd", "rollback", "earlier", "earlierMessages",
-        "unloadPoint", "unloaded", "compact", "usage", "useReset", "setRemoteControl", "relaunch", "listModels",
+        "unloadPoint", "unloaded", "compact", "usage", "useReset", "setRemoteControl", "relaunch", "listModels", "close",
     ]
 
     /// Reads a command; one whose tag (or shape) this side doesn't know is `.unknown`, never a
     /// failure.
     package static func decode(_ decoder: any Decoder) -> ChatCommand {
         if let command = try? ChatCommand(from: decoder) { return command }
-        let tag = (try? decoder.container(keyedBy: AnyKey.self))?.allKeys.first?.stringValue
+        let tag = try? decoder.container(keyedBy: AnyKey.self).decode(String.self, forKey: AnyKey(stringValue: "type"))
         return .unknown(tag ?? "")
     }
 }
 
-/// A file a relayed message carries: uploaded to the box first, named there by its blob id.
-package struct RelayFile: Sendable, Codable, Equatable {
+/// A file a forwarded message carries: uploaded to the box first, named there by its blob id.
+package struct CallFile: Sendable, Codable, Equatable {
     package var blob: String
     package var name: String
     package var kind: AttachmentKind
@@ -106,8 +108,8 @@ package struct RelayFile: Sendable, Codable, Equatable {
     }
 }
 
-/// What a relayed call gives back: the one field its call returns.
-package struct RelayValue: Sendable, Codable {
+/// What a forwarded call gives back: the one field its call returns.
+package struct CallValue: Sendable, Codable {
     package var bool: Bool?
     package var text: String?
     package var events: [ChatEvent]?

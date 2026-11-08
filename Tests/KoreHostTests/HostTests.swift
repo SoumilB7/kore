@@ -128,11 +128,12 @@ struct HostTests {
         #expect(welcome.proto.minor == LinkProto.boxMinor)
         #expect(welcome.policy.control == .full)
         #expect(windows.map(\.name) == ["work"])
-        // A second connection for the same grant is turned away.
+        // A second connection for the same grant takes over: the first is told it was replaced.
         let second = try Client(rig.paths.socket)
         try await until { !second.got.isEmpty }
         second.hello(grant: grant)
-        try await until { second.ended }
+        try await until { client.got.contains(.bye(.replaced)) }
+        #expect(!second.ended)
     }
 
     @Test func aWrongProofOrUnknownGrantIsRefused() async throws {
@@ -300,7 +301,7 @@ struct HostTests {
         // A full grant's snapshot carries the controls and the list; an act grant's neither.
         let store = GrantStore(rig.paths.grants)
         let full = try store.allow("laptop", control: .full, socket: rig.paths.socket)
-        let act = try store.allow("phone", control: .act, socket: rig.paths.socket)
+        let act = try store.allow("second", control: .act, socket: rig.paths.socket)
         func snapshot(_ grant: Grant) async throws -> ([ChatMeta], LinkExtras?) {
             let client = try Client(rig.paths.socket)
             try await until { !client.got.isEmpty }

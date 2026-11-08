@@ -64,7 +64,7 @@ final class FakeHost {
         send(json: [
             "t": "welcome", "proto": ["major": 1, "minor": 5], "epoch": "e1",
             "host": ["name": "mybox", "koreVersion": "1", "kind": "box"], "providers": [],
-            "policy": ["sendMaxLevel": 4, "control": "full"], "caps": ["tx", "control", "relay"],
+            "policy": ["sendMaxLevel": 4, "control": "full"], "caps": ["tx", "control", "stream"],
         ])
         send(.snapshot(rev: 1, windows: windows, chats: chats, extras: nil))
         return hello

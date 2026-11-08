@@ -14,7 +14,7 @@ import Testing
 /// A backend that keeps every call it gets and answers each with what a test set, as the real
 /// ones' events would say it.
 @MainActor
-final class RelayStandIn: ChatBackend {
+final class StreamStandIn: ChatBackend {
     let events: AsyncStream<ChatEvent>
     let sink: AsyncStream<ChatEvent>.Continuation
     var sessionId: String? { "s1" }
@@ -75,7 +75,7 @@ final class RelayStandIn: ChatBackend {
 
 /// A client on the box's socket that keeps each frame's bytes.
 @MainActor
-final class RelayClient {
+final class StreamClient {
     let socket: HostSocket
     var frames: [Data] = []
     var nonce: String?
@@ -92,15 +92,15 @@ final class RelayClient {
         try await until { self.nonce != nil }
         let key = Data(base64Encoded: grant.secret) ?? Data()
         socket.send(.hello(proto: LinkProto.version, client: .init(name: "test", build: "1"), proof: LinkProof.proof(secret: key, nonce: nonce ?? ""), grant: grant.name))
-        try await until { self.frames.contains { RelayWire.type($0) == "snapshot" } }
+        try await until { self.frames.contains { StreamWire.type($0) == "snapshot" } }
     }
 
-    func send<T: Encodable>(_ value: T) { socket.send(RelayWire.encode(value)) }
+    func send<T: Encodable>(_ value: T) { socket.send(StreamWire.encode(value)) }
 
-    var events: [ChatEvents] { frames.filter { RelayWire.type($0) == "chat.events" }.compactMap { try? JSONDecoder().decode(ChatEvents.self, from: $0) } }
-    var items: [RelayItem] { events.flatMap(\.items) }
+    var events: [ChatEvents] { frames.filter { StreamWire.type($0) == "chat.events" }.compactMap { try? JSONDecoder().decode(ChatEvents.self, from: $0) } }
+    var items: [StreamItem] { events.flatMap(\.items) }
     var flat: [ChatEvent] {
-        var assembler = RelayAssembler()
+        var assembler = StreamAssembler()
         return assembler.take(items)
     }
 
@@ -118,10 +118,10 @@ final class RelayClient {
     func close() { socket.close() }
 }
 
-@Suite("kore-host, relay", .serialized)
+@Suite("kore-host, stream", .serialized)
 @MainActor
-struct RelayTests {
-    func rig(_ backend: RelayStandIn, control: GrantControl = .full) throws -> (HostRig, Grant, HostChat) {
+struct StreamTests {
+    func rig(_ backend: StreamStandIn, control: GrantControl = .full) throws -> (HostRig, Grant, HostChat) {
         let rig = try HostRig()
         try rig.host.start()
         rig.host.services.backend = { _, _ in backend }
@@ -135,11 +135,11 @@ struct RelayTests {
     }
 
     @Test func eventsStreamAndCatchUpBySeq() async throws {
-        let backend = RelayStandIn()
+        let backend = StreamStandIn()
         backend.pieces = 40
         let (rig, grant, hc) = try rig(backend)
         defer { rig.finish() }
-        let client = try await RelayClient(rig, grant: grant)
+        let client = try await StreamClient(rig, grant: grant)
         client.send(ChatFollow(chatId: hc.id, after: nil, log: nil))
         // The follow starts the chat's CLI, as a tab showing starts a chat's.
         try await until { backend.calls.contains("start") }
@@ -162,65 +162,65 @@ struct RelayTests {
         let last = try #require(client.items.last?.s)
         client.close()
 
-        // Meanwhile a phone sends: the row and the turn go in the log.
-        _ = rig.host.apply(.send(chatId: hc.id, text: "from phone"), id: "p1", control: .act) { _ in }
-        try await until { backend.calls.contains { $0.hasPrefix("send from phone") } }
-        try await until { hc.relay.seq > last + 3 }
+        // Meanwhile another client sends: the row and the turn go in the log.
+        _ = rig.host.apply(.send(chatId: hc.id, text: "from another client"), id: "p1", control: .act) { _ in }
+        try await until { backend.calls.contains { $0.hasPrefix("send from another client") } }
+        try await until { hc.stream.seq > last + 3 }
 
         // Back, from where it was: only what came since, no reset.
-        let again = try await RelayClient(rig, grant: grant)
+        let again = try await StreamClient(rig, grant: grant)
         again.send(ChatFollow(chatId: hc.id, after: last, log: log))
         try await until { again.flat.contains { if case .turnFinished = $0 { true } else { false } } }
         #expect(again.events.allSatisfy { $0.reset != true })
         #expect(again.items.allSatisfy { $0.s > last })
-        #expect(again.flat.contains { if case .userMessage("from phone", _, _) = $0 { true } else { false } })
+        #expect(again.flat.contains { if case .userMessage("from another client", _, _) = $0 { true } else { false } })
         again.close()
 
         // Another log, or nothing held: the whole log again, as a reset.
-        let fresh = try await RelayClient(rig, grant: grant)
+        let fresh = try await StreamClient(rig, grant: grant)
         fresh.send(ChatFollow(chatId: hc.id, after: 3, log: "old"))
-        try await until { fresh.flat.contains { if case .userMessage("from phone", _, _) = $0 { true } else { false } } }
+        try await until { fresh.flat.contains { if case .userMessage("from another client", _, _) = $0 { true } else { false } } }
         #expect(fresh.events.first?.reset == true)
-        #expect(fresh.items.first?.s == hc.relay.first)
-        #expect(texts(fresh.flat) == "Hi: helloHi: from phone")
+        #expect(fresh.items.first?.s == hc.stream.first)
+        #expect(texts(fresh.flat) == "Hi: helloHi: from another client")
         fresh.close()
 
         // The log outlives a restart.
         rig.restart()
         let back = try #require(rig.host.chat(hc.id))
-        #expect(back.relay.since(nil, log: nil).items.count == hc.relay.since(nil, log: nil).items.count)
-        #expect(back.relay.id == log)
+        #expect(back.stream.since(nil, log: nil).items.count == hc.stream.since(nil, log: nil).items.count)
+        #expect(back.stream.id == log)
     }
 
     @Test func aResumedHistoryIsntSentAgain() async throws {
-        let (rig, grant, hc) = try rig(RelayStandIn())
+        let (rig, grant, hc) = try rig(StreamStandIn())
         defer { rig.finish() }
         // Each start of the CLI is a new backend, which replays the session's history.
-        var made: [RelayStandIn] = []
+        var made: [StreamStandIn] = []
         rig.host.services.backend = { _, _ in
-            let backend = RelayStandIn()
+            let backend = StreamStandIn()
             backend.replay = [.userMessage(text: "past", attachments: [], id: "m0")]
             made.append(backend)
             return backend
         }
-        let client = try await RelayClient(rig, grant: grant)
+        let client = try await StreamClient(rig, grant: grant)
         client.send(ChatFollow(chatId: hc.id, after: nil, log: nil))
         try await until { client.flat.contains { if case .replayed = $0 { true } else { false } } }
-        let count = hc.relay.seq
+        let count = hc.stream.seq
         // The CLI sleeps and starts again: its history comes again, and stays out of the log.
         rig.host.sleep(hc)
         _ = try await client.call(hc.id, .send(text: "again", files: [], queued: nil, id: "m2"))
         try await until { client.flat.contains { if case .turnFinished = $0 { true } else { false } } }
         #expect(made.count == 2)
         #expect(client.flat.filter { if case .replayed = $0 { true } else { false } }.count == 1)
-        #expect(hc.relay.seq > count)
+        #expect(hc.stream.seq > count)
     }
 
     @Test func callsReachTheBackendAndTheChat() async throws {
-        let backend = RelayStandIn()
+        let backend = StreamStandIn()
         let (rig, grant, hc) = try rig(backend)
         defer { rig.finish() }
-        let client = try await RelayClient(rig, grant: grant)
+        let client = try await StreamClient(rig, grant: grant)
         client.send(ChatFollow(chatId: hc.id, after: nil, log: nil))
         try await until { backend.calls.contains("start") }
         try await until { hc.chat?.controls.commands.isEmpty == false }
@@ -267,10 +267,10 @@ struct RelayTests {
     }
 
     @Test func anAttachmentUploadsAndGoesByItsBoxPath() async throws {
-        let backend = RelayStandIn()
+        let backend = StreamStandIn()
         let (rig, grant, hc) = try rig(backend)
         defer { rig.finish() }
-        let client = try await RelayClient(rig, grant: grant)
+        let client = try await StreamClient(rig, grant: grant)
         let data = Data("notes for the box\n".utf8)
         let sha = LinkUploads.hex(SHA256.hash(data: data))
         client.socket.send(.blobPutBegin(uploadId: "u1", name: "notes.txt", mime: "text/plain", size: data.count, sha256: sha))
@@ -284,22 +284,22 @@ struct RelayTests {
             }.first
             return blob != nil
         }
-        let sent = try await client.call(hc.id, .send(text: "read this", files: [RelayFile(blob: blob!, name: "notes.txt", kind: .text)], queued: nil, id: "m1"))
+        let sent = try await client.call(hc.id, .send(text: "read this", files: [CallFile(blob: blob!, name: "notes.txt", kind: .text)], queued: nil, id: "m1"))
         #expect(sent.ok)
         try await until { !backend.files.isEmpty }
         let file = try #require(backend.files.first)
         #expect(file.url.path.hasPrefix(rig.paths.state.path) && file.name == "notes.txt")
         #expect(try Data(contentsOf: file.url) == data)
         // A blob the box doesn't have is refused.
-        let gone = try await client.call(hc.id, .send(text: "x", files: [RelayFile(blob: "nope", name: "a", kind: .text)], queued: nil, id: "m2"))
+        let gone = try await client.call(hc.id, .send(text: "x", files: [CallFile(blob: "nope", name: "a", kind: .text)], queued: nil, id: "m2"))
         #expect(!gone.ok && gone.code == .goneBlob)
     }
 
     @Test func thePolicyHoldsForEveryCall() async throws {
-        let backend = RelayStandIn()
+        let backend = StreamStandIn()
         let (rig, grant, hc) = try rig(backend)
         defer { rig.finish() }
-        let client = try await RelayClient(rig, grant: grant)
+        let client = try await StreamClient(rig, grant: grant)
         // A raise past Auto, a `!` line and Always allow are refused; Auto itself is fine.
         #expect(try await client.call(hc.id, .setMode("bypassPermissions")).code == .raiseMode)
         #expect(try await client.call(hc.id, .setMode("auto")).ok)
@@ -315,21 +315,55 @@ struct RelayTests {
         let answer = client.frames.compactMap { try? JSONDecoder().decode(ChatCallResult.self, from: $0) }.first { $0.id == "u1" }
         #expect(answer?.ok == false && answer?.code == .invalid)
         // An act grant doesn't drive chats.
-        let act = try GrantStore(rig.paths.grants).allow("phone", control: .act, socket: rig.paths.socket)
-        let phone = try await RelayClient(rig, grant: act)
-        phone.send(ChatCall(id: "p1", chatId: hc.id, command: .interrupt))
-        try await until { phone.frames.contains { (try? JSONDecoder().decode(ChatCallResult.self, from: $0))?.code == .deniedControl } }
+        let act = try GrantStore(rig.paths.grants).allow("second", control: .act, socket: rig.paths.socket)
+        let other = try await StreamClient(rig, grant: act)
+        other.send(ChatCall(id: "p1", chatId: hc.id, command: .interrupt))
+        try await until { other.frames.contains { (try? JSONDecoder().decode(ChatCallResult.self, from: $0))?.code == .deniedControl } }
     }
 
     @Test func aRepeatedCallRunsOnce() async throws {
-        let backend = RelayStandIn()
+        let backend = StreamStandIn()
         let (rig, grant, hc) = try rig(backend)
         defer { rig.finish() }
-        let client = try await RelayClient(rig, grant: grant)
+        let client = try await StreamClient(rig, grant: grant)
         let first = try await client.call(hc.id, .send(text: "once", files: [], queued: nil, id: "m1"), id: "same")
         client.frames.removeAll()
         let again = try await client.call(hc.id, .send(text: "once", files: [], queued: nil, id: "m1"), id: "same")
         #expect(first.ok && again.ok)
         #expect(backend.calls.filter { $0.hasPrefix("send once") }.count == 1)
+    }
+
+    @Test func aNewChatsModeIsCheckedOnTheBox() throws {
+        let rig = try HostRig()
+        defer { rig.finish() }
+        let path = rig.folder.path
+        let codex = rig.host.apply(.control(.chatNew, ControlArgs(provider: "codex", mode: "fullAccess", folder: path)), id: "1", control: .act) { _ in }
+        #expect(codex?.code == .raiseMode)
+        let fork = ControlArgs(entryId: "m1", provider: "claude", sessionId: "s1", mode: "bypassPermissions", folder: path)
+        #expect(rig.host.apply(.control(.chatNew, fork), id: "2", control: .full) { _ in }?.code == .raiseMode)
+        #expect(rig.host.apply(.control(.chatNew, ControlArgs(provider: "claude", mode: "auto", folder: path)), id: "3", control: .act) { _ in }?.code == .raiseMode)
+        #expect(rig.host.apply(.control(.chatNew, ControlArgs(provider: "claude", mode: "auto", folder: path)), id: "4", control: .full) { _ in }?.ok == true)
+        // A control kind the box has no rule for is refused.
+        #expect(rig.host.apply(.control(.windowOpen, ControlArgs()), id: "5", control: .full) { _ in }?.code == .invalid)
+    }
+
+    @Test func callAnswersAreKeptPerGrantAndTheNewestConnectionWins() async throws {
+        let backend = StreamStandIn()
+        let (rig, grant, hc) = try rig(backend)
+        defer { rig.finish() }
+        let other = try GrantStore(rig.paths.grants).allow("second", control: .full, socket: rig.paths.socket)
+        let a = try await StreamClient(rig, grant: grant)
+        let b = try await StreamClient(rig, grant: other)
+        _ = try await a.call(hc.id, .send(text: "from a", files: [], queued: nil, id: "m1"), id: "same")
+        _ = try await b.call(hc.id, .send(text: "from b", files: [], queued: nil, id: "m2"), id: "same")
+        #expect(backend.calls.contains { $0.hasPrefix("send from a") } && backend.calls.contains { $0.hasPrefix("send from b") })
+        // The same grant again: the older connection is told it was replaced.
+        let again = try await StreamClient(rig, grant: grant)
+        try await until { a.frames.contains { if case .bye(.replaced)? = try? LinkMessage.decode($0) { true } else { false } } }
+        again.close()
+        // A revoked grant's next command ends its connection.
+        #expect(GrantStore(rig.paths.grants).revoke("second"))
+        b.send(ChatCall(id: "late", chatId: hc.id, command: .interrupt))
+        try await until { b.frames.contains { if case .bye(.auth)? = try? LinkMessage.decode($0) { true } else { false } } }
     }
 }

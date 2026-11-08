@@ -11,8 +11,8 @@ package protocol HostFollower: AnyObject {
     /// Where its copy stands: what `chat.follow` asks for.
     var following: ChatFollow? { get }
     /// Its chat's events (1.5 `chat.events`).
-    func relayed(_ events: ChatEvents)
-    /// The box can't send them: the chat is gone, or the grant or the box can't relay.
+    func streamed(_ events: ChatEvents)
+    /// The box can't send them: the chat is gone, or the grant or the box can't stream them.
     func refused(_ message: String)
     /// Its chat's state from a snapshot or delta; nil once the box closed it.
     func meta(_ meta: ChatMeta?)
@@ -59,15 +59,14 @@ package final class HostConnection {
     @ObservationIgnored package private(set) var providers: [ProviderInfo] = []
     /// `welcome.host.kind`: "box" for kore-host.
     @ObservationIgnored package private(set) var hostKind: String?
-    /// The welcome's: what the box offers this grant (1.5's "relay" with full control), and the
+    /// The welcome's: what the box offers this grant (1.5's "stream" with full control), and the
     /// grant's control.
     @ObservationIgnored package private(set) var caps: [String] = []
     @ObservationIgnored package private(set) var control: LinkControlLevel?
     @ObservationIgnored package let cache: HostCache
 
-    /// How often a ping goes, and how many may go unanswered.
-    @ObservationIgnored package var pingEvery: Duration = .seconds(15)
-    @ObservationIgnored package var missedLimit = 2
+    /// A link up this long counts as stable: the next drop dials again from the shortest wait.
+    @ObservationIgnored package var stableAfter: Duration = .seconds(30)
     /// Waits before each dial after the link went, the last repeating.
     @ObservationIgnored package var backoff: [Duration] = [.seconds(1), .seconds(2), .seconds(5), .seconds(10), .seconds(30), .seconds(60)]
     /// A dial that hasn't had its welcome by then is given up.
@@ -88,7 +87,7 @@ package final class HostConnection {
     /// Commands' ids end with this run's own tag: a box keeps recent `chat.call` ids, so ids
     /// never repeat across runs.
     @ObservationIgnored private let tag = String(UUID().uuidString.prefix(8)).lowercased()
-    /// Commands a dropped link sends again (relayed calls: the box answers a repeat once).
+    /// Commands a dropped link sends again (forwarded calls: the box answers a repeat once).
     @ObservationIgnored private var resend: [String: Data] = [:]
     @ObservationIgnored private var outbox: [(id: String, payload: Data)] = []
     @ObservationIgnored private var inFlight: Set<String> = []
@@ -125,6 +124,12 @@ package final class HostConnection {
             folders = state.folders
             lastHeard = state.updated.map(Date.init(timeIntervalSince1970:))
             heardAt = lastHeard
+        }
+        // Sends a quit Kore didn't get to: they go once the box is back; their answers aren't
+        // waited on (the chat shows them when the box does).
+        for pending in self.cache.outbox() {
+            outbox.append((pending.id, pending.payload))
+            resend[pending.id] = pending.payload
         }
     }
 
@@ -181,20 +186,20 @@ package final class HostConnection {
     package func unfollow(_ follower: any HostFollower) {
         guard let id = follower.chatId, followers[id]?.follower === follower else { return }
         followers[id] = nil
-        if ready, relays { transport?.send(RelayWire.encode(ChatUnfollow(chatId: id))) }
+        if ready, streams { transport?.send(StreamWire.encode(ChatUnfollow(chatId: id))) }
     }
 
-    /// The box relays chats to this grant (1.5, full control).
-    package var relays: Bool { caps.contains("relay") }
+    /// The box streams chats to this grant (1.5, full control).
+    package var streams: Bool { caps.contains("stream") }
 
     private func askEvents(_ follower: any HostFollower) {
-        guard relays else {
+        guard streams else {
             return follower.refused(
                 control == .full
                     ? "kore-host on \(alias) is older than this Kore: update it to open its chats"
                     : "This Mac's grant on \(alias) needs full control (kore-host allow \(grant) --control full)")
         }
-        if let ask = follower.following { transport?.send(RelayWire.encode(ask)) }
+        if let ask = follower.following { transport?.send(StreamWire.encode(ask)) }
     }
 
     // MARK: Commands
@@ -205,15 +210,23 @@ package final class HostConnection {
         await command(payload, resending: false)
     }
 
-    /// `resending`: a link that drops before the answer sends it again once it's back (a relayed
+    /// `resending`: a link that drops before the answer sends it again once it's back (a forwarded
     /// call, which the box runs once per id).
     private func command(_ payload: (String) -> Data, resending: Bool) async -> LinkMessage.Result {
         serial += 1
         let id = "c\(serial).\(tag)"
         let data = payload(id)
         if case .refused(let why) = phase { return LinkMessage.Result(id: id, ok: false, code: .unknown, message: why) }
-        if resending { resend[id] = data }
-        defer { resend[id] = nil }
+        if resending {
+            resend[id] = data
+            keepOutbox()
+        }
+        defer {
+            if resending {
+                resend[id] = nil
+                keepOutbox()
+            }
+        }
         return await withCheckedContinuation { continuation in
             waiting[id] = continuation
             if ready, let transport {
@@ -241,9 +254,9 @@ package final class HostConnection {
         return (result, raws.removeValue(forKey: result.id))
     }
 
-    /// One relayed backend call on a chat (1.5 `chat.call`): its answer, sent again after a drop.
+    /// One forwarded backend call on a chat (1.5 `chat.call`): its answer, sent again after a drop.
     package func call(_ chatId: String, _ command: ChatCommand) async -> ChatCallResult {
-        let (result, raw) = await commandRaw({ RelayWire.encode(ChatCall(id: $0, chatId: chatId, command: command)) }, resending: true)
+        let (result, raw) = await commandRaw({ StreamWire.encode(ChatCall(id: $0, chatId: chatId, command: command)) }, resending: true)
         if let raw, let full = try? JSONDecoder().decode(ChatCallResult.self, from: raw) { return full }
         return ChatCallResult(id: result.id, ok: result.ok, code: result.code, message: result.message)
     }
@@ -401,13 +414,15 @@ package final class HostConnection {
     private func dropped(_ reason: String?) {
         guard transport != nil || pump != nil else { return }
         teardown()
-        // Sent, never answered: the box may or may not have it. A relayed call goes again (the box
+        // Sent, never answered: the box may or may not have it. A forwarded call goes again (the box
         // runs it once); anything else says so.
         for id in inFlight.sorted() {
             if let data = resend[id] { outbox.append((id, data)) } else { finish(id, ok: false, message: "The link to \(alias) dropped before it answered") }
         }
         inFlight = []
         endUploads("The link to \(alias) dropped")
+        // A sign-in's end won't come over a link that's gone.
+        for id in waiting.keys where id.hasSuffix(HostWire.doneSuffix) { finish(id, ok: false, message: "The link to \(alias) dropped") }
         if case .refused = phase { return }
         if phase == .online || lastHeard == nil { lastHeard = heardAt ?? lastHeard }
         phase = .offline
@@ -435,7 +450,7 @@ package final class HostConnection {
         }
         switch inbound {
         case .events(let events):
-            followers[events.chatId]?.follower?.relayed(events)
+            followers[events.chatId]?.follower?.streamed(events)
         case .folders(let id, let list):
             // `folders.list`'s own answer; any other result with folders (`folder.add`) is a result.
             if folderAsks[id] != nil {
@@ -461,6 +476,7 @@ package final class HostConnection {
             switch reason {
             case .auth: refuse("\(alias) didn't accept this Mac's grant \"\(grant)\"")
             case .version: refuse("\(alias) runs a link this Kore can't read")
+            case .replaced: refuse("Another Kore with this Mac's grant took over \(alias)")
             default: drop("the box said \(reason.rawValue)")
             }
         case .snapshot(_, let windows, let chats, let extras):
@@ -510,12 +526,12 @@ package final class HostConnection {
         if let gh = HostWire.ghSignedIn(message, raw: raw), gh != ghSignedIn { ghSignedIn = gh }
     }
 
-    /// The box's state is in: followed chats catch up, waiting commands go, pings begin.
+    /// The box's state is in: followed chats catch up, waiting commands go. Liveness is SSH's own
+    /// (`ServerAliveInterval`), so nothing wakes the box to ask.
     private func becameReady() {
         guard !ready else { return }
         ready = true
         phase = .online
-        attempts = 0
         lastHeard = nil
         for follower in liveFollowers {
             askEvents(follower)
@@ -527,27 +543,21 @@ package final class HostConnection {
             inFlight.insert(id)
             transport?.send(payload)
         }
-        startPings()
+        // Waits reset only once the link has stayed up a while: one that drops at once backs off.
+        pinger?.cancel()
+        let stable = stableAfter
+        pinger = Task { [weak self] in
+            try? await Task.sleep(for: stable)
+            guard let self, !Task.isCancelled, self.ready else { return }
+            self.attempts = 0
+        }
     }
 
-    private func startPings() {
-        pinger?.cancel()
-        let every = pingEvery, limit = missedLimit
-        pinger = Task { [weak self] in
-            var missed = 0
-            while !Task.isCancelled {
-                try? await Task.sleep(for: every)
-                guard let self, !Task.isCancelled, self.ready else { return }
-                missed = self.heard ? 0 : missed + 1
-                if missed >= limit {
-                    self.drop("\(limit) pings went unanswered")
-                    return
-                }
-                self.heard = false
-                self.serial += 1
-                self.transport?.send(HostWire.ping(id: "ping.\(self.serial)"))
-            }
-        }
+    /// Calls that go again after a drop are kept on disk, so a quit Kore sends them when it's back
+    /// (the box runs each id once).
+    private func keepOutbox() {
+        let kept = resend.sorted { $0.key < $1.key }.map { HostCache.Pending(id: $0.key, payload: $0.value) }
+        cache.saveOutbox(kept)
     }
 
     private func refuse(_ why: String) {

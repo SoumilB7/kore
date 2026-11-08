@@ -19,7 +19,7 @@ public struct PlanReading: Sendable, Equatable, Codable {
 }
 
 public struct PlanAccount: Sendable, Equatable, Codable {
-    public enum Access: Sendable, Equatable, Codable {
+    public enum Access: Sendable, Equatable {
         /// A subscription with plan limits.
         case plan
         /// Billed per token (Console, API key, a cloud provider): no plan limits; how, in a line.
@@ -107,7 +107,7 @@ public struct PlanReset: Sendable, Equatable, Codable {
 }
 
 /// What using a full reset did, as Codex answers `account/rateLimitResetCredit/consume`.
-public enum PlanResetOutcome: Sendable, Equatable, Codable {
+public enum PlanResetOutcome: Sendable, Equatable {
     case reset
     /// Nothing was near a limit: the credit stays.
     case nothingToReset

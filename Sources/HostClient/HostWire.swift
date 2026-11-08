@@ -167,7 +167,7 @@ package enum HostWire {
     // MARK: In
 
     package static func decode(_ data: Data) throws -> HostInbound {
-        if RelayWire.type(data) == "chat.events" { return .events(try JSONDecoder().decode(ChatEvents.self, from: data)) }
+        if StreamWire.type(data) == "chat.events" { return .events(try JSONDecoder().decode(ChatEvents.self, from: data)) }
         let message = try LinkMessage.decode(data)
         if case .result(let result) = message, result.ok, let folders = try? JSONDecoder().decode(FoldersPeek.self, from: data).folders {
             return .folders(id: result.id, folders.map { BoxFolder(path: $0.path, windowId: $0.windowId) })

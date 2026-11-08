@@ -62,7 +62,7 @@ struct HostClientTests {
         dials.hosts[0].close()
         #expect(await until { connection.phase == .offline })
         #expect(connection.lastHeard != nil)
-        #expect(await until { log.events.contains { if case .connection(.offline) = $0 { true } else { false } } })
+        #expect(await until { log.events.contains { if case .connection(.away(let words)) = $0 { words.hasPrefix("mybox offline") } else { false } } })
 
         let sending = Task { try await backend.send("are you there", files: [], queued: nil, id: "m1") }
 
@@ -74,8 +74,8 @@ struct HostClientTests {
         _ = await host.handshake(windows: [Fixture.window(["c1"])], chats: [Fixture.meta("c1")])
         #expect(await host.next("chat.follow") != nil)
         let call = try #require(await host.next("chat.call"))
-        let send = try #require((call["command"] as? [String: Any])?["send"] as? [String: Any])
-        #expect(send["text"] as? String == "are you there" && send["id"] as? String == "m1")
+        let send = try #require(call["command"] as? [String: Any])
+        #expect(send["type"] as? String == "send" && send["text"] as? String == "are you there" && send["id"] as? String == "m1")
         host.send(json: ["t": "result", "id": call["id"] ?? "", "ok": true, "value": ["bool": true]])
         #expect(try await sending.value)
         #expect(await until { log.events.contains { if case .connection(.ok) = $0 { true } else { false } } })
@@ -83,36 +83,19 @@ struct HostClientTests {
         // The box's copy of a message sent from here isn't shown twice; another client's is.
         host.send(json: [
             "t": "chat.events", "chatId": "c1", "log": "L1", "reset": true,
-            "items": [["s": 1, "by": "laptop", "e": ["userMessage": ["text": "are you there", "attachments": [], "id": "m1"]]]],
+            "items": [["s": 1, "by": "laptop", "e": ["type": "userMessage", "text": "are you there", "attachments": [], "id": "m1"]]],
         ])
         host.send(json: [
             "t": "chat.events", "chatId": "c1", "log": "L1",
             "items": [
-                ["s": 2, "by": "laptop", "e": ["userMessage": ["text": "are you there", "attachments": [], "id": "m1"]]],
-                ["s": 3, "e": ["userMessage": ["text": "from the phone", "attachments": [], "id": "p1"]]],
+                ["s": 2, "by": "laptop", "e": ["type": "userMessage", "text": "are you there", "attachments": [], "id": "m1"]],
+                ["s": 3, "e": ["type": "userMessage", "text": "from another client", "attachments": [], "id": "p1"]],
             ],
         ])
-        #expect(await until { log.flat.contains { if case .userMessage("from the phone", _, _) = $0 { true } else { false } } })
+        #expect(await until { log.flat.contains { if case .userMessage("from another client", _, _) = $0 { true } else { false } } })
         // The reset shows the log whole (a copy holds the box's rows); live, its own row is skipped.
         #expect(log.flat.filter { if case .userMessage("are you there", _, _) = $0 { true } else { false } }.count == 1)
         #expect(await host.next("chat.call", within: 0.3) == nil)
-        connection.release()
-    }
-
-    @Test func missedPingsMarkOffline() async throws {
-        let dials = Dials()
-        let connection = makeConnection(root: Fixture.scratch(), dials: dials)
-        connection.pingEvery = .milliseconds(80)
-        connection.retain()
-        #expect(await until { dials.hosts.count == 1 })
-        let host = dials.hosts[0]
-        _ = await host.handshake(windows: [], chats: [])
-        #expect(await until { connection.isOnline })
-        // Pings go as commands; the box says nothing back.
-        let ping = try #require(await host.next("cmd"))
-        #expect((ping["cmd"] as? [String: Any])?["type"] as? String == "ping")
-        #expect(await until(2) { connection.phase != .online })
-        #expect(await until { host.closed })
         connection.release()
     }
 
@@ -267,7 +250,11 @@ struct HostClientTests {
             Match host x
             """
         #expect(SSHHosts.parse(config) == ["mybox", "web1", "web2", "gpu"])
-        #expect(SSHTransport.arguments(alias: "mybox", grant: "laptop") == ["-T", "-o", "BatchMode=yes", "mybox", "~/.local/bin/kore-host", "attach", "--as", "laptop"])
+        #expect(
+            SSHTransport.arguments(alias: "mybox", grant: "laptop") == [
+                "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", "--", "mybox", "~/.local/bin/kore-host",
+                "attach", "--as", "laptop",
+            ])
     }
 
 }

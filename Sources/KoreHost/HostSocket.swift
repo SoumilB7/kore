@@ -140,31 +140,49 @@ package enum HostSocketError: Error, CustomStringConvertible {
 }
 
 /// One connected socket: whole frames in, whole frames out. Reads are woken by the socket;
-/// nothing runs while it's quiet.
+/// writes never block: what the peer hasn't taken yet waits in this socket's own queue, drained
+/// as the peer reads. A peer that falls `outboundCap` behind is dropped (a client catches up by
+/// seq when it's back). Nothing runs while it's quiet.
 @MainActor
 package final class HostSocket {
     package let fd: Int32
     private var source: DispatchSourceRead?
+    private var writer: DispatchSourceWrite?
     private var buffer = Data()
+    /// Bytes written but not yet taken by the peer.
+    private var pending = Data()
+    private var ended: (@MainActor () -> Void)?
     private(set) var closed = false
+    /// The queue drained below `lowWater`: a client paging a catch-up sends its next part.
+    package var drained: (@MainActor () -> Void)?
+
+    package static let outboundCap = 8 * 1024 * 1024
+    package static let lowWater = 256 * 1024
 
     init(fd: Int32) {
         self.fd = fd
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
         #if canImport(Darwin)
         var on: Int32 = 1
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
         #endif
     }
 
-    /// `frame`: each whole frame read (at most `max`); `ended`: the peer went, or sent too much.
+    /// Bytes waiting for the peer.
+    package var backlog: Int { pending.count }
+
+    /// `frame`: each whole frame read (at most `max`); `ended`: the peer went, sent too much, or
+    /// fell too far behind.
     package func start(max: Int, frame: @escaping @MainActor (Data) -> Void, ended: @escaping @MainActor () -> Void) {
+        self.ended = ended
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .main)
         source.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
                 guard let self else { return }
                 var chunk = [UInt8](repeating: 0, count: 64 * 1024)
                 let count = read(self.fd, &chunk, chunk.count)
-                guard count > 0 else { return self.end(ended) }
+                if count < 0, errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR { return }
+                guard count > 0 else { return self.end() }
                 self.buffer.append(contentsOf: chunk[0..<count])
                 do {
                     for payload in try LinkFrame.take(&self.buffer, max: max) {
@@ -172,7 +190,7 @@ package final class HostSocket {
                         frame(payload)
                     }
                 } catch {
-                    self.end(ended)
+                    self.end()
                 }
             }
         }
@@ -180,23 +198,17 @@ package final class HostSocket {
         source.resume()
     }
 
-    /// Writes one frame; false once the socket is gone.
+    /// Queues one frame; false once the socket is gone.
     @discardableResult
     package func send(_ payload: Data) -> Bool {
         guard !closed else { return false }
-        let framed = LinkFrame.frame(payload)
-        return framed.withUnsafeBytes { raw in
-            var offset = 0
-            while offset < raw.count {
-                let written = write(fd, raw.baseAddress! + offset, raw.count - offset)
-                if written < 0 {
-                    if errno == EINTR { continue }
-                    return false
-                }
-                offset += written
-            }
-            return true
+        pending.append(LinkFrame.frame(payload))
+        flush()
+        guard pending.count <= Self.outboundCap else {
+            end()
+            return false
         }
+        return !closed
     }
 
     package func send(_ message: LinkMessage) {
@@ -204,18 +216,50 @@ package final class HostSocket {
         send(data)
     }
 
+    /// Writes what the peer takes now; the rest waits for it to be writable again.
+    private func flush() {
+        while !pending.isEmpty, !closed {
+            let written = pending.withUnsafeBytes { raw in write(fd, raw.baseAddress!, raw.count) }
+            if written > 0 {
+                pending.removeFirst(written)
+                continue
+            }
+            if written < 0, errno == EINTR { continue }
+            if written < 0, errno == EAGAIN || errno == EWOULDBLOCK { break }
+            return end()
+        }
+        if pending.isEmpty {
+            writer?.cancel()
+            writer = nil
+        } else if writer == nil {
+            let writer = DispatchSource.makeWriteSource(fileDescriptor: fd, queue: .main)
+            writer.setEventHandler { [weak self] in
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.flush()
+                    if self.pending.count < Self.lowWater { self.drained?() }
+                }
+            }
+            self.writer = writer
+            writer.resume()
+        }
+    }
+
     package func close() {
         guard !closed else { return }
         closed = true
         source?.cancel()
         source = nil
+        writer?.cancel()
+        writer = nil
+        pending = Data()
         _ = Glue2.close(fd)
     }
 
-    private func end(_ ended: @MainActor () -> Void) {
+    private func end() {
         guard !closed else { return }
         close()
-        ended()
+        ended?()
     }
 }
 

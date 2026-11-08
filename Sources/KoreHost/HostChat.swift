@@ -23,6 +23,8 @@ package struct ChatRecord: Codable, Sendable, Equatable {
     /// and the message it forks at. Kept until the fork has a session of its own.
     package var forkFrom: String?
     package var forkAt: String?
+    /// Its tab was closed on a client: it's no longer one of the box's chats.
+    package var closed: Bool?
 }
 
 /// One line of a chat's log (`log.jsonl`): an entry as it went on the wire, a turn, or the start
@@ -40,10 +42,20 @@ package final class HostChat {
     package private(set) var record: ChatRecord
     let folderURL: URL
     private let dir: URL
-    /// The entries as last sent, in order, and the turns by id.
-    package private(set) var entries: [LinkEntry] = []
+    /// The entries as last sent, in order, and the turns by id: read from the log the first time
+    /// a client asks (a box keeps many chats no one follows).
+    package var entries: [LinkEntry] {
+        readLogOnce()
+        return stored
+    }
+    package var turns: [String: LinkTurn] {
+        readLogOnce()
+        return storedTurns
+    }
+    private var stored: [LinkEntry] = []
+    private var storedTurns: [String: LinkTurn] = [:]
     private var index: [String: Int] = [:]
-    package private(set) var turns: [String: LinkTurn] = [:]
+    private var logRead = false
     /// The chat, while it lives (from a send, or a command that needs it, until idle).
     package private(set) var chat: Chat?
     package private(set) var lastUsed = Date()
@@ -51,10 +63,10 @@ package final class HostChat {
     private var log: FileHandle?
 
     /// The chat's events as its backend gave them, numbered, for full grants (link 1.5).
-    package let relay: RelayLog
+    package let stream: StreamLog
     /// Messages a full grant sent through `chat.call`, by id: the grant, so its own client isn't
     /// sent its row back live.
-    var relayBy: [String: String] = [:]
+    var sentBy: [String: String] = [:]
     /// Recent `chat.call` answers by the client's id, oldest first, and those still running with
     /// the clients waiting on them: a repeat gets the first answer and runs nothing.
     var answered: [(id: String, data: Data)] = []
@@ -67,7 +79,7 @@ package final class HostChat {
         self.record = record
         self.dir = dir
         folderURL = URL(fileURLWithPath: record.folder)
-        relay = RelayLog(url: dir.appendingPathComponent("events.jsonl"))
+        stream = StreamLog(url: dir.appendingPathComponent("events.jsonl"))
     }
 
     package var id: String { record.id }
@@ -75,7 +87,10 @@ package final class HostChat {
     package var title: String { chat?.title ?? record.title ?? provider.name }
     package var running: Bool { chat?.isBusy ?? false }
     package var cliRunning: Bool { chat != nil }
-    package var idle: Bool { chat.map { !$0.isWorking && $0.queuedCount == 0 && $0.approvals.pending.isEmpty } ?? true }
+    /// Nothing to do: no turn, queue or card, and no live command or armed job (its CLI runs them).
+    package var idle: Bool {
+        chat.map { !$0.isWorking && $0.queuedCount == 0 && $0.approvals.pending.isEmpty && $0.commands.summary.total == 0 } ?? true
+    }
 
     // MARK: Disk
 
@@ -98,9 +113,7 @@ package final class HostChat {
         guard let data = try? Data(contentsOf: dir.appendingPathComponent("meta.json")),
             let record = try? JSONDecoder().decode(ChatRecord.self, from: data)
         else { return nil }
-        let chat = HostChat(record: record, dir: dir)
-        chat.readLog()
-        return chat
+        return HostChat(record: record, dir: dir)
     }
 
     func saveRecord() throws {
@@ -111,25 +124,32 @@ package final class HostChat {
 
     private var logURL: URL { dir.appendingPathComponent("log.jsonl") }
 
+    private func readLogOnce() {
+        guard !logRead else { return }
+        logRead = true
+        readLog()
+    }
+
     private func readLog() {
-        guard let text = try? String(contentsOf: logURL, encoding: .utf8) else { return }
+        // A torn line (a crash mid-write) is skipped, never the whole log.
+        guard let data = try? Data(contentsOf: logURL) else { return }
         let decoder = JSONDecoder()
-        for line in text.split(separator: "\n") {
-            guard let item = try? decoder.decode(LogLine.self, from: Data(line.utf8)) else { continue }
+        for line in data.split(separator: 0x0A) {
+            guard let item = try? decoder.decode(LogLine.self, from: line) else { continue }
             if item.reset == true {
-                (entries, index, turns) = ([], [:], [:])
+                (stored, index, storedTurns) = ([], [:], [:])
             }
             if let e = item.e { upsert(e) }
-            if let t = item.turn { turns[t.id] = t }
+            if let t = item.turn { storedTurns[t.id] = t }
         }
     }
 
     private func upsert(_ e: LinkEntry) {
         if let at = index[e.id] {
-            entries[at] = e
+            stored[at] = e
         } else {
-            index[e.id] = entries.count
-            entries.append(e)
+            index[e.id] = stored.count
+            stored.append(e)
         }
     }
 
@@ -172,7 +192,7 @@ package final class HostChat {
             provider: provider, folder: folderURL, resume: session, fork: fork, modeMemory: ModeMemory(defaults: nil),
             compactMemory: AutoCompactMemory(defaults: nil), services: services)
         if let mode = record.mode { chat.controls.mode = mode }
-        chat.backendTap = { [weak self] event in self?.relay.raw(event) }
+        chat.backendTap = { [weak self] event in self?.stream.raw(event) }
         chat.launchModel = record.modelId
         chat.launchEffort = record.effort
         if let transcript = chat.transcriptView as? HostTranscript {
@@ -188,6 +208,9 @@ package final class HostChat {
     /// Its CLI ends and the chat goes; the record and log stay, and the next send resumes it.
     func sleep() {
         guard let chat else { return }
+        // A turn its CLI takes along ends here, so no client keeps it running.
+        if chat.isBusy { stream.add(.turnFinished(nil, .interrupted, duration: nil), by: nil) }
+        stream.flush()
         chat.close(reason: "idle")
         self.chat = nil
     }
@@ -209,6 +232,11 @@ package final class HostChat {
         }
     }
 
+    func markClosed() {
+        record.closed = true
+        try? saveRecord()
+    }
+
     func setModel(_ id: String) {
         record.modelId = id
         record.controls?.modelId = id
@@ -226,6 +254,7 @@ package final class HostChat {
     /// Sends the entries from `from` on: those new or changed since last sent, and a reset when
     /// the whole history was read in again.
     private func project(_ chat: Chat, from: Int, reset: Bool) {
+        readLogOnce()
         let log = chat.transcriptView.log
         let reading = HostReading()
         let made = log.entries.indices.dropFirst(reset ? 0 : max(0, min(from, log.entries.count))).map {
@@ -236,27 +265,28 @@ package final class HostChat {
         var removed: [String] = []
         var order: [String]?
         if reset {
-            (entries, index) = ([], [:])
+            (stored, index) = ([], [:])
             for e in made { upsert(e) }
             upserts = made
             lines = [LogLine(reset: true)] + made.map { LogLine(e: $0) }
         } else {
             let ids = log.entries.map(\.id.uuidString)
             let live = Set(ids)
-            removed = entries.map(\.id).filter { !live.contains($0) }
+            removed = stored.map(\.id).filter { !live.contains($0) }
             if !removed.isEmpty {
-                entries.removeAll { !live.contains($0.id) }
-                index = Dictionary(uniqueKeysWithValues: entries.enumerated().map { ($1.id, $0) })
+                stored.removeAll { !live.contains($0.id) }
+                index = Dictionary(uniqueKeysWithValues: stored.enumerated().map { ($1.id, $0) })
             }
-            for e in made where index[e.id].map({ entries[$0] != e }) ?? true {
+            for e in made where index[e.id].map({ stored[$0] != e }) ?? true {
                 upsert(e)
                 upserts.append(e)
-                lines.append(LogLine(e: e))
+                // Streaming text goes to disk once it's done (the event log has every piece).
+                if e.done || ![.answer, .thinking, .plan].contains(e.kind) { lines.append(LogLine(e: e)) }
             }
-            if entries.map(\.id) != ids {
+            if stored.map(\.id) != ids {
                 // Something went in above the end (a peer's message, a mode line): the order again.
-                entries = ids.compactMap { id in index[id].map { entries[$0] } }
-                index = Dictionary(uniqueKeysWithValues: entries.enumerated().map { ($1.id, $0) })
+                stored = ids.compactMap { id in index[id].map { stored[$0] } }
+                index = Dictionary(uniqueKeysWithValues: stored.enumerated().map { ($1.id, $0) })
                 order = ids
             }
         }
@@ -264,8 +294,8 @@ package final class HostChat {
         for id in Set(log.entries.compactMap(\.turn)) {
             guard let turn = log.turns[id] else { continue }
             let made = LinkProjection.turn(turn)
-            if reset || turns[id] != made {
-                turns[id] = made
+            if reset || storedTurns[id] != made {
+                storedTurns[id] = made
                 changedTurns.append(made)
                 lines.append(LogLine(turn: made))
             }

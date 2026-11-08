@@ -1,0 +1,51 @@
+{"id":"s1","type":"sessionIdentified"}
+{"title":"Totals","type":"titleChanged"}
+{"controls":{"commands":[{"description":"Review","hint":"","kind":"skill","name":"review","on":false,"unavailable":false}],"effort":"low","model":"small","models":[{"efforts":["low"],"id":"small","name":"Small","resolved":"small-1","supportsAutoMode":true,"supportsFastMode":false}]},"type":"controlsLoaded"}
+{"change":{"at":821692800,"mode":"plan","previous":"default","source":{"agent":{},"cause":"enteredPlanMode","type":"agent"}},"type":"modeChanged"}
+{"change":{"at":821692800,"on":true,"source":{"type":"user"}},"type":"planModeChanged"}
+{"report":{"offered":true,"on":true,"paused":false},"type":"fastModeChanged"}
+{"remote":{"place":"x","state":{"reason":"no","type":"failed"}},"type":"remoteControl"}
+{"reason":"why","type":"remoteControlUnavailable"}
+{"at":821692800,"origin":"user","turn":"t1","type":"turnStarted"}
+{"origin":"schedule","turn":"t1","type":"turnOrigin"}
+{"duration":[0,3000000000000000000],"outcome":{"line":"limit","resetsAt":821692800,"type":"limited"},"turn":"t1","type":"turnFinished"}
+{"outcome":{"type":"interrupted"},"type":"turnFinished"}
+{"refusal":{"category":"cyber","model":"m-4-5"},"turn":"t1","type":"refused"}
+{"changes":[{"added":0,"hunks":[],"isBinary":false,"isTruncated":false,"kind":{"update":{}},"path":"a.txt","removed":0}],"turn":"t1","type":"turnChanges"}
+{"delivery":{"turn":"t2","type":"nextTurn"},"id":"m2","type":"queuedMessage"}
+{"attachments":[],"id":"m2","text":"later","type":"messageQueued"}
+{"attachments":[{"kind":"text","name":"a.txt","url":"file:///tmp/a.txt"}],"id":"m1","text":"hello","type":"userMessage"}
+{"from":"other","id":"p1","text":"hi","turn":"t1","type":"peerMessage"}
+{"block":"b1","kind":"answer","text":"Hi","type":"text"}
+{"agent":{"sub":"ag1"},"block":"b2","kind":"thinking","text":"hmm","type":"text"}
+{"block":"b1","type":"finalAnswer"}
+{"tool":{"description":"List","detail":"ls","id":"tool1","input":"ls -la","name":"Bash","readOnly":true},"type":"toolStarted"}
+{"id":"tool1","text":"out","type":"toolOutput"}
+{"agent":{"sub":"ag1"},"id":"tool1","isError":false,"type":"toolFinished"}
+{"id":"tool1","type":"toolStopped"}
+{"changes":[{"added":0,"hunks":[],"isBinary":false,"isTruncated":false,"kind":{"update":{}},"path":"a.txt","removed":0}],"toolId":"tool1","type":"fileChanged"}
+{"isError":true,"text":"note","type":"notice"}
+{"info":{"background":true,"id":"ag1","name":"Search","parent":{},"prompt":"find","toolId":"tool2","type":"Explore"},"type":"agentSpawned"}
+{"id":"ag1","progress":{"approximate":false,"duration":[0,5000000000000000000],"lastTool":"Read","tokens":10,"tools":2},"type":"agentProgress"}
+{"id":"ag1","result":"done","status":"completed","type":"agentFinished"}
+{"id":"ag1","type":"agentResumed"}
+{"id":"ag1","type":"agentBackgrounded"}
+{"command":{"command":"npm run watch","id":"cmd1","kind":"shell","output":{"type":"none"},"owner":{"sub":"ag1"},"startedAt":821692800,"state":{"type":"running"},"stopping":false,"title":"watch"},"type":"commandStarted"}
+{"change":{"at":821692800,"type":"fired"},"id":"cmd1","type":"commandChanged"}
+{"id":"cmd1","text":"line","type":"commandOutput"}
+{"at":821692800,"id":"cmd1","state":{"by":"user","type":"stopped"},"type":"commandEnded"}
+{"approval":{"agent":{},"body":"ls","canAlwaysAllow":false,"changes":[],"detail":"in work","id":"ap1","questions":[{"header":"Pick","id":"q1","multiple":false,"options":[{"description":"first","label":"A"}],"other":true,"secret":false,"text":"Which?"}],"signIn":false,"title":"Run ls"},"type":"approvalRequested"}
+{"id":"ap1","type":"approvalWithdrawn"}
+{"type":"planReady"}
+{"status":15,"type":"exited"}
+{"at":821692800,"auto":false,"from":1000,"type":"compacted"}
+{"auto":true,"type":"compactionStarted"}
+{"text":"sum","type":"compactionSummary"}
+{"reason":"no","type":"compactionFailed"}
+{"type":"compactionStopped"}
+{"state":{"attempt":1,"of":3,"type":"retrying"},"type":"connection"}
+{"state":{"type":"away","words":"mybox offline"},"type":"connection"}
+{"type":"contextUsage","usage":{"approximate":false,"at":821692800,"autoCompacts":true,"used":10,"window":100}}
+{"more":true,"type":"earlierHistory"}
+{"events":[{"attachments":[],"id":"m0","text":"old","type":"userMessage"}],"type":"replayed"}
+{"events":[],"type":"historyReplaced"}

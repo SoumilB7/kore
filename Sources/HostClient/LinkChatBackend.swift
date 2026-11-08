@@ -48,13 +48,15 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     /// The box's log this copy follows, and the last seq it holds.
     private var log: String?
     private var seq: Int?
-    private var assembler = RelayAssembler()
+    private var assembler = StreamAssembler()
     /// Something was shown: a history from the box from now on rebuilds it.
     private var shown = false
     private var connectionSaid = Connection.ok
     private var starting: Task<Void, Error>?
     private var closed = false
     private var titleSaid: String?
+    /// Messages and answers this chat sent in this run: the box's copies of them are shown already.
+    private var sentHere: Set<String> = []
 
     /// The box's title for the chat changed (a rename there, or its first title).
     package var onTitle: ((String) -> Void)?
@@ -119,7 +121,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     package var following: ChatFollow? { chatId.map { ChatFollow(chatId: $0, after: seq, log: log) } }
 
-    package func relayed(_ frame: ChatEvents) {
+    package func streamed(_ frame: ChatEvents) {
         guard let chatId, !closed else { return }
         if frame.reset == true {
             // The box's log started again, or this copy was behind it: what it holds replaces
@@ -138,13 +140,20 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         guard frame.log == log else { return }
         seq = frame.seq ?? seq
         connection.cache.append(frame.items, chat: chatId)
-        // This grant's own rows (its message, its answer) are shown already, by this Mac's chat.
+        // This chat's own rows (its message, its answer) are shown already.
         var list: [ChatEvent] = []
         for item in frame.items {
-            if item.by == connection.grant, item.e != nil { continue }
+            if item.by == connection.grant, let event = item.e, ownRow(event) { continue }
             if let event = assembler.take(item) { list.append(event) }
         }
         show(list)
+    }
+
+    private func ownRow(_ event: ChatEvent) -> Bool {
+        switch event {
+        case .userMessage(_, _, let id?), .messageQueued(let id, _, _), .approvalWithdrawn(let id): sentHere.contains(id)
+        default: false
+        }
     }
 
     package func refused(_ message: String) {
@@ -167,9 +176,9 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     static let remoteOnBox = "Remote control of a chat on a box is turned on on the box"
 
-    /// A call the box takes for this chat's CLI (its provider's `relay` capabilities).
+    /// A call the box takes for this chat's CLI (its provider's `calls` capabilities).
     package func offers(_ call: String) -> Bool {
-        connection.providers.first { $0.id == provider.id }?.relay?.contains(call) ?? false
+        connection.providers.first { $0.id == provider.id }?.calls?.contains(call) ?? false
     }
 
     package func meta(_ meta: ChatMeta?) {
@@ -180,11 +189,20 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     package func linked(_ up: Bool) {
         guard !closed else { return }
-        // A send waiting on the link says so where the turn's spinner is.
-        let now: Connection = up ? .ok : .offline
+        // A send waiting on the link says so where the turn's spinner is, as the window's cue does.
+        let now: Connection = up ? .ok : .away(awayWords)
         guard now != connectionSaid else { return }
         connectionSaid = now
         emit([.connection(now)])
+    }
+
+    /// "mybox offline · 14:32": the box's name, and when it last spoke.
+    private var awayWords: String {
+        guard let heard = connection.lastHeard else { return "\(connection.alias) offline · sends when it's back" }
+        let when =
+            Calendar.current.isDateInToday(heard)
+            ? heard.formatted(date: .omitted, time: .shortened) : heard.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+        return "\(connection.alias) offline · \(when)"
     }
 
     private func emit(_ list: [ChatEvent]) {
@@ -202,31 +220,32 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     /// One call on the box's backend: its value, or the box's reason.
     @discardableResult
-    private func call(_ command: ChatCommand) async throws -> RelayValue {
+    private func call(_ command: ChatCommand) async throws -> CallValue {
         let chatId = try await ready()
         let result = await connection.call(chatId, command)
-        guard result.ok else { throw HostRefusal(message: result.message ?? HostRefusal.words(result.code, alias: connection.alias)) }
-        return result.value ?? RelayValue()
+        guard result.ok else { throw HostRefusal(result, command: command, alias: connection.alias, modes: provider.modes) }
+        return result.value ?? CallValue()
     }
 
     package func send(_ text: String, files: [Attachments.File], queued: String?, id: String?) async throws -> Bool {
         _ = try await ready()
+        if let id { sentHere.insert(id) }
         if !connection.isOnline { linked(false) }
-        var sent: [RelayFile] = []
+        var sent: [CallFile] = []
         for file in files { sent.append(try await upload(file)) }
         return try await call(.send(text: text, files: sent, queued: queued, id: id)).bool ?? true
     }
 
     /// A file to the box by the link's upload: the blob its message names it by there, which the
     /// box saves and attaches by its path.
-    private func upload(_ file: Attachments.File) async throws -> RelayFile {
+    private func upload(_ file: Attachments.File) async throws -> CallFile {
         let url = file.url
         guard let data = await Task.detached(operation: { try? Data(contentsOf: url) }).value else {
             throw HostRefusal(message: "\(file.name) couldn't be read")
         }
         guard data.count <= LinkUploads.maxSize else { throw HostRefusal(message: "\(file.name) is over 12 MB, too large to send to \(connection.alias)") }
         switch await connection.upload(data, name: file.name, mime: Self.mime(data)) {
-        case .success(let blob): return RelayFile(blob: blob, name: file.name, kind: file.kind)
+        case .success(let blob): return CallFile(blob: blob, name: file.name, kind: file.kind)
         case .failure(let refusal): throw refusal
         }
     }
@@ -249,6 +268,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     package func interrupt() async { _ = try? await call(.interrupt) }
 
     package func respond(to approvalID: String, _ decision: Decision) async {
+        sentHere.insert(approvalID)
         do {
             try await call(.respond(approval: approvalID, decision: decision))
         } catch {
@@ -283,7 +303,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     package func forkAtEnd() async throws -> ForkStart { Self.start(try await call(.forkAtEnd)) }
 
-    private static func start(_ value: RelayValue) -> ForkStart {
+    private static func start(_ value: CallValue) -> ForkStart {
         guard let from = value.forkFrom, let at = value.forkAt else { return .fresh }
         return .pending(ForkPoint(from: from, at: at))
     }
@@ -296,7 +316,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
     package func earlier() async -> (events: [ChatEvent], more: Bool)? { page(try? await call(.earlier(turns: nil))) }
     package func earlier(turns: Int) async -> (events: [ChatEvent], more: Bool)? { page(try? await call(.earlier(turns: turns))) }
 
-    private func page(_ value: RelayValue?) -> (events: [ChatEvent], more: Bool)? {
+    private func page(_ value: CallValue?) -> (events: [ChatEvent], more: Bool)? {
         guard let value, let events = value.events else { return nil }
         return (events, value.more ?? false)
     }
@@ -354,6 +374,22 @@ package struct HostRefusal: LocalizedError, CustomStringConvertible {
 
     init(_ result: LinkMessage.Result, alias: String) {
         message = result.message ?? Self.words(result.code, alias: alias)
+    }
+
+    /// A forwarded call the box refused: its policy's refusals in the box's own words ("mybox
+    /// doesn't allow Bypass from here"), anything else as the box said it.
+    init(_ result: ChatCallResult, command: ChatCommand, alias: String, modes: [ModeOption]) {
+        switch (result.code, command) {
+        case (.raiseMode?, .setMode(let id)):
+            message = "\(alias) doesn't allow \(modes.first { $0.id == id }?.label ?? id) from here"
+        case (.raiseMode?, _): message = "\(alias) doesn't allow leaving plan into that mode from here"
+        case (.alwaysAllow?, _): message = "Always allow is set on \(alias) itself"
+        case (.signIn?, _): message = "Sign-ins are answered on \(alias) itself"
+        case (.command?, .setRemoteControl): message = "Remote control is turned on on \(alias) itself"
+        case (.command?, _): message = result.message.map { $0.replacingOccurrences(of: "over the link", with: "to \(alias)").replacingOccurrences(of: "use it in Kore", with: "use it on \(alias)") } ?? "\(alias) doesn't take that here"
+        case (.deniedControl?, _): message = "This Mac's grant on \(alias) needs full control"
+        default: message = result.message ?? Self.words(result.code, alias: alias)
+        }
     }
 
     package var errorDescription: String? { message }
