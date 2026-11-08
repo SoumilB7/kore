@@ -7,6 +7,10 @@
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
+#include <sys/uio.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -88,4 +92,95 @@ int kore_pty_resize(int master, unsigned short cols, unsigned short rows) {
 
 int kore_open_folder(int dirfd, const char *name) {
     return openat(dirfd, name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+}
+
+ssize_t kore_send_fd(int sock, const void *buf, size_t len, int fd) {
+    struct iovec iov = {.iov_base = (void *)buf, .iov_len = len};
+    struct msghdr msg = {0};
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    union {
+        char buf[CMSG_SPACE(sizeof(int))];
+        struct cmsghdr align;
+    } control;
+    if (fd >= 0) {
+        memset(&control, 0, sizeof(control));
+        msg.msg_control = control.buf;
+        msg.msg_controllen = sizeof(control.buf);
+        struct cmsghdr *c = CMSG_FIRSTHDR(&msg);
+        c->cmsg_level = SOL_SOCKET;
+        c->cmsg_type = SCM_RIGHTS;
+        c->cmsg_len = CMSG_LEN(sizeof(int));
+        memcpy(CMSG_DATA(c), &fd, sizeof(int));
+    }
+    ssize_t n;
+    do {
+        n = sendmsg(sock, &msg, 0);
+    } while (n < 0 && errno == EINTR);
+    return n;
+}
+
+ssize_t kore_recv_fd(int sock, void *buf, size_t len, int *fd) {
+    *fd = -1;
+    struct iovec iov = {.iov_base = buf, .iov_len = len};
+    struct msghdr msg = {0};
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    union {
+        char buf[CMSG_SPACE(sizeof(int) * 4)];
+        struct cmsghdr align;
+    } control;
+    msg.msg_control = control.buf;
+    msg.msg_controllen = sizeof(control.buf);
+#if defined(MSG_CMSG_CLOEXEC)
+    int flags = MSG_CMSG_CLOEXEC;
+#else
+    int flags = 0;
+#endif
+    ssize_t n;
+    do {
+        n = recvmsg(sock, &msg, flags);
+    } while (n < 0 && errno == EINTR);
+    if (n < 0) return n;
+    for (struct cmsghdr *c = CMSG_FIRSTHDR(&msg); c != NULL; c = CMSG_NXTHDR(&msg, c)) {
+        if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) continue;
+        size_t count = (c->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+        for (size_t i = 0; i < count; i++) {
+            int got;
+            memcpy(&got, CMSG_DATA(c) + i * sizeof(int), sizeof(int));
+            if (*fd < 0) {
+                *fd = got;
+                fcntl(got, F_SETFD, FD_CLOEXEC);
+            } else {
+                close(got);
+            }
+        }
+    }
+    if (msg.msg_flags & MSG_CTRUNC) {
+        if (*fd >= 0) close(*fd);
+        *fd = -1;
+        errno = EMSGSIZE;
+        return -1;
+    }
+    return n;
+}
+
+#if defined(__APPLE__) && !defined(TCP_NOTSENT_LOWAT)
+#define TCP_NOTSENT_LOWAT 0x201
+#elif defined(__linux__) && !defined(TCP_NOTSENT_LOWAT)
+#define TCP_NOTSENT_LOWAT 25
+#endif
+
+int kore_tcp_tune(int fd, int lowat) {
+    int on = 1;
+    int a = setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    int b = setsockopt(fd, IPPROTO_TCP, TCP_NOTSENT_LOWAT, &lowat, sizeof(lowat));
+    return (a == 0 && b == 0) ? 0 : -1;
+}
+
+int kore_tcp_notsent_lowat(int fd) {
+    int value = 0;
+    socklen_t size = sizeof(value);
+    if (getsockopt(fd, IPPROTO_TCP, TCP_NOTSENT_LOWAT, &value, &size) != 0) return -1;
+    return value;
 }

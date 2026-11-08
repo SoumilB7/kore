@@ -26,4 +26,20 @@ int kore_pidfd_open(pid_t pid);
 /// a file, or not there.
 int kore_open_folder(int dirfd, const char *name);
 
+/// KoreNet's sidecar socket (`kore-tailnet`): sends `len` bytes from `buf`, with `fd` attached as
+/// SCM_RIGHTS when it isn't -1. Bytes sent, or -1.
+ssize_t kore_send_fd(int sock, const void *buf, size_t len, int fd);
+
+/// Receives up to `len` bytes into `buf`; a descriptor that came with them lands in `*fd`
+/// (close-on-exec), else -1 there. Any further descriptors are closed. Bytes read, 0 at the end,
+/// -1 on error.
+ssize_t kore_recv_fd(int sock, void *buf, size_t len, int *fd);
+
+/// A KoreNet TCP connection's options: `TCP_NODELAY` on, `TCP_NOTSENT_LOWAT` to `lowat` bytes.
+/// 0 when both took.
+int kore_tcp_tune(int fd, int lowat);
+
+/// The connection's `TCP_NOTSENT_LOWAT`, or -1.
+int kore_tcp_notsent_lowat(int fd);
+
 #endif

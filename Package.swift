@@ -55,6 +55,8 @@ let package = Package(
         .target(
             name: "KoreTrust", dependencies: [.product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux]))],
             swiftSettings: releaseForSize),
+        // Tailnet: Tailscale's LocalAPI (installed tailscaled) or the `kore-tailnet` sidecar's fds.
+        .target(name: "Tailnet", dependencies: ["KoreTrust", "KoreHostSys"], swiftSettings: releaseForSize),
         // kore-host: Kore's chats on a headless machine (phase 17), served over the link. It
         // never links KoreUI or KoreLink, and the Mac app never links it.
         // `VERSION` links to the package's own: the version kore-host says (`--version`, the welcome).
