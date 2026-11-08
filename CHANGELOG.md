@@ -12,6 +12,8 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
 - Phone: select part of a message, answer, code block or table cell; Message… opens the menu.
 - ⌘+ and ⌘− scale the whole window, file explorer included.
 - `kore send` reaches a closed chat in its folder: it reopens the chat, then sends.
+- Arsenal can answer another chat's Auto asks card: Run once or Always allow, from a chat at Auto
+  with Act unlimited or above. Removing the working folder, a home or system path stays yours.
 
 ### Changed
 - Allowing a command on the phone is a plain tap; the fingerprint is only for raising a mode
@@ -26,6 +28,8 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
   removal whose path the same command sets, or that sits under `$HOME` or `$TMPDIR`, is judged as
   the path it is. Your home folder, system paths and unknown variables still ask.
 - Queued messages are sent in the order you queued them.
+- `/rename` renames the chat in Kore too, on every device, and a chat never shows an empty title.
+- A rollback reaches every device showing the chat, and a moved or copied chat resumes from it.
 - "On mybox" shows only for a login Kore actually moved there.
 - Box chats show the context meter, copied ones too.
 - Box chats keep model, effort, mode, plan and fast mode in step on every device, through
