@@ -10,7 +10,7 @@
     "privateKey": "0797f084904e29fae58041fb62b2cf671d5bc006772639859842e26a053c6dc3",
     "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEH9uKTngqQU5wK1avQRcm45u1z5elMD+1LNxPEygeMZvvgzlNbSqqK1G0nlrO7YaPj1dxutDvBYJstDzJJm0IqQ=="
   },
-  "sig": "MEUCICgZypVLdmzXa6fcBjX5RyYDwdPkX3/au8/W6PUqEgavAiEAk8FEon4C8FBBLb5dg6F0mSzODxbue8SfReR12u0YLH4=",
+  "sig": "MEUCIByxWKeuLqGhG7ADjnNeHHK/91VwXTkhQo39E7OEApT4AiEAvGAhUmD1F6gIBVGbDdA15M/hb/Dj18V20mgzTAYZDK8=",
   "signature": "ECDSA P-256 with SHA-256 over the 32-byte digest, DER.",
   "ttlSeconds": 60
 }

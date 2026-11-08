@@ -190,15 +190,20 @@ struct DiscoveryTests {
     @Test(arguments: [
         (TailnetChooser.Installed.state(.running), TailnetChooser.Choice.installed),
         (.state(.starting), .installed),
-        (.state(.stopped), .sshOnly),
-        (.state(.needsLogin), .sidecar),
-        (.state(.noState), .sidecar),
+        (.state(.needsMachineAuth), .installed),
+        (.state(.stopped), .stopped),
+        (.state(.needsLogin), .signedOut),
+        (.state(.noState), .signedOut),
+        (.state(.inUseOtherUser), .signedOut),
         (.missing(.absent), .sidecar),
         (.missing(.appStore), .sidecar),
         (.missing(.unreadable), .sidecar),
     ])
     func choice(_ installed: TailnetChooser.Installed, _ want: TailnetChooser.Choice) {
-        #expect(TailnetChooser.choose(installed) == want)
+        let got = TailnetChooser.choose(installed)
+        #expect(got == want)
+        // The sidecar only when installed Tailscale is absent or unreadable.
+        if case .missing = installed { #expect(got.startsSidecar) } else { #expect(!got.startsSidecar) }
     }
 
     @Test func choiceFollowsBusEventsOnly() async {
@@ -211,7 +216,7 @@ struct DiscoveryTests {
         feed.finish()
         var got: [TailnetChooser.Choice] = []
         for await choice in TailnetChooser.follow(.state(.running), events: events) { got.append(choice) }
-        #expect(got == [.installed, .sshOnly, .sidecar])
+        #expect(got == [.installed, .stopped, .signedOut])
     }
 }
 

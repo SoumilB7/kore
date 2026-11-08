@@ -9,6 +9,10 @@ package enum NetControl: Equatable, Sendable {
     case welcome(Welcome)
     /// More stream-queue bytes the sender will take.
     case credit(Int)
+    /// Client → server, the first message after the welcome when it has any: the cursors it holds
+    /// (chat events `{log,s}`, pty byte seq, revs), opaque here, for the service above. Kept out of
+    /// the hello so the pre-auth frame stays small.
+    case resume([String: JSONValue])
     case bye(String)
 
     package static let version = 2
@@ -29,7 +33,7 @@ package enum NetControl: Equatable, Sendable {
     }
 
     /// Client → server: who it is, the service it wants, its signature over B, the stream credit
-    /// it gives, and what it resumes from.
+    /// it gives, and the last session's ticket when it has one.
     package struct Hello: Codable, Equatable, Sendable {
         package var v: Int
         package var service: String
@@ -37,24 +41,24 @@ package enum NetControl: Equatable, Sendable {
         package var nonce: Data
         package var sig: Data
         package var credit: Int
-        package var resume: Resume?
+        package var ticket: Data?
         /// Only inside the Mac's Add device window (later steps); absent otherwise.
         package var enroll: Enroll?
 
-        package init(service: String, device: UUID, nonce: Data, sig: Data, credit: Int, resume: Resume? = nil, enroll: Enroll? = nil) {
+        package init(service: String, device: UUID, nonce: Data, sig: Data, credit: Int, ticket: Data? = nil, enroll: Enroll? = nil) {
             v = NetControl.version
             self.service = service
             self.device = device
             self.nonce = nonce
             self.sig = sig
             self.credit = credit
-            self.resume = resume
+            self.ticket = ticket
             self.enroll = enroll
         }
     }
 
-    /// The last session's ticket and the cursors the client holds (chat events `{log,s}`, pty
-    /// byte seq, revs): opaque here, read by the service above.
+    /// What a client resumes from (its setup, not a message): the ticket goes in the hello, the
+    /// cursors in the `resume` message after the welcome.
     package struct Resume: Codable, Equatable, Sendable {
         package var ticket: Data
         package var cursors: [String: JSONValue]
@@ -108,7 +112,7 @@ package enum NetControl: Equatable, Sendable {
 }
 
 extension NetControl: Codable {
-    private enum Key: String, CodingKey { case t, n, reason }
+    private enum Key: String, CodingKey { case t, n, reason, cursors }
 
     package init(from decoder: any Decoder) throws {
         let c = try decoder.container(keyedBy: Key.self)
@@ -122,6 +126,7 @@ extension NetControl: Codable {
             guard n > 0 else { throw DecodingError.dataCorruptedError(forKey: .n, in: c, debugDescription: "credit \(n)") }
             self = .credit(n)
         case "bye": self = .bye(try c.decode(String.self, forKey: .reason))
+        case "resume": self = .resume(try c.decode([String: JSONValue].self, forKey: .cursors))
         default: throw DecodingError.dataCorruptedError(forKey: .t, in: c, debugDescription: "unknown control \(t)")
         }
     }
@@ -144,6 +149,9 @@ extension NetControl: Codable {
         case .bye(let reason):
             try c.encode("bye", forKey: .t)
             try c.encode(reason, forKey: .reason)
+        case .resume(let cursors):
+            try c.encode("resume", forKey: .t)
+            try c.encode(cursors, forKey: .cursors)
         }
     }
 

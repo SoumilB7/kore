@@ -1,21 +1,25 @@
 {
-  "about": "Session control messages, JSON on stream 0; \"json\" is the exact compact form (sorted keys) an encoder gives.",
+  "about": "Session control messages, JSON on stream 0; \"json\" is the exact compact form (sorted keys) an encoder gives. The hello carries only a resume ticket; the cursors follow in \"resume\", the client's first message after the welcome.",
   "messages": [
     {
       "json": "{\"device\":\"B3D9E1F0-7A2C-4E6B-8D41-5C0F9A3E2B02\",\"nonce\":\"NOrVX8fanPt2xA0QWnFWLd8tC+wCIarmJW9fWhn+Bhg=\",\"route\":\"tailnet\",\"t\":\"challenge\",\"v\":2}",
       "name": "challenge"
     },
     {
-      "json": "{\"credit\":524288,\"device\":\"6F1C3A52-0B7E-4C1D-9A3F-2E5B8D7C1A01\",\"nonce\":\"06hT46RbmXNwz75ZeFZUo82H3tSri3yRO3X2YDg75uQ=\",\"service\":\"link\",\"sig\":\"MEUCIQDhdIyVQgGPocgCwhO7nR4fdU4Q53kNg0GtqvWk1MJ43gIgEjl55iPFiliQCV/LonBOFwdnP7PfPWKkhIlXy2YKNPc=\",\"t\":\"hello\",\"v\":2}",
+      "json": "{\"credit\":524288,\"device\":\"6F1C3A52-0B7E-4C1D-9A3F-2E5B8D7C1A01\",\"nonce\":\"06hT46RbmXNwz75ZeFZUo82H3tSri3yRO3X2YDg75uQ=\",\"service\":\"link\",\"sig\":\"MEQCIEZuS7CfBGDV72cn6ptfjdDpLECibIyuGz3/zGnZO4UaAiB/UtgwWOl4PgYbtbK0w4TW1RD/XGyZMHEn9sNwCojCIA==\",\"t\":\"hello\",\"v\":2}",
       "name": "hello"
     },
     {
-      "json": "{\"credit\":524288,\"device\":\"6F1C3A52-0B7E-4C1D-9A3F-2E5B8D7C1A01\",\"nonce\":\"06hT46RbmXNwz75ZeFZUo82H3tSri3yRO3X2YDg75uQ=\",\"resume\":{\"cursors\":{\"chat.events\":{\"log\":\"c-12\",\"s\":42},\"pty\":{\"seq\":1048576}},\"ticket\":\"MymW1rXpT0HjAUumove8ew==\"},\"service\":\"link\",\"sig\":\"MEUCIQDhdIyVQgGPocgCwhO7nR4fdU4Q53kNg0GtqvWk1MJ43gIgEjl55iPFiliQCV/LonBOFwdnP7PfPWKkhIlXy2YKNPc=\",\"t\":\"hello\",\"v\":2}",
-      "name": "hello.resume"
+      "json": "{\"credit\":524288,\"device\":\"6F1C3A52-0B7E-4C1D-9A3F-2E5B8D7C1A01\",\"nonce\":\"06hT46RbmXNwz75ZeFZUo82H3tSri3yRO3X2YDg75uQ=\",\"service\":\"link\",\"sig\":\"MEQCIEZuS7CfBGDV72cn6ptfjdDpLECibIyuGz3/zGnZO4UaAiB/UtgwWOl4PgYbtbK0w4TW1RD/XGyZMHEn9sNwCojCIA==\",\"t\":\"hello\",\"ticket\":\"MymW1rXpT0HjAUumove8ew==\",\"v\":2}",
+      "name": "hello.ticket"
     },
     {
-      "json": "{\"abilities\":[\"read\",\"ask\",\"run\"],\"credit\":524288,\"resumed\":true,\"sig\":\"MEYCIQDbZ3Huf2Pva4X9HuaujL0MBmD2kWTwnmZnnzWgZIqBSgIhAN8tDKi0+NPFCj/G1t3DbXNK5ohREgQJGN1rwcYaSYm+\",\"t\":\"welcome\",\"ticket\":\"21xtWuTKBr9zidhPaWMLWQ==\",\"v\":2}",
+      "json": "{\"abilities\":[\"read\",\"ask\",\"run\"],\"credit\":524288,\"resumed\":true,\"sig\":\"MEQCIBj7IHkZ1XbK1eonyRA426HNc2/39+XeTv+Uzqch33COAiAzMgmeULM88zkgkky1khgCeIInoaWWTPzMXhi/qsJXjg==\",\"t\":\"welcome\",\"ticket\":\"21xtWuTKBr9zidhPaWMLWQ==\",\"v\":2}",
       "name": "welcome"
+    },
+    {
+      "json": "{\"cursors\":{\"chat.events\":{\"log\":\"c-12\",\"s\":42},\"pty\":{\"seq\":1048576}},\"t\":\"resume\"}",
+      "name": "resume"
     },
     {
       "json": "{\"n\":65536,\"t\":\"credit\"}",

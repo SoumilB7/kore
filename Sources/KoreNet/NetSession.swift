@@ -41,8 +41,6 @@ package struct NetPeer: Equatable, Sendable {
     package var abilities: Ability
     package var service: String
     package var resumed: Bool
-    /// The client's cursors (server side), for the service to resume from.
-    package var cursors: [String: JSONValue]?
     /// The ticket for the next session's resume (client side: keep it; server side: the one issued).
     package var ticket: Data
 }
@@ -55,8 +53,9 @@ package enum NetSessionError: Error, Equatable {
 }
 
 /// One link 2.0 connection (phase 18 §1): challenge → hello → welcome with identity proofs over
-/// the binding, then messages both ways through the two-queue scheduler under stream credit.
-/// Single-threaded and non-blocking: the owner calls `pump()` when the descriptor is readable or
+/// the binding (the hello carries only a resume ticket; the cursors follow as the client's first
+/// message after the welcome), then messages both ways through the two-queue scheduler under
+/// stream credit. Single-threaded and non-blocking: the owner calls `pump()` when the descriptor is readable or
 /// writable (or its deadline passes). Every write waits for the socket to say it's writable, which
 /// with `TCP_NOTSENT_LOWAT` keeps the kernel's unsent bytes small on macOS too (spike 0e), so a
 /// late interactive frame isn't stuck behind a deep send buffer.
@@ -122,6 +121,8 @@ package final class NetSession {
     package static let clientWindow: TimeInterval = 20
 
     package private(set) var state = State.handshaking
+    /// Server side: the cursors the client sent in its first message after the welcome.
+    package private(set) var cursors: [String: JSONValue]?
     /// When the handshake gives up; nil once established.
     package private(set) var deadline: Date?
 
@@ -135,6 +136,8 @@ package final class NetSession {
     private var nonceS = Data()
     private var binding: Binding?
     private var serverRecord: DeviceRecord?
+    /// Server side: nothing has come since the welcome, so a `resume` may still.
+    private var awaitingFirst = false
 
     /// Takes `fd` (a connected stream socket): made non-blocking, and for TCP, `TCP_NODELAY` and
     /// `TCP_NOTSENT_LOWAT` 16 KiB.
@@ -197,6 +200,7 @@ package final class NetSession {
                 if message.stream == NetFrame.controlStream {
                     handleControl(message.payload)
                 } else if case .established = state {
+                    awaitingFirst = false
                     inbox.append(message)
                 } else {
                     fail(NetControl.Reason.protocolError)
@@ -285,7 +289,11 @@ package final class NetSession {
             clientChallenge(client, challenge)
         case (.handshaking, .client(let client), .welcome(let welcome)) where binding != nil:
             clientWelcome(client, welcome)
+        case (.established, .server, .resume(let held)) where awaitingFirst:
+            awaitingFirst = false
+            cursors = held
         case (.established, _, .credit(let n)):
+            awaitingFirst = false
             scheduler.grant(n)
         default:
             fail(NetControl.Reason.protocolError)
@@ -308,14 +316,15 @@ package final class NetSession {
         guard case .allow(_, let granted) = PolicyTable.decide(request) else { return fail(NetControl.Reason.refused) }
         guard (1...Self.maxCredit).contains(hello.credit) else { return fail(NetControl.Reason.protocolError) }
         guard let sig = try? IdentityProof.sign(binding, with: server.local.signer) else { return fail(NetControl.Reason.proof) }
-        let resumed = hello.resume.map { server.tickets.redeem($0.ticket, for: record.id) } ?? false
+        let resumed = hello.ticket.map { server.tickets.redeem($0, for: record.id) } ?? false
         let ticket = server.tickets.issue(for: record.id)
         scheduler.grant(hello.credit)
         control(.welcome(.init(sig: sig, credit: server.credit, ticket: ticket, resumed: resumed, abilities: granted)))
         self.binding = binding
         decoder.preAuth = false
         deadline = nil
-        state = .established(NetPeer(record: record, abilities: granted, service: hello.service, resumed: resumed, cursors: hello.resume?.cursors, ticket: ticket))
+        awaitingFirst = true
+        state = .established(NetPeer(record: record, abilities: granted, service: hello.service, resumed: resumed, ticket: ticket))
     }
 
     private func clientChallenge(_ client: Client, _ challenge: NetControl.Challenge) {
@@ -330,7 +339,7 @@ package final class NetSession {
         else { return fail(NetControl.Reason.proof) }
         self.binding = binding
         serverRecord = record
-        control(.hello(.init(service: client.service, device: client.local.device, nonce: nonceC, sig: sig, credit: client.credit, resume: client.resume)))
+        control(.hello(.init(service: client.service, device: client.local.device, nonce: nonceC, sig: sig, credit: client.credit, ticket: client.resume?.ticket)))
         decoder.expectAnotherPreAuthFrame()
     }
 
@@ -344,7 +353,8 @@ package final class NetSession {
         scheduler.grant(welcome.credit)
         decoder.preAuth = false
         deadline = nil
-        state = .established(NetPeer(record: record, abilities: welcome.abilities, service: client.service, resumed: welcome.resumed, cursors: nil, ticket: welcome.ticket))
+        state = .established(NetPeer(record: record, abilities: welcome.abilities, service: client.service, resumed: welcome.resumed, ticket: welcome.ticket))
+        if let cursors = client.resume?.cursors, !cursors.isEmpty { control(.resume(cursors)) }
     }
 
     /// The peer's node key is one its record holds, or (rotation) it's kept now: a valid proof

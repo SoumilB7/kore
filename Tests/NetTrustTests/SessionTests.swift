@@ -160,14 +160,29 @@ struct SessionTests {
         #expect(try q.boxBook.record(q.mac.id)?.nodeKeys == ["nodekey:mac"])
     }
 
-    @Test func resumeTicketsAreSingleUseAndCarryCursors() throws {
+    @Test func resumeTicketsAreSingleUseAndCursorsFollowTheWelcome() throws {
         let p = try Pairing()
         let first = try p.connect().client.state.peer!.ticket
         let cursors: [String: JSONValue] = ["chat.events": .object(["log": .string("c-1"), "s": .int(42)])]
-        let second = try p.connect(resume: .init(ticket: first, cursors: cursors)).server.state.peer!
-        #expect(second.resumed && second.cursors == cursors)
-        let third = try p.connect(resume: .init(ticket: first, cursors: cursors)).server.state.peer!
-        #expect(!third.resumed)
+        let (c, s) = try p.connect(resume: .init(ticket: first, cursors: cursors))
+        #expect(s.state.peer!.resumed && s.cursors == cursors)
+        // The service's own messages come after, untouched.
+        try c.send(Data("cmd".utf8), queue: .interactive, stream: 1)
+        #expect(Pairing.run(c, s).server.map(\.stream) == [1])
+        let third = try p.connect(resume: .init(ticket: first, cursors: cursors))
+        #expect(!third.server.state.peer!.resumed && third.server.cursors == cursors)
+        // No cursors, no message.
+        #expect(try p.connect().server.cursors == nil)
+    }
+
+    /// The hello is the one pre-auth frame: with a ticket it stays far under 4 KiB, whatever the
+    /// client's cursors.
+    @Test func helloStaysSmall() throws {
+        let hello = NetControl.hello(.init(
+            service: "link", device: UUID(), nonce: Data(count: 32), sig: Data(count: 72), credit: NetSession.initialCredit,
+            ticket: Data(count: ResumeTickets.size)))
+        let frame = NetFrame(queue: .interactive, stream: 0, payload: try hello.encoded()).encoded
+        #expect(frame.count < 512)
     }
 }
 

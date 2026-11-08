@@ -1,9 +1,12 @@
 import Foundation
 
-/// Which tailnet a device uses (phase 18 §1 "Choose"): installed and running → installed; installed
-/// but stopped → neither (the user's choice; the SSH route is offered); absent, unreadable or
-/// signed out → Kore's own `kore-tailnet`. Re-evaluated only when installed Tailscale's state
-/// changes, never on a timer.
+/// Which tailnet a device uses (phase 18 §1 "Choose", as the first-connection UX pass settled
+/// it): installed and running → installed. Installed but stopped or signed out → neither: the
+/// user's Tailscale stays theirs, Kore never starts a second node for the same machine, the SSH
+/// route is offered and the UI says "Sign in to Tailscale" when signed out. Kore's own
+/// `kore-tailnet` only when there's no installed Tailscale, or its LocalAPI can't be read (App
+/// Store build, non-admin user). Re-evaluated only when installed Tailscale's state changes,
+/// never on a timer.
 package enum TailnetChooser {
     package enum Installed: Equatable, Sendable {
         case missing(LocalAPIEndpoint.Missing)
@@ -13,8 +16,12 @@ package enum TailnetChooser {
     package enum Choice: Equatable, Sendable {
         case installed
         case sidecar
-        /// Tailscale is installed and the user stopped it: no second node, SSH only.
-        case sshOnly
+        /// The user stopped installed Tailscale: SSH only.
+        case stopped
+        /// Installed Tailscale needs a sign-in: SSH only, the UI asks for "Sign in to Tailscale".
+        case signedOut
+
+        package var startsSidecar: Bool { self == .sidecar }
     }
 
     package static func choose(_ installed: Installed) -> Choice {
@@ -23,8 +30,10 @@ package enum TailnetChooser {
         case .state(let state):
             switch state {
             case .running, .starting, .needsMachineAuth, .unknown: .installed
-            case .stopped: .sshOnly
-            case .needsLogin, .noState, .inUseOtherUser: .sidecar
+            case .stopped: .stopped
+            // Signed out, never set up, or held by another user of this machine: all the
+            // installed node's, so no second one.
+            case .needsLogin, .noState, .inUseOtherUser: .signedOut
             }
         }
     }
