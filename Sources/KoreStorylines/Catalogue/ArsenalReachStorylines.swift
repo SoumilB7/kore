@@ -156,7 +156,10 @@ final class ArsenalReach: ChatStoryline {
                 let call = Self.text(replies[2])
                 return !call.error && call.text.contains("Opened a Codex chat. Sent.")
             },
-            Expect("a Codex chat in Read only, no freer than a, Arsenal off") { story in
+            Expect("a Codex chat in Read only, no freer than a, Arsenal off", found: { story in
+                guard let shown = try? story.activeChat(), let a = try? AgentCast.of(story).chat("a") else { return "no chat" }
+                return "\(shown.provider.id), mode \(shown.controls.mode), no freer \(shown.noFreer(than: a)), arsenal \(shown.arsenal == nil ? "off" : "on"), unavailable \(Arsenal.unavailable(shown) ?? "-")"
+            }) { story in
                 let shown = try story.activeChat()
                 let a = try AgentCast.of(story).chat("a")
                 return shown.provider.id == "codex" && shown.controls.mode == "readOnly" && shown.noFreer(than: a) && shown.arsenal == nil
