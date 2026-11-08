@@ -33,6 +33,8 @@ final class LinkClient {
     private var watches: FolderWatches?
     /// The search running for this client, stopped by the next or by the link ending.
     private var searching: SearchRun?
+    /// Running `fs.copy`s by their command's id (`fs.cancel` stops one).
+    private var copies: [String: CopyRun] = [:]
     /// `sync.watch`es, by folder; they end with the link.
     private var syncs: [String: SyncWatch] = [:]
 
@@ -78,6 +80,9 @@ final class LinkClient {
         watches = nil
         searching?.cancel()
         searching = nil
+        // A copy whose asker has gone stops, its partial copy removed.
+        for copy in copies.values { copy.cancel() }
+        copies = [:]
         syncPieces = []
         boxAsksEnded()
         host.ended(self)
@@ -306,6 +311,17 @@ final class LinkClient {
         let home = HostPaths.home().path
         let files = HostFiles(home: home, served: host.config.folders)
         if kind == .fsWatch { return sendRaw(StreamWire.encode(watch(args.folders ?? [], files: files, id: id))) }
+        if kind == .fsCancel {
+            let copy = args.copyId.flatMap { copies[$0] }
+            copy?.cancel()
+            return sendRaw(StreamWire.encode(copy == nil ? FilesResult.refused(id, .goneFile, "That copy isn't running.") : FilesResult(id: id, ok: true)))
+        }
+        // A copy's progress goes as it's made; `fs.cancel` stops it.
+        let copying = CopyRun { [weak self] bytes, total in
+            let frame = StreamWire.encode(FilesProgress(id: id, bytes: bytes, total: total))
+            Task { @MainActor in self?.sendRaw(frame) }
+        }
+        if kind == .fsCopy { copies[id] = copying }
         // An upload's bytes, written in place (`fs.write` with `blob`).
         let upload: URL? = kind == .fsWrite ? args.blob.flatMap { host.blobs[$0] } : nil
         if kind == .fsWrite, args.blob != nil, upload == nil {
@@ -335,13 +351,14 @@ final class LinkClient {
                 case .fsCreate: return files.create(id: id, path: args.path ?? "", dir: args.dir == true)
                 case .fsRename: return files.rename(id: id, from: args.from ?? "", to: args.to ?? "")
                 case .fsDelete: return files.delete(id: id, path: args.path ?? "", trash: trash)
-                case .fsCopy: return files.copy(id: id, from: args.from ?? "", to: args.to ?? "")
+                case .fsCopy: return files.copy(id: id, from: args.from ?? "", to: args.to ?? "", run: copying)
                 case .fsCount: return files.count(id: id, path: args.path ?? "")
                 case .fsSearch:
                     return files.search(id: id, root: args.root ?? "", query: args.query ?? "", text: args.mode == "text", max: args.max, run: run)
                 default: return .refused(id, .invalid, "Not taken here.")
                 }
             }.value
+            if kind == .fsCopy { self?.copies[id] = nil }
             self?.sendRaw(StreamWire.encode(result))
             // A file changed over the link: git's states there may have too (1.8).
             if result.ok, let self {

@@ -642,7 +642,7 @@ replica is `followed`; missed events go from `mirrored` when the link is back.
 ## Link 1.11: files copied and moved between places
 
 The Mac copies and moves files and folders between any two explorers in any window: a folder on
-the Mac, one on a box, one on another box. Two commands, additive, full grants only
+the Mac, one on a box, one on another box. Three commands and one pushed frame, additive, full grants only
 (`denied.control` otherwise), checked by `LinkPolicy.checkBox` and done off the daemon's main
 thread, with 1.8's rules for where a path may lead (inside a served folder; the entry's folder
 resolved and kept inside it; the entry itself never followed). A 1.10 box answers them `invalid`;
@@ -652,6 +652,11 @@ the Mac says the box needs an update. The welcome's `caps` say `copy` to a full 
 |---|---|---|
 | `fs.copy` | `from, to` | Copies `from` to `to`, a folder with everything in it: files with their mode and modification time, links as the same link (never followed), anything else (a socket, a pipe) left out. Into a hidden name beside `to` first, renamed when whole; a failure leaves nothing. Nothing is replaced (`invalid` when `to` is taken), a folder never goes inside itself, and a served folder's own place isn't a target. Result: `path`, and the copy's `files`, `size`, `dir` as `fs.count` says them. |
 | `fs.count` | `path` | What's under the entry, links not followed: `files` (a file or a link counts one, folders none), `size` (their bytes) and `dir` (the entry is a folder). |
+| `fs.cancel` | `copyId` | Stops the running `fs.copy` whose command id is `copyId`, at its next MiB: that copy's result is `invalid` "Cancelled." and its hidden partial copy is removed. `gone.file` when no such copy runs. A link that ends stops its copies the same way. |
+
+While an `fs.copy` runs, the box pushes `fs.progress {id, bytes, total}` (`id` the command's;
+`total` the source's bytes, counted first; `bytes` copied so far), the first at once and then at
+most every 250 ms, before the result. Files are copied a MiB at a time.
 
 ### How a carry goes
 
@@ -676,5 +681,9 @@ files (Finder pastes them; Kore pastes Finder's, as copies), a box's as their pa
 - A move across devices sends the source to its trash (`fs.delete`, or the macOS Trash) only
   after its copy matched. A cancel or a failure stops the copy, removes the hidden partial copy
   and keeps the source.
-- A carry that takes a while shows one line in the explorer it goes into ("Copying 3 items to
-  mybox · 42%", the copy's bytes counted every second) with Cancel.
+- A carry that takes a while (half a second) shows a bar at the bottom of the explorer it goes
+  into: "Copying 3 items to mybox · 1.2 GB of 3.4 GB · about 2 min left", with Cancel. The bytes
+  come from rsync's `--progress` lines, the tar stream counted as it passes through the Mac, or
+  `fs.progress`, read four times a second. Several carries share the bar ("2 transfers · 38%",
+  each listed under the pointer). Done, it says "Copied to mybox · 3.4 GB" for 2 s and fades; a
+  failure stays, with Retry (what hadn't landed) and a close.

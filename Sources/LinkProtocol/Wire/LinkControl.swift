@@ -80,6 +80,8 @@ package enum ControlKind: String, Sendable, CaseIterable {
     /// (what a copy across devices checks before its source goes).
     case fsCopy = "fs.copy"
     case fsCount = "fs.count"
+    /// 1.11: a running `fs.copy` stopped (its partial copy removed), named by its command's id.
+    case fsCancel = "fs.cancel"
     /// 1.10: a chat moves between the box and a Mac (`LinkMoves.swift`), and the sync says when
     /// both ends have settled.
     case chatRelease = "chat.release"
@@ -189,6 +191,8 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     package var host: String?
     package var seq: Int?
     package var events: MirrorItems?
+    /// 1.11: `fs.cancel`'s copy: the `fs.copy` command's id.
+    package var copyId: String?
 
     package init(
         chatId: String? = nil, windowId: String? = nil, title: String? = nil, force: Bool? = nil, modelId: String? = nil,

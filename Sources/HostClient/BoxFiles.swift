@@ -65,7 +65,8 @@ package protocol BoxFileSource: AnyObject {
     /// the folders that changed. False when the box can't watch them.
     func watch(_ key: String, _ folders: Set<String>, changed: (@MainActor (BoxChange) -> Void)?) async -> Bool
     // 1.11: an entry copied within the served folders, and an entry's files and bytes counted.
-    func copy(_ from: String, to: String) async -> Result<String, HostRefusal>
+    /// `run`: the box's progress as it comes, and its Cancel.
+    func copy(_ from: String, to: String, run: BoxCopyRun?) async -> Result<String, HostRefusal>
     func count(_ path: String) async -> Result<CarryCount, HostRefusal>
 }
 
@@ -86,12 +87,34 @@ extension BoxFileSource {
     package func read(_ path: String, max: Int?) async -> Result<BoxFileRead, HostRefusal> { await read(path, max: max, base: nil) }
 
     /// A stand-in that doesn't copy: as a box from before 1.11 answers.
-    package func copy(_ from: String, to: String) async -> Result<String, HostRefusal> {
+    package func copy(_ from: String, to: String, run: BoxCopyRun?) async -> Result<String, HostRefusal> {
         .failure(HostRefusal(message: "\(alias) needs an update to copy files"))
     }
 
     package func count(_ path: String) async -> Result<CarryCount, HostRefusal> {
         .failure(HostRefusal(message: "\(alias) needs an update to copy files"))
+    }
+}
+
+/// A copy on a box under way (`fs.copy`): its bytes as the box says them, and its Cancel
+/// (`fs.cancel`), which works once the command has gone.
+@MainActor
+package final class BoxCopyRun {
+    package var progress: ((Int64, Int64) -> Void)?
+    package private(set) var cancelled = false
+    private var stop: (() -> Void)?
+
+    package init(progress: ((Int64, Int64) -> Void)? = nil) { self.progress = progress }
+
+    func started(_ id: String, stop: @escaping () -> Void) {
+        self.stop = stop
+        if cancelled { stop() }
+    }
+
+    package func cancel() {
+        guard !cancelled else { return }
+        cancelled = true
+        stop?()
     }
 }
 
@@ -157,8 +180,8 @@ extension HostConnection: BoxFileSource {
         return result.ok ? .success(()) : .failure(refusal(result))
     }
 
-    package func copy(_ from: String, to: String) async -> Result<String, HostRefusal> {
-        let result = await files(.fsCopy, ControlArgs(from: from, to: to))
+    package func copy(_ from: String, to: String, run: BoxCopyRun?) async -> Result<String, HostRefusal> {
+        let result = await files(.fsCopy, ControlArgs(from: from, to: to), copy: run)
         return result.ok ? .success(result.path ?? to) : .failure(refusal(result, copying: true))
     }
 
@@ -200,6 +223,12 @@ extension HostConnection: BoxFileSource {
         }
     }
 
+    /// `fs.progress`: how far a running copy is, to its asker.
+    func filesProgress(_ raw: Data) {
+        guard let said = try? JSONDecoder().decode(FilesProgress.self, from: raw) else { return }
+        fileCopies[said.id]?.progress?(said.bytes, said.total)
+    }
+
     /// `fs.hits`: a page of a running search, to its asker.
     func filesHits(_ raw: Data) {
         guard let page = try? JSONDecoder().decode(FilesHits.self, from: raw) else { return }
@@ -214,7 +243,9 @@ extension HostConnection: BoxFileSource {
 
     /// One `fs.*` command: at once while linked, after the dial while it's connecting; a link that
     /// can't be reached says so at once rather than waiting.
-    private func files(_ kind: ControlKind, _ args: ControlArgs, pages: (@MainActor ([FileHit]) -> Void)? = nil) async -> FilesResult {
+    private func files(
+        _ kind: ControlKind, _ args: ControlArgs, pages: (@MainActor ([FileHit]) -> Void)? = nil, copy: BoxCopyRun? = nil
+    ) async -> FilesResult {
         switch phase {
         case .refused(let why): return .refused("", .unknown, why.line(alias))
         case .offline, .idle: return .refused("", .unknown, "\(alias) can't be reached")
@@ -224,9 +255,18 @@ extension HostConnection: BoxFileSource {
         let (result, raw) = await commandRaw { id in
             asked = id
             if let pages { fileHits[id] = pages }
+            if let copy {
+                fileCopies[id] = copy
+                copy.started(id) { [weak self] in
+                    var cancel = ControlArgs()
+                    cancel.copyId = id
+                    Task { _ = await self?.files(.fsCancel, cancel) }
+                }
+            }
             return HostWire.command(id: id, .control(kind, args))
         }
         fileHits[asked] = nil
+        fileCopies[asked] = nil
         if let raw, let decoded = try? JSONDecoder().decode(FilesResult.self, from: raw) { return decoded }
         return FilesResult(id: result.id, ok: result.ok, code: result.code, message: result.message)
     }

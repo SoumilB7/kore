@@ -197,17 +197,23 @@ package final class FileCarry {
     package let move: Bool
     /// The boxes it reaches, by alias.
     package let boxes: [String: CarryBox]
+    /// Bytes copied so far, of `total` (every copied item's, once all are checked).
+    package private(set) var bytes: Int64 = 0
+    package var total: Int64 { totalBytes }
     /// Done so far, 0…1, while bytes cross; nil before.
-    package private(set) var fraction: Double?
+    package var fraction: Double? { totalBytes > 0 && bytes > 0 ? min(1, Double(bytes) / Double(totalBytes)) : nil }
+    /// Told as the bytes move: at most every `tick`, and never while nothing moves.
     package var onProgress: (@MainActor () -> Void)?
     /// What it did, in order (`copy name`, `verify name`, `trash name`…), for tests.
     package private(set) var steps: [String] = []
-    /// How often the copy's bytes are counted for the progress.
-    package var poll: Duration = .seconds(1)
+    /// How often the bytes said so far are read for the progress.
+    package var tick: Duration = .milliseconds(250)
     package private(set) var cancelled = false
     /// Each item's count, once all are checked (a rename's: none).
     package private(set) var counts: [CarryCount?] = []
     private let spawn = Spawn()
+    private let meter = CarryMeter()
+    private var boxCopy: BoxCopyRun?
     private var totalBytes: Int64 = 0
     private var doneBytes: Int64 = 0
 
@@ -222,6 +228,7 @@ package final class FileCarry {
     package func cancel() {
         cancelled = true
         spawn.stop()
+        boxCopy?.cancel()
     }
 
     package func route(_ item: CarryItem) -> CarryRoute { CarryRoute.pick(from: item.source, into: folder, move: move) }
@@ -258,6 +265,10 @@ package final class FileCarry {
             case .failure(let why): return fail(why.text)
             }
             doneBytes += count.bytes
+            if bytes != doneBytes {
+                bytes = doneBytes
+                onProgress?()
+            }
         }
         return outcome
     }
@@ -410,16 +421,22 @@ package final class FileCarry {
             }.value
         case .boxCopy:
             guard let alias = source.alias, let box = boxes[alias] else { return "\(source.device) can't be reached." }
-            if case .failure(let why) = await box.files.copy(source.path, to: staged.path) { return why.message }
+            let meter = meter
+            let run = BoxCopyRun { done, _ in meter.set(done) }
+            boxCopy = run
+            defer { boxCopy = nil }
+            if cancelled { run.cancel() }
+            let result = await metering { await box.files.copy(source.path, to: staged.path, run: run) }
+            if case .failure(let why) = result { return why.message }
             return nil
         case .macToBox:
             guard let alias = staged.alias, let ssh = boxes[alias]?.ssh else { return "\(staged.device) isn't an SSH alias Kore can use." }
             let from = source.path + (count.dir ? "/" : "")
-            return await watching(staged) { await self.spawn.run([["/usr/bin/rsync", "-a"] + ssh.rsyncOptions(false) + [from, ssh.spec(staged.path)]]) }
+            return await rsync(["/usr/bin/rsync", "-a", "--progress"] + ssh.rsyncOptions(false) + [from, ssh.spec(staged.path)])
         case .boxToMac:
             guard let alias = source.alias, let ssh = boxes[alias]?.ssh else { return "\(source.device) isn't an SSH alias Kore can use." }
             let from = ssh.spec(source.path + (count.dir ? "/" : ""))
-            return await watching(staged) { await self.spawn.run([["/usr/bin/rsync", "-a"] + ssh.rsyncOptions(false) + [from, staged.path]]) }
+            return await rsync(["/usr/bin/rsync", "-a", "--progress"] + ssh.rsyncOptions(false) + [from, staged.path])
         case .boxToBox:
             guard let a = source.alias, let b = staged.alias, let from = boxes[a]?.ssh, let to = boxes[b]?.ssh, let into = boxes[b], let scratch else {
                 return "\(source.device) or \(staged.device) isn't an SSH alias Kore can use."
@@ -427,22 +444,33 @@ package final class FileCarry {
             if case .failure(let why) = await into.files.create(scratch.path, folder: true) { return why.message }
             let send = from.shellArgv(#"COPYFILE_DISABLE=1 exec tar -C "$1" -cf - "./$2""#, [source.parent.path, source.name])
             let take = to.shellArgv(#"exec tar -C "$1" -xf -"#, [scratch.path])
-            return await watching(staged) { await self.spawn.run([send, take]) }
+            // The tar stream counted as it passes through (its headers too: near the files' bytes).
+            let meter = meter
+            return await metering { await self.spawn.run([send, take], passed: { meter.add(Int64($0)) }) }
         case .macRename, .boxRename:
             return "Not a copy."
         }
     }
 
-    /// Runs `work`, counting what has reached `staged` meanwhile for the progress.
-    private func watching(_ staged: FilePlace, _ work: @escaping @MainActor () async -> String?) async -> String? {
-        let total = max(totalBytes, 1)
+    /// rsync, its progress lines read as they come (`RsyncProgress`).
+    private func rsync(_ command: [String]) async -> String? {
+        let meter = meter
+        let parser = RsyncReader()
+        return await metering { await self.spawn.run([command], output: { meter.set(parser.feed($0)) }) }
+    }
+
+    /// Runs `work`, reading the meter every `tick` for the progress: one number read, no matter
+    /// how fast the bytes go.
+    private func metering<T>(_ work: @escaping @MainActor () async -> T) async -> T {
+        meter.set(0)
         let ticker = Task { [weak self] in
             while !Task.isCancelled {
                 guard let self else { return }
-                try? await Task.sleep(for: self.poll)
+                try? await Task.sleep(for: self.tick)
                 guard !Task.isCancelled else { return }
-                if case .success(let now) = await self.count(staged) {
-                    self.fraction = min(0.99, Double(self.doneBytes + now.bytes) / Double(total))
+                let now = min(self.doneBytes + self.meter.value, self.totalBytes)
+                if now != self.bytes {
+                    self.bytes = now
                     self.onProgress?()
                 }
             }
@@ -506,6 +534,64 @@ package final class FileCarry {
     private static func hidden(_ name: String) -> String { "." + name + ".kore-" + String(UUID().uuidString.prefix(8)).lowercased() }
 }
 
+/// Bytes said so far by a copy's reader on another thread; read every tick.
+package final class CarryMeter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var bytes: Int64 = 0
+    package init() {}
+    package var value: Int64 { lock.withLock { bytes } }
+    package func set(_ value: Int64) { lock.withLock { bytes = value } }
+    package func add(_ count: Int64) { lock.withLock { bytes += count } }
+}
+
+/// rsync's `--progress` lines, as openrsync and rsync print them: per file, "<bytes> <n>% <rate>
+/// <time>", redrawn after `\r` while it goes and ended with "(xfer#…)" ("xfr#" in rsync 3) when
+/// it's done. Bytes so far: the files done, and the one going.
+package struct RsyncProgress: Sendable {
+    private var pending: [UInt8] = []
+    private var completed: Int64 = 0
+    private var current: Int64 = 0
+
+    package init() {}
+
+    package var bytes: Int64 { completed + current }
+
+    package mutating func feed(_ data: Data) {
+        for byte in data {
+            if byte == 0x0D || byte == 0x0A {
+                parse(pending)
+                pending.removeAll(keepingCapacity: true)
+            } else if pending.count < 4096 {
+                pending.append(byte)
+            }
+        }
+    }
+
+    private mutating func parse(_ line: [UInt8]) {
+        let text = String(decoding: line, as: UTF8.self)
+        let words = text.split(separator: " ", omittingEmptySubsequences: true)
+        guard words.count >= 2, words[1].hasSuffix("%"), let count = Int64(words[0].replacingOccurrences(of: ",", with: "")) else { return }
+        if text.contains("xfer#") || text.contains("xfr#") {
+            completed += count
+            current = 0
+        } else {
+            current = count
+        }
+    }
+}
+
+/// `RsyncProgress` fed from the reader's thread.
+final class RsyncReader: @unchecked Sendable {
+    private let lock = NSLock()
+    private var progress = RsyncProgress()
+    func feed(_ data: Data) -> Int64 {
+        lock.withLock {
+            progress.feed(data)
+            return progress.bytes
+        }
+    }
+}
+
 /// Processes run to their end, each one's output into the next's input, and stopped at once by
 /// `stop`. Their errors go to a scratch file, never a pipe held here.
 package final class Spawn: @unchecked Sendable {
@@ -523,8 +609,12 @@ package final class Spawn: @unchecked Sendable {
         for process in running where process.isRunning { process.terminate() }
     }
 
-    /// Nil when every stage ended well; else the last thing one said.
-    package func run(_ stages: [[String]]) async -> String? {
+    /// Nil when every stage ended well; else the last thing one said. `output`: the last stage's
+    /// output as it comes. `passed`: with two stages, what goes from one to the other runs
+    /// through here, counted as it goes (never held: a piece at a time).
+    package func run(
+        _ stages: [[String]], output: (@Sendable (Data) -> Void)? = nil, passed: (@Sendable (Int) -> Void)? = nil
+    ) async -> String? {
         guard !stages.isEmpty, stages.allSatisfy({ !$0.isEmpty }) else { return "Nothing to run." }
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("kore-carry-\(UUID().uuidString)")
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
@@ -533,6 +623,9 @@ package final class Spawn: @unchecked Sendable {
         var errors: [URL] = []
         var pipes: [Pipe] = []
         var ends: [AsyncStream<Int32>] = []
+        // Counted between two stages: the first's output and the second's input are two pipes.
+        let pump: (from: Pipe, to: Pipe)? = passed != nil && stages.count == 2 ? (Pipe(), Pipe()) : nil
+        let read: Pipe? = output.map { _ in Pipe() }
         for (index, stage) in stages.enumerated() {
             let process = Process()
             process.executableURL = URL(fileURLWithPath: stage[0])
@@ -541,13 +634,21 @@ package final class Spawn: @unchecked Sendable {
             FileManager.default.createFile(atPath: error.path, contents: nil)
             errors.append(error)
             process.standardError = try? FileHandle(forWritingTo: error)
-            process.standardInput = index == 0 ? FileHandle.nullDevice : pipes[index - 1]
-            if index < stages.count - 1 {
-                let pipe = Pipe()
-                pipes.append(pipe)
-                process.standardOutput = pipe
+            if let pump {
+                process.standardInput = index == 0 ? FileHandle.nullDevice : pump.to
             } else {
-                process.standardOutput = FileHandle.nullDevice
+                process.standardInput = index == 0 ? FileHandle.nullDevice : pipes[index - 1]
+            }
+            if index < stages.count - 1 {
+                if let pump {
+                    process.standardOutput = pump.from
+                } else {
+                    let pipe = Pipe()
+                    pipes.append(pipe)
+                    process.standardOutput = pipe
+                }
+            } else {
+                process.standardOutput = read ?? FileHandle.nullDevice
             }
             let (end, ended) = AsyncStream<Int32>.makeStream()
             process.terminationHandler = { ended.yield($0.terminationStatus); ended.finish() }
@@ -575,10 +676,37 @@ package final class Spawn: @unchecked Sendable {
             try? pipe.fileHandleForReading.close()
             try? pipe.fileHandleForWriting.close()
         }
+        var readers: [AsyncStream<Void>] = []
+        if let pump, let passed {
+            try? pump.from.fileHandleForWriting.close()
+            try? pump.to.fileHandleForReading.close()
+            let (source, sink) = (pump.from.fileHandleForReading, pump.to.fileHandleForWriting)
+            // A write after the reader went fails, not SIGPIPE in Kore.
+            _ = fcntl(sink.fileDescriptor, F_SETNOSIGPIPE, 1)
+            readers.append(Self.background {
+                while let piece = try? source.read(upToCount: 256 * 1024), !piece.isEmpty {
+                    guard (try? sink.write(contentsOf: piece)) != nil else { break }
+                    passed(piece.count)
+                }
+                try? sink.close()
+                try? source.close()
+            })
+        }
+        if let read, let output {
+            try? read.fileHandleForWriting.close()
+            let source = read.fileHandleForReading
+            readers.append(Self.background {
+                while let piece = try? source.read(upToCount: 64 * 1024), !piece.isEmpty { output(piece) }
+                try? source.close()
+            })
+        }
         if started.contains(false) { stop() }
         var failed = !go || started.contains(false)
         for (index, end) in ends.enumerated() where index < started.count && started[index] {
             for await status in end where status != 0 { failed = true }
+        }
+        for reader in readers {
+            for await _ in reader {}
         }
         for process in processes { try? (process.standardError as? FileHandle)?.close() }
         lock.withLock { live = [] }
@@ -589,5 +717,15 @@ package final class Spawn: @unchecked Sendable {
             return text.split(whereSeparator: \.isNewline).last.map(String.init)
         }.first
         return said ?? "The copy stopped."
+    }
+
+    /// `work` on a thread of its own; the stream ends when it does.
+    private static func background(_ work: @escaping @Sendable () -> Void) -> AsyncStream<Void> {
+        let (stream, done) = AsyncStream<Void>.makeStream()
+        Thread.detachNewThread {
+            work()
+            done.finish()
+        }
+        return stream
     }
 }

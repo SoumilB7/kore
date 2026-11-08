@@ -6,8 +6,8 @@ import SwiftUI
 
 // Copy, Cut, Paste, Duplicate and drops between every explorer in every window: a folder on this
 // Mac or on a box. One Kore file clipboard for the app; Mac items also go on the pasteboard as
-// files (Finder pastes them, and Kore pastes Finder's). Each carry runs in `FileCarries`, its one
-// quiet line in the explorer it goes into (`CarryLine`).
+// files (Finder pastes them, and Kore pastes Finder's). Each carry runs in `FileCarries`, its bar
+// at the bottom of the explorer it goes into (`TransferBar`).
 
 /// What ⌘C or ⌘X took, with where each item is: a path on this Mac, or an alias and a path on a
 /// box. Good while the pasteboard is still what it wrote; after that, the pasteboard's files
@@ -67,23 +67,11 @@ final class FileClipboard {
 final class FileCarries {
     static let shared = FileCarries()
 
-    struct Line: Identifiable, Equatable {
-        let id: UUID
-        let folder: FilePlace
-        var text: String
-        var fraction: Double?
-        /// Running (Cancel shows), else a failure said for a while.
-        var running: Bool
-        var shown: Bool
-    }
-
-    private(set) var lines: [Line] = []
-    /// What's on its way: each new entry's place, its carry, and whether it's a folder. Trees show
-    /// them at once, dimmed, with the carry's bar.
+    /// What's on its way: each new entry's place, its transfer, and whether it's a folder. Trees
+    /// show them at once, dimmed, with the transfer's bar.
     private(set) var pending: [FilePlace: (id: UUID, isFolder: Bool)] = [:]
     /// Goes up as `pending` changes: trees rebuild their rows.
     private(set) var revision = 0
-    @ObservationIgnored private var carries: [UUID: FileCarry] = [:]
 
     /// The entries on their way into `folder`.
     func pending(in folder: FilePlace) -> [(name: String, isFolder: Bool)] {
@@ -93,7 +81,7 @@ final class FileCarries {
     /// How far the entry at `place` is, when it's on its way.
     func progress(of place: FilePlace) -> Double? {
         guard let id = pending[place]?.id else { return nil }
-        return lines.first { $0.id == id }?.fraction ?? 0
+        return TransferProgress.shared.items.first { $0.id == id }?.fraction ?? 0
     }
 
     private func setPending(_ change: () -> Void) {
@@ -101,12 +89,8 @@ final class FileCarries {
         revision += 1
     }
 
-    /// The line for an explorer whose folder is `root`: a carry into it or below.
-    func line(under root: FilePlace) -> Line? { lines.first { $0.shown && $0.folder.within(root) } }
-
-    func cancel(_ id: UUID) { carries[id]?.cancel() }
-
-    /// Runs a carry, each box it reaches held linked meanwhile; `done` after.
+    /// Runs a carry, each box it reaches held linked meanwhile, its bar in `TransferProgress`;
+    /// `done` after. A failure's Retry carries what hadn't landed.
     func start(_ items: [CarryItem], into folder: FilePlace, move: Bool, done: @escaping @MainActor (CarryOutcome) async -> Void) {
         guard !items.isEmpty else { return }
         var boxes: [String: CarryBox] = [:]
@@ -118,9 +102,12 @@ final class FileCarries {
             boxes[alias] = CarryBox(alias: alias, files: connection, ssh: SyncBox.ssh(alias))
         }
         let carry = FileCarry(items: items, into: folder, move: move, boxes: boxes)
-        let id = UUID()
-        carries[id] = carry
-        lines.append(Line(id: id, folder: folder, text: Self.text(items, into: folder, move: move), running: true, shown: false))
+        var landed = 0
+        let transfers = TransferProgress.shared
+        let id = transfers.begin(
+            Self.text(items, into: folder, move: move), done: Self.doneText(items, into: folder, move: move), place: folder,
+            cancel: { [weak carry] in carry?.cancel() },
+            retry: { [weak self] in self?.start(Array(items.dropFirst(landed)), into: folder, move: move, done: done) })
         setPending {
             for item in items {
                 var isFolder: ObjCBool = false
@@ -130,46 +117,26 @@ final class FileCarries {
         }
         carry.onProgress = { [weak self, weak carry] in
             guard let self, let carry else { return }
-            edit(id) { $0.fraction = carry.fraction }
+            transfers.update(id, bytes: carry.bytes, total: carry.total)
             // Once counted: which are folders.
             let kinds = zip(items, carry.counts).filter { $0.1 != nil && pending[folder.child($0.0.name)]?.isFolder != $0.1?.dir }
             if !kinds.isEmpty { setPending { for (item, count) in kinds { pending[folder.child(item.name)] = (id, count?.dir == true) } } }
         }
-        // Quick ones never show.
-        Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
-            self?.edit(id) { $0.shown = true }
-        }
         Task { [weak self] in
             let outcome = await carry.run()
+            landed = outcome.landed.count
             for connection in held { connection.release() }
-            guard let self else { return await done(outcome) }
-            carries[id] = nil
             // The trees list what landed before the stand-ins go, so nothing blinks.
             await done(outcome)
-            setPending { pending = pending.filter { $0.value.id != id } }
-            if let failure = outcome.failure, !outcome.cancelled {
-                edit(id) {
-                    $0.text = failure
-                    $0.running = false
-                    $0.shown = true
-                    $0.fraction = nil
-                }
-                Task { [weak self] in
-                    try? await Task.sleep(for: .seconds(6))
-                    self?.lines.removeAll { $0.id == id }
-                }
-            } else {
-                lines.removeAll { $0.id == id }
-            }
+            self?.setPending { self?.pending = self?.pending.filter { $0.value.id != id } ?? [:] }
+            transfers.finish(id, failure: outcome.failure, cancelled: outcome.cancelled)
         }
     }
 
-    private func edit(_ id: UUID, _ change: (inout Line) -> Void) {
-        guard let index = lines.firstIndex(where: { $0.id == id }) else { return }
-        var line = lines[index]
-        change(&line)
-        if line != lines[index] { lines[index] = line }
+    /// "Copied to mybox", "Moved to Downloads".
+    static func doneText(_ items: [CarryItem], into folder: FilePlace, move: Bool) -> String {
+        let across = items.contains { !$0.source.sameDevice(folder) }
+        return "\(move ? "Moved" : "Copied") to \(across ? folder.device : folder.name)"
     }
 
     /// "Copying 3 items to mybox", "Moving notes.md to Downloads".
@@ -245,28 +212,5 @@ enum FilePaste {
                 OptionItem("Keep Both") { answer(false) },
                 OptionItem("Replace", destructive: true) { answer(true) },
             ], at: window.mouseLocationOutsideOfEventStream, in: window, source: "paste")
-    }
-}
-
-/// The explorer's one quiet line for a carry into its folder: what goes where and how far, with
-/// Cancel; or what went wrong, for a while.
-struct CarryLine: View {
-    let root: FilePlace
-
-    var body: some View {
-        if let line = FileCarries.shared.line(under: root) {
-            HStack(spacing: Space.sm) {
-                Text(line.text + (line.fraction.map { " · \(Int($0 * 100))%" } ?? (line.running ? "…" : "")))
-                    .font(Chrome.caption).foregroundStyle(Theme.secondary).lineLimit(2).truncationMode(.middle)
-                Spacer(minLength: 0)
-                if line.running {
-                    Button("Cancel") { FileCarries.shared.cancel(line.id) }
-                        .buttonStyle(.plain).font(Chrome.caption).foregroundStyle(Theme.tertiary)
-                }
-            }
-            .padding(.horizontal, Layout.Explorer.headerInset).padding(.vertical, Space.xs)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .transition(.opacity)
-        }
     }
 }

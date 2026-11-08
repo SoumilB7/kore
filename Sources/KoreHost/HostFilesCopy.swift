@@ -22,7 +22,7 @@ extension HostFiles {
 
     /// Copies `from` (recursively, links as links) to `to`, which mustn't be there yet: into a
     /// hidden name beside `to` first, renamed when whole; a failure leaves nothing.
-    package func copy(id: String, from: String, to: String) -> FilesResult {
+    package func copy(id: String, from: String, to: String, run: CopyRun = CopyRun()) -> FilesResult {
         let source: (path: String, real: String)
         let target: (path: String, real: String)
         switch (entry(from), entry(to)) {
@@ -37,9 +37,11 @@ extension HostFiles {
         let name = (target.path as NSString).lastPathComponent
         if Self.look(target.real) != nil { return .refused(id, .invalid, "\(name) is already there.") }
         let folder = (target.real as NSString).deletingLastPathComponent
-        let temp = folder + "/." + name + ".kore-" + String(UUID().uuidString.prefix(8))
-        guard Self.copyTree(source.real, temp) else {
+        let temp = folder + "/." + name + ".kore-" + String(UUID().uuidString.prefix(8)).lowercased()
+        run.start(total: Self.tally(source.real).bytes)
+        guard Self.copyTree(source.real, temp, run: run) else {
             try? FileManager.default.removeItem(atPath: temp)
+            if run.cancelled { return .refused(id, .invalid, "Cancelled.") }
             return .refused(id, .deniedPath, "Can't copy it there on this box.")
         }
         guard Self.look(target.real) == nil, FileCalls.rename(temp, target.real) == 0 else {
@@ -103,18 +105,19 @@ extension HostFiles {
 
     /// One entry copied, a folder with all in it: files with their mode and time, links as the
     /// same link. False at the first thing that can't be made.
-    static func copyTree(_ from: String, _ to: String) -> Bool {
+    static func copyTree(_ from: String, _ to: String, run: CopyRun) -> Bool {
+        guard !run.cancelled else { return false }
         guard let info = linkInfo(from) else { return false }
         let manager = FileManager.default
         switch info.st_mode & mode_t(S_IFMT) {
         case mode_t(S_IFDIR):
             guard FileCalls.mkdir(to, 0o700) == 0 else { return false }
             guard let names = try? manager.contentsOfDirectory(atPath: from) else { return false }
-            for name in names where !copyTree(from + "/" + name, to + "/" + name) { return false }
+            for name in names where !copyTree(from + "/" + name, to + "/" + name, run: run) { return false }
             _ = chmod(to, info.st_mode & 0o7777)
             return true
         case mode_t(S_IFREG):
-            guard (try? manager.copyItem(atPath: from, toPath: to)) != nil else { return false }
+            guard copyFile(from, to, run: run) else { return false }
             _ = chmod(to, info.st_mode & 0o7777)
             let seconds = Double(millis(info)) / 1000
             try? manager.setAttributes([.modificationDate: Date(timeIntervalSince1970: seconds)], ofItemAtPath: to)
@@ -126,5 +129,55 @@ extension HostFiles {
             // A socket or a pipe: not a file to copy.
             return true
         }
+    }
+
+    /// A file's bytes, a MiB at a time (each counted on `run`, which can stop it between them).
+    static func copyFile(_ from: String, _ to: String, run: CopyRun) -> Bool {
+        guard let input = FileHandle(forReadingAtPath: from) else { return false }
+        defer { try? input.close() }
+        let fd = open(to, O_WRONLY | O_CREAT | O_EXCL, 0o600)
+        guard fd >= 0 else { return false }
+        let output = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        while true {
+            guard !run.cancelled else { return false }
+            // Nil or empty: the end.
+            let chunk: Data
+            do { chunk = try input.read(upToCount: 1 << 20) ?? Data() } catch { return false }
+            if chunk.isEmpty { return true }
+            guard (try? output.write(contentsOf: chunk)) != nil else { return false }
+            run.add(Int64(chunk.count))
+        }
+    }
+}
+
+/// One running `fs.copy`: its bytes so far said at most every 250 ms (`fs.progress`), and a stop
+/// (`fs.cancel`, or the link ending) that ends it at the next MiB.
+package final class CopyRun: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stopped = false
+    private var bytes: Int64 = 0
+    private var total: Int64 = 0
+    private var said = Date.distantPast
+    private let progress: (@Sendable (Int64, Int64) -> Void)?
+    /// Least time between two `fs.progress`.
+    static let every: TimeInterval = 0.25
+
+    package init(progress: (@Sendable (Int64, Int64) -> Void)? = nil) { self.progress = progress }
+
+    package var cancelled: Bool { lock.withLock { stopped } }
+
+    package func cancel() { lock.withLock { stopped = true } }
+
+    func start(total: Int64) { lock.withLock { self.total = total } }
+
+    func add(_ count: Int64) {
+        let due: (Int64, Int64)? = lock.withLock {
+            bytes += count
+            let now = Date()
+            guard now.timeIntervalSince(said) >= Self.every else { return nil }
+            said = now
+            return (bytes, total)
+        }
+        if let due { progress?(due.0, due.1) }
     }
 }

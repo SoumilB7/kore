@@ -60,7 +60,7 @@ struct ExplorerSidebar: View {
         VStack(spacing: 0) {
             header
             content
-            if workspace.sidebar != .search { CarryLine(root: .mac(store.root)) }
+            if workspace.sidebar != .search { TransferBar(root: .mac(store.root), window: workspace.folder.standardizedFileURL.path) }
         }
         .onChange(of: FileCarries.shared.revision) { store.carriesChanged() }
         .frame(maxHeight: .infinity, alignment: .top)

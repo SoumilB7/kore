@@ -299,6 +299,9 @@ package enum LinkPolicy {
             if case .deny(let code, let message) = full() { return .deny(code, message) }
             guard LinkFiles.plainPath(args.from), LinkFiles.plainPath(args.to) else { return .deny(.invalid, "Two absolute paths.") }
             return .allow
+        case .fsCancel:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            return plainID(args.copyId) ? .allow : .deny(.invalid, "Name the copy.")
         case .fsSearch:
             if case .deny(let code, let message) = full() { return .deny(code, message) }
             guard LinkFiles.plainPath(args.root) else { return .deny(.invalid, "An absolute root.") }

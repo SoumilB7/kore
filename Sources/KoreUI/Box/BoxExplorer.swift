@@ -107,7 +107,7 @@ struct BoxExplorer: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .transition(.opacity)
         }
-        if !searching { CarryLine(root: .box(alias: store.alias, path: store.root)) }
+        if !searching { TransferBar(root: .box(alias: store.alias, path: store.root), window: box.key) }
     }
 
     private var tree: some View {

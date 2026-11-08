@@ -86,6 +86,34 @@ struct FilesCopyTests {
         #expect(files.count(id: "12", path: rig.work + "/escape/key.txt").code == .deniedPath)
     }
 
+    @Test func aCopySaysHowFarAndACancelLeavesNothing() throws {
+        let rig = try Rig()
+        defer { rig.finish() }
+        try Data(repeating: 1, count: 5 * 1024 * 1024).write(to: URL(fileURLWithPath: rig.work + "/src/big.bin"))
+        final class Said: @unchecked Sendable {
+            let lock = NSLock()
+            var frames: [(Int64, Int64)] = []
+        }
+        let said = Said()
+        // Progress, a frame at most every 250 ms: the first comes at once, with the total.
+        let run = CopyRun { bytes, total in said.lock.withLock { said.frames.append((bytes, total)) } }
+        let copied = rig.files.copy(id: "1", from: rig.work + "/src", to: rig.other + "/src", run: run)
+        #expect(copied.ok)
+        let frames = said.lock.withLock { said.frames }
+        #expect(!frames.isEmpty && frames.allSatisfy { $0.1 == 5 * 1024 * 1024 + 15 } && frames.first!.0 > 0)
+
+        // Cancelled at its first MiB: refused, nothing left, the source whole.
+        final class Holder: @unchecked Sendable { var run: CopyRun? }
+        let holder = Holder()
+        let stop = CopyRun { _, _ in holder.run?.cancel() }
+        holder.run = stop
+        let cancelled = rig.files.copy(id: "2", from: rig.work + "/src", to: rig.other + "/again", run: stop)
+        #expect(!cancelled.ok && cancelled.message == "Cancelled.")
+        #expect(try FileManager.default.contentsOfDirectory(atPath: rig.other) == ["src"])
+        let source = rig.files.count(id: "3", path: rig.work + "/src")
+        #expect(source.size == Int64(5_242_895) && source.files == 4)
+    }
+
     @Test func onlyAFullGrantCopiesOrCounts() {
         let path = "/srv/work/a.txt"
         for kind in [ControlKind.fsCopy, .fsCount] {
@@ -101,5 +129,10 @@ struct FilesCopyTests {
         #expect(LinkPolicy.checkBox(.fsCopy, ControlArgs(from: "a.txt", to: path), nil, control: .full) != .allow)
         #expect(LinkPolicy.checkBox(.fsCopy, ControlArgs(from: path), nil, control: .full) != .allow)
         #expect(LinkPolicy.checkBox(.fsCount, ControlArgs(path: "x\ny"), nil, control: .full) != .allow)
+        var cancel = ControlArgs()
+        cancel.copyId = "c12.ab"
+        #expect(LinkPolicy.checkBox(.fsCancel, cancel, nil, control: .full) == .allow)
+        #expect(LinkPolicy.checkBox(.fsCancel, cancel, nil, control: .standard) != .allow)
+        #expect(LinkPolicy.checkBox(.fsCancel, ControlArgs(), nil, control: .full) != .allow)
     }
 }

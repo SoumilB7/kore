@@ -60,6 +60,21 @@ package struct FilesChanged: Codable, Sendable, Equatable {
     }
 }
 
+/// `fs.progress`, box to client (1.11): how far a running `fs.copy` is, its bytes copied of its
+/// `total`, at most about four a second, before its `result`.
+package struct FilesProgress: Codable, Sendable, Equatable {
+    package static let type = "fs.progress"
+    package var t = FilesProgress.type
+    package var id: String
+    package var bytes: Int64
+    package var total: Int64
+    package init(id: String, bytes: Int64, total: Int64) {
+        self.id = id
+        self.bytes = bytes
+        self.total = total
+    }
+}
+
 /// `fs.hits`, box to client: a page of a running `fs.search`'s hits, before its `result`.
 package struct FilesHits: Codable, Sendable, Equatable {
     package static let type = "fs.hits"

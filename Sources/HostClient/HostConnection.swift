@@ -137,6 +137,8 @@ package final class HostConnection {
     @ObservationIgnored private var tabWatchers: [String: @MainActor () -> Void] = [:]
     /// Box windows' open explorer folders (1.8 `fs.watch`), by window, and who hears their changes.
     @ObservationIgnored package var fileWatchers: [String: (folders: Set<String>, changed: (@MainActor (BoxChange) -> Void)?)] = [:]
+    /// Running box copies' progress (1.11 `fs.progress`), by command id.
+    @ObservationIgnored var fileCopies: [String: BoxCopyRun] = [:]
     /// Running searches' pages (1.8 `fs.hits`), by command id.
     @ObservationIgnored var fileHits: [String: @MainActor ([FileHit]) -> Void] = [:]
     /// `sync.changed`'s readers, by the box folder they sync.
@@ -688,6 +690,8 @@ package final class HostConnection {
             filesChanged(raw)
         case .unknown(let type) where type == FilesHits.type:
             filesHits(raw)
+        case .unknown(let type) where type == FilesProgress.type:
+            filesProgress(raw)
         default:
             break
         }

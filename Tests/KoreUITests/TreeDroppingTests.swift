@@ -48,45 +48,48 @@ struct TreeDroppingTests {
 
     @Test func aHeldCollapsedFolderSpringsOpenAndClosesWhenTheDragLeaves() async throws {
         let dropping = TreeDropping()
-        dropping.springDelay = .milliseconds(150)
+        dropping.springDelay = .milliseconds(200)
         dropping.leaveDelay = .milliseconds(50)
         var open: Set<String> = []
+        var opened: [(String, Date)] = []
         dropping.isOpen = { open.contains($0) }
-        dropping.expand = { open.insert($0) }
+        dropping.expand = {
+            open.insert($0)
+            opened.append(($0, Date()))
+        }
         dropping.collapse = { open.remove($0) }
         func over(_ folder: String, act: DropAct = .copy) {
             dropping.over(row: folder, isFolder: true, folder: folder, point: .zero, act: act, text: "Copy to x/")
         }
-        // Held less than the delay: still closed.
+        /// Busy test runs run the main actor late: wait for it, up to a few seconds.
+        func until(_ check: () -> Bool) async throws {
+            for _ in 0..<300 where !check() { try await Task.sleep(for: .milliseconds(10)) }
+        }
+        // Over one, then on to another before it opens: only the second opens, after the delay.
         over("/r/src")
-        #expect(dropping.target == "/r/src" && dropping.badge?.text == "Copy to x/")
-        try await Task.sleep(for: .milliseconds(60))
-        #expect(open.isEmpty)
-        // Moved on before it: the first never opens.
+        #expect(dropping.target == "/r/src" && dropping.badge?.text == "Copy to x/" && open.isEmpty)
+        let held = Date()
         over("/r/docs")
-        try await Task.sleep(for: .milliseconds(100))
-        #expect(open.isEmpty)
-        try await Task.sleep(for: .milliseconds(150))
+        try await until { open.contains("/r/docs") }
         #expect(open == ["/r/docs"] && dropping.sprung == ["/r/docs"])
+        #expect(opened.first.map { $0.1.timeIntervalSince(held) >= 0.19 } == true)
         // Deeper, then dropped there: the folders above stay open.
         over("/r/docs/deep")
-        try await Task.sleep(for: .milliseconds(250))
-        #expect(open == ["/r/docs", "/r/docs/deep"])
+        try await until { open.contains("/r/docs/deep") }
         dropping.ended(droppedInto: "/r/docs/deep")
         #expect(open == ["/r/docs", "/r/docs/deep"] && dropping.target == nil && dropping.badge == nil)
 
         // Another drag springs one open and leaves without dropping: it closes.
         over("/r/src")
-        try await Task.sleep(for: .milliseconds(250))
-        #expect(open.contains("/r/src"))
+        try await until { open.contains("/r/src") }
         dropping.out(row: "/r/src")
-        try await Task.sleep(for: .milliseconds(150))
+        try await until { !open.contains("/r/src") }
         #expect(!open.contains("/r/src") && dropping.badge == nil)
 
         // Refused (a folder into itself): no target, nothing opens, the badge says so.
         over("/r/lib", act: .refused)
         #expect(dropping.target == nil && dropping.badge?.refused == true)
-        try await Task.sleep(for: .milliseconds(250))
+        try await Task.sleep(for: .milliseconds(400))
         #expect(!open.contains("/r/lib"))
         #expect(TreeDropping.toClose(["/a", "/a/b", "/c"], droppedInto: "/a/b/x") == ["/c"])
     }
