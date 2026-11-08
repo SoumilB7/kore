@@ -220,13 +220,9 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         guard let chatId else { return }
         askLogin()
         let model = request.model ?? ""
-        let units =
-            provider.id == "codex"
-            ? UsageAttribution.codexUnits(input: Double(request.input), cached: Double(request.cacheRead), output: Double(request.output))
-            : UsageAttribution.units(
-                ClaudeTokens(
-                    input: Double(request.input), output: Double(request.output), cacheRead: Double(request.cacheRead),
-                    cacheWrite5m: Double(request.cacheWrite5m), cacheWrite1h: Double(request.cacheWrite1h)), model: model)
+        let units = HostConnection.units(
+            provider: provider.id, model: model, input: request.input, output: request.output, cacheRead: request.cacheRead,
+            cacheWrite5m: request.cacheWrite5m, cacheWrite1h: request.cacheWrite1h)
         usage(
             ForwardedRequest(
                 cli: provider.id, chat: connection.alias + "/" + chatId, request: request.id, time: request.at, model: model, agent: request.agent,

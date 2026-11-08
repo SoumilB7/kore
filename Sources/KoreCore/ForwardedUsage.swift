@@ -99,6 +99,28 @@ extension KoreUsage {
         return out.mapValues { ($0.box, $0.title) }
     }
 
+    /// A box's stores moved from `old` (its alias) to `new` (its KoreNet id): the requests kept
+    /// in memory and the logins known for it move too, so nothing writes the old key back.
+    public func rekeyBox(from old: String, to new: String) {
+        guard old != new else { return }
+        loadForwarded()
+        let prefix = old + "/"
+        var changed = false
+        for (key, request) in forwardedRequests where request.chat.hasPrefix(prefix) {
+            var moved = request
+            moved.chat = new + "/" + request.chat.dropFirst(prefix.count)
+            forwardedRequests[key] = nil
+            changed = true
+            if let kept = forwardedRequests[moved.key], kept.units >= moved.units { continue }
+            forwardedRequests[moved.key] = moved
+        }
+        for (key, login) in boxLogins where key.hasPrefix(prefix) {
+            boxLogins[key] = nil
+            boxLogins[new + "/" + key.dropFirst(prefix.count)] = login
+        }
+        if changed { saveForwarded() }
+    }
+
     private var forwardedFile: URL? { forwardedSupport?.appendingPathComponent("forwarded.json") }
 
     private func loadForwarded() {

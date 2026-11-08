@@ -54,7 +54,9 @@ package final class HostConnection {
         }
     }
 
-    package let alias: String
+    /// The box's key in this Mac's stores: its SSH alias, or its KoreNet id once its first
+    /// KoreNet welcome rekeyed them (`NodeMigration`).
+    package private(set) var alias: String
     /// The name `attach --as` gives; a change takes effect on the next dial.
     package private(set) var grant: String
     @ObservationIgnored private var command: String
@@ -82,7 +84,7 @@ package final class HostConnection {
     /// 1.10: the last move command's bytes on the link, both ways (a move's cost).
     @ObservationIgnored package var lastMoveBytes = 0
     @ObservationIgnored package private(set) var control: LinkControlLevel?
-    @ObservationIgnored package let cache: HostCache
+    @ObservationIgnored package private(set) var cache: HostCache
     /// The CLIs whose login its chats' usage asked for (`LinkChatBackend`): once each.
     @ObservationIgnored package var loginsAsked: Set<String> = []
 
@@ -92,6 +94,43 @@ package final class HostConnection {
     @ObservationIgnored package var backoff: [Duration] = [.seconds(1), .seconds(2), .seconds(5), .seconds(10), .seconds(30), .seconds(60)]
     /// A dial that hasn't had its welcome by then is given up.
     @ObservationIgnored package var handshakeLimit: Duration = .seconds(20)
+
+    /// The route the link is on (or dialling) now; nil while down.
+    @ObservationIgnored package private(set) var route: HostRoute?
+    /// The box's link minor, as its welcome said (1.12 has `usage.since`, `net.node`).
+    @ObservationIgnored package private(set) var boxMinor = 0
+    /// KoreNet's way to boxes while it's on (`KoreNetSwitch`); nil: SSH only, as before KoreNet.
+    package static var net: (any NetRouter)?
+    /// This connection's own router (tests); a connection with a test transport uses no other.
+    @ObservationIgnored package var router: (any NetRouter)?
+    private var activeRouter: (any NetRouter)? { router ?? (makeTransport == nil ? Self.net : nil) }
+    /// Waits (the backoff, the handshake, probes, the unanswered check): a test's virtual clock.
+    @ObservationIgnored package var sleep: @Sendable (Duration) async -> Void = { try? await Task.sleep(for: $0) }
+    /// How long a probe waits for any word from the box before the link counts as dead.
+    @ObservationIgnored package var probeWait: Duration = .seconds(5)
+    /// A command unanswered this long probes the link.
+    @ObservationIgnored package var unansweredAfter: Duration = .seconds(10)
+    /// Each box usage ledger line pulled on link-up (`usage.since`), as forwarded usage.
+    package static var usageSink: @Sendable (ForwardedRequest) -> Void = { request in Task { await KoreUsage.shared.forwarded(request) } }
+    @ObservationIgnored private var skipNet = false
+    @ObservationIgnored private var redialNow = false
+    @ObservationIgnored private var wantsNet = false
+    @ObservationIgnored private var switching = false
+    @ObservationIgnored private var dials = 0
+    @ObservationIgnored private var transportDial = 0
+    @ObservationIgnored private var ownUp = 0
+    /// Frames heard on any link so far (a probe's answer is any of them).
+    @ObservationIgnored package private(set) var heardCount = 0
+    @ObservationIgnored private var probing: Task<Void, Never>?
+    @ObservationIgnored private var watchdog: Task<Void, Never>?
+    @ObservationIgnored private var usageWaits: [String: CheckedContinuation<UsageWire.Page?, Never>] = [:]
+    @ObservationIgnored private var pullingUsage = false
+    @ObservationIgnored private var usageCursor: Int?
+    /// Writes to the copy wait while its folder moves (a rekey).
+    @ObservationIgnored private var cacheHeld = false
+    @ObservationIgnored private var heldWrites = false
+    /// Probes sent (tests).
+    @ObservationIgnored package private(set) var probes = 0
 
     /// A test's transport; nil dials SSH with the grant and command as they are then.
     @ObservationIgnored private let makeTransport: (@MainActor () -> any HostTransport)?
@@ -171,6 +210,7 @@ package final class HostConnection {
             folders = state.folders
             lastHeard = state.updated.map(Date.init(timeIntervalSince1970:))
             heardAt = lastHeard
+            usageCursor = state.usageCursor
         }
         // Sends a quit Kore didn't get to: they go once the box is back; their answers aren't
         // waited on (the chat shows them when the box does).
@@ -204,6 +244,8 @@ package final class HostConnection {
     /// The alias's connection, made on first ask; the same one ever after, held or not. A grant
     /// or command given is the next dial's.
     package static func named(_ alias: String, grant: String? = nil, command: String? = nil) -> HostConnection {
+        // An alias whose stores moved to the box's KoreNet id is that id's connection.
+        let alias = current(alias)
         if let connection = open[alias] ?? made[alias] {
             if let grant, grant != connection.grant { connection.grant = grant }
             if let command, command != connection.command { connection.command = command }
@@ -213,6 +255,12 @@ package final class HostConnection {
         open[alias] = connection
         made[alias] = connection
         return connection
+    }
+
+    /// The key a box is kept under now: an alias rekeyed to its KoreNet id gives the id.
+    package static func current(_ key: String) -> String {
+        guard !NodeDirectory.isNodeKey(key), made[key] == nil else { return key }
+        return NodeDirectory.shared.all.values.first { $0.ssh == key && $0.rekeyed }?.id.raw ?? key
     }
 
     /// Kore is quitting: each linked box is told goodbye (its shells end with it, as a Mac's do)
@@ -239,7 +287,10 @@ package final class HostConnection {
     package func retain() {
         if Self.open[alias] == nil { Self.open[alias] = self }
         users += 1
-        if users == 1 { dial() }
+        if users == 1 {
+            activeRouter?.using(self, true)
+            dial()
+        }
     }
 
     /// One closed: the link ends with the last, and nothing of it runs.
@@ -247,8 +298,24 @@ package final class HostConnection {
         users = max(0, users - 1)
         guard users == 0 else { return }
         stop()
+        activeRouter?.using(self, false)
         if Self.open[alias] === self { Self.open[alias] = nil }
     }
+
+    /// Whether a window (or a carry) holds it now.
+    package var inUse: Bool { users > 0 }
+
+    /// The connections held now.
+    package static var held: [HostConnection] { Array(open.values) }
+
+    /// kore-host's path on the box, as the next SSH dial runs it.
+    package var sshCommand: String { command }
+
+    /// The alias SSH reaches the box by.
+    package var sshAlias: String { NodeDirectory.shared.sshAlias(forKey: alias) ?? alias }
+
+    /// What the box is called in words.
+    package var name: String { NodeNames.name(alias) }
 
     package var isOnline: Bool { phase == .online && ready }
 
@@ -327,7 +394,7 @@ package final class HostConnection {
         serial += 1
         let id = "c\(serial).\(tag)"
         let data = payload(id)
-        if case .refused(let why) = phase { return LinkMessage.Result(id: id, ok: false, code: .unknown, message: why.line(alias)) }
+        if case .refused(let why) = phase { return LinkMessage.Result(id: id, ok: false, code: .unknown, message: why.line(name)) }
         if resending {
             resend[id] = data
             if let chatId { kept[id] = (Date(), chatId) }
@@ -339,6 +406,7 @@ package final class HostConnection {
             if ready, let transport {
                 inFlight.insert(id)
                 transport.send(data)
+                armWatchdog()
             } else {
                 outbox.append((id, data))
             }
@@ -493,7 +561,18 @@ package final class HostConnection {
         guard users > 0, transport == nil else { return }
         redial = nil
         if phase != .offline { phase = .connecting }
-        let transport = makeTransport?() ?? SSHTransport(alias: alias, grant: grant, command: command)
+        let useNet = !skipNet
+        skipNet = false
+        let transport: any HostTransport
+        if useNet, let net = activeRouter?.transport(for: self) {
+            transport = net
+            route = .net
+        } else {
+            transport = makeTransport?() ?? SSHTransport(alias: alias, grant: grant, command: command)
+            route = .ssh(alias: sshAlias, grant: grant)
+        }
+        dials += 1
+        transportDial = dials
         self.transport = transport
         ready = false
         do {
@@ -513,8 +592,9 @@ package final class HostConnection {
             }
         }
         let limit = handshakeLimit
+        let sleep = sleep
         pinger = Task { [weak self] in
-            try? await Task.sleep(for: limit)
+            await sleep(limit)
             guard let self, !Task.isCancelled, self.transport === transport, !self.ready else { return }
             self.drop("no answer")
         }
@@ -549,9 +629,16 @@ package final class HostConnection {
     private func teardown() {
         pump?.cancel()
         pinger?.cancel()
+        probing?.cancel()
+        watchdog?.cancel()
         pump = nil
         pinger = nil
+        probing = nil
+        watchdog = nil
         transport = nil
+        route = nil
+        for (_, wait) in usageWaits { wait.resume(returning: nil) }
+        usageWaits = [:]
         let was = ready
         ready = false
         if was { for follower in liveFollowers { follower.linked(false) } }
@@ -562,6 +649,14 @@ package final class HostConnection {
 
     private func dropped(_ reason: String?) {
         guard transport != nil || pump != nil else { return }
+        // KoreNet that never came up: SSH at once (`NetPaths`: tailnet, then SSH). A switch of
+        // route, or a stale route's `replaced`, dials again at once too.
+        let netFailed = route == .net && !ready
+        let now = redialNow || netFailed || switching
+        let quiet = switching
+        redialNow = false
+        switching = false
+        if netFailed { skipNet = true }
         teardown()
         // Sent, never answered: the box may or may not have it. A forwarded call goes again (the box
         // runs it once); anything else says so.
@@ -573,16 +668,22 @@ package final class HostConnection {
         // A sign-in's end won't come over a link that's gone.
         for id in waiting.keys where id.hasSuffix(HostWire.doneSuffix) { finish(id, ok: false, message: "Lost \(alias) before it answered") }
         if case .refused = phase { return }
-        if phase == .online || lastHeard == nil { lastHeard = heardAt ?? lastHeard }
-        phase = .offline
-        lastReason = reason
+        if quiet {
+            phase = .connecting
+        } else {
+            if phase == .online || lastHeard == nil { lastHeard = heardAt ?? lastHeard }
+            phase = .offline
+            lastReason = reason
+            for watcher in Array(linkWatchers.values) { watcher(false) }
+        }
         HostLog.note(alias, "dropped", reason)
-        for watcher in Array(linkWatchers.values) { watcher(false) }
         guard users > 0 else { return }
+        if now { return dial() }
         let wait = backoff[min(attempts, backoff.count - 1)]
         attempts += 1
+        let sleep = sleep
         redial = Task { [weak self] in
-            try? await Task.sleep(for: wait)
+            await sleep(wait)
             guard !Task.isCancelled else { return }
             self?.dial()
         }
@@ -591,6 +692,12 @@ package final class HostConnection {
     private func take(_ data: Data) {
         heard = true
         heardAt = Date()
+        heardCount += 1
+        // Any word from the box answers a probe.
+        if let probing {
+            probing.cancel()
+            self.probing = nil
+        }
         let inbound: HostInbound
         do {
             inbound = try HostWire.decode(data)
@@ -621,6 +728,7 @@ package final class HostConnection {
             transport?.send(HostWire.hello(build: HostLog.build))
         case .welcome(let welcome):
             hostOlder = HostWire.older(welcome)
+            boxMinor = welcome.proto.major == LinkProto.major ? welcome.proto.minor : 0
             providers = welcome.providers
             caps = welcome.caps
             control = welcome.policy.control
@@ -628,6 +736,11 @@ package final class HostConnection {
             switch reason {
             case .auth: refuse(.auth)
             case .version: refuse(.version)
+            // Replaced by this Mac's own newer session (the KoreNet upgrade's): not another
+            // Kore, so it dials again at once.
+            case .replaced where transportDial < ownUp:
+                redialNow = true
+                drop("\(alias) took this Mac's newer link")
             case .replaced: refuse(.replaced)
             // The box's own wait for this Mac's hello ran out (a Mac that slept mid-handshake): it
             // dials again.
@@ -684,6 +797,7 @@ package final class HostConnection {
                 if wantRaw.remove(result.id) != nil { raws[result.id] = raw }
                 if calls.contains(result.id) { answers[result.id] = try? JSONDecoder().decode(ChatCallResult.self, from: raw) }
                 waiting.removeValue(forKey: result.id)?.resume(returning: result)
+                if wantsNet { preferNet() }
             } else if result.id.hasSuffix(HostWire.doneSuffix) {
                 // A sign-in's end, before anyone waits on it.
                 early[result.id] = result
@@ -698,6 +812,10 @@ package final class HostConnection {
             filesHits(raw)
         case .unknown(let type) where type == FilesProgress.type:
             filesProgress(raw)
+        case .unknown(let type) where type == UsageWire.page:
+            if let page = try? JSONDecoder().decode(UsageWire.Page.self, from: raw) { usageWaits.removeValue(forKey: page.id)?.resume(returning: page) }
+        case .unknown(let type) where type == NetNodeWire.type:
+            if let node = NetNodeWire.decode(raw) { activeRouter?.said(node, on: self) }
         default:
             break
         }
@@ -731,14 +849,17 @@ package final class HostConnection {
             inFlight.insert(id)
             transport?.send(payload)
         }
+        armWatchdog()
         // Waits reset only once the link has stayed up a while: one that drops at once backs off.
         pinger?.cancel()
         let stable = stableAfter
+        let sleep = sleep
         pinger = Task { [weak self] in
-            try? await Task.sleep(for: stable)
+            await sleep(stable)
             guard let self, !Task.isCancelled, self.ready else { return }
             self.attempts = 0
         }
+        if boxMinor >= 12, control == .full { pullUsage() }
     }
 
     /// Calls that go again after a drop are kept on disk, so a quit Kore sends them when it's back
@@ -758,6 +879,7 @@ package final class HostConnection {
     }
 
     private func keepOutbox() {
+        guard !cacheHeld else { return heldWrites = true }
         let kept = self.kept.compactMap { id, entry in
             resend[id].map { HostCache.Pending(id: id, payload: $0, at: entry.at, chatId: entry.chatId) }
         }.sorted { $0.id < $1.id }
@@ -766,7 +888,7 @@ package final class HostConnection {
 
     private func refuse(_ reason: Refused) {
         phase = .refused(reason)
-        let why = reason.line(alias)
+        let why = reason.line(name)
         let transport = transport
         teardown()
         transport?.close()
@@ -790,10 +912,19 @@ package final class HostConnection {
     private func saveSoon() {
         guard !saveQueued else { return }
         saveQueued = true
+        let sleep = sleep
         Task { [weak self] in
-            try? await Task.sleep(for: .seconds(1))
+            await sleep(.seconds(1))
             guard let self else { return }
             self.saveQueued = false
+            self.saveNow()
+        }
+    }
+
+    /// The box's state to disk now (held while a rekey moves the folder).
+    private func saveNow() {
+        guard !cacheHeld else { return heldWrites = true }
+        do {
             var state = HostCache.State()
             state.windows = self.windows
             state.chats = self.chats.values.sorted { $0.id < $1.id }
@@ -801,8 +932,180 @@ package final class HostConnection {
             state.providers = self.providers
             state.folders = self.folders
             state.updated = self.heardAt?.timeIntervalSince1970
+            state.usageCursor = self.usageCursor
             self.cache.save(state)
         }
+    }
+
+    // MARK: KoreNet (phase 18 step 5a)
+
+    /// Over SSH with KoreNet now possible (the upgrade came up, the box's peer came online): the
+    /// link moves to KoreNet once nothing is in flight. A failed KoreNet dial falls back to SSH
+    /// at once.
+    package func preferNet() {
+        guard users > 0, ready, case .ssh? = route, activeRouter != nil else { return }
+        guard inFlight.isEmpty, outbox.isEmpty, uploadWaits.isEmpty else {
+            wantsNet = true
+            return
+        }
+        wantsNet = false
+        switching = true
+        HostLog.note(alias, "korenet", "moving the link to KoreNet")
+        drop("moving to KoreNet")
+    }
+
+    /// The box's peer came online on the tailnet (the IPN bus): a link waiting to dial again
+    /// dials now, from the shortest wait; one up over SSH moves to KoreNet.
+    package func peerOnline() {
+        guard users > 0 else { return }
+        if transport == nil {
+            redial?.cancel()
+            redial = nil
+            attempts = 0
+            dial()
+        } else if case .ssh? = route, ready {
+            preferNet()
+        }
+    }
+
+    /// A session of this Mac's own came up beside the link (the upgrade's `attach --proto 2`):
+    /// a `replaced` on the link from before it is that, not another Kore.
+    package func ownRouteCameUp() {
+        dials += 1
+        ownUp = dials
+    }
+
+    /// An on-demand check that the link still works (no periodic pings): the app came to the
+    /// front, the user acted, the Mac woke, a command went unanswered. Waiting to dial again, it
+    /// dials now; up, it asks the box something small and drops the link when nothing at all
+    /// comes back within `probeWait`.
+    package func probe(_ why: String) {
+        guard users > 0 else { return }
+        guard let transport else {
+            if redial != nil {
+                redial?.cancel()
+                redial = nil
+                dial()
+            }
+            return
+        }
+        guard ready, probing == nil else { return }
+        serial += 1
+        probes += 1
+        let heard = heardCount
+        transport.send(HostWire.foldersList(id: "p\(serial)"))
+        let (sleep, wait) = (sleep, probeWait)
+        probing = Task { [weak self] in
+            await sleep(wait)
+            guard let self, !Task.isCancelled, self.transport === transport else { return }
+            self.probing = nil
+            guard self.heardCount == heard else { return }
+            HostLog.note(self.alias, "probe unanswered", why)
+            self.drop("no answer to a check (\(why))")
+        }
+    }
+
+    /// Probes every held link (the Mac woke, the app came to the front).
+    package static func probeAll(_ why: String) {
+        for connection in open.values { connection.probe(why) }
+    }
+
+    /// The Mac's network changed (`NWPathMonitor`): links waiting to dial again dial now; links
+    /// up are checked.
+    package static func networkChanged() {
+        for connection in open.values {
+            if connection.transport == nil { connection.attempts = 0 }
+            connection.probe("network")
+        }
+    }
+
+    /// While commands wait for answers: one that waited `unansweredAfter` probes the link. No
+    /// timer runs while nothing is in flight.
+    private func armWatchdog() {
+        guard watchdog == nil, !inFlight.isEmpty else { return }
+        let watched = inFlight
+        let (sleep, wait) = (sleep, unansweredAfter)
+        watchdog = Task { [weak self] in
+            await sleep(wait)
+            guard let self, !Task.isCancelled else { return }
+            self.watchdog = nil
+            if !self.inFlight.isDisjoint(with: watched) { self.probe("unanswered") }
+            self.armWatchdog()
+        }
+    }
+
+    /// The box's usage ledger since the cursor kept, a page at a time, into forwarded usage.
+    private func pullUsage() {
+        guard !pullingUsage else { return }
+        pullingUsage = true
+        Task { [weak self] in
+            defer { self?.pullingUsage = false }
+            for _ in 0..<100 {
+                guard let self, let page = await self.usagePage(after: self.usageCursor) else { return }
+                for line in page.lines { Self.usageSink(Self.forwarded(line, key: self.alias, title: self.chats[line.chat]?.title)) }
+                self.usageCursor = page.cursor
+                self.saveSoon()
+                guard page.more, !page.lines.isEmpty else { return }
+            }
+        }
+    }
+
+    private func usagePage(after cursor: Int?) async -> UsageWire.Page? {
+        guard ready, let transport else { return nil }
+        serial += 1
+        let id = "u\(serial).\(tag)"
+        transport.send(StreamWire.encode(UsageWire.Since(id: id, cursor: cursor)))
+        let (sleep, wait) = (sleep, handshakeLimit)
+        let timeout = Task { [weak self] in
+            await sleep(wait)
+            guard !Task.isCancelled else { return }
+            self?.usageWaits.removeValue(forKey: id)?.resume(returning: nil)
+        }
+        let page = await withCheckedContinuation { usageWaits[id] = $0 }
+        timeout.cancel()
+        return page
+    }
+
+    // MARK: Rekey (`NodeMigration`)
+
+    /// Its copy's writes wait while the folder moves.
+    package func holdCache() { cacheHeld = true }
+
+    /// The move didn't happen: what waited goes to the copy where it was.
+    package func releaseCache() {
+        cacheHeld = false
+        flushHeld()
+    }
+
+    /// The box's stores moved to `key` (its KoreNet id): it's that key's connection from now on,
+    /// its copy the one there, and what waited is written there.
+    package func rekey(to key: String) {
+        let old = alias
+        guard key != old else { return releaseCache() }
+        if Self.open[old] === self {
+            Self.open[old] = nil
+            Self.open[key] = self
+        }
+        if Self.made[old] === self {
+            Self.made[old] = nil
+            Self.made[key] = self
+        }
+        alias = key
+        cache = HostCache(alias: key, root: cache.root)
+        if case .ssh = route { route = .ssh(alias: sshAlias, grant: grant) }
+        HostLog.note(key, "rekeyed", old)
+        cacheHeld = false
+        // Whatever waited, and the state as it is, go under the new key.
+        heldWrites = false
+        saveNow()
+        keepOutbox()
+    }
+
+    private func flushHeld() {
+        guard heldWrites else { return }
+        heldWrites = false
+        saveNow()
+        keepOutbox()
     }
 
     // MARK: Arsenal on the box (1.6)

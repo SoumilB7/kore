@@ -288,14 +288,14 @@ package struct NodeMigration {
 }
 
 extension FilePlace {
-    func rekeyed(_ old: String, _ new: String) -> FilePlace {
+    package func rekeyed(_ old: String, _ new: String) -> FilePlace {
         if case .box(old, let path) = self { return .box(alias: new, path: path) }
         return self
     }
 }
 
 extension CarryJournal {
-    func rekeyed(_ old: String, _ new: String) -> CarryJournal {
+    package func rekeyed(_ old: String, _ new: String) -> CarryJournal {
         var journal = self
         for index in journal.items.indices { journal.items[index].source = journal.items[index].source.rekeyed(old, new) }
         journal.folder = journal.folder.rekeyed(old, new)
