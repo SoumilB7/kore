@@ -364,7 +364,7 @@ struct OpsTests {
             try Data(text.utf8).write(to: url)
         }
         try write(".claude.json", #"{"mcpServers": {"linear": {"env": {"TOKEN": "s3cret"}}, "files": {}}, "projects": {}}"#)
-        try write(".claude/settings.json", #"{"model": "opus", "enabledPlugins": {"a@m": true, "b@m": false}}"#)
+        try write(".claude/settings.json", #"{"model": "big", "enabledPlugins": {"a@m": true, "b@m": false}}"#)
         try write(".claude/skills/review/SKILL.md", "x")
         try write(".claude/skills/empty/notes.txt", "x")
         try write(".claude/agents/planner.md", "x")
@@ -372,7 +372,7 @@ struct OpsTests {
         let facts = AgentFacts.read(home: home, environment: [:])
         #expect(facts.claudeMCP == ["files", "linear"])
         #expect(facts.claudePlugins == ["a@m"])
-        #expect(facts.claudeModel == "opus")
+        #expect(facts.claudeModel == "big")
         #expect(facts.claudeSkills == ["review"])
         #expect(facts.claudeAgents == ["planner"])
         #expect(facts.codexMCP == ["a.b", "linear"])

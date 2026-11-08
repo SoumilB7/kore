@@ -225,7 +225,7 @@ package final class BoxList {
                 $0.older = found.older
             }
         }
-        await finding?.value
+        _ = await finding?.value
     }
 
     // MARK: The machine

@@ -50,7 +50,7 @@ struct BoxMachineTests {
         #expect(!shallow.contains(" facts"))
         for word in ["install", "rm ", "mv ", "systemctl --user start", "enable", "> ", "tee"] { #expect(!shallow.contains(word)) }
         let deep = BoxMachine.script()
-        #expect(deep.contains("for t in claude codex gh git node rsync"))
+        #expect(deep.contains("for t in \(BoxMachine.compared.joined(separator: " "))"))
         #expect(deep.contains("\"$k\" facts"))
         // Run here, the same script says what this Mac is.
         let parsed = BoxMachine.parse("uname=Darwin arm64\nmacos=15.2\nv.claude=2.1.322\nfacts={\"claudeMCP\":[\"files\"],\"claudeAgents\":[],\"claudePlugins\":[],\"claudeSkills\":[],\"codexMCP\":[]}\n")
@@ -200,7 +200,7 @@ struct BoxMachineTests {
             var facts = AgentFacts()
             facts.claudeMCP = ["files", "linear", "notion", "slack", "web"]
             facts.claudeSkills = ["review"]
-            facts.claudeModel = "opus"
+            facts.claudeModel = "big"
             facts.codexMCP = ["linear"]
             return facts
         }()
@@ -213,7 +213,7 @@ struct BoxMachineTests {
             var facts = AgentFacts()
             facts.claudeMCP = ["files"]
             facts.claudeSkills = ["review"]
-            facts.claudeModel = "opus"
+            facts.claudeModel = "big"
             return facts
         }()
         let parity = BoxParity.compare(

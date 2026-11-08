@@ -172,6 +172,7 @@ package struct BoxSetup: Sendable {
     }
 
     /// Sets the box up (`allow`: and grants this Mac full control), saying each step as it starts.
+    @discardableResult
     package func run(allow: Bool, step: @MainActor @Sendable (String) -> Void) async throws(Failure) -> Done {
         let retry: BoxFix = allow ? .setUp : .update
         await step("Checking \(alias)…")
