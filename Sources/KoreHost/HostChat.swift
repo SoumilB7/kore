@@ -379,8 +379,6 @@ package final class HostChat {
         try? saveRecord()
     }
 
-    /// True when it changed.
-    @discardableResult
     /// A message, or a turn's start or end: the chat's recency moves (`line` nil keeps the last word).
     func noteRecent(at: Date, line: String?) {
         let ms = Int64((at.timeIntervalSince1970 * 1000).rounded())
@@ -412,6 +410,8 @@ package final class HostChat {
         return nil
     }
 
+    /// True when it changed.
+    @discardableResult
     func setDraft(_ text: String) -> Bool {
         guard record.draft != (text.isEmpty ? nil : text) else { return false }
         record.draft = text.isEmpty ? nil : text
