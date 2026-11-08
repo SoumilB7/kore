@@ -55,11 +55,10 @@ struct AccountProcessStopTests {
         let fake = folder.appendingPathComponent("fake-cli.py")
         let script = """
             import signal, subprocess, sys, time
-            code = "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(20)"
-            child = subprocess.Popen([sys.executable, "-c", code], start_new_session=True,
+            # The job says its pid once it ignores SIGTERM (a fixed wait raced a busy Mac's start).
+            code = "import os,signal,sys,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); open(sys.argv[1] + '.tmp','w').write(str(os.getpid())); os.rename(sys.argv[1] + '.tmp', sys.argv[1]); time.sleep(20)"
+            child = subprocess.Popen([sys.executable, "-c", code, sys.argv[1]], start_new_session=True,
                                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(0.1)
-            with open(sys.argv[1], "w") as marker: marker.write(str(child.pid))
             while True: time.sleep(1)
             """
         try script.write(to: fake, atomically: true, encoding: .utf8)
@@ -72,7 +71,7 @@ struct AccountProcessStopTests {
                                   arguments: [fake.path, marker.path], cwd: folder,
                                   environment: ProcessInfo.processInfo.environment)
         defer { io.close(grace: .zero) }
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(30)
         while !FileManager.default.fileExists(atPath: marker.path), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
@@ -102,11 +101,10 @@ struct AccountProcessStopTests {
         let fake = folder.appendingPathComponent("fake-cli.py")
         let script = """
             import signal, subprocess, sys, time
-            code = "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); time.sleep(20)"
-            child = subprocess.Popen([sys.executable, "-c", code], start_new_session=True,
+            # The job says its pid once it ignores SIGTERM (a fixed wait raced a busy Mac's start).
+            code = "import os,signal,sys,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); open(sys.argv[1] + '.tmp','w').write(str(os.getpid())); os.rename(sys.argv[1] + '.tmp', sys.argv[1]); time.sleep(20)"
+            child = subprocess.Popen([sys.executable, "-c", code, sys.argv[1]], start_new_session=True,
                                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            time.sleep(0.1)
-            with open(sys.argv[1], "w") as marker: marker.write(str(child.pid))
             while True: time.sleep(1)
             """
         try script.write(to: fake, atomically: true, encoding: .utf8)
@@ -118,7 +116,7 @@ struct AccountProcessStopTests {
         let io = try StdioProcess(executable: URL(fileURLWithPath: "/usr/bin/python3"),
                                   arguments: [fake.path, marker.path], cwd: folder,
                                   environment: ProcessInfo.processInfo.environment)
-        let deadline = ContinuousClock.now + .seconds(3)
+        let deadline = ContinuousClock.now + .seconds(30)
         while !FileManager.default.fileExists(atPath: marker.path), ContinuousClock.now < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
@@ -127,7 +125,7 @@ struct AccountProcessStopTests {
         defer { child.signal(SIGKILL) }
         #expect(child.alive)
         io.close(grace: .milliseconds(200))
-        let gone = ContinuousClock.now + .seconds(4)
+        let gone = ContinuousClock.now + .seconds(30)
         while child.alive, ContinuousClock.now < gone { try await Task.sleep(for: .milliseconds(50)) }
         #expect(!io.isRunning)
         #expect(!child.alive)
