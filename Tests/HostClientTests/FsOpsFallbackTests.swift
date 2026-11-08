@@ -197,3 +197,28 @@ struct FsOpsFallbackTests {
         #expect(!FileManager.default.fileExists(atPath: work + "/src"))
     }
 }
+
+/// A sync's rsync never hangs for good: `--timeout` on the Mac's side, and on the box's through
+/// `--rsync-path` (openrsync doesn't pass its own on). Only the argv is looked at.
+@Suite("sync rsync timeouts")
+@MainActor
+struct SyncRsyncTimeoutTests {
+    let box = SyncBox.via("/usr/bin/ssh", alias: "mybox", base: nil)
+
+    @Test func aLowPriorityRoundTimesOutOnBothEnds() {
+        let argv = HostSync.rsyncArguments(box, low: true)
+        #expect(argv.contains("--timeout=60"))
+        #expect(argv.contains("--rsync-path=nice -n 10 rsync --timeout=120"))
+    }
+
+    @Test func aRoundAtFullSpeedTimesOutOnBothEnds() {
+        let argv = HostSync.rsyncArguments(box, low: false)
+        #expect(argv.contains("--timeout=60"))
+        #expect(argv.contains("--rsync-path=rsync --timeout=120"))
+    }
+
+    @Test func otherRsyncsKeepTheirOptions() {
+        #expect(!box.rsyncOptions(false).contains { $0.hasPrefix("--rsync-path") })
+        #expect(box.rsyncOptions(true).last == "--rsync-path=nice -n 10 rsync")
+    }
+}

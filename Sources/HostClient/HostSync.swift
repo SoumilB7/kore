@@ -139,8 +139,11 @@ package struct SyncBox: Sendable {
     /// rsync's name for a path on the box: the alias, then the path quoted for the box's shell.
     func spec(_ path: String) -> String { host + ":" + ShellQuote.single(path) }
 
-    func rsyncOptions(_ low: Bool) -> [String] {
-        ["-e", (ssh + ["--"]).joined(separator: " ")] + (low ? ["--rsync-path=nice -n 10 rsync"] : [])
+    /// `remoteTimeout`: the box's rsync gives up after that many seconds without I/O too (the
+    /// Mac's openrsync never passes its own `--timeout` on to the box's).
+    func rsyncOptions(_ low: Bool, remoteTimeout: Int? = nil) -> [String] {
+        let path = (low ? "nice -n 10 " : "") + "rsync" + (remoteTimeout.map { " --timeout=\($0)" } ?? "")
+        return ["-e", (ssh + ["--"]).joined(separator: " ")] + (low || remoteTimeout != nil ? ["--rsync-path=" + path] : [])
     }
 
     /// Runs `script` under sh on the box, `args` as `$1`…, `input` on its stdin.
@@ -702,7 +705,7 @@ package final class HostSync {
             try? FileManager.default.removeItem(at: plan.pullList)
         }
         let mac = tree.root.path + "/", remote = box.spec(pair.box + "/")
-        let rsync = ["-a"] + box.rsyncOptions(low)
+        let rsync = Self.rsyncArguments(box, low: low)
         func ok(_ output: SyncProcess.Output) -> Bool {
             // 23/24: a file went between the listing and the copy; the next round sees it.
             guard [0, 23, 24].contains(output.status) else {
@@ -758,6 +761,16 @@ package final class HostSync {
         }
         return true
     }
+
+    /// A round's rsync options: a stalled link ends on both sides (`--timeout` here, and on the
+    /// box through `--rsync-path`) rather than hanging the sync for good.
+    static func rsyncArguments(_ box: SyncBox, low: Bool) -> [String] {
+        ["-a", "--timeout=\(rsyncTimeout)"] + box.rsyncOptions(low, remoteTimeout: boxRsyncTimeout)
+    }
+
+    /// Seconds without I/O before the Mac's rsync gives up, and the box's.
+    static let rsyncTimeout = 60
+    static let boxRsyncTimeout = 120
 
     /// Deletes files in the box's copy (paths inside `folder`): a path with a link among its
     /// folders is left alone, a folder is never deleted, and folders left empty go. A 1.12 box
