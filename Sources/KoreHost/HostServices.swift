@@ -46,7 +46,7 @@ package final class HostServices: ChatServices {
 
     /// Told with the `kore_app` server, after the box's paragraph.
     package static let toolInstructions = """
-        Kore gives you `kore_app` tools to act on Kore on the user's Mac: kore_new_chat opens a new tab with a claude \
+        Kore gives you `kore_app` tools (and a `kore` command on PATH) to act on Kore on the user's Mac: kore_new_chat opens a new tab with a claude \
         or codex chat (on this machine, or with place mac on the Mac), kore_send sends a message to another chat, \
         kore_list_chats and kore_read_chat read chats, kore_set_model changes this chat's model, and more. \
         Ordinary coding needs none of them. Use them when the user asks for something in Kore, such as another tab \

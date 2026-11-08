@@ -623,7 +623,9 @@ package final class AgentChannel {
     }
 
     /// `chat.ask`: a question to another Act unlimited chat, by its id, sent once it's idle
-    /// (`ArsenalAsks`). Answers with the ask's id at once; the answer comes to `chat.wait`.
+    /// (`ArsenalAsks`). Answers with the ask's id at once; the answer comes to `chat.wait`. A box's
+    /// chat asks a Mac's as a Mac's asks a box's (the owner, 2026-11-19): a message, as `chat.send`
+    /// sends one; only files stay behind `arsenalBoxReachesMac`.
     private func askChat(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
         guard let asker = callerChat(client) else {
             fail(client, id, .noWindow, "Only a chat in Kore asks another.")
@@ -644,10 +646,6 @@ package final class AgentChannel {
         let name = AgentReads.title(target.title)
         if target === asker {
             refuseLine(asker, client, id, "asked", "a chat doesn't ask itself")
-            return targetId
-        }
-        if asker.boxPlace != nil, target.boxPlace == nil, !ArsenalAsks.boxReachesMac {
-            refuseLine(asker, client, id, "asked", "a box can't reach into the Mac")
             return targetId
         }
         guard target.noFreer(than: asker) else {

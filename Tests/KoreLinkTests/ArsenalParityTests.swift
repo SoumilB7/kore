@@ -299,7 +299,8 @@ extension AgentChannelTests {
         }
 
         /// What differs on purpose: a box chat opens chats on its box or the Mac (`place`), and reaches
-        /// up into the Mac's chats and files only when the owner turned that on.
+        /// up into the Mac's files only when the owner turned that on. Asks go both ways alike
+        /// (the owner, 2026-11-19).
         @Test func whatABoxChatDoesDifferently() async throws {
             let rig = try Rig("claude")
             defer { rig.finish() }
@@ -310,8 +311,23 @@ extension AgentChannelTests {
             func call(_ tool: String, _ args: [String: JSONValue]) async -> BoxToolResult {
                 await AgentBoxCalls.answer(rig.connection, BoxToolCall(id: "d", chatId: "bc1", tool: tool, args: .object(args)))
             }
+            // Box to Mac and Mac to box: the same answer, the same rules after it.
+            AgentGrants.set(.drive, chat: rig.boxTarget.id.uuidString)
             let asked = await call("kore_ask", ["chat": .string(AgentReads.short(rig.macTarget.id.uuidString)), "text": .string("q")])
-            #expect(!asked.ok && asked.text == "Not asked: a box can't reach into the Mac")
+            #expect(asked.ok && asked.text.contains("Asked"), "\(asked.text)")
+            let channel = try #require(AgentChannel.current)
+            let line = await channel.boxCall(chat: rig.macCaller.id.uuidString, "chat.ask", ["chat": AgentReads.short(rig.boxTarget.id.uuidString), "text": "q"])
+            let back = AgentTools.answer((try JSONSerialization.jsonObject(with: line)) as? [String: Any] ?? [:], box: false)
+            #expect(back.ok && back.text.contains("Asked"), "\(back.text)")
+            for said in [asked.text, back.text] {
+                let data = try #require((try JSONSerialization.jsonObject(with: Data(said.utf8))) as? [String: Any])
+                #expect(Set(data.keys) == ["ask", "chat", "message"])
+            }
+            // The target chat isn't Act unlimited: refused alike.
+            AgentGrants.set(.watch, chat: rig.macTarget.id.uuidString)
+            let notDrive = await call("kore_ask", ["chat": .string(AgentReads.short(rig.macTarget.id.uuidString)), "text": .string("q")])
+            #expect(!notDrive.ok && notDrive.text.hasPrefix("Not asked:") && notDrive.text.hasSuffix("isn't Act unlimited"), "\(notDrive.text)")
+            // Files from the Mac stay behind the owner's switch.
             let fetched = await call("kore_fetch", ["path": .string("mac:" + rig.mac.folder.appendingPathComponent("notes.md").path)])
             #expect(!fetched.ok && fetched.text == "Not fetched: a box can't reach into the Mac")
             // Into the other CLI: Import carries a history file on this Mac, so a box's chat forks into its own.

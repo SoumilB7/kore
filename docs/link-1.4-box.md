@@ -303,6 +303,16 @@ and never sees the new messages.
   chat's, counted with everything else it does: 30 commands a minute, 10 messages a minute, 10 new
   chats an hour and 6 of them open, wherever they opened; 4 calls in flight at once, as a Mac
   chat's process holds 4 connections.
+- Chat to chat goes both ways alike: a box chat's `kore_ask` reaches a Mac chat as a Mac chat's
+  reaches a box chat's (both at Act unlimited, by id, one hop, 20 an hour). Only files stay behind
+  the owner's switch: `kore_fetch` from a box into the Mac's folders needs `arsenalBoxReachesMac`.
+- `kore` in a box chat's shell: kore-host keeps a link named `kore` to itself in
+  `$XDG_RUNTIME_DIR/kore-host/bin/` and puts that folder at the front of each chat CLI's PATH
+  (`kore-host kore …` is the same). It runs the Mac `kore`'s chat commands (`ls`, `show`, `log`,
+  `pending`, `history`, Own's and Drive's, `whoami`, `caps`, `mcp`), each one tool call on
+  `agent.sock` as `kore-host mcp` makes it, with the same tiers, words and exit codes (5 refused,
+  2 usage, 1 failed). `kore new --place mac` opens on the Mac. Not on a box: `kore log -f` (the
+  tools are one call each), and the Mac's own `kore`, `kore <folder>`, `setup`, `update`, `logs`.
 
 
 ## Link 1.7: a box's files

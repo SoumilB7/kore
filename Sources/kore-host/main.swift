@@ -25,6 +25,7 @@ let usage = """
            kore-host status
            kore-host attach --as <name> [--proto 2]
            kore-host mcp
+           kore-host kore <command>     (Kore's chat commands for a box chat: kore help)
            kore-host install-service
            kore-host start
            kore-host uninstall [--purge]
@@ -44,6 +45,8 @@ func fail(_ message: String, code: Int32 = 2) -> Never {
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
+// `kore` in a box chat's shell: the link kore-host puts at the front of its PATH.
+if URL(fileURLWithPath: CommandLine.arguments.first ?? "").lastPathComponent == "kore" { exit(HostCommand.run(arguments)) }
 let paths = HostPaths()
 let grants = GrantStore(paths.grants)
 let home = HostPaths.home()
@@ -333,6 +336,9 @@ case "attach":
         keep.append(attach)
     }
     dispatchMain()
+case "kore":
+    // The Mac's `kore` commands for a box chat (`kore` on its PATH is this).
+    exit(HostCommand.run(Array(arguments.dropFirst())))
 case "mcp":
     // A box chat's `kore_app` server, which kore-host starts its CLI with while Arsenal is on.
     exit(HostToolServer.run())

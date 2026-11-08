@@ -30,8 +30,27 @@ extension HostDaemon {
         guard let hc = chats.first(where: { $0.chat === chat }) else { return nil }
         hc.serverGiven = true
         return KoreReach.Server(
-            command: mcpCommand, arguments: ["mcp"], pathFolder: nil, instructions: HostServices.toolInstructions,
+            command: mcpCommand, arguments: ["mcp"], pathFolder: koreFolder(), instructions: HostServices.toolInstructions,
             variables: ["KORE_AGENT_SOCKET": paths.agentSocket.path, KoreReach.chatVariable: hc.id], approved: true)
+    }
+
+    /// `kore` for a box chat's shell, as a Mac chat has it (`HostCommand`): a folder in the runtime
+    /// one holding a link named `kore` to this binary, for the front of the CLI's PATH. Made again
+    /// when the binary moved; nil when it can't be made.
+    func koreFolder() -> String? {
+        let folder = paths.runtime.appendingPathComponent("bin", isDirectory: true)
+        let link = folder.appendingPathComponent("kore")
+        let fm = FileManager.default
+        if (try? fm.destinationOfSymbolicLink(atPath: link.path)) == mcpCommand.path { return folder.path }
+        do {
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+            if (try? fm.attributesOfItem(atPath: link.path)) != nil { try fm.removeItem(at: link) }
+            try fm.createSymbolicLink(atPath: link.path, withDestinationPath: mcpCommand.path)
+            return folder.path
+        } catch {
+            HostJournal.note("kore link failed", ["reason": "\(error)"])
+            return nil
+        }
     }
 
     /// The chat's tier on the Mac, said with a message, a follow or a change there: kept, for its

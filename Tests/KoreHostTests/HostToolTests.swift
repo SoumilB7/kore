@@ -96,7 +96,7 @@ struct HostToolTests {
         let first = made.backends[0].options
         let server = try #require(first.agentServer)
         #expect(first.agentPass == hc.chat?.agentPass && first.agentPass != nil)
-        #expect(server.command == rig.host.mcpCommand && server.arguments == ["mcp"] && server.pathFolder == nil)
+        #expect(server.command == rig.host.mcpCommand && server.arguments == ["mcp"] && server.pathFolder == rig.paths.runtime.appendingPathComponent("bin").path)
         #expect(server.variables[KoreReach.chatVariable] == hc.id && server.variables["KORE_AGENT_SOCKET"] == rig.paths.agentSocket.path)
         #expect(!server.variables.values.contains(first.agentPass ?? "-"))
         #expect(KoreReach.claudeLaunchArguments(instructions: nil, server: server).contains { $0.contains("\"args\":[\"mcp\"]") })
