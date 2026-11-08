@@ -446,7 +446,7 @@ struct HostUpgradeTests {
         let again = try rig.dialAttach(thief, grant: grant, enroll: .init(name: "x", kind: .mac, identityKey: thief.key.publicKey))
         try await again.until { again.closed != nil }
         let stolen = try rig.store.book.record(thief.id)
-        #expect(again.closed == "bye grant" && stolen == nil)
+        #expect(again.closed == "bye grant" && stolen == nil, "\(again.closed ?? "-"), stolen \(stolen != nil)")
         // A wrong secret too.
         var wrong = grant
         wrong.name = "laptop"
