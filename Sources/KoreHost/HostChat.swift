@@ -121,6 +121,8 @@ package final class HostChat {
         self.dir = dir
         folderURL = URL(fileURLWithPath: record.folder)
         stream = StreamLog(url: dir.appendingPathComponent("events.jsonl"))
+        stream.session = { [weak self] in self?.record.session }
+        stream.context = { [weak self] in self?.chat?.context.usage }
     }
 
     package var id: String { record.id }

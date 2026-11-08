@@ -44,6 +44,13 @@ package final class StreamLog {
     private var messageIds: Set<String> = []
     /// New items to send, or a log started again (`reset`).
     package var flushed: ((_ items: [StreamItem], _ reset: Bool) -> Void)?
+    /// The chat's session as the box keeps it: every log says it, for a client's wheel and
+    /// compaction (a resumed Claude session's CLI never says its id again).
+    package var session: @MainActor () -> String? = { nil }
+    /// The context's latest reading: a log started again carries it, window and all.
+    package var context: @MainActor () -> ContextUsage? = { nil }
+    /// The session the log says (its last `sessionIdentified`).
+    private var said: String?
 
     /// Past this, the next resumed history starts the log again.
     package static let cap = 16 * 1024 * 1024
@@ -151,6 +158,7 @@ package final class StreamLog {
                 if s % Self.indexEvery == 0 { offsets.append((s, offset)) }
             }
             if let e = peek.e, e.type == "userMessage" || e.type == "messageQueued", let message = e.id { messageIds.insert(message) }
+            if let e = peek.e, e.type == "sessionIdentified", let session = e.id { said = session }
             if peek.open != nil { inHistory = true }
             if peek.close == true { inHistory = false }
             if !inHistory, let type = peek.e?.type {
@@ -304,9 +312,32 @@ package final class StreamLog {
         pending = []
         var items: [StreamItem] = []
         for one in waiting { items += StreamItem.items(one.gathered, seq: &seq, by: one.by) }
+        items += identified(items)
         write(items)
         flushed?(items, false)
         if bytes > rotateAt, case .turnFinished? = waiting.last?.event { rotate() }
+    }
+
+    /// A client follows: a log kept from before it said the session gets it now. (An empty log
+    /// waits for the chat's history, which goes first.)
+    package func identify() {
+        load()
+        flush()
+        guard !isEmpty else { return }
+        let items = identified([])
+        guard !items.isEmpty else { return }
+        write(items)
+        flushed?(items, false)
+    }
+
+    /// The session after `items` when the log doesn't say it yet (or says another). Items that
+    /// say one are the CLI's own word: the chat's record takes it after them.
+    private func identified(_ items: [StreamItem]) -> [StreamItem] {
+        var says = false
+        for item in items { if case .sessionIdentified(let id)? = item.e { (said, says) = (id, true) } }
+        guard !says, let session = session(), session != said else { return [] }
+        said = session
+        return StreamItem.items(.sessionIdentified(session), seq: &seq)
     }
 
     /// The log again from its history so far, streamed pieces merged: clients take it as a rebuild.
@@ -342,8 +373,14 @@ package final class StreamLog {
         handle = nil
         id = UUID().uuidString.lowercased()
         first = seq + 1
+        said = nil
         var items: [StreamItem] = []
         for event in events { items += StreamItem.items(event, seq: &seq) }
+        // What the old log said of the context and the session goes on in the new one.
+        if !events.isEmpty {
+            if let usage = context(), usage.window != nil { items += StreamItem.items(.contextUsage(usage), seq: &seq) }
+            items += identified(items)
+        }
         noteMessages(items)
         var data = StreamWire.encode(Header(log: id)) + Data([0x0A])
         for item in items { data += StreamWire.encode(item) + Data([0x0A]) }
@@ -445,6 +482,7 @@ extension HostDaemon {
         followersChanged(hc)
         // Its CLI starts with the tier the Mac has for it (1.6), not again at its first message.
         if fresh, !hc.cliRunning { arsenalSaid(request.arsenal, hc) }
+        hc.stream.identify()
         client.catchUpStarts(hc.id, log: hc.stream.id)
         hc.chat?.automatic = false
         Task { [weak self, weak client] in

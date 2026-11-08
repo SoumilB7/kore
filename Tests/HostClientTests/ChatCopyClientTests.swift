@@ -95,6 +95,25 @@ struct ChatCopyClientTests {
         print("mac → box copy: rsync sent \(made.cost.rsyncSent) B, link \(made.cost.linkBytes) B")
     }
 
+    /// A chat copied to a box has its wheel in the box window here: its CLI resumes the copy and
+    /// never says the session, so the box's log says it, and the fill and window follow.
+    @Test func aChatCopiedToABoxShowsItsWheelHere() async throws {
+        let (b, m) = (try await box(), try mac())
+        defer { b.rig.finish(); m.finish() }
+        b.rig.silentResume = true
+        let folder = try m.folder("app"), real = SessionFiles.real(folder)
+        try write(Self.rows(real), m.projects(folder).appendingPathComponent("\(Self.session).jsonl"))
+        let new = SessionCopy.newId()
+        let source = CopySource(end: .mac(folder), id: Self.session, provider: "claude", title: "Repos")
+        let made = try await m.copies.copy(source, to: b.end, as: new, line: "Copied from “Repos” · app").get()
+        let chatId = try #require(made.chatId)
+        let (chat, _) = b.rig.chat(b.connection, id: chatId)
+        await chat.startOnce()
+        #expect(await until { chat.status.sessionId == new && chat.context.usage?.window == 200_000 && chat.context.fraction == 0.15 })
+        #expect(chat.canCompact)
+        chat.close()
+    }
+
     @Test func aBoxChatCopiedHereLandsUnderANewIdAndTheBoxKeepsRunningIt() async throws {
         let (b, m) = (try await box(), try mac())
         defer { b.rig.finish(); m.finish() }
