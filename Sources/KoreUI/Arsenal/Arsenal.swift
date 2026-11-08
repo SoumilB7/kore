@@ -15,7 +15,7 @@ package enum ArsenalTier: String, CaseIterable, Sendable {
         case .full: "Full"
         }
     }
-    var built: Bool { self != .full }
+    package var built: Bool { self != .full }
 
     /// What it lets the chat's agent do, in a line.
     var reach: String {
@@ -106,6 +106,23 @@ package final class Arsenal {
         UILog.event("arsenal", ["chat": chat.id.uuidString, "tier": tier.rawValue])
         // Drive opens chats on a model the CLI lists: Codex's, when no chat of it has said them yet.
         if tier == .drive { ArsenalModels.fetch("codex", folder: chat.folder) }
+    }
+
+    /// A tier from the link, with full control (`z-docs/link-protocol.md`, 1.3): the tiers popup's
+    /// path, nil being its Off. The first use turns the switch on and the chat says so, as the
+    /// right-click does. False: a tier not built, or a chat that can't have it now.
+    package func linkSet(_ tier: ArsenalTier?, _ chat: Chat) -> Bool {
+        guard let tier else {
+            turnOff(chat)
+            return true
+        }
+        guard tier.built, Self.unavailable(chat) == nil else { return false }
+        if !allowed {
+            setAllowed(true)
+            chat.note("Chats can use Arsenal now")
+        }
+        choose(tier, chat)
+        return chat.arsenal == tier
     }
 
     package func turnOff(_ chat: Chat) {

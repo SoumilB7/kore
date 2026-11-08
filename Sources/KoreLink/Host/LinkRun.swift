@@ -27,6 +27,8 @@ package final class LinkRun {
     /// The card's "Allow with full control": link 1.2's commands and state, for this run only.
     package let fullControl: Bool
     package var control: LinkControlLevel { fullControl ? .full : .standard }
+    /// The companion as the log names it: an opaque id of its code requirement, never its name.
+    package var companionID: String { StableID.of(key, prefix: "c_") }
     let requirement: SecRequirement
     /// The requirement's text: the key a Deny is remembered by.
     let key: String

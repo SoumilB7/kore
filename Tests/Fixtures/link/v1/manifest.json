@@ -230,11 +230,27 @@
     {
       "file": "delta.account.json",
       "type": "delta"
+    },
+    {
+      "file": "cmd.setArsenal.json",
+      "type": "cmd"
+    },
+    {
+      "file": "cmd.arsenal.stopAll.json",
+      "type": "cmd"
+    },
+    {
+      "file": "result.arsenal.json",
+      "type": "result"
+    },
+    {
+      "file": "delta.arsenal.json",
+      "type": "delta"
     }
   ],
   "proto": {
     "major": 1,
-    "minor": 2
+    "minor": 3
   },
   "ringProof": {
     "file": "ring-proof.json"

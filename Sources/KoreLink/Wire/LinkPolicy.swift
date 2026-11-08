@@ -42,10 +42,12 @@ package enum LinkPolicy {
         /// entries in its "/" menu.
         package var commands: Set<String>
         package var koreEntries: Set<String>
+        /// Why the chat can't have Arsenal now (Codex outside Full access); nil when it can.
+        package var arsenalUnavailable: String?
 
         package init(
             level: ModeLevel, planOn: Bool = false, modes: [String: ModeLevel], cards: [String: Card] = [:], commands: Set<String> = [],
-            koreEntries: Set<String> = []
+            koreEntries: Set<String> = [], arsenalUnavailable: String? = nil
         ) {
             self.level = level
             self.planOn = planOn
@@ -53,6 +55,7 @@ package enum LinkPolicy {
             self.cards = cards
             self.commands = commands
             self.koreEntries = koreEntries
+            self.arsenalUnavailable = arsenalUnavailable
         }
 
         /// What the agent may do now: a plan switch that's on means planning, whatever the mode.
@@ -68,6 +71,9 @@ package enum LinkPolicy {
     package static let maxTitle = 200
     /// The longest code a sign-in takes back from its manual page.
     package static let maxSignInInput = 4096
+    /// Arsenal's built tiers, lowest first: what `chat.setArsenal` takes besides "off". Full isn't
+    /// built, so it is refused.
+    package static let arsenalTiers = ["watch", "own", "drive"]
 
     package static func check(_ command: LinkCommand, _ chat: ChatFacts?, control: LinkControlLevel = .standard) -> Verdict {
         switch command {
@@ -122,7 +128,9 @@ package enum LinkPolicy {
 
     /// A 1.2 command: only with full control granted on the Mac this run. Full control widens
     /// what the link may arrange (chats, tabs, boards, windows, history), never how much an agent
-    /// may do without asking: raising a mode, Always allow and `!` lines stay refused.
+    /// may do without asking: raising a mode, Always allow and `!` lines stay refused. The one
+    /// exception, the owner's (1.3): Arsenal, which full control may turn on and raise to a built
+    /// tier, as the Mac's tiers popup does.
     static func check(_ kind: ControlKind, _ args: ControlArgs, _ chat: ChatFacts?, control: LinkControlLevel) -> Verdict {
         guard control == .full else { return .deny(.deniedControl, "Full control isn't granted in Kore for this run.") }
         if kind.onChat, chat == nil { return .deny(.goneChat, "That chat isn't open in Kore any more.") }
@@ -152,6 +160,11 @@ package enum LinkPolicy {
             guard args.provider != nil else { return .deny(.invalid, "Name the CLI.") }
         case .accountPrivacy:
             guard args.on != nil else { return .deny(.invalid, "Say on or off.") }
+        case .chatSetArsenal:
+            let tier = args.tier ?? ""
+            if tier == "full" { return .deny(.invalid, "Arsenal's Full tier isn't built yet.") }
+            guard tier == "off" || arsenalTiers.contains(tier) else { return .deny(.invalid, "Arsenal has no such tier.") }
+            if tier != "off", let why = chat?.arsenalUnavailable { return .deny(.busy, why) }
         default: break
         }
         return .allow

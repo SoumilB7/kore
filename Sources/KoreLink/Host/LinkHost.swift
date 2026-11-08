@@ -431,12 +431,30 @@ package final class LinkHost {
                     : ["type": kind.rawValue, "chat": args.chatId, "code": outcome.code?.rawValue ?? "ok"])
             let chat = args.chatId.flatMap { LinkSnapshot.chatsByID()[$0] } ?? outcome.newChat
             if outcome.ok { self.mark.record(Self.describe(.control(kind, args), chat: chat)) }
+            if kind == .chatSetArsenal || kind == .arsenalStopAll { self.arsenalChanged(kind, args, outcome) }
             self.send(
                 .result(
                     .init(
                         id: id, ok: outcome.ok, code: outcome.code, message: outcome.message, chatId: outcome.newChat?.id.uuidString,
                         windowId: outcome.newWindowId, tabId: outcome.newTabId)))
             self.tick()
+        }
+    }
+
+    /// Arsenal changed from the link: an audit line of ids only, and the chats it touched go out on
+    /// the next tick, as a chat's own events do.
+    private func arsenalChanged(_ kind: ControlKind, _ args: ControlArgs, _ outcome: LinkActions.Outcome) {
+        UILog.event(
+            "link-arsenal",
+            [
+                "chat": kind == .arsenalStopAll ? "all" : String((args.chatId ?? "").prefix(8)),
+                "tier": kind == .arsenalStopAll ? "off" : args.tier, "by": run.companionID, "code": outcome.code?.rawValue ?? "ok",
+            ])
+        guard outcome.ok else { return }
+        if kind == .arsenalStopAll {
+            dirtyChats.formUnion(LinkSnapshot.chatsByID().keys)
+        } else if let id = args.chatId {
+            dirtyChats.insert(id)
         }
     }
 
@@ -505,6 +523,8 @@ package final class LinkHost {
         case .accountSignOut: "Signed out"
         case .accountRefresh: "Read the account"
         case .accountPrivacy: "Changed email privacy"
+        case .chatSetArsenal: "Changed Arsenal"
+        case .arsenalStopAll: "Stopped agent control"
         }
     }
 

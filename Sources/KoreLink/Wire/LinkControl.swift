@@ -53,6 +53,9 @@ package enum ControlKind: String, Sendable, CaseIterable {
     case accountSignOut = "account.signOut"
     case accountRefresh = "account.refresh"
     case accountPrivacy = "account.privacy"
+    // 1.3: Arsenal, a chat's agent-control tier, and Stop agent control.
+    case chatSetArsenal = "chat.setArsenal"
+    case arsenalStopAll = "arsenal.stopAll"
 
     /// It acts on a CLI's account.
     package var onAccount: Bool { rawValue.hasPrefix("account.") }
@@ -61,7 +64,7 @@ package enum ControlKind: String, Sendable, CaseIterable {
     package var onChat: Bool {
         switch self {
         case .chatRename, .chatClose, .chatSelect, .chatSetModel, .chatSetEffort, .chatSetFast, .chatCompact, .chatSetAutoCompact,
-            .chatFork, .chatRetry, .chatContinue, .chatSendAtReset, .chatCancelContinue, .chatSetDraft:
+            .chatFork, .chatRetry, .chatContinue, .chatSendAtReset, .chatCancelContinue, .chatSetDraft, .chatSetArsenal:
             true
         default: false
         }
@@ -124,6 +127,8 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     package var login: String?
     package var serial: Int?
     package var input: String?
+    /// `chat.setArsenal` (1.3): a built tier's id, or "off".
+    package var tier: String?
 
     package init(
         chatId: String? = nil, windowId: String? = nil, title: String? = nil, force: Bool? = nil, modelId: String? = nil,
@@ -133,7 +138,7 @@ package struct ControlArgs: Codable, Sendable, Equatable {
         groupId: String? = nil, name: String? = nil, color: String? = nil, folded: Bool? = nil, boardTabId: String? = nil,
         sectionId: String? = nil, toTab: Bool? = nil, swatch: String? = nil, mergeInto: String? = nil, remove: Bool? = nil,
         recentId: String? = nil, sessionId: String? = nil, mode: String? = nil, method: String? = nil, aim: String? = nil,
-        login: String? = nil, serial: Int? = nil, input: String? = nil
+        login: String? = nil, serial: Int? = nil, input: String? = nil, tier: String? = nil
     ) {
         self.chatId = chatId
         self.windowId = windowId
@@ -173,6 +178,7 @@ package struct ControlArgs: Codable, Sendable, Equatable {
         self.login = login
         self.serial = serial
         self.input = input
+        self.tier = tier
     }
 }
 
@@ -248,7 +254,7 @@ package struct LinkGroup: Codable, Sendable, Equatable {
 }
 
 /// The Mac's side: recent folders by opaque id (never a path the link could name), whether a
-/// closed window can come back, and Stay awake.
+/// closed window can come back, Stay awake, and (1.3) Arsenal's built tiers in order.
 package struct MacState: Codable, Sendable, Equatable {
     package struct Recent: Codable, Sendable, Equatable {
         package var id: String
@@ -274,10 +280,12 @@ package struct MacState: Codable, Sendable, Equatable {
     package var recents: [Recent]
     package var canReopenWindow: Bool
     package var stayAwake: StayAwake?
-    package init(recents: [Recent], canReopenWindow: Bool, stayAwake: StayAwake?) {
+    package var arsenalTiers: [String]?
+    package init(recents: [Recent], canReopenWindow: Bool, stayAwake: StayAwake?, arsenalTiers: [String]? = nil) {
         self.recents = recents
         self.canReopenWindow = canReopenWindow
         self.stayAwake = stayAwake
+        self.arsenalTiers = arsenalTiers
     }
 }
 

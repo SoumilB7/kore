@@ -98,7 +98,8 @@ enum LinkSnapshot {
         }
         return MacState(
             recents: Array(recents), canReopenWindow: AppModel.shared?.linkCanReopenWindow ?? false,
-            stayAwake: LinkAwake.state.map { MacState.StayAwake(mode: $0.mode, on: $0.on) })
+            stayAwake: LinkAwake.state.map { MacState.StayAwake(mode: $0.mode, on: $0.on) },
+            arsenalTiers: ArsenalTier.allCases.filter(\.built).map(\.rawValue))
     }
 
     // MARK: Reads (full control)
@@ -215,7 +216,8 @@ enum LinkSnapshot {
         let all = chat.controls.linkCommands
         return LinkPolicy.ChatFacts(
             level: current, planOn: chat.provider.planToggle != nil && chat.controls.planMode, modes: modes, cards: waiting,
-            commands: Set(all.filter { $0.kind != .kore }.map(\.name)), koreEntries: Set(all.filter { $0.kind == .kore }.map(\.name)))
+            commands: Set(all.filter { $0.kind != .kore }.map(\.name)), koreEntries: Set(all.filter { $0.kind == .kore }.map(\.name)),
+            arsenalUnavailable: Arsenal.unavailable(chat))
     }
 
     /// The most commands, and the longest description, a chat's meta carries.
@@ -233,7 +235,7 @@ enum LinkSnapshot {
 
     static func meta(_ chat: Chat) -> ChatMeta { meta(chat, full: false) }
 
-    /// `full`: with the run's full control, the chat's controls, rescue and wider `can` too.
+    /// `full`: with the run's full control, the chat's controls, rescue, wider `can` and Arsenal too.
     static func meta(_ chat: Chat, full: Bool) -> ChatMeta {
         var made = baseMeta(chat)
         guard full else { return made }
@@ -250,6 +252,8 @@ enum LinkSnapshot {
         made.can.rename = true
         made.can.close = true
         made.can.sendAtReset = chat.linkCanSendAtReset
+        made.arsenal = chat.arsenal?.rawValue ?? "off"
+        made.arsenalUnavailable = Arsenal.unavailable(chat)
         return made
     }
 

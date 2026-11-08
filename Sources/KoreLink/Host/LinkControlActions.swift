@@ -20,6 +20,10 @@ enum LinkControlActions {
             return await onChat(kind, args, chat, files: files)
         }
         if kind.onAccount { return await onAccount(kind, args) }
+        if kind == .arsenalStopAll {
+            Arsenal.shared.stopAll()
+            return .done
+        }
         return await onWindow(kind, args, files: files)
     }
 
@@ -68,9 +72,20 @@ enum LinkControlActions {
             chat.linkCancelContinue()
         case .chatSetDraft:
             chat.linkSetDraft(args.text ?? "")
+        case .chatSetArsenal:
+            return setArsenal(args.tier, chat)
         default:
             return .failed(.invalid, "Kore doesn't know that command.")
         }
+        return .done
+    }
+
+    /// `chat.setArsenal`, by the tiers popup's path. The policy refused Full, unknown tiers and a
+    /// chat that can't have it; Arsenal checks the last two again.
+    static func setArsenal(_ id: String?, _ chat: Chat) -> Outcome {
+        let tier = ArsenalTier(rawValue: id ?? "")
+        guard id == "off" || tier?.built == true else { return .failed(.invalid, "Arsenal has no such tier.") }
+        guard Arsenal.shared.linkSet(tier, chat) else { return .failed(.busy, Arsenal.unavailable(chat) ?? "Arsenal can't be on here now.") }
         return .done
     }
 

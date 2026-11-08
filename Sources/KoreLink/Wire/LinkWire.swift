@@ -7,7 +7,7 @@ import Foundation
 
 package enum LinkProto {
     package static let major = 1
-    package static let minor = 2
+    package static let minor = 3
     package static var version: LinkVersion { LinkVersion(major: major, minor: minor) }
 }
 
@@ -491,11 +491,15 @@ package struct ChatMeta: Codable, Sendable, Equatable {
     /// The composer's controls, and what the chat offers to get going again (1.2, with full control).
     package var controls: ChatControls?
     package var rescue: ChatRescue?
+    /// Its Arsenal tier ("off" or a built tier's id), and why it can't have one now (1.3, with
+    /// full control).
+    package var arsenal: String?
+    package var arsenalUnavailable: String?
 
     package init(
         id: String, provider: String, title: String, state: State, mode: Mode, modeIds: [String], allowedModeIds: [String],
         model: String?, queued: Int, running: Bool, cards: [LinkCard], can: Can, commands: [LinkSlash]? = nil,
-        controls: ChatControls? = nil, rescue: ChatRescue? = nil
+        controls: ChatControls? = nil, rescue: ChatRescue? = nil, arsenal: String? = nil, arsenalUnavailable: String? = nil
     ) {
         self.id = id
         self.provider = provider
@@ -512,6 +516,8 @@ package struct ChatMeta: Codable, Sendable, Equatable {
         self.commands = commands
         self.controls = controls
         self.rescue = rescue
+        self.arsenal = arsenal
+        self.arsenalUnavailable = arsenalUnavailable
     }
 }
 

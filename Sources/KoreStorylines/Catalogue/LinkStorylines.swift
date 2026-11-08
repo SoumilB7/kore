@@ -224,6 +224,106 @@ final class LinkFullControl: ChatStoryline {
     }
 }
 
+/// Link 1.3: with full control, Arsenal over the link. The chat's tier and the built tiers are in
+/// the state; `chat.setArsenal` turns it on (the switch too, said once in the chat) and raises it,
+/// Full is refused, Codex outside Full access is refused with its reason, and `arsenal.stopAll`
+/// turns every chat off; the external caller's tier never moves. A plain Allow sees none of it and
+/// is answered `denied.control`.
+final class LinkArsenal: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("Done.")]) }
+
+    override func steps() -> [any Step] {
+        let full = LinkStoryClient()
+        let plain = LinkStoryClient()
+        let codex = variant == .codex
+        var chatId = ""
+        let directory = URL(fileURLWithPath: "/tmp/kla-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let tier = { (wanted: ArsenalTier?) in
+            Expect("the chat at \(wanted?.rawValue ?? "off"), here and over the link", found: { _ in full.meta(chatId)?.arsenal }) { story in
+                try story.activeChat().arsenal == wanted && full.meta(chatId)?.arsenal == (wanted?.rawValue ?? "off")
+                    && AgentGrants.external == .off
+            }
+        }
+        return super.steps() + [
+            Do("start with no link, Arsenal off, at a socket of this run's") { story in
+                LinkStoryClient.reset()
+                AgentChannel.directory = directory
+                Arsenal.shared.stopAll()
+                Arsenal.shared.setAllowed(false)
+                chatId = try story.activeChat().id.uuidString
+            },
+            Do("ring") { _ in try full.ring() },
+            WaitForElement(.id(StoryID.Link.card)),
+            Expect("the card's Allows take a press") { _ in LinkPanel.allowsReady },
+            Press(.id(StoryID.Link.allowFull)),
+            Do("connect") { _ in full.connect() },
+            Expect("welcomed: the chat off, and the built tiers", found: { _ in "\(full.meta(chatId)?.arsenal ?? "-") \(full.mac?.arsenalTiers ?? [])" }) { _ in
+                full.welcomed && full.meta(chatId)?.arsenal == "off" && full.mac?.arsenalTiers == ["watch", "own", "drive"]
+            },
+        ] + (codex ? [
+            // Codex's default sandbox: the reason is in the state, and a tier is refused with it.
+            Expect("the reason, over the link", found: { _ in full.meta(chatId)?.arsenalUnavailable }) { story in
+                full.meta(chatId)?.arsenalUnavailable == Arsenal.unavailable(try story.activeChat())
+                    && full.meta(chatId)?.arsenalUnavailable != nil
+            },
+            Do("ask for Act limited in the default sandbox") { _ in
+                full.send(.cmd(id: "sandbox", .control(.chatSetArsenal, ControlArgs(chatId: chatId, tier: "own"))))
+            },
+            Expect("refused: busy, and the switch still off", found: { _ in full.result("sandbox").map { "\($0)" } }) { story in
+                try full.result("sandbox")?.code == .busy && (story.activeChat().arsenal) == nil && !Arsenal.shared.allowed
+            },
+            Do("the user puts the chat in Full access") { story in try story.activeChat().storySetMode("fullAccess") },
+            Expect("no reason any more, over the link") { story in
+                (try story.activeChat().mode) == "fullAccess" && full.meta(chatId)?.arsenalUnavailable == nil
+            },
+        ] : []) + [
+            Do("Read, over the link") { _ in full.send(.cmd(id: "read", .control(.chatSetArsenal, ControlArgs(chatId: chatId, tier: "watch")))) },
+            tier(.watch),
+            Expect("the switch on, said once in the chat", found: { _ in full.result("read").map { "\($0)" } }) { _ in
+                full.result("read")?.ok == true && Arsenal.shared.allowed
+            },
+            Expect.rows("the chat says so once") { rows in rows.filter { $0.kind == "notice" && $0.text == "Chats can use Arsenal now" }.count == 1 },
+            Do("raise to Act unlimited") { _ in full.send(.cmd(id: "drive", .control(.chatSetArsenal, ControlArgs(chatId: chatId, tier: "drive")))) },
+            tier(.drive),
+            Do("ask for Full, and a tier that isn't one") { _ in
+                full.send(.cmd(id: "full", .control(.chatSetArsenal, ControlArgs(chatId: chatId, tier: "full"))))
+                full.send(.cmd(id: "bogus", .control(.chatSetArsenal, ControlArgs(chatId: chatId, tier: "admin"))))
+            },
+            Expect("both refused: invalid", found: { _ in ["full", "bogus"].map { full.result($0).map { "\($0)" } ?? "-" }.joined(separator: " ") }) { story in
+                try full.result("full")?.code == .invalid && full.result("bogus")?.code == .invalid && (story.activeChat().arsenal) == .drive
+            },
+            Do("Stop agent control, over the link") { _ in full.send(.cmd(id: "stop", .control(.arsenalStopAll, ControlArgs()))) },
+            tier(nil),
+            Expect("stopped", found: { _ in full.result("stop").map { "\($0)" } }) { _ in full.result("stop")?.ok == true && !Arsenal.shared.anyOn },
+            Do("disconnect, then ring again") { _ in
+                LinkRun.current?.revoke()
+                LinkStoryClient.reset()
+                try plain.ring(key: "plain-sender")
+            },
+            WaitForElement(.id(StoryID.Link.card)),
+            Expect("the card's Allows take a press") { _ in LinkPanel.allowsReady },
+            Press(.id(StoryID.Link.allow)),
+            Do("connect") { _ in plain.connect() },
+            Expect("welcomed, with no Arsenal state") { _ in
+                plain.welcomed && plain.meta(chatId) != nil && plain.meta(chatId)?.arsenal == nil && plain.meta(chatId)?.arsenalUnavailable == nil
+                    && plain.mac == nil
+            },
+            Do("ask for Read, and stop all, without full control") { _ in
+                plain.send(.cmd(id: "read", .control(.chatSetArsenal, ControlArgs(chatId: chatId, tier: "watch"))))
+                plain.send(.cmd(id: "stop", .control(.arsenalStopAll, ControlArgs())))
+            },
+            Expect("refused: denied.control", found: { _ in ["read", "stop"].map { plain.result($0).map { "\($0)" } ?? "-" }.joined(separator: " ") }) { story in
+                try plain.result("read")?.code == .deniedControl && plain.result("stop")?.code == .deniedControl && (story.activeChat().arsenal) == nil
+            },
+            Do("disconnect, Arsenal's switch back off") { _ in
+                LinkRun.current?.revoke()
+                Arsenal.shared.setAllowed(false)
+            },
+        ]
+    }
+}
+
 /// Link 1.2 accounts: with full control, a Codex sign-in by device code started over the link shows
 /// the link its page and code and opens nothing on the Mac; Claude's sign-in shows its manual
 /// page and takes the pasted code back; a method only the Mac can finish is refused
@@ -539,6 +639,18 @@ final class LinkStoryClient: @unchecked Sendable {
             messages.reversed().lazy.compactMap { message -> LinkAccountState? in
                 switch message {
                 case .snapshot(_, _, _, let extras), .delta(_, _, _, _, let extras): extras?.clis?.first { $0.provider == provider }?.account
+                default: nil
+                }
+            }.first
+        }
+    }
+
+    /// The Mac's latest state, from snapshots and deltas (full control only).
+    var mac: MacState? {
+        lock.withLock {
+            messages.reversed().lazy.compactMap { message -> MacState? in
+                switch message {
+                case .snapshot(_, _, _, let extras), .delta(_, _, _, _, let extras): extras?.mac
                 default: nil
                 }
             }.first

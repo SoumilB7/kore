@@ -334,7 +334,7 @@ struct LinkControlTests {
     /// Every field any 1.2 command reads, filled in.
     static let args = ControlArgs(
         chatId: "x", windowId: "w", title: "A name", on: true, text: "hi", provider: "claude", login: "main", serial: 1,
-        input: "CODE-FROM-PAGE")
+        input: "CODE-FROM-PAGE", tier: "own")
 
     @Test(arguments: ControlKind.allCases)
     func refusedWithoutTheGrant(_ kind: ControlKind) {
