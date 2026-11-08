@@ -529,13 +529,16 @@ class NodeClient(
      * Uploads one file for a later [send] (link 1.1: `blob.put.begin`, base64 chunks, `blob.put.end`);
      * the node answers `result {id: "blob.put:<id>", ok, blobId}`. The blob id, or null.
      */
-    suspend fun upload(name: String, mime: String, bytes: ByteArray): String? {
+    suspend fun upload(name: String, mime: String, bytes: ByteArray): String? =
+        uploadResult(name, mime, bytes)?.takeIf { it["ok"]?.jsonPrimitive?.contentOrNull == "true" }?.str("blobId")
+
+    /** The upload's `result` as the node answered it (its `code` and `message` when it refused); null when nothing answered. */
+    suspend fun uploadResult(name: String, mime: String, bytes: ByteArray): JsonObject? {
         val link = session ?: return null
         val uploadId = UUID.randomUUID().toString()
         val answer = scope.async(start = CoroutineStart.UNDISPATCHED) { resultFlow.first { it.str("id") == "blob.put:$uploadId" } }
         for (frame in uploadFrames(uploadId, name, mime, bytes)) if (!link.send(frame.toByteArray())) break
-        val r = withTimeoutOrNull(60_000) { answer.await() } ?: run { answer.cancel(); return null }
-        return if (r["ok"]?.jsonPrimitive?.contentOrNull == "true") r.str("blobId") else null
+        return withTimeoutOrNull(60_000) { answer.await() } ?: run { answer.cancel(); null }
     }
 
     /** An attachment's bytes (`variant` thumb or full) for a ref in [chatId]'s transcript; null when refused. */

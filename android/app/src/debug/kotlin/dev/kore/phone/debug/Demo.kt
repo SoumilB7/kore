@@ -136,8 +136,11 @@ class Demo(private val context: Context, private val scenario: String = "") : St
                 }
                 "cmd" -> if (id != null) {
                     val cmd = m["cmd"] as? JsonObject
+                    // Every command the phone sends, for the emulator's checks (`logcat -s KoreDemo`).
+                    android.util.Log.i("KoreDemo", "$dir ${cmd ?: "{}"}")
                     if ((cmd?.get("type") as? JsonPrimitive)?.content == "chat.send") queueIfWorking((cmd["chatId"] as? JsonPrimitive)?.content)
                     push(buildJsonObject { put("t", "result"); put("id", id); put("ok", true) })
+                    cmd?.let(::closeIfAsked)
                 }
                 // An upload: taken, as the Mac's would be.
                 "blob.put.end" -> (m["uploadId"] as? JsonPrimitive)?.content?.let { upload ->
@@ -175,9 +178,45 @@ class Demo(private val context: Context, private val scenario: String = "") : St
                         ).map { JsonPrimitive(it) }))
                     })))
                 })
+                // A sent image (thumb or full alike): the demo's own picture, in one piece.
+                "blob.get" -> push(buildJsonObject {
+                    val bytes = context.assets.open("demo/pasted.png").use { it.readBytes() }
+                    put("t", "blob.chunk"); put("id", id); put("mime", "image/png"); put("offset", 0); put("total", bytes.size)
+                    put("data", java.util.Base64.getEncoder().encodeToString(bytes))
+                })
                 "logs.chunk" -> logsRead = (m["total"] as? JsonPrimitive)?.content?.toIntOrNull() ?: -1
             }
             return true
+        }
+
+        /** A window or a chat closed, as the Mac or kore-host would: gone from the windows, as a delta. */
+        private fun closeIfAsked(cmd: JsonObject) {
+            val type = (cmd["type"] as? JsonPrimitive)?.content
+            if (type != "window.close" && type != "chat.close") return
+            val snap = snapshot ?: return
+            val windows = (snap["windows"] as? kotlinx.serialization.json.JsonArray)?.map { it as JsonObject } ?: return
+            fun str(o: JsonObject, k: String) = (o[k] as? JsonPrimitive)?.content
+            val gone: List<String>
+            val kept: List<JsonObject>
+            if (type == "window.close") {
+                val window = windows.firstOrNull { str(it, "id") == str(cmd, "windowId") } ?: return
+                gone = (window["tabs"] as? kotlinx.serialization.json.JsonArray).orEmpty().mapNotNull { str(it as JsonObject, "chatId") }
+                kept = windows - window
+            } else {
+                val chat = str(cmd, "chatId") ?: return
+                gone = listOf(chat)
+                kept = windows.map { w ->
+                    val tabs = (w["tabs"] as? kotlinx.serialization.json.JsonArray).orEmpty().filter { str(it as JsonObject, "chatId") != chat }
+                    JsonObject(w + ("tabs" to kotlinx.serialization.json.JsonArray(tabs)))
+                }
+            }
+            val chats = (snap["chats"] as? kotlinx.serialization.json.JsonArray).orEmpty().filter { str(it as JsonObject, "id") !in gone }
+            val rev = ((snap["rev"] as? JsonPrimitive)?.content?.toIntOrNull() ?: 1) + 1
+            snapshot = JsonObject(snap + mapOf("rev" to JsonPrimitive(rev), "windows" to kotlinx.serialization.json.JsonArray(kept), "chats" to kotlinx.serialization.json.JsonArray(chats)))
+            push(buildJsonObject {
+                put("t", "delta"); put("rev", rev); put("windows", kotlinx.serialization.json.JsonArray(kept))
+                put("removed", kotlinx.serialization.json.JsonArray(gone.map(::JsonPrimitive)))
+            })
         }
 
         /** A message to a chat whose turn runs waits behind it: its `queued` goes up by one, as a delta. */

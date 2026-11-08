@@ -345,7 +345,34 @@ struct StreamTests {
         #expect(rig.host.apply(.control(.chatNew, ControlArgs(provider: "claude", mode: "auto", folder: path)), id: "3", control: .act) { _ in }?.code == .raiseMode)
         #expect(rig.host.apply(.control(.chatNew, ControlArgs(provider: "claude", mode: "auto", folder: path)), id: "4", control: .full) { _ in }?.ok == true)
         // A control kind the box has no rule for is refused.
-        #expect(rig.host.apply(.control(.windowOpen, ControlArgs()), id: "5", control: .full) { _ in }?.code == .invalid)
+        #expect(rig.host.apply(.control(.boardNew, ControlArgs()), id: "5", control: .full) { _ in }?.code == .invalid)
+        #expect(rig.host.apply(.control(.windowOpen, ControlArgs()), id: "6", control: .full) { _ in }?.code == .invalid)
+    }
+
+    /// A box's window closes even with no chat in it (the phone's dim chips): it leaves the
+    /// windows, a restart keeps it closed, and `window.open` or a new chat there bring it back.
+    /// Its folder stays served all along.
+    @Test func anEmptyWindowCloses() throws {
+        let rig = try HostRig()
+        defer { rig.finish() }
+        let window = HostDaemon.windowID(rig.folder.path)
+        #expect(rig.host.windows.map(\.id) == [window])
+        #expect(rig.host.apply(.control(.windowClose, ControlArgs(windowId: window)), id: "c1", control: .act) { _ in }?.ok == true)
+        #expect(rig.host.windows.isEmpty)
+        #expect(rig.host.folders.map(\.windowId) == [window])
+        rig.restart()
+        #expect(rig.host.windows.isEmpty)
+        let open = rig.host.apply(.control(.windowOpen, ControlArgs(windowId: window)), id: "o1", control: .act) { _ in }
+        #expect(open?.ok == true && open?.windowId == window)
+        #expect(rig.host.windows.map(\.id) == [window])
+        // Closed again, then a chat started in its folder: the window is back, and stays after the chat closes.
+        #expect(rig.host.apply(.control(.windowClose, ControlArgs(windowId: window)), id: "c2", control: .act) { _ in }?.ok == true)
+        let made = rig.host.apply(.control(.chatNew, ControlArgs(provider: "claude", folder: rig.folder.path)), id: "n1", control: .act) { _ in }
+        #expect(made?.ok == true)
+        #expect(rig.host.windows.map(\.id) == [window])
+        rig.restart()
+        #expect(rig.host.windows.map(\.id) == [window])
+        #expect(rig.host.apply(.control(.windowOpen, ControlArgs(windowId: "w_gone")), id: "o2", control: .act) { _ in }?.code == .goneWindow)
     }
 
     @Test func callAnswersAreKeptPerGrantAndTheNewestConnectionWins() async throws {
@@ -387,6 +414,30 @@ struct StreamTests {
         _ = try await client.call(hc.id, .close)
         rig.restart()
         #expect(rig.host.chat(hc.id) == nil && rig.host.closedChats.map(\.id) == [hc.id])
+    }
+
+    /// A box chat closes as a Mac's tab does: its meta says it can, and a working one asks first
+    /// (`confirm.close`) unless forced.
+    @Test func aWorkingChatAsksBeforeItCloses() async throws {
+        let backend = StreamStandIn()
+        let (rig, grant, hc) = try rig(backend)
+        defer { rig.finish() }
+        #expect(HostMeta.meta(hc).can.close == true)
+        let client = try await StreamClient(rig, grant: grant)
+        client.send(ChatFollow(chatId: hc.id, after: nil, log: nil))
+        try await until { client.flat.contains { if case .controlsLoaded = $0 { true } else { false } } }
+        // A turn under way, as a send starts one (the stand-in's own send ends it at once).
+        backend.sink.yield(.userMessage(text: "go", attachments: [], id: "m1"))
+        backend.sink.yield(.turnStarted("t1", origin: .user, at: .now))
+        backend.sink.yield(.text("b-t1", .answer, "working"))
+        try await until { hc.running }
+        let asked = rig.host.apply(.control(.chatClose, ControlArgs(chatId: hc.id)), id: "c1", control: .act) { _ in }
+        #expect(asked?.code == .confirmClose && rig.host.chat(hc.id) != nil)
+        backend.sink.yield(.turnFinished("t1", .completed, duration: .seconds(1)))
+        try await until { !hc.running }
+        #expect(rig.host.apply(.control(.chatClose, ControlArgs(chatId: hc.id)), id: "c2", control: .act) { _ in }?.ok == true)
+        #expect(rig.host.chat(hc.id) == nil)
+        client.close()
     }
 
     /// Link 1.13: the box's meta says what its chat has going in the background, live sub-agents

@@ -20,8 +20,8 @@ import kotlinx.serialization.json.longOrNull
 
 /**
  * A window's history, as the Mac's panel (L7–L9): search, newest first under day headers, ▣
- * for the archived ones. A tap opens the chat in a background tab on the Mac and here; a
- * long-press offers Open, Rename and Archive. Read a page at a time with `history.list`.
+ * for the archived ones. A tap opens the chat in this window (a background tab on a Mac) and
+ * here; a long-press offers Open here, Rename and Archive. Read a page at a time with `history.list`.
  */
 class HistoryActivity : NodeActivity() {
     private val windowId by lazy { intent.getStringExtra("window") ?: "" }
@@ -174,7 +174,7 @@ class HistoryActivity : NodeActivity() {
         val id = s.str("id") ?: return
         val isArchived = s.bool("archived")
         PopMenu(this).show(anchor, listOf(
-            PopMenu.Item("Open") { open(s) },
+            PopMenu.Item("Open here") { open(s) },
             PopMenu.Item("Rename…") { renameSheet(s.str("title").orEmpty()) { t -> act(Control.historyRename(windowId, id, t)) { load(reset = true) } } },
             PopMenu.Item(if (isArchived) "Unarchive" else "Archive") { act(Control.historyArchive(windowId, id, !isArchived)) { load(reset = true) } },
         ))

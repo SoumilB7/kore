@@ -201,6 +201,8 @@ class ChatActivity : NodeActivity() {
         chat?.let { kore.seen.opened(chatId, (it["lastAt"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull()) }
         actions.render(chat, snapshot)
         adapter.queued = (chat?.get("queued") as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull() ?: 0
+        // A chat not in the snapshot yet keeps what it showed (no fold-and-unfold on a reconnect).
+        if (chat != null) adapter.running = chat.bool("running")
         adapter.canFork = chat?.obj("can")?.let { if (it.containsKey("fork")) it.bool("fork") else null }
         adapter.rescue = ControlModel.rescue(chat?.obj("rescue")) { at -> whenText(at) }
         menuButton?.visibility = if (chat != null && (chat.containsKey("controls") || link.hasControl(snapshot))) View.VISIBLE else View.GONE
@@ -284,6 +286,10 @@ class ChatActivity : NodeActivity() {
         /** A rescue row under the turn: Retry, Continue, "Continues at …" ×. */
         data class Rescue(val line: ControlModel.RescueLine) : Item()
         data class Work(val key: String, val steps: List<JsonObject>, val open: Boolean) : Item()
+        /** A step of the running turn, one line (`LiveWork`); [spin]: the spinner marks it. */
+        data class Live(val e: JsonObject, val spin: Boolean) : Item()
+        /** The turn runs with nothing of it on screen yet: the spinner and "Working…". */
+        object Pending : Item()
         /** Messages waiting behind the running turn or a compaction (the Mac's queued rows), counted. */
         data class Queued(val count: Int) : Item()
     }
@@ -297,6 +303,9 @@ class ChatActivity : NodeActivity() {
         private var turned: String? = null
         var queued = 0
             set(value) { if (field != value) { field = value; rebuild() } }
+        /** A turn runs: its last steps stay out as live lines; when it ends they fold. */
+        var running = false
+            set(value) { if (field != value) { field = value; rebuild() } }
         var earlier = false
         /** Null when the Mac doesn't offer forks; false while it can't fork now. */
         var canFork: Boolean? = null
@@ -309,24 +318,16 @@ class ChatActivity : NodeActivity() {
             rebuild()
         }
 
-        /** Runs of tool, thinking and agent rows fold into "Worked · N steps", except the live tail. */
+        /** Runs of tool, thinking and agent rows fold into "Worked · N steps"; a running turn's last 3 stay out, one line each. */
         private fun rebuild() {
             val out = ArrayList<Item>()
             if (earlier && entries.isNotEmpty()) out.add(Item.Earlier)
-            var run = ArrayList<JsonObject>()
-            fun flush(live: Boolean) {
-                if (run.isEmpty()) return
-                val key = run.first().str("id") ?: ""
-                if (live || run.size < 2 || key in open) {
-                    if (run.size >= 2 && key in open) out.add(Item.Work(key, run.toList(), true))
-                    run.forEach { out.add(Item.One(it)) }
-                } else out.add(Item.Work(key, run.toList(), false))
-                run = ArrayList()
-            }
-            for (e in entries) {
-                if (e.str("kind") in setOf("tool", "thinking", "agent")) run.add(e) else flush(false).also { out.add(Item.One(e)) }
-            }
-            flush(true)
+            for (f in LiveWork.fold(entries, open, running)) out.add(when (f) {
+                is LiveWork.Fold.One -> Item.One(f.e)
+                is LiveWork.Fold.Work -> Item.Work(f.key, f.steps, f.open)
+                is LiveWork.Fold.Live -> Item.Live(f.e, f.spin)
+                LiveWork.Fold.Pending -> Item.Pending
+            })
             if (queued > 0) out.add(Item.Queued(queued))
             rescue.forEach { out.add(Item.Rescue(it)) }
             // Only what changed is drawn again: a streaming answer rebinds its own row, not the page.
@@ -343,6 +344,8 @@ class ChatActivity : NodeActivity() {
         private fun keyOf(item: Item): String = when (item) {
             is Item.One -> "e:" + (item.e.str("id") ?: System.identityHashCode(item.e).toString())
             is Item.Work -> "w:" + item.key
+            is Item.Live -> "l:" + (item.e.str("id") ?: System.identityHashCode(item.e).toString())
+            Item.Pending -> "pending"
             is Item.Rescue -> "r:" + item.line.key
             Item.Earlier -> "earlier"
             is Item.Queued -> "queued"
@@ -352,6 +355,8 @@ class ChatActivity : NodeActivity() {
         private fun sameContent(a: Item, b: Item): Boolean = when {
             a is Item.One && b is Item.One -> a.e === b.e || a.e == b.e
             a is Item.Work && b is Item.Work -> a.steps.size == b.steps.size && a.open == b.open
+            a is Item.Live && b is Item.Live -> a.spin == b.spin && (a.e === b.e || a.e == b.e)
+            a is Item.Pending && b is Item.Pending -> true
             a is Item.Rescue && b is Item.Rescue -> a == b
             else -> false
         }
@@ -376,6 +381,11 @@ class ChatActivity : NodeActivity() {
                     android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                         topMargin = dp(6); bottomMargin = dp(6)
                     })
+                // A live step's mark, in the glyph column: the spinner (it ticks only while shown), or a done step's dot.
+                addView(Spinner(this@ChatActivity, Tone.spinClaude).apply { visibility = View.GONE },
+                    android.widget.FrameLayout.LayoutParams(dp(13), dp(13), Gravity.START or Gravity.CENTER_VERTICAL).apply { leftMargin = dp(16) })
+                addView(View(this@ChatActivity).apply { visibility = View.GONE; background = shape(Tone.faint, 3) },
+                    android.widget.FrameLayout.LayoutParams(dp(5), dp(5), Gravity.START or Gravity.CENTER_VERTICAL).apply { leftMargin = dp(20) })
             },
         ) {}
 
@@ -384,12 +394,17 @@ class ChatActivity : NodeActivity() {
             val rule = frame.getChildAt(0)
             val v = frame.getChildAt(1) as TextView
             val docBox = frame.getChildAt(2) as LinearLayout
+            val spin = frame.getChildAt(3) as Spinner
+            val dot = frame.getChildAt(4)
             rule.visibility = View.GONE
             docBox.visibility = View.GONE
+            spin.visibility = View.GONE
+            dot.visibility = View.GONE
             v.visibility = View.VISIBLE
             v.maxWidth = Int.MAX_VALUE
             v.background = null
             v.setOnClickListener(null)
+            v.setOnTouchListener(null)
             v.setOnLongClickListener(null)
             v.movementMethod = null
             v.isLongClickable = false
@@ -453,6 +468,16 @@ class ChatActivity : NodeActivity() {
                     if (!askedEarlier) v.setOnClickListener { loadEarlier() }
                     return
                 }
+                is Item.Live -> bindLive(v, spin, dot, item)
+                Item.Pending -> {
+                    v.text = "Working…"
+                    v.setTextColor(Tone.faint); v.type(Type.Callout)
+                    v.maxLines = 1
+                    v.setPadding(dp(26), dp(5), dp(4), dp(5))
+                    spin.tint = if (provider == "codex") Tone.spinCodex else Tone.spinClaude
+                    spin.visibility = View.VISIBLE
+                    (v.layoutParams as android.widget.FrameLayout.LayoutParams).leftMargin = dp(10)
+                }
                 is Item.Rescue -> { bindRescue(v, item.line); return }
                 is Item.Queued -> {
                     v.text = if (item.count == 1) "⟳ 1 message queued · goes when the turn ends" else "⟳ ${item.count} messages queued · go when the turn ends"
@@ -460,6 +485,34 @@ class ChatActivity : NodeActivity() {
                     v.type(Type.Callout)
                     (v.layoutParams as android.widget.FrameLayout.LayoutParams).leftMargin = dp(10)
                 }
+            }
+        }
+
+        /**
+         * One live step (the Mac's working row, minimal): a thought as its newest line, quiet and
+         * italic; a tool or sub-agent as its short name · its target. The spinner marks the newest
+         * (or one still running), a dot the ones done, red when one failed.
+         */
+        private fun bindLive(v: TextView, spin: Spinner, dot: View, item: Item.Live) {
+            val line = LiveWork.line(item.e)
+            v.text = if (line.thought) line.what else android.text.SpannableStringBuilder().apply {
+                append(line.what, android.text.style.ForegroundColorSpan(Tone.dim), 0)
+                line.on?.let { append(" · ", android.text.style.ForegroundColorSpan(Tone.faint), 0).append(it, android.text.style.ForegroundColorSpan(Tone.faint), 0) }
+            }
+            v.type(Type.Callout)
+            v.setTextColor(Tone.faint)
+            if (line.thought) v.setTypeface(v.typeface, android.graphics.Typeface.ITALIC)
+            v.maxLines = 1
+            v.ellipsize = android.text.TextUtils.TruncateAt.END
+            v.setPadding(dp(26), dp(5), dp(4), dp(5))
+            (v.layoutParams as android.widget.FrameLayout.LayoutParams).apply { leftMargin = dp(10); topMargin = dp(1); bottomMargin = dp(1) }
+            v.contentDescription = listOfNotNull(if (item.spin) "Working" else null, line.what, line.on).joinToString(", ")
+            if (item.spin) {
+                spin.tint = if (provider == "codex") Tone.spinCodex else Tone.spinClaude
+                spin.visibility = View.VISIBLE
+            } else if (!line.thought) {
+                dot.background = shape(if (line.failed) Tone.err else Tone.faint, 3)
+                dot.visibility = View.VISIBLE
             }
         }
 
@@ -497,7 +550,10 @@ class ChatActivity : NodeActivity() {
             (v.layoutParams as android.widget.FrameLayout.LayoutParams).leftMargin = dp(10)
         }
 
-        /** The message, then each attachment: its thumbnail once the Mac sent it, else its name. */
+        /**
+         * The message, then each attachment: its thumbnail once the Mac sent it, else its name. An
+         * image is marked with its ref ([ImageRef]): a tap on it opens it full screen.
+         */
         private fun userText(e: JsonObject): CharSequence {
             val text = e.str("text").orEmpty()
             val files = e.objs("attachments")
@@ -506,6 +562,7 @@ class ChatActivity : NodeActivity() {
                 for (f in files) {
                     val ref = f.str("ref") ?: continue
                     if (isNotEmpty()) append("\n")
+                    val from = length
                     val thumb = Thumbs.get(ref)
                     if (thumb != null) {
                         val w = dp(160)
@@ -517,7 +574,22 @@ class ChatActivity : NodeActivity() {
                         val l = link
                         if (l != null && f.str("kind") == "image") Thumbs.fetch(kore.scope, l, chatId, ref) { runOnUiThread { changed(e.str("id")) } }
                     }
+                    if (f.str("kind") == "image") setSpan(ImageRef(ref, f.str("name")), from, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
+            }
+        }
+
+        /** A tap on a bubble's image (where the finger went down) opens it full screen. */
+        private fun tapImages(v: TextView) {
+            val spanned = v.text as? android.text.Spanned ?: return
+            if (spanned.getSpans(0, spanned.length, ImageRef::class.java).isEmpty()) return
+            var x = 0f
+            var y = 0f
+            v.setOnTouchListener { _, ev -> if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) { x = ev.x; y = ev.y }; false }
+            v.setOnClickListener {
+                val at = v.getOffsetForPosition(x, y)
+                val hit = spanned.getSpans(maxOf(0, at - 1), at + 1, ImageRef::class.java).firstOrNull() ?: return@setOnClickListener
+                ImageActivity.open(this@ChatActivity, chatId, hit.ref, hit.name)
             }
         }
 
@@ -525,6 +597,7 @@ class ChatActivity : NodeActivity() {
             when (e.str("kind")) {
                 "user" -> {
                     v.text = userText(e)
+                    tapImages(v)
                     // The user bubble (spec §5): l2, radius 18 18 6 18, padding 9 × 14, at most 82 % of the column.
                     v.background = corners(Tone.l2, 18, 18, 6, 18)
                     v.setPadding(dp(14), dp(9), dp(14), dp(9))
@@ -643,7 +716,6 @@ class ChatActivity : NodeActivity() {
         val window = snap.objs("windows").firstOrNull { w -> w.objs("tabs").any { it.str("chatId") == chatId } }
             ?: snap.objs("windows").firstOrNull { it.str("id") == chat?.str("windowId") }
             ?: return Quiet.say(this, "This chat's window isn't open any more.")
-        val box = link?.device?.value?.kind == dev.kore.link.trust.NodeKind.BOX
         val providers = link?.welcome?.value?.objs("providers").orEmpty()
         lateinit var s: Sheet
         s = Sheet(this).show {
@@ -652,14 +724,21 @@ class ChatActivity : NodeActivity() {
                 val pid = p.str("id") ?: continue
                 item("${p.str("name") ?: pid} chat", glyph = providerMark(pid), checked = pid == chat?.str("provider"), tag = "New ${p.str("name")} chat") {
                     s.dismiss()
-                    val path = window.str("path")
-                    val cmd = if (box && path != null) dev.kore.link.node.Control.newChatInFolder(path, pid) else dev.kore.link.node.Control.newChat(window.str("id") ?: "", pid)
-                    act(cmd) { r ->
+                    // By the window's id, on a box too: its windows say their folder as `~/…`.
+                    act(dev.kore.link.node.Control.newChat(window.str("id") ?: "", pid)) { r ->
                         r.str("chatId")?.let { startActivity(android.content.Intent(this@ChatActivity, ChatActivity::class.java).putExtra("chat", it)) }
                             ?: Quiet.say(this@ChatActivity, "Started on $macName")
                     }
                 }
             }
+            // A past chat back, in this window (a tap in History opens it here).
+            item("From History", glyph = "From History", chevron = true) {
+                dismiss()
+                startActivity(android.content.Intent(this@ChatActivity, HistoryActivity::class.java).putExtra("window", window.str("id")))
+            }
         }
     }
 }
+
+/** Marks a sent image's place in a user bubble (its thumbnail or its name): what a tap there opens. */
+private class ImageRef(val ref: String, val name: String?)

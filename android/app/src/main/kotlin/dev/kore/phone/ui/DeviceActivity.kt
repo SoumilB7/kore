@@ -215,19 +215,25 @@ class DeviceActivity : NodeActivity() {
         }
     }
 
-    /** A chip held (spec §6): Show on the Mac (its active chat comes forward), a rule, Close window. */
+    /**
+     * A chip held (spec §6): Show on the Mac (its active chat comes forward; a box has no screen),
+     * History (its past chats, to open here), a rule, Close window. A box's window with no chats closes too (kore-host keeps the folder).
+     */
     private fun chipMenu(anchor: View, chip: DeviceList.Chip) {
         val w = last?.objs("windows")?.firstOrNull { it.str("id") == chip.windowId } ?: return
         val C = dev.kore.link.node.Control
         val shown = w.objs("tabs").firstOrNull { it.str("id") == w.str("activeTabId") }?.str("chatId")
             ?: w.objs("tabs").firstOrNull { it.str("chatId") != null }?.str("chatId")
-        PopMenu(this).show(anchor, listOf(
-            PopMenu.Item("Show on the Mac", enabled = shown != null) { shown?.let { id -> act(C.select(id)) { Quiet.say(this, "Shown on $macName") } } },
-            PopMenu.Item("Close window", danger = true, rule = true) {
-                act(C.windowClose(chip.windowId), forced = C.windowClose(chip.windowId, force = true), ask = "A chat in ${w.str("name") ?: "this window"} is working. Closing stops it.")
-            },
-        ))
+        val items = ArrayList<PopMenu.Item>()
+        if (!isBox) items += PopMenu.Item("Show on the Mac", enabled = shown != null) { shown?.let { id -> act(C.select(id)) { Quiet.say(this, "Shown on $macName") } } }
+        items += PopMenu.Item("History") { history(chip.windowId) }
+        items += PopMenu.Item("Close window", danger = true, rule = true) {
+            act(C.windowClose(chip.windowId), forced = C.windowClose(chip.windowId, force = true), ask = "A chat in ${w.str("name") ?: "this window"} is working. Closing stops it.")
+        }
+        PopMenu(this).show(anchor, items)
     }
+
+    private val isBox get() = link?.device?.value?.kind == dev.kore.link.trust.NodeKind.BOX
 
     /** Why the device isn't up, in one line, and the one thing to do about it. */
     private fun stateLine(): View? {
@@ -310,12 +316,17 @@ class DeviceActivity : NodeActivity() {
             item(w.str("name") ?: "Window", glyph = "□", detail = ControlModel.parentOf(w.str("path")), tag = "New $cliName chat in ${w.str("name")}") {
                 val pid = chosen ?: return@item
                 s.dismiss()
-                val cmd = if (box && w.str("path") != null) dev.kore.link.node.Control.newChatInFolder(w.str("path")!!, pid) else dev.kore.link.node.Control.newChat(wid, pid)
-                act(cmd) { r ->
+                // By the window's id, on a box too: its windows say their folder as `~/…`.
+                act(dev.kore.link.node.Control.newChat(wid, pid)) { r ->
                     r.str("chatId")?.let { startActivity(Intent(this@DeviceActivity, ChatActivity::class.java).putExtra("chat", it)) }
                         ?: Quiet.say(this@DeviceActivity, "Started on $macName")
                 }
             }
+        }
+        // The picked window's past chats, to open one there.
+        val picked = (if (windows.size == 1) windows[0] else windows.firstOrNull { it.str("id") == filter })
+        picked?.str("id")?.let { wid ->
+            item("From History", glyph = "From History", detail = picked.str("name"), chevron = true) { s.dismiss(); history(wid) }
         }
         val where = if (windows.size == 1) windows[0].str("name") ?: "the window" else "the folder you pick"
         say(if (box) "A $cliName chat in $where on $macName." else "A $cliName chat in $where, as a new tab there.")
@@ -330,7 +341,10 @@ class DeviceActivity : NodeActivity() {
                 val wid = f.str("windowId") ?: continue
                 item((f.str("path") ?: "Folder").trimEnd('/').substringAfterLast('/'), glyph = "□", detail = ControlModel.parentOf(f.str("path")), enabled = !f.bool("missing")) {
                     s.dismiss()
-                    startActivity(Intent(this@DeviceActivity, WindowActivity::class.java).putExtra("window", wid))
+                    val window = Intent(this@DeviceActivity, WindowActivity::class.java).putExtra("window", wid)
+                    // A closed window comes back first (`window.open` by its id); an open one just opens.
+                    if (snap.objs("windows").any { it.str("id") == wid }) startActivity(window)
+                    else act(dev.kore.link.node.Control.windowShow(wid)) { startActivity(window) }
                 }
             }
             say("Folders open on $macName. A new folder is added from the Mac.")
@@ -376,9 +390,25 @@ class DeviceActivity : NodeActivity() {
     private fun windowMenu(anchor: View, w: JsonObject) {
         val id = w.str("id") ?: return
         val C = dev.kore.link.node.Control
-        PopMenu(this).show(anchor, listOf(PopMenu.Item("Close window", danger = true) {
-            act(C.windowClose(id), forced = C.windowClose(id, force = true), ask = "A chat in ${w.str("name") ?: "this window"} is working. Closing stops it.")
-        }))
+        PopMenu(this).show(anchor, listOf(
+            PopMenu.Item("History") { history(id) },
+            PopMenu.Item("Close window", danger = true, rule = true) {
+                act(C.windowClose(id), forced = C.windowClose(id, force = true), ask = "A chat in ${w.str("name") ?: "this window"} is working. Closing stops it.")
+            },
+        ))
+    }
+
+    /** A window's past chats; a tap there opens one here, in that window. */
+    private fun history(windowId: String) = startActivity(Intent(this, HistoryActivity::class.java).putExtra("window", windowId))
+
+    /** A chat's row held: Show on the Mac (a Mac's), then Close tab, refused while it would lose work. */
+    private fun rowMenu(anchor: View, chatId: String) {
+        val chat = last?.chatsById()?.get(chatId) ?: return
+        if (!link.hasControl(last)) return
+        val items = ArrayList<PopMenu.Item>()
+        if (!isBox) items += PopMenu.Item("Show on the Mac") { act(dev.kore.link.node.Control.select(chatId)) { Quiet.say(this, "Shown on $macName") } }
+        if (CloseHold.offered(chat, isBox)) items += PopMenu.Item("Close tab", danger = true, rule = items.isNotEmpty()) { closeChat(chat) }
+        if (items.isNotEmpty()) PopMenu(this).show(anchor, items)
     }
 
     /** The rows, diffed: a snapshot rebinds only the rows that changed. */
@@ -388,6 +418,10 @@ class DeviceActivity : NodeActivity() {
     }) {
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): RecyclerView.ViewHolder = object : RecyclerView.ViewHolder(chatCard()) {}
 
-        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) = bindChatCard(holder.itemView as LinearLayout, getItem(position))
+        override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
+            val row = getItem(position)
+            bindChatCard(holder.itemView as LinearLayout, row)
+            holder.itemView.setOnLongClickListener(row.chatId?.let { id -> View.OnLongClickListener { v -> rowMenu(v, id); true } })
+        }
     }
 }

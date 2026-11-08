@@ -152,6 +152,8 @@ object Control {
         }
     }
     fun windowOpen(recentId: String) = cmd("window.open") { put("recentId", recentId) }
+    /** A box's closed folder window back, by its id (kore-host 1.13; a Mac opens from its recents). */
+    fun windowShow(windowId: String) = cmd("window.open") { put("windowId", windowId) }
     fun windowReopen() = cmd("window.reopen")
     fun windowClose(windowId: String, force: Boolean = false) = cmd("window.close") { put("windowId", windowId); if (force) put("force", true) }
     fun historyOpen(windowId: String, sessionId: String) = cmd("history.open") { put("windowId", windowId); put("sessionId", sessionId) }

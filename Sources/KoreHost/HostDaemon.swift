@@ -241,6 +241,8 @@ package final class HostDaemon {
                 provider: provider, folder: folder, modelId: modelId, in: paths.chats, fork: fork, title: title, mode: mode, effort: effort,
                 session: session, account: provider == "claude" ? accounts.folderDefault(folder) : nil)
         else { return nil }
+        // A chat in a closed window's folder opens its window again.
+        setClosed(folder, false, broadcast: false)
         chats.append(chat)
         watch(chat)
         broadcast(windows: true, chats: [chat])
@@ -299,6 +301,7 @@ package final class HostDaemon {
         guard let at = closedChats.firstIndex(where: { $0.id == id }) else { return nil }
         let hc = closedChats.remove(at: at)
         hc.markOpen()
+        setClosed(hc.record.folder, false, broadcast: false)
         chats.append(hc)
         watch(hc)
         broadcast(windows: true, chats: [hc])
@@ -601,8 +604,22 @@ package final class HostDaemon {
                 + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap] : []))
     }
 
+    /// Whether a served folder's window is closed (`window.close`); one with a chat shows anyway.
+    func isClosed(_ folder: String) -> Bool { config.closed?.contains(folder) == true }
+
+    /// A folder's window closed or open again: kept in `config.json` so a restart keeps it.
+    func setClosed(_ folder: String, _ on: Bool, broadcast: Bool = true) {
+        guard config.folders.contains(folder), isClosed(folder) != on else { return }
+        var closed = (config.closed ?? []).filter { $0 != folder }
+        if on { closed.append(folder) }
+        config.closed = closed.isEmpty ? nil : closed
+        do { try config.save(paths.config) } catch { HostJournal.note("closed window not saved", ["path": folder, "reason": "\(error)"]) }
+        if broadcast { broadcastWindows() }
+    }
+
+    /// The box's windows: one per served folder, but a closed one only while a chat is in it.
     var windows: [LinkWindow] {
-        config.folders.map { folder in
+        config.folders.filter { folder in !isClosed(folder) || chats.contains { $0.record.folder == folder } }.map { folder in
             let tabs = chats.filter { $0.record.folder == folder }.map { LinkTab(id: "t_" + $0.id, kind: .chat, title: $0.title, chatId: $0.id) }
             return LinkWindow(
                 id: Self.windowID(folder), name: URL(fileURLWithPath: folder).lastPathComponent, path: LinkProjection.homeRelative(folder),
@@ -770,10 +787,13 @@ package final class HostDaemon {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
         switch kind {
         case .chatNew:
-            let folder = args.folder.map { URL(fileURLWithPath: $0).standardizedFileURL.path } ?? args.windowId.flatMap(self.folder(windowId:))
+            // A folder as the box's windows say it (`~/…`, this box's home) or absolute.
+            let folder = args.folder.flatMap { HostConfig.normalised($0) } ?? args.windowId.flatMap(self.folder(windowId:))
             return newChat(id: id, folder: folder, provider: args.provider ?? "", modelId: args.modelId, args: args)
         case .chatClose:
             guard let hc = args.chatId.flatMap(chat) else { return fail(.goneChat, "No such chat on this box.") }
+            // As a Mac's: a working chat isn't closed without `force` (its turn would stop).
+            if args.force != true, hc.running { return fail(.confirmClose, "It's working; closing stops it. Send again with force to close.") }
             close(hc)
             return .init(id: id, ok: true)
         case .windowClose:
@@ -784,7 +804,15 @@ package final class HostDaemon {
                 return fail(.confirmClose, "A chat in it is working; closing stops it. Send again with force.")
             }
             closing.forEach(close)
+            // Its window goes too, even with no chat in it (the folder stays served: History,
+            // its files, and a new chat or `window.open` show it again).
+            setClosed(folder, true)
             return .init(id: id, ok: true)
+        case .windowOpen:
+            // 1.13 (a box): a closed folder's window back, by its `windowId`.
+            guard let folder = args.windowId.flatMap(self.folder(windowId:)) else { return fail(.goneWindow, "That folder isn't on this box any more.") }
+            setClosed(folder, false)
+            return .init(id: id, ok: true, windowId: Self.windowID(folder))
         case .tabReopen:
             guard let hc = args.sourceId.flatMap(reopen) else { return fail(.goneChat, "That chat isn't kept any more.") }
             return .init(id: id, ok: true, chatId: hc.id, windowId: Self.windowID(hc.record.folder))

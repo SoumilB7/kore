@@ -177,8 +177,15 @@ class Spinner(context: Context, var tint: Int) : View(context) {
         override fun run() {
             step = (step + 1) % 8
             invalidate()
-            if (isAttachedToWindow && Motion.scale > 0f) postDelayed(this, 100)
+            if (isAttachedToWindow && isShown && Motion.scale > 0f) postDelayed(this, 100)
         }
+    }
+
+    /** Hidden (a row that isn't working, a recycled one): no ticks; shown again, it turns again. */
+    override fun onVisibilityAggregated(isVisible: Boolean) {
+        super.onVisibilityAggregated(isVisible)
+        removeCallbacks(tick)
+        if (isVisible && isAttachedToWindow && Motion.scale > 0f) postDelayed(tick, 100)
     }
 
     init {
@@ -188,7 +195,8 @@ class Spinner(context: Context, var tint: Int) : View(context) {
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
-        if (Motion.scale > 0f) postDelayed(tick, 100)
+        removeCallbacks(tick)
+        if (isShown && Motion.scale > 0f) postDelayed(tick, 100)
     }
 
     override fun onDetachedFromWindow() {

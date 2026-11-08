@@ -350,6 +350,9 @@ package enum LinkPolicy {
             // 1.13: a folder's window on the box closes, its chats as tabs closing (kept, reopenable).
             // The box asks (`confirm.close`) when one is working, unless `force`, as a Mac does.
             return args.windowId != nil ? .allow : .deny(.invalid, "Name the window.")
+        case .windowOpen:
+            // 1.13: a closed folder's window back, by its `windowId` (a Mac's recents aren't a box's).
+            return args.windowId != nil ? .allow : .deny(.invalid, "Name the window.")
         // 1.9: a chat's own operations, as a Mac window offers them. An act grant does the
         // ordinary ones; a full grant also what raises (an Arsenal tier on) or acts at a plan's
         // limit (Continue, a message at the reset). Always allow, `!` lines and keys stay refused.
