@@ -73,6 +73,54 @@ struct BoxTailnetBinaryTests {
         #expect(again.url == got.url)
     }
 
+    /// This Kore's own release first; the latest only when that one has no kore-tailnet, and then
+    /// never kept under this Kore's (older) label.
+    @Test func ownVersionFirstAndANewerOneIsNeverKept() async throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ktb-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let build = BoxHostBuild(support: root, version: "0.2.3", commit: String(repeating: "a", count: 40), builtFrom: nil)
+        let kept = root.appendingPathComponent("kore-host/0.2.3-aaaaaaa-kore-tailnet-linux-x86_64")
+        let key = Curve25519.Signing.PrivateKey()
+        let publicKey = key.publicKey.rawRepresentation.base64EncodedString()
+        /// A release folder: its signed sums (version `version`), and the asset when it has one.
+        func release(_ version: String, asset: Data?) throws -> [String: Data] {
+            var lines = ["# kore \(version) \(String(repeating: "b", count: 40))"]
+            if let asset { lines.append(SHA256.hash(data: asset).map { String(format: "%02x", $0) }.joined() + "  kore-tailnet-linux-x86_64.xz") }
+            let sums = Data((lines.joined(separator: "\n") + "\n").utf8)
+            var files = ["SHA256SUMS": sums, "SHA256SUMS.sig": try key.signature(for: sums)]
+            files["kore-tailnet-linux-x86_64.xz"] = asset
+            return files
+        }
+        let own = try (Data("0.2.3's".utf8) as NSData).compressed(using: .lzma) as Data
+        let newer = try (Data("0.2.4's".utf8) as NSData).compressed(using: .lzma) as Data
+        let asked = Mutex<[String]>([])
+        func fetch(_ folders: [String: [String: Data]]) -> BoxTailnetBinary.Fetch {
+            { url in
+                asked.withLock { $0.append(url.absoluteString) }
+                return folders[url.deletingLastPathComponent().absoluteString]?[url.lastPathComponent]
+            }
+        }
+        let mine = "https://github.com/SoumilB7/kore/releases/download/v0.2.3/", latest = "https://github.com/SoumilB7/kore/releases/latest/download/"
+
+        // Its own release has none: the latest's, used once and not kept as 0.2.3's.
+        let fallback = try #require(await BoxTailnetBinary.local(
+            "linux-x86_64", override: nil, helper: nil, build: build,
+            fetch: fetch([mine: try release("0.2.3", asset: nil), latest: try release("0.2.4", asset: newer)]), key: publicKey))
+        #expect(try Data(contentsOf: fallback.url) == Data("0.2.4's".utf8) && fallback.temporary)
+        #expect(!FileManager.default.fileExists(atPath: kept.path), "a newer release's was kept under 0.2.3")
+        #expect(asked.withLock { $0.first } == mine + "SHA256SUMS")
+        try? FileManager.default.removeItem(at: fallback.url)
+
+        // Its own has one: that one, kept; the latest never asked.
+        asked.withLock { $0 = [] }
+        let got = try #require(await BoxTailnetBinary.local(
+            "linux-x86_64", override: nil, helper: nil, build: build,
+            fetch: fetch([mine: try release("0.2.3", asset: own), latest: try release("0.2.4", asset: newer)]), key: publicKey))
+        let keptNow = try Data(contentsOf: kept)
+        #expect(got.url == kept && !got.temporary && keptNow == Data("0.2.3's".utf8))
+        #expect(!asked.withLock { $0 }.contains { $0.hasPrefix(latest) })
+    }
+
     /// A Mac box gets Kore.app's own helper; a dev folder's comes first.
     @Test func aMacBoxGetsTheAppsHelper() async throws {
         let root = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ktb-\(UUID().uuidString.prefix(8))")
