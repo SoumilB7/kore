@@ -153,7 +153,7 @@ struct HostTests {
         #expect(unknown.got.last == .bye(.auth))
     }
 
-    @Test func revokingClosesTheGrantsConnection() async throws {
+    @Test func revokingEndsTheConnectionAtItsNextCommand() async throws {
         let rig = try HostRig()
         defer { rig.finish() }
         try rig.host.start()
@@ -163,9 +163,63 @@ struct HostTests {
         try await until { !client.got.isEmpty }
         client.hello(grant: grant)
         try await until { client.got.count >= 3 }
+        client.socket.send(.cmd(id: "1", .control(.foldersList, ControlArgs())))
+        try await until { client.got.contains { if case .result(let r) = $0 { r.id == "1" } else { false } } }
+        // No signal: the file is gone, and the next command reads it again.
         store.revoke("laptop")
-        rig.host.grantsChanged()
+        client.socket.send(.cmd(id: "2", .control(.foldersList, ControlArgs())))
         try await until { client.ended }
+        #expect(client.got.last == .bye(.auth))
+    }
+
+    @Test func aLoweredGrantTakesEffectAtTheNextCommandAndAReissueEndsIt() async throws {
+        let rig = try HostRig()
+        defer { rig.finish() }
+        try rig.host.start()
+        let store = GrantStore(rig.paths.grants)
+        let grant = try store.allow("laptop", control: .act, socket: rig.paths.socket)
+        let client = try Client(rig.paths.socket)
+        try await until { !client.got.isEmpty }
+        client.hello(grant: grant)
+        try await until { client.got.count >= 3 }
+        // Lowered by hand in the file, same secret: the next command is a watch grant's.
+        var lowered = grant
+        lowered.control = .watch
+        try HostPaths.privateFile(JSONEncoder().encode(lowered), to: rig.paths.grants.appendingPathComponent("laptop.json"))
+        client.socket.send(.cmd(id: "1", .control(.foldersList, ControlArgs())))
+        try await until { client.got.contains { if case .result(let r) = $0 { r.id == "1" } else { false } } }
+        let answer = client.got.compactMap { if case .result(let r) = $0, r.id == "1" { r } else { nil } }.first
+        #expect(answer?.code == .deniedControl)
+        #expect(store.current("laptop", secret: grant.secret)?.control == .watch)
+        // `allow` again: a new secret, and the old connection ends.
+        try store.allow("laptop", control: .full, socket: rig.paths.socket)
+        #expect(store.current("laptop", secret: grant.secret) == nil)
+        client.socket.send(.cmd(id: "2", .control(.foldersList, ControlArgs())))
+        try await until { client.ended }
+    }
+
+    @Test func aSecondDaemonOnTheSameFolderStopsAndLeavesTheSocket() async throws {
+        let rig = try HostRig()
+        defer { rig.finish() }
+        try rig.host.start()
+        #expect(HostLock.held(rig.paths.lock))
+        let second = HostDaemon(paths: rig.paths)
+        #expect(throws: HostLockError.self) { try second.start() }
+        second.stop()
+        // The first still listens, on the same socket, with its pid file.
+        #expect(FileManager.default.fileExists(atPath: rig.paths.socket.path))
+        #expect(FileManager.default.fileExists(atPath: rig.paths.pid.path))
+        let grant = try GrantStore(rig.paths.grants).allow("laptop", control: .act, socket: rig.paths.socket)
+        let client = try Client(rig.paths.socket)
+        try await until { !client.got.isEmpty }
+        client.hello(grant: grant)
+        try await until { client.got.count >= 3 }
+        // Once it stops, the lock is free again.
+        rig.host.stop()
+        #expect(!HostLock.held(rig.paths.lock))
+        let third = HostDaemon(paths: rig.paths)
+        try third.start()
+        third.stop()
     }
 
     @Test func aChatsLogKeepsItsEntriesAcrossARestart() async throws {

@@ -51,9 +51,12 @@ package enum LinkMessage: Sendable, Equatable {
     package struct Folder: Codable, Sendable, Equatable {
         package var windowId: String
         package var path: String
-        package init(windowId: String, path: String) {
+        /// 1.4 (additive): true when the folder isn't on the box any more; it stays listed.
+        package var missing: Bool?
+        package init(windowId: String, path: String, missing: Bool? = nil) {
             self.windowId = windowId
             self.path = path
+            self.missing = missing
         }
     }
 

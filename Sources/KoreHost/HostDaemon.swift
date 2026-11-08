@@ -13,6 +13,8 @@ package final class HostDaemon {
     package private(set) var config: HostConfig
     package private(set) var chats: [HostChat] = []
     private var listener: HostListener?
+    /// Held from `start` to `stop`: one daemon per runtime folder.
+    private var lock: HostLock?
     private var connections: [LinkClient] = []
     private let epoch = UUID().uuidString.lowercased()
     /// A chat's CLI stops after this long with nothing to do; the next send resumes it.
@@ -31,7 +33,7 @@ package final class HostDaemon {
     package private(set) var clis: [CLIState] = []
     /// Files full grants uploaded, by blob id (link 1.5's attachments).
     var blobs: [String: URL] = [:]
-    package static let version = "0.1"
+    package static let version = HostVersion.string
 
     package init(paths: HostPaths) {
         self.paths = paths
@@ -48,46 +50,48 @@ package final class HostDaemon {
         for chat in chats { watch(chat) }
     }
 
-    /// Starts listening; the socket exists when this returns.
+    /// Starts listening; the socket exists when this returns. Throws `HostLockError.held`, and
+    /// leaves the socket alone, while another daemon runs on the same runtime folder.
     package func start() throws {
+        try paths.needRuntime()
+        lock = try HostLock(paths.lock)
         try HostPaths.privateFolder(paths.state)
         listener = try HostListener(path: paths.socket) { [weak self] socket in self?.accepted(socket) }
         sweepUploads()
         try? HostPaths.privateFile(Data("\(getpid())\n".utf8), to: paths.pid)
+        HostJournal.note("start", ["version": Self.version, "link": HostVersion.link, "pid": "\(getpid())", "chats": "\(chats.count)"])
     }
 
     package func stop() {
         for connection in connections { connection.end(.quit) }
         for chat in chats { chat.sleep() }
+        guard let lock else { return }
         listener?.stop()
         try? FileManager.default.removeItem(at: paths.pid)
-    }
-
-    /// Grants were revoked (`kore-host revoke` signals the daemon): their connections close.
-    package func grantsChanged() {
-        let store = GrantStore(paths.grants)
-        for connection in connections {
-            guard let grant = connection.grant else { continue }
-            if store.load(grant.name)?.secret != grant.secret { connection.end(.auth) }
-        }
+        lock.release()
+        self.lock = nil
+        HostJournal.note("stop")
     }
 
     // MARK: Folders and chats
 
-    package var folders: [LinkMessage.Folder] { config.folders.map { .init(windowId: Self.windowID($0), path: $0) } }
+    /// The folders served; one that isn't there any more stays, said missing.
+    package var folders: [LinkMessage.Folder] {
+        config.folders.map { .init(windowId: Self.windowID($0), path: $0, missing: HostConfig.missing($0) ? true : nil) }
+    }
 
     static func windowID(_ folder: String) -> String { StableID.of(folder, prefix: "w_") }
 
     func folder(windowId: String) -> String? { config.folders.first { Self.windowID($0) == windowId } }
 
-    /// Adds a folder to `config.json`: an absolute path to a folder that exists.
+    /// Adds a folder to `config.json`: a folder that exists, by its absolute path or under `~`
+    /// (this box's home). While `config.json` can't be read it's served until the next start, and
+    /// the file is left as it is.
     func addFolder(_ path: String) -> String? {
-        let standard = URL(fileURLWithPath: path).standardizedFileURL.path
-        var isDir: ObjCBool = false
-        guard path.hasPrefix("/"), FileManager.default.fileExists(atPath: standard, isDirectory: &isDir), isDir.boolValue else { return nil }
+        guard let standard = HostConfig.normalised(path), !HostConfig.missing(standard) else { return nil }
         if !config.folders.contains(standard) {
             config.folders.append(standard)
-            try? config.save(paths.config)
+            do { try config.save(paths.config) } catch { HostJournal.note("folder not saved", ["path": standard, "reason": "\(error)"]) }
             broadcastWindows()
         }
         return standard
@@ -153,6 +157,7 @@ package final class HostDaemon {
             guard let quiet = running.filter(\.idle).min(by: { $0.lastUsed < $1.lastUsed }) else { return nil }
             sleep(quiet)
         }
+        HostJournal.note("cli start", ["chat": hc.id, "cli": hc.record.provider])
         let chat = hc.live(services: services)
         chat.automatic = !drivenByFull(hc)
         return chat
@@ -160,6 +165,7 @@ package final class HostDaemon {
 
     func sleep(_ hc: HostChat) {
         idleStops.removeValue(forKey: hc.id)?.cancel()
+        if hc.cliRunning { HostJournal.note("cli stop", ["chat": hc.id, "cli": hc.record.provider]) }
         hc.sleep()
         broadcast(chats: [hc])
         // The CLI's pipes and the chat's state go with it: their memory goes back once they have.
@@ -217,6 +223,7 @@ package final class HostDaemon {
     }
 
     func ended(_ connection: LinkClient) {
+        if connections.contains(where: { $0 === connection }), let grant = connection.grant { HostJournal.note("disconnect", ["grant": grant.name]) }
         connections.removeAll { $0 === connection }
         HostMemory.releaseSoon()
     }

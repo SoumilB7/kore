@@ -44,6 +44,14 @@ package struct GrantStore: Sendable {
         return try? JSONDecoder().decode(Grant.self, from: data)
     }
 
+    /// The grant as its file says now, for a connection that proved `secret`: nil once it's
+    /// revoked or issued again (a new secret). Read on every command, so `revoke` and a lowered
+    /// `--control` take effect at the next one, with no signal to the daemon.
+    package func current(_ name: String, secret: String) -> Grant? {
+        guard let now = load(name), now.secret == secret else { return nil }
+        return now
+    }
+
     package func all() -> [Grant] {
         let names = (try? FileManager.default.contentsOfDirectory(atPath: folder.path)) ?? []
         return names.filter { $0.hasSuffix(".json") }.map { String($0.dropLast(5)) }.sorted().compactMap(load)

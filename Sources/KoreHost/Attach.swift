@@ -22,14 +22,16 @@ package final class Attach {
     private var stdinSource: DispatchSourceRead?
     private let done: (Int32) -> Void
 
-    package init(grant: Grant, done: @escaping (Int32) -> Void) throws {
+    /// Connects to the daemon's socket (`paths.socket`, where the running daemon listens, not the
+    /// one the grant was made beside); throws when no daemon answers there.
+    package init(grant: Grant, socket path: URL, done: @escaping (Int32) -> Void) throws {
         self.grant = grant
         self.done = done
-        socket = try HostListener.connect(to: grant.socket)
+        socket = try HostListener.connect(to: path.path)
     }
 
     package func start() {
-        socket.start(max: LinkFrame.outboundMax, frame: { [weak self] data in self?.fromHost(data) }, ended: { [weak self] in self?.done(0) })
+        socket.start(max: LinkFrame.outboundMax, frame: { [weak self] data in self?.fromHost(data) }, ended: { [weak self] in self?.done(AttachExit.ended.rawValue) })
         let source = DispatchSource.makeReadSource(fileDescriptor: 0, queue: .main)
         source.setEventHandler { [weak self] in
             MainActor.assumeIsolated {
@@ -38,10 +40,10 @@ package final class Attach {
                 let count = read(0, &chunk, chunk.count)
                 guard count > 0 else {
                     self.socket.close()
-                    return self.done(0)
+                    return self.done(AttachExit.ended.rawValue)
                 }
                 self.input.append(contentsOf: chunk[0..<count])
-                guard let frames = try? LinkFrame.take(&self.input, max: LinkFrame.inboundMax) else { return self.done(1) }
+                guard let frames = try? LinkFrame.take(&self.input, max: LinkFrame.inboundMax) else { return self.done(AttachExit.broken.rawValue) }
                 for frame in frames { self.fromClient(frame) }
             }
         }
@@ -94,92 +96,6 @@ private enum Glue3 {
         Glibc.write(fd, buffer, count)
         #else
         Musl.write(fd, buffer, count)
-        #endif
-    }
-}
-
-/// The systemd user unit, and telling systemd the socket is up (`Type=notify`).
-package enum HostService {
-    package static let unitName = "kore-host.service"
-
-    package static func unit(executable: String) -> String {
-        """
-        [Unit]
-        Description=kore-host: Kore's chats on this machine, for the Mac over SSH
-        After=default.target
-
-        [Service]
-        Type=notify
-        # The allocator hands freed pages back at once, so an idle box stays small.
-        Environment=MIMALLOC_PURGE_DELAY=0
-        ExecStart=\(executable) run
-        Restart=on-failure
-        RestartSec=2
-
-        [Install]
-        WantedBy=default.target
-
-        """
-    }
-
-    /// Writes the unit under ~/.config/systemd/user and enables it, started now.
-    package static func install(executable: String, home: URL) throws -> URL {
-        let folder = home.appendingPathComponent(".config/systemd/user")
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let file = folder.appendingPathComponent(unitName)
-        try unit(executable: executable).write(to: file, atomically: true, encoding: .utf8)
-        try run(["systemctl", "--user", "daemon-reload"])
-        try run(["systemctl", "--user", "enable", "--now", unitName])
-        return file
-    }
-
-    private static func run(_ arguments: [String]) throws {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = arguments
-        try process.run()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0 else { throw HostSocketError.failed(arguments.joined(separator: " ")) }
-    }
-
-    /// `READY=1` to `$NOTIFY_SOCKET`, when systemd set one: the socket is listening by then.
-    package static func notifyReady(environment: [String: String] = ProcessInfo.processInfo.environment) {
-        guard var path = environment["NOTIFY_SOCKET"], !path.isEmpty else { return }
-        let abstract = path.hasPrefix("@")
-        if abstract { path.removeFirst() }
-        #if canImport(Glibc)
-        let fd = socket(AF_UNIX, Int32(SOCK_DGRAM.rawValue), 0)
-        #else
-        let fd = socket(AF_UNIX, SOCK_DGRAM, 0)
-        #endif
-        guard fd >= 0 else { return }
-        defer { _ = Glue4.close(fd) }
-        var address = sockaddr_un()
-        address.sun_family = sa_family_t(AF_UNIX)
-        let bytes = Array(path.utf8)
-        guard bytes.count + 1 < MemoryLayout.size(ofValue: address.sun_path) else { return }
-        let start = abstract ? 1 : 0
-        withUnsafeMutableBytes(of: &address.sun_path) { raw in
-            raw.storeBytes(of: 0, toByteOffset: 0, as: UInt8.self)
-            for (i, b) in bytes.enumerated() { raw[start + i] = b }
-            raw[start + bytes.count] = 0
-        }
-        let length = socklen_t(MemoryLayout<sa_family_t>.size + start + bytes.count + (abstract ? 0 : 1))
-        let message = Array("READY=1".utf8)
-        _ = withUnsafePointer(to: &address) {
-            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { sendto(fd, message, message.count, 0, $0, length) }
-        }
-    }
-}
-
-private enum Glue4 {
-    static func close(_ fd: Int32) -> Int32 {
-        #if canImport(Darwin)
-        Darwin.close(fd)
-        #elseif canImport(Glibc)
-        Glibc.close(fd)
-        #else
-        Musl.close(fd)
         #endif
     }
 }

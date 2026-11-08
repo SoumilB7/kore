@@ -7,45 +7,64 @@ import Glibc
 import Musl
 #endif
 import KoreHost
+import LinkProtocol
 
-/// kore-host: Kore's chats on a headless machine, served over the link (`docs/link-1.4-box.md`).
+/// kore-host: Kore's chats on a headless machine, served over the link (`docs/kore-host.md`).
 let usage = """
     usage: kore-host run
            kore-host allow <name> [--control watch|act|full]
            kore-host revoke <name>
            kore-host grants
+           kore-host status
            kore-host attach --as <name>
            kore-host install-service
+           kore-host uninstall [--purge]
+           kore-host --version
     """
 
-func fail(_ message: String) -> Never {
+// The Mac's diagnostic logs (`~/Library/Logs/Kore`) aren't kept on a box: kore-host's own lines go
+// to stderr, which is the journal under systemd. KORE_LOG_DIR set by hand still wins.
+setenv("KORE_LOG_DIR", "off", 0)
+
+func fail(_ message: String, code: Int32 = 2) -> Never {
     FileHandle.standardError.write(Data((message + "\n").utf8))
-    exit(2)
+    exit(code)
 }
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 let paths = HostPaths()
 let grants = GrantStore(paths.grants)
+let home = HostPaths.home()
 var keep: [Any] = []
+
+/// The running daemon's pid, for "already running".
+func runningPid() -> String {
+    let pid = (try? String(contentsOf: paths.pid, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+    return pid.map { " (pid \($0))" } ?? ""
+}
 
 switch arguments.first {
 case "run":
     signal(SIGPIPE, SIG_IGN)
+    if let problem = paths.runtimeProblem { fail("kore-host: \(problem)") }
+    if HostLock.held(paths.lock) { fail("kore-host is already running\(runningPid()); this one stops here") }
     HostMemory.smallPages()
     let host = HostDaemon(paths: paths)
-    do { try host.start() } catch { fail("\(error)") }
+    do {
+        try host.start()
+    } catch HostLockError.held {
+        fail("kore-host is already running\(runningPid()); this one stops here")
+    } catch {
+        fail("\(error)")
+    }
     HostService.notifyReady()
-    for (number, action) in [(SIGTERM, "stop"), (SIGINT, "stop"), (SIGHUP, "grants")] {
+    for number in [SIGTERM, SIGINT] {
         signal(number, SIG_IGN)
         let source = DispatchSource.makeSignalSource(signal: number, queue: .main)
         source.setEventHandler {
             MainActor.assumeIsolated {
-                if action == "grants" {
-                    host.grantsChanged()
-                } else {
-                    host.stop()
-                    exit(0)
-                }
+                host.stop()
+                exit(0)
             }
         }
         source.resume()
@@ -60,38 +79,46 @@ case "allow":
         guard at + 1 < arguments.count, let picked = GrantControl(rawValue: arguments[at + 1]) else { fail("--control is watch, act or full") }
         control = picked
     }
+    let replacing = grants.load(arguments[1]) != nil
     do {
         let grant = try grants.allow(arguments[1], control: control, socket: paths.socket)
-        print("allowed \(grant.name) (\(grant.control.rawValue))")
+        print("allowed \(grant.name) (\(grant.control.rawValue))" + (replacing ? ": its old connection ends at its next command" : ""))
     } catch { fail("\(error)") }
 case "revoke":
     guard arguments.count >= 2 else { fail(usage) }
     guard grants.revoke(arguments[1]) else { fail("no grant named \(arguments[1])") }
-    // The daemon closes that grant's connection.
-    if let text = try? String(contentsOf: paths.pid, encoding: .utf8), let pid = Int32(text.trimmingCharacters(in: .whitespacesAndNewlines)) {
-        kill(pid, SIGHUP)
-    }
+    // The daemon reads the grant again on each command: a live connection ends at its next one.
     print("revoked \(arguments[1])")
 case "grants":
     for grant in grants.all() { print("\(grant.name)\t\(grant.control.rawValue)") }
+case "status":
+    for line in HostStatus.lines(paths: paths, home: home.path) { print(line) }
 case "attach":
-    guard arguments.count >= 3, arguments[1] == "--as" else { fail(usage) }
-    guard let grant = grants.load(arguments[2]) else { fail("no grant named \(arguments[2])") }
+    guard arguments.count >= 3, arguments[1] == "--as" else { fail(usage, code: AttachExit.usage.rawValue) }
+    if let problem = paths.runtimeProblem { fail("kore-host: \(problem)", code: AttachExit.noRuntime.rawValue) }
+    guard let grant = grants.load(arguments[2]) else { fail("kore-host: no grant named \(arguments[2])", code: AttachExit.noGrant.rawValue) }
     signal(SIGPIPE, SIG_IGN)
     MainActor.assumeIsolated {
         do {
-            let attach = try Attach(grant: grant) { code in exit(code) }
+            let attach = try Attach(grant: grant, socket: paths.socket) { code in exit(code) }
             attach.start()
             keep.append(attach)
-        } catch { fail("\(error)") }
+        } catch {
+            fail("kore-host isn't running (systemctl --user start kore-host)", code: AttachExit.notRunning.rawValue)
+        }
     }
     dispatchMain()
 case "install-service":
-    let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL.path
     do {
-        let file = try HostService.install(executable: executable, home: URL(fileURLWithPath: NSHomeDirectory()))
-        print("installed \(file.path)")
-    } catch { fail("\(error)") }
+        for line in try HostService.install(executable: HostService.executable(), home: home, user: HostService.user()) { print(line) }
+    } catch { fail("kore-host: \(error)") }
+case "uninstall":
+    var lines = HostService.uninstall(home: home)
+    if arguments.contains("--purge") { lines += HostService.purge(paths) }
+    for line in lines { print(line) }
+    print("the binary stays at \(HostService.executable()): delete it to finish")
+case "--version", "-v", "version":
+    print("kore-host \(HostVersion.string) (link \(HostVersion.link))")
 default:
     fail(usage)
 }

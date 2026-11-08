@@ -31,7 +31,13 @@ final class LinkClient {
         socket.drained = { [weak self] in self?.sendCatchUps() }
         send(.challenge(nonce: nonce))
         // A client that hasn't proven itself in 10 s is closed: the one wait while it connects.
-        let wait = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { if self?.proven == false { self?.end(.auth) } } }
+        let wait = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard self?.proven == false else { return }
+                HostJournal.note("refused", ["reason": "no hello in 10 s"])
+                self?.end(.auth)
+            }
+        }
         helloWait = wait
         DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: wait)
     }
@@ -100,7 +106,8 @@ final class LinkClient {
     /// takes effect at once.
     private func current() -> Grant? {
         guard let grant else { return nil }
-        guard let now = GrantStore(host.paths.grants).load(grant.name), now.secret == grant.secret else {
+        guard let now = GrantStore(host.paths.grants).current(grant.name, secret: grant.secret) else {
+            HostJournal.note("revoked", ["grant": grant.name])
             end(.auth)
             return nil
         }
@@ -185,16 +192,23 @@ final class LinkClient {
 
     private func hello(_ message: LinkMessage) {
         guard case .hello(let proto, _, let proof, _, let name) = message else { return end(.invalid) }
-        guard proto.major == LinkProto.major else { return end(.version) }
+        guard proto.major == LinkProto.major else {
+            HostJournal.note("refused", ["grant": name, "reason": "link \(proto.major).\(proto.minor)"])
+            return end(.version)
+        }
         guard let name, let grant = GrantStore(host.paths.grants).load(name), let secret = Data(base64Encoded: grant.secret),
             LinkProof.check(proof, secret: secret, nonce: nonce)
-        else { return end(.auth) }
+        else {
+            HostJournal.note("refused", ["grant": name, "reason": "auth"])
+            return end(.auth)
+        }
         // The newest proven connection of a grant wins: the older one (a link that died while the
         // Mac slept) is told it was replaced.
         host.replace(self, grant: grant)
         helloWait?.cancel()
         self.grant = grant
         proven = true
+        HostJournal.note("connect", ["grant": grant.name, "control": grant.control.rawValue])
         send(.welcome(host.welcome(control: grant.control)))
         rev += 1
         let full = grant.control == .full
