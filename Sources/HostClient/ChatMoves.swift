@@ -42,6 +42,8 @@ package final class MovedChats {
     package static let shared = MovedChats()
     package private(set) var all: [MovedChat] = []
     private var url: URL
+    /// The hosts' folder it's kept in (each box's moves sit under it too).
+    package var root: URL { url.deletingLastPathComponent() }
     /// Told after every change (the tabs' marks, the box windows' replicas).
     package var changed: (() -> Void)?
 
@@ -270,6 +272,7 @@ package struct ChatMoves {
         cost.linkBytes += connection.lastMoveBytes
         guard adopted.ok, let chatId = adopted.chatId else { return .failure(MoveFailure(adopted.message ?? "\(connection.alias) didn't take it", adopted.code)) }
         store.forget(session: moved.session)
+        ChatMirrors.shared.ended(session: moved.session)
         HostLog.note(connection.alias, "move back", "chat \(chatId) files \(found.files.count) rsync \(cost.rsyncSent)B")
         return .success((chatId, cost))
     }

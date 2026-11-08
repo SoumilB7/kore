@@ -128,6 +128,8 @@ package final class HostConnection {
     @ObservationIgnored private var early: [String: LinkMessage.Result] = [:]
     @ObservationIgnored private var saveQueued = false
     @ObservationIgnored private var snapshotWatchers: [String: @MainActor () -> Void] = [:]
+    /// Told the ids of chats whose meta came (a snapshot's every chat, a delta's), by key.
+    @ObservationIgnored private var metaWatchers: [String: @MainActor ([String]) -> Void] = [:]
     /// Box windows' open explorer folders (1.8 `fs.watch`), by window, and who hears their changes.
     @ObservationIgnored package var fileWatchers: [String: (folders: Set<String>, changed: (@MainActor (BoxChange) -> Void)?)] = [:]
     /// Running searches' pages (1.8 `fs.hits`), by command id.
@@ -234,6 +236,9 @@ package final class HostConnection {
     package func onSnapshot(_ key: String, _ action: (@MainActor () -> Void)?) { snapshotWatchers[key] = action }
 
     /// Hands each `sync.changed` for a box folder to `read` (its frame's bytes); nil stops it.
+    /// Watches chats' metas as they come (1.10: a moved chat's replica, followed or not).
+    package func onChatMeta(_ key: String, _ action: (@MainActor ([String]) -> Void)?) { metaWatchers[key] = action }
+
     package func onSync(_ folder: String, _ read: (@MainActor (Data) -> Void)?) { syncReaders[folder] = read }
 
     // MARK: Following chats
@@ -604,6 +609,7 @@ package final class HostConnection {
                 entry.follower?.meta(self.chats[id])
             }
             for watcher in snapshotWatchers.values { watcher() }
+            for watcher in metaWatchers.values { watcher(Array(self.chats.keys)) }
             saveSoon()
         case .delta(_, let windows, let chats, let removed, let extras):
             if let windows { self.windows = windows }
@@ -622,6 +628,7 @@ package final class HostConnection {
                 self.chats[id] = nil
                 followers[id]?.follower?.meta(nil)
             }
+            if let chats, !chats.isEmpty { for watcher in metaWatchers.values { watcher(chats.map(\.id)) } }
             saveSoon()
         case .historyPage(let id, _, let sessions, _):
             historyAsks.removeValue(forKey: id)?.resume(returning: sessions)

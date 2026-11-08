@@ -108,6 +108,54 @@ struct ChatMoveTests {
         #expect(again.cost.rsyncReceived < size / 4)
     }
 
+    @Test func anHourOfAChattyChatMirrorsInFewSmallFrames() async throws {
+        let s = try await sides()
+        defer { s.rig.finish() }
+        let hc = try #require(s.rig.host.newChat(folder: s.rig.folder.path, provider: "claude", modelId: "haiku", title: "Repos", session: Self.session))
+        try write(Self.rows(SessionFiles.real(s.rig.folder.path), count: 10), s.boxProjects.appendingPathComponent("\(Self.session).jsonl"))
+        let brought = try await s.moves.bring(chatId: hc.id, gen: 0, boxFolder: s.rig.folder.path, pair: s.pair).get()
+        let mirrors = ChatMirrors()
+        mirrors.store = s.moves.store
+        mirrors.connection = { _ in s.connection }
+        mirrors.every = 0.02
+        let mirror = mirrors.mirror(brought.moved)
+        func peak() -> Int {
+            var usage = rusage()
+            getrusage(RUSAGE_SELF, &usage)
+            return Int(usage.ru_maxrss)
+        }
+        // An hour's worth: 60 turns, each a message, 400 streamed pieces, three tools with output.
+        func turn(_ t: Int) {
+            mirrors.event(session: Self.session, .userMessage(text: "turn \(t)", attachments: [], id: "m\(t)"))
+            mirrors.event(session: Self.session, .turnStarted("t\(t)", origin: .user, at: Date()))
+            for p in 0..<400 { mirrors.event(session: Self.session, .text("a\(t)", .answer, "word\(p) ", agent: .main)) }
+            for k in 0..<3 {
+                for _ in 0..<50 { mirrors.event(session: Self.session, .toolOutput(id: "x\(t).\(k)", String(repeating: "o", count: 80) + "\n", agent: .main)) }
+            }
+            mirrors.event(session: Self.session, .turnFinished("t\(t)", .completed, duration: .seconds(3)))
+        }
+        // No client follows the replica: nothing goes, it waits on disk.
+        let before = peak()
+        for t in 0..<30 { turn(t) }
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(mirror.frames == 0 && mirror.count > 0)
+        // The box window follows it: what waited goes, then each turn as it comes.
+        s.connection.post(StreamWire.encode(ChatFollow(chatId: hc.id, after: nil, log: nil)))
+        try await until { mirror.acked == mirror.count }
+        for t in 30..<60 {
+            turn(t)
+            try await Task.sleep(for: .milliseconds(30))
+        }
+        mirror.write()
+        try await until { mirror.acked == mirror.count }
+        #expect(hc.record.owner?.mirrored == mirror.count)
+        let held = await hc.stream.since(nil, log: nil).items.compactMap(\.e)
+        let text = held.compactMap { if case .text(_, _, let t, _) = $0 { t } else { nil } }.joined()
+        #expect(text.contains("word0 word1 ") && text.contains("word399 "))
+        print("mirror, an hour: \(mirror.count) events in \(mirror.frames) frames, \(mirror.sentBytes) B on the link, resident +\((peak() - before) / 1024) KiB")
+        #expect(mirror.frames < 200)
+    }
+
     @Test func aStaleReturnStaysHereAndAFailedCopyUnfreezes() async throws {
         let s = try await sides()
         defer { s.rig.finish() }
