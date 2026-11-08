@@ -147,7 +147,9 @@ struct ChatMoveUITests {
         let local = Workspace.forWindow(canonical, restore: false)
         let tab = try #require(local.tabs.first { $0.chat?.status.sessionId == Self.session })
         #expect(local.activeTab === tab)
-        #expect(tab.chat?.launchModel == "haiku" && tab.chat?.launchEffort == "low" && tab.chat?.title == "Repos")
+        // The box's model when this Mac's CLI lists it (or hasn't listed yet), else the default.
+        let model = Workspace.usable("haiku", among: ArsenalModels.seen["claude"] ?? []) ? "haiku" : nil
+        #expect(tab.chat?.launchModel == model && tab.chat?.launchEffort == "low" && tab.chat?.title == "Repos")
         #expect(ChatPlaces.shared.moved(tab.chat!)?.alias == "mybox")
         #expect(Workspace.localTab(session: Self.session)?.1 === tab)
 

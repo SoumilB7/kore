@@ -207,9 +207,14 @@ enum ChatMoving {
     }
 
     /// The pair a box folder syncs through: its own, or one around it.
-    static func pair(alias: String, boxFolder: String) -> SyncPair? {
+    static func pair(alias: String, boxFolder: String) -> SyncPair? { pairs(alias, boxFolder) }
+
+    /// The pairs as kept (tests give their own).
+    static var pairs: (String, String) -> SyncPair? = { alias, boxFolder in
         SyncPairList.shared.pair(alias: alias, box: boxFolder) ?? SyncPairList.shared.around(alias: alias, box: boxFolder)
     }
+    /// A pair's sync for a return while no box window runs it (tests: none).
+    static var makeSync: (SyncPair, HostConnection) -> HostSync? = { pair, connection in HostSync(pair: pair, connection: connection) }
 
     /// Brings it at the gen last heard; a box that says the gen moved on is asked at the ones after.
     static func release(_ moves: ChatMoves, alias: String, chatId: String, boxFolder: String, pair: SyncPair, stop: Bool)
@@ -271,7 +276,7 @@ enum ChatMoving {
             guard connection.moves else { return sheet.fail("Update kore-host on \(moved.alias) to move chats") }
             // The pair's sync while no box window runs it: started for the check, stopped after.
             var sync = running
-            if sync == nil, let made = HostSync(pair: pair, connection: connection) {
+            if sync == nil, let made = makeSync(pair, connection) {
                 made.start()
                 sheet.ownSync = made
                 sync = made
