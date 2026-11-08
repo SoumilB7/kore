@@ -192,6 +192,9 @@ final class ScrollShift: ObservableObject {
         return true
     }
 
+    /// The page is magnified (a pinch).
+    var isMagnified: Bool { (scrollView?.magnification ?? 1) > 1.001 }
+
     /// Sits in the content and tells its `ScrollShift` the scroll view it's in.
     struct Finder: NSViewRepresentable {
         let shift: ScrollShift

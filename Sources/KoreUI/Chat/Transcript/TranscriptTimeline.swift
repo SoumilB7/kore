@@ -418,12 +418,12 @@ struct TranscriptTimeline: View, Equatable {
                     following.value = true
                 }
                 // Rows measured after they were placed change the height: while following, stay
-                // pinned to the end through layout (an inset's move, the visible height's too) as
-                // well as new content (T3 Code does both).
-                if !shift.zoomAdjusting, following.value, !widthHeld, height != geometry.value.height || insetSettling.value || visibleMoved,
+                // pinned to the end through layout (`pinsEnd`).
+                if !shift.zoomAdjusting, following.value, !widthHeld,
+                    Self.pinsEnd(grew: height != geometry.value.height, insetSettling: insetSettling.value, visibleMoved: visibleMoved, magnified: shift.isMagnified),
                     glidingUntil.value.map({ Date() >= $0 }) ?? true
                 {
-                    proxy.scrollTo(Self.end, anchor: .bottom)
+                    pinEnd(proxy)
                 }
                 // Within a screen of the top on the way up: earlier turns go in above, as the top
                 // row's press does, with what's on screen kept where it is. Only the reader's own
@@ -492,9 +492,11 @@ struct TranscriptTimeline: View, Equatable {
             }
             .onAppear {
                 shift.onMagnified = { [sticky] in sticky.magnified.set($0) }
-                shift.onZoomBegin = { [glidingUntil, glideCut, store, position, nudge, geometry, insetTop, following, zoomFollowing, zoomRejoining, zoomBegan] native in
+                shift.onZoomBegin = { [glidingUntil, glideCut, store, position, nudge, geometry, insetTop, following, zoomFollowing, zoomRejoining, zoomBegan, shift] native in
                     zoomFollowing.value = following.value
                     zoomBegan.value = native
+                    // The pinch holds the page itself: nothing else does meanwhile.
+                    shift.release()
                     zoomRejoining.value = false
                     glidingUntil.value = nil
                     glideCut.value = store.sentAt
@@ -532,9 +534,15 @@ struct TranscriptTimeline: View, Equatable {
                     instant.disablesAnimations = true
                     withTransaction(instant) {
                         // Replace the absolute target frozen at begin, rather than leaving
-                        // it to compete with following when the next text arrives.
-                        position.value = ScrollPosition(edge: .bottom)
-                        proxy.scrollTo(Self.end, anchor: .bottom)
+                        // it to compete with following when the next text arrives. A magnified
+                        // page keeps its side: no edge target, pinned up or down natively.
+                        if shift.isMagnified {
+                            position.value = ScrollPosition()
+                            shift.hold(.end, until: Date() + Self.landing)
+                        } else {
+                            position.value = ScrollPosition(edge: .bottom)
+                            proxy.scrollTo(Self.end, anchor: .bottom)
+                        }
                     }
                 }
                 shift.onZoomInput = { [zoomRejoining] in
@@ -768,6 +776,14 @@ struct TranscriptTimeline: View, Equatable {
             following.value = true
         }
         guard following.value else { return }
+        if shift.isMagnified {
+            // A magnified page goes to the end at once, up or down only, keeping its side: no
+            // glide (SwiftUI's scroll doesn't count the magnification, and centres the page).
+            glidingUntil.value = nil
+            glideCut.value = store.sentAt
+            pinEnd(proxy)
+            return
+        }
         let glideEnd = store.sentAt.map { $0.addingTimeInterval(Self.glide) }
         if !showing, !reduceMotion, store.sentAt != glideCut.value, let glideEnd, Date() < glideEnd {
             glidingUntil.value = glideEnd
@@ -779,6 +795,26 @@ struct TranscriptTimeline: View, Equatable {
             var instant = Transaction()
             instant.disablesAnimations = true
             withTransaction(instant) { proxy.scrollTo(Self.end, anchor: .bottom) }
+        } else {
+            proxy.scrollTo(Self.end, anchor: .bottom)
+        }
+    }
+
+    /// Whether layout pins a followed end: new content or rows measured anew (a new height), an
+    /// inset's move, and the visible height's (a card or the composer growing under it), as T3
+    /// Code does. Not a magnified page's visible height: the zoomed view stays where it is, only
+    /// shorter or taller at the bottom, until new content or a send moves it.
+    static func pinsEnd(grew: Bool, insetSettling: Bool, visibleMoved: Bool, magnified: @autoclosure () -> Bool) -> Bool {
+        grew || insetSettling || visibleMoved && !magnified()
+    }
+
+    /// Pins the end at once. A magnified page moves up or down only, keeping the side it was
+    /// moved to; `scrollTo` with `.bottom` would centre it. It's held there natively through the
+    /// layout that follows (`ScrollShift.hold`): AppKit sizes its document after SwiftUI reports
+    /// the new height, and SwiftUI, which doesn't count the magnification, can move it meanwhile.
+    private func pinEnd(_ proxy: ScrollViewProxy) {
+        if shift.isMagnified {
+            shift.hold(.end, until: Date() + Self.landing)
         } else {
             proxy.scrollTo(Self.end, anchor: .bottom)
         }

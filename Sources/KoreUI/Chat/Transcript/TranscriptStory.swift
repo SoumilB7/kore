@@ -30,6 +30,9 @@ package struct StoryTranscript {
     /// The scroll view the timeline knows it's in.
     package var scrollView: NSScrollView? { store.storyScrollView?() }
 
+    /// When the last message went out.
+    package var sentAt: Date? { store.sentAt }
+
     /// Every entry, including those above the built window.
     package var entries: [Entry] {
         store.entries.map { e in

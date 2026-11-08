@@ -15,6 +15,118 @@ final class PinchZoomGesture: ChatStoryline {
     }
 }
 
+/// Magnified at the chat's end by a pinch right of centre (the page moved to its right side),
+/// the view stays put through the composer growing (three ⇧↩), its side and top as they were.
+/// A send takes it to the end and the reply streams in: the end is pinned up and down only, the
+/// page at its side and scale, and at the end.
+final class PinchZoomKeepsSide: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    static let rest = (13...80).map { PinchZoomWhileStreaming.paragraph($0) }.joined(separator: "\n\n")
+    override class var script: CLIScript {
+        // Taller than the view unzoomed: a shorter one SwiftUI keeps at its top whatever the zoom.
+        CLIScript(turns: [CLIScript.reply(PinchZoomNewLineHolds.answer), [.startTurn, .stream(.answer, rest, chunk: 8), .finishTurn(.completed)]])
+    }
+    override func steps() -> [any Step] {
+        let newline = Key(KeyChord(.returnKey, .shift))
+        return super.steps() + [
+            Send("Show some text"), TurnFinished(1), WaitIdle(), WaitForFocus(.id(StoryID.Composer.field)),
+            ZoomRightAtEnd(),
+            newline, newline, newline,
+            ExpectSideKept(streaming: false),
+            Pace(240), Send("Keep writing"),
+            ExpectSideKept(streaming: true),
+        ]
+    }
+
+    /// The page's side, top, scale and visible height as the pinch left them.
+    final class Noted { var side: CGFloat = 0, top: CGFloat = 0, scale: CGFloat = 1, height: CGFloat = 0 }
+
+    /// The view's bottom within this of the content's end: at the end, as following counts it.
+    static let atEnd: CGFloat = 50
+
+    @MainActor static func distanceToEnd(_ scroll: NSScrollView) -> CGFloat {
+        guard let document = scroll.documentView else { return .infinity }
+        return document.frame.height - scroll.contentView.bounds.maxY
+    }
+}
+
+/// A pinch at the bottom right of the view, at the chat's end: magnified 1.5×, the page moved to
+/// its right side, the bottom still at the end.
+private struct ZoomRightAtEnd: Step {
+    var label: String { "Pinch to 1.5× right of centre at the chat's end" }
+
+    func run(_ story: StoryContext) async throws {
+        let chat = try story.activeChat()
+        let scroll = try await story.wait("the transcript's scroll view") { chat.storyTranscript.scrollView }
+        let clip = scroll.contentView
+        // Past the send's glide (two seconds), and the new view's settling with it: either moves
+        // the view by SwiftUI's own scroll, which a pinch this instant (a real one holds the page
+        // through it) would have land on the magnified page.
+        if let sent = chat.storyTranscript.sentAt {
+            try await story.until("the send's glide over", timeout: .seconds(3)) { Date() >= sent + 2.05 }
+        }
+        // A reader's scroll to the end first: a scripted turn's glide can stop short of it.
+        try await Scroll(.answer(turn: 1), to: .bottom).run(story)
+        try await story.until("the transcript at its end") { PinchZoomKeepsSide.distanceToEnd(scroll) < 2 }
+        try await PinchZoomNewLineHolds.pinch(story, scroll, at: CGPoint(x: 0.8, y: 0.99), amount: 0.5)
+        let noted = story.stash(PinchZoomKeepsSide.Noted.self) { .init() }
+        noted.side = clip.bounds.minX
+        noted.top = clip.bounds.minY
+        noted.scale = scroll.magnification
+        noted.height = clip.frame.height
+        guard abs(noted.scale - 1.5) < 0.01, noted.side > 1, PinchZoomKeepsSide.distanceToEnd(scroll) < PinchZoomKeepsSide.atEnd else {
+            throw StoryFailure.other("the pinch left scale \(noted.scale), side \(noted.side), \(PinchZoomKeepsSide.distanceToEnd(scroll)) pt from the end")
+        }
+    }
+}
+
+/// The page at the side and scale the pinch left: after the composer grew (the view got shorter)
+/// at its top too, or through each delta of a reply streaming in at the end.
+private struct ExpectSideKept: Step {
+    let streaming: Bool
+    var label: String { "Expect the magnified page's side kept, \(streaming ? "at the end through a streamed reply" : "and its top, with the composer grown")" }
+    var timeout: Duration? { .seconds(15) }
+
+    func run(_ story: StoryContext) async throws {
+        let chat = try story.activeChat()
+        guard let scroll = chat.storyTranscript.scrollView else { throw StoryFailure.modelMissing("the transcript's scroll view") }
+        let noted = story.stash(PinchZoomKeepsSide.Noted.self) { .init() }
+        let clip = scroll.contentView
+        func check(_ when: String) throws {
+            let side = clip.bounds.minX, scale = scroll.magnification
+            guard abs(side - noted.side) <= 0.5, abs(scale - noted.scale) < 0.001 else {
+                throw StoryFailure.expectation("\(when): the page at side \(noted.side), \(noted.scale)× (found side \(side), \(scale)×)")
+            }
+        }
+        if streaming {
+            defer { chat.storyStop() }
+            let start = scroll.documentView?.frame.height ?? 0
+            // Each delta that lands is looked at: the end pinned for it must not move the side.
+            for n in 0..<60 {
+                let seen = count(chat)
+                try await story.until("more of the reply") { count(chat) > seen }
+                try check("after delta \(n)")
+            }
+            try await story.until("the reply past a screen, still followed", timeout: .seconds(2)) {
+                (scroll.documentView?.frame.height ?? 0) > start + clip.bounds.height
+                    && PinchZoomKeepsSide.distanceToEnd(scroll) < PinchZoomKeepsSide.atEnd
+            }
+            try check("at the end")
+        } else {
+            try await story.until("the composer grown, the transcript shorter") { clip.frame.height < noted.height - 20 }
+            try await story.idle()
+            try check("with the composer grown")
+            guard abs(clip.bounds.minY - noted.top) <= 1 else {
+                throw StoryFailure.expectation("the page's top at \(noted.top) with the composer grown (found \(clip.bounds.minY))")
+            }
+        }
+    }
+
+    @MainActor private func count(_ chat: Chat) -> Int {
+        chat.storyTranscript.entries.filter { $0.kind == .answer }.reduce(0) { $0 + $1.text.count }
+    }
+}
+
 /// Starts at the followed end, then keeps adding lines while fingers hold a pinch. Nothing
 /// reveals or scrolls a row before beginning: the test retains the normal follow state.
 /// The first page lands in one delta, so a scrollable answer never waits on the paced rate.
@@ -422,5 +534,215 @@ final class PinchLeavesStickyMessage: ChatStoryline {
             _ = PinchZoom.storySample(in: window, amount: 0, phase: .ended, at: point)
             try await story.until("still its size with the fingers up", timeout: .seconds(2)) { held() }
         }
+    }
+}
+
+/// Zoomed in at a spot above the chat's end, the composer growing a line at a time (three ⇧↩)
+/// or shrinking again leaves the zoomed view where it was: its scale, and its top-left corner in
+/// the content. The view only gets shorter or taller at the bottom. So too a little above the
+/// end, where the end is followed. Return then sends, and the view goes to the end at once,
+/// keeping its side. Unzoomed at the end, the composer growing keeps the end in view.
+final class PinchZoomNewLineHolds: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    static let answer = (1...30).map { PinchZoomGesture.paragraph($0) }.joined(separator: "\n\n")
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(answer), CLIScript.reply(PinchZoomGesture.answer)]) }
+    override func steps() -> [any Step] {
+        let grow = [Key(KeyChord(.returnKey, .shift)), Key(KeyChord(.returnKey, .shift)), Key(KeyChord(.returnKey, .shift))]
+        let shrink = [Key(KeyChord(.backspace)), Key(KeyChord(.backspace)), Key(KeyChord(.backspace))]
+        return super.steps() + [Send("Show some text"), TurnFinished(1), WaitIdle(), WaitForFocus(.id(StoryID.Composer.field)), ZoomAboveEnd()]
+            + grow + [ExpectZoomedViewKept(grown: true)] + shrink + [ExpectZoomedViewKept(grown: false), NearEnd()]
+            + grow + [ExpectZoomedViewKept(grown: true), TypeText("Next"), Key(.returnKey), ExpectSendAtEnd(), TurnFinished(2), WaitIdle(), UnzoomAtEnd()]
+            + grow + [ExpectEndHeld()]
+    }
+
+    /// The zoomed view as last noted, and how far anything moved it since.
+    @MainActor final class Noted: StoryFinishing {
+        var origin = CGPoint.zero, scale: CGFloat = 1, height: CGFloat = 0
+        var drift: CGFloat = 0
+        private var watcher: CFRunLoopObserver?
+
+        /// Where the view is now; from here on, wherever it's drawn counts: it's looked at as
+        /// each pass of the run loop ends, after the pass's layout and before its frame shows.
+        /// (AppKit can move it and back within one call, as SwiftUI resolves its insets for a
+        /// new height: never drawn, so not counted.)
+        func note(_ scroll: NSScrollView) {
+            let clip = scroll.contentView
+            origin = clip.bounds.origin
+            scale = scroll.magnification
+            height = clip.frame.height
+            drift = 0
+            finish()
+            let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, CFIndex.max - 1) { [weak self, weak clip] _, _ in
+                MainActor.assumeIsolated {
+                    guard let self, let clip else { return }
+                    self.drift = max(self.drift, hypot(clip.bounds.minX - self.origin.x, clip.bounds.minY - self.origin.y))
+                }
+            }
+            watcher = observer
+            CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)
+        }
+
+        func finish() {
+            if let watcher { CFRunLoopRemoveObserver(CFRunLoopGetMain(), watcher, .commonModes) }
+            watcher = nil
+        }
+    }
+
+    @MainActor static func distanceToEnd(_ scroll: NSScrollView) -> CGFloat {
+        guard let document = scroll.documentView else { return .infinity }
+        return document.frame.height - scroll.contentView.bounds.maxY
+    }
+
+    /// A pinch on the transcript at `at` (a fraction of the view across and down) by `amount`,
+    /// over a few frames as fingers go.
+    @MainActor static func pinch(_ story: StoryContext, _ scroll: NSScrollView, at: CGPoint, amount: CGFloat) async throws {
+        guard let window = scroll.window else { throw StoryFailure.modelMissing("the transcript's window") }
+        let clip = scroll.contentView
+        let point = clip.convert(CGPoint(x: clip.bounds.minX + clip.bounds.width * at.x, y: clip.bounds.minY + clip.bounds.height * at.y), to: nil)
+        let before = PinchZoom.storyCounts(in: window)?.commits ?? 0
+        guard PinchZoom.storySample(in: window, amount: 0, phase: .began, at: point) else { throw StoryFailure.other("the transcript did not take the pinch") }
+        for _ in 0..<6 {
+            try await Task.sleep(for: .milliseconds(16))
+            guard PinchZoom.storySample(in: window, amount: amount / 6, phase: .changed, at: point) else { throw StoryFailure.other("the pinch was cut off") }
+        }
+        try await Task.sleep(for: .milliseconds(16))
+        guard PinchZoom.storySample(in: window, amount: 0, phase: .ended, at: point) else { throw StoryFailure.other("the pinch did not end") }
+        try await story.until("the pinch to finish") { (PinchZoom.storyCounts(in: window)?.commits ?? 0) > before }
+        try await story.idle()
+        // A few more passes: whatever the pinch's end sets off lands by then.
+        for _ in 0..<10 { try await Task.sleep(for: .milliseconds(20)) }
+    }
+
+    @MainActor static func scroll(_ story: StoryContext) throws -> NSScrollView {
+        guard let scroll = try story.activeChat().storyTranscript.scrollView else { throw StoryFailure.modelMissing("the transcript's scroll view") }
+        return scroll
+    }
+}
+
+/// At the end, a reader's scroll 900 pt up, then a pinch to 1.5× right of centre and above the
+/// middle: the view away from the content's sides and its end, which isn't followed.
+private struct ZoomAboveEnd: Step {
+    var label: String { "Pinch to 1.5× at a spot well above the chat's end" }
+
+    func run(_ story: StoryContext) async throws {
+        let chat = try story.activeChat()
+        let scroll = try await story.wait("the transcript's scroll view") { chat.storyTranscript.scrollView }
+        // Past the send's glide (two seconds): it moves the view by SwiftUI's own scroll.
+        if let sent = chat.storyTranscript.sentAt {
+            try await story.until("the send's glide over", timeout: .seconds(3)) { Date() >= sent + 2.05 }
+        }
+        // A reader's scroll to the end first: a scripted turn's glide can stop short of it.
+        try await Scroll(.answer(turn: 1), to: .bottom).run(story)
+        try await Scroll(.answer(turn: 1), to: .by(-900)).run(story)
+        try await story.idle()
+        try await PinchZoomNewLineHolds.pinch(story, scroll, at: CGPoint(x: 0.75, y: 0.35), amount: 0.5)
+        let noted = story.stash(PinchZoomNewLineHolds.Noted.self) { .init() }
+        noted.note(scroll)
+        guard abs(noted.scale - 1.5) < 0.01, noted.origin.x > 1, PinchZoomNewLineHolds.distanceToEnd(scroll) > 400 else {
+            throw StoryFailure.other("the pinch left scale \(noted.scale), origin \(noted.origin), \(PinchZoomNewLineHolds.distanceToEnd(scroll)) pt from the end")
+        }
+    }
+}
+
+/// Still zoomed: a reader's scroll to the end and 100 pt back up, a spot where the end is
+/// followed.
+private struct NearEnd: Step {
+    var label: String { "Scroll the zoomed view to 100 pt above the end" }
+
+    func run(_ story: StoryContext) async throws {
+        let scroll = try PinchZoomNewLineHolds.scroll(story)
+        try await Scroll(.answer(turn: 1), to: .bottom).run(story)
+        try await Scroll(.answer(turn: 1), to: .by(-100)).run(story)
+        try await story.idle()
+        for _ in 0..<10 { try await Task.sleep(for: .milliseconds(20)) }
+        let noted = story.stash(PinchZoomNewLineHolds.Noted.self) { .init() }
+        noted.note(scroll)
+        let distance = PinchZoomNewLineHolds.distanceToEnd(scroll)
+        guard abs(noted.scale - 1.5) < 0.01, noted.origin.x > 1, distance > 50, distance < 150 else {
+            throw StoryFailure.other("the zoomed view at scale \(noted.scale), origin \(noted.origin), \(distance) pt from the end")
+        }
+    }
+}
+
+/// The composer grown (the view shorter) or shrunk (taller): the zoomed view's scale and
+/// top-left corner as noted, and never more than a point from there meanwhile.
+private struct ExpectZoomedViewKept: Step {
+    let grown: Bool
+    var label: String { "Expect the zoomed view's scale and top-left corner kept with the composer \(grown ? "grown" : "shrunk")" }
+
+    func run(_ story: StoryContext) async throws {
+        let scroll = try PinchZoomNewLineHolds.scroll(story)
+        let noted = story.stash(PinchZoomNewLineHolds.Noted.self) { .init() }
+        let clip = scroll.contentView
+        try await story.until("the composer \(grown ? "grown, the transcript shorter" : "shrunk, the transcript taller")") {
+            grown ? clip.frame.height < noted.height - 20 : clip.frame.height > noted.height + 20
+        }
+        try await story.idle()
+        for _ in 0..<10 { try await Task.sleep(for: .milliseconds(20)) }
+        let origin = clip.bounds.origin, scale = scroll.magnification
+        let moved = hypot(origin.x - noted.origin.x, origin.y - noted.origin.y)
+        let line = "\(story.name) \(grown ? "grown" : "shrunk"): scale \(noted.scale)→\(scale), origin \(noted.origin)→\(origin), moved \(String(format: "%.2f", moved)), most \(String(format: "%.2f", noted.drift)), view \(noted.height)→\(clip.frame.height)\n"
+        let url = story.outputs.appendingPathComponent(story.name + ".zoom-newline.notes")
+        if let handle = try? FileHandle(forWritingTo: url) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            try? handle.close()
+        } else {
+            try line.write(to: url, atomically: true, encoding: .utf8)
+        }
+        guard abs(scale - noted.scale) < 0.001, moved <= 1, noted.drift <= 1 else {
+            throw StoryFailure.expectation("the zoomed view at \(noted.origin), \(noted.scale)× (found \(origin), \(scale)×; moved up to \(noted.drift) pt)")
+        }
+        noted.note(scroll)
+    }
+}
+
+/// Return sent the message: the view goes to the end at once, at the zoomed scale and side.
+private struct ExpectSendAtEnd: Step {
+    var label: String { "Expect Return to send and take the view to the end" }
+    var timeout: Duration? { .seconds(10) }
+
+    func run(_ story: StoryContext) async throws {
+        let chat = try story.activeChat()
+        let scroll = try PinchZoomNewLineHolds.scroll(story)
+        try await story.until("the message sent") { chat.storyTranscript.entries.filter { $0.kind == .user }.count == 2 }
+        let noted = story.stash(PinchZoomNewLineHolds.Noted.self) { .init() }
+        noted.finish()
+        try await story.until("the view at the end", timeout: .seconds(1)) { PinchZoomNewLineHolds.distanceToEnd(scroll) < 2 }
+        let clip = scroll.contentView
+        guard abs(scroll.magnification - noted.scale) < 0.001, abs(clip.bounds.minX - noted.origin.x) <= 1 else {
+            throw StoryFailure.expectation("still \(noted.scale)× at side \(noted.origin.x) after the send (found \(scroll.magnification)× at \(clip.bounds.minX))")
+        }
+    }
+}
+
+/// A pinch back to the natural size at the bottom of the view, then the view at the end.
+private struct UnzoomAtEnd: Step {
+    var label: String { "Pinch back to the natural size at the end" }
+
+    func run(_ story: StoryContext) async throws {
+        let scroll = try PinchZoomNewLineHolds.scroll(story)
+        try await PinchZoomNewLineHolds.pinch(story, scroll, at: CGPoint(x: 0.5, y: 0.98), amount: -1)
+        guard scroll.magnification < 1.001 else { throw StoryFailure.other("the pinch left \(scroll.magnification)×") }
+        try await Scroll(.answer(turn: 2), to: .bottom).run(story)
+        try await story.idle()
+        try await story.until("the transcript at its end") { PinchZoomNewLineHolds.distanceToEnd(scroll) < 2 }
+        story.stash(PinchZoomNewLineHolds.Noted.self) { .init() }.height = scroll.contentView.frame.height
+    }
+}
+
+/// Unzoomed, the composer grown: the view still at the end.
+private struct ExpectEndHeld: Step {
+    var label: String { "Expect the end held with the composer grown" }
+
+    func run(_ story: StoryContext) async throws {
+        let scroll = try PinchZoomNewLineHolds.scroll(story)
+        let noted = story.stash(PinchZoomNewLineHolds.Noted.self) { .init() }
+        let clip = scroll.contentView
+        try await story.until("the composer grown, the transcript shorter") { clip.frame.height < noted.height - 20 }
+        try await story.idle()
+        for _ in 0..<10 { try await Task.sleep(for: .milliseconds(20)) }
+        let distance = PinchZoomNewLineHolds.distanceToEnd(scroll)
+        guard distance < 2 else { throw StoryFailure.expectation("the view at the end (found \(distance) pt above it)") }
     }
 }
