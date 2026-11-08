@@ -3,7 +3,8 @@
 # folder and signs SHA256SUMS with a throwaway key; the folder is served on 127.0.0.1 as GitHub
 # lays it out, and each update path is pointed at it with the key swapped in (a sed'd copy of the
 # scripts, a debug kore-host's KORE_TEST_* overrides, a JVM test's env):
-#   Mac     install.sh v<version> (stops before building), and Updater's version order
+#   Mac     install.sh v<version> (stops before building), and Updater's version order;
+#           KORE_REHEARSE_APP=1 also builds Kore.app from the release source into the scratch folder
 #   box     kore-host.sh, `kore-host verify`, `update --check`, `update`
 #   phone   the app's update check, download and signer check (:link UpdateRehearsalTest)
 # Each must take the release and refuse a changed file, an edited SHA256SUMS and a downgrade.
@@ -90,6 +91,22 @@ curl -fsS -o $s/SHA256SUMS $url/good/latest/download/SHA256SUMS && curl -fsS -o 
 xcrun swiftc -O -package-name kore -o $s/order Sources/KoreCore/ReleaseKey.swift $s/order-src/main.swift 2>$s/order.log
 out=$($s/order $s/SHA256SUMS $s/SHA256SUMS.sig $key $OLD $V 99.0.0 2>&1)
 check "  Updater offers v$V to $OLD only, not to $V or 99.0.0" '[[ $out == "offer none none" ]]'
+# KORE_REHEARSE_APP=1: the curl install's build too, from the release's own source, signed as an
+# install signs (this Mac's identity, scripts/local-sign.sh), into the scratch folder only. It
+# never runs build-app.sh --install: that would quit Kore and replace /Applications/Kore.app.
+if [[ -n ${KORE_REHEARSE_APP:-} ]]; then
+    plist $OLD; out=$(mac good)
+    ident=$(scripts/local-sign.sh)
+    (cd $s/mac/Kore && KORE_SIGN_IDENTITY="$ident" KORE_RELEASES=$url/good KORE_RELEASE_TAG=v$V scripts/build-app.sh > $s/app-build.log 2>&1)
+    code=$?; app=$s/mac/Kore/build/Kore.app
+    check "Mac: the release source builds Kore.app (${ident:-ad-hoc})" '(( code == 0 )) && [[ -x $app/Contents/MacOS/Kore ]]'
+    check "  its version is v$V" '[[ $(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" $app/Contents/Info.plist) == $V ]]'
+    check "  the signature verifies" 'codesign --verify --deep --strict $app 2>/dev/null'
+    req=$(codesign -d -r- $app 2>&1 | sed -n 's/^\(# \)\{0,1\}designated => //p')
+    if [[ -n $ident ]]; then
+        check "  signed by this Mac's identity: same app to macOS across updates" '[[ $req == *"identifier \"dev.kore.Kore\""*"certificate leaf = H\""* ]]'
+    fi
+fi
 
 # Box: kore-host.sh on a "Linux" x86_64 (a fake uname). The real binary can't run on this Mac, so
 # a good release gets as far as running it, after the signature and hash checked out.
