@@ -92,15 +92,23 @@ for a in x86_64 aarch64; do print "fake $a" | xz -c > $dry/kore-host-linux-$a.xz
 out=$(KORE_RELEASE_DIR=$dry KORE_GO=/var/empty/no-go scripts/release.sh --dry-run 2>&1); code=$?
 tailnets=$(ls $dry | grep -c '^kore-tailnet-')
 tailnet_skipped() { [[ -f $dry/kore-tailnet-macos-arm64 || $out == *"skipped kore-tailnet-macos-arm64"* ]] }
-check "release.sh --dry-run plans without publishing" '(( code == 0 )) && [[ $out == *"dry run: would publish v$(<VERSION)"* ]]'
+check "release.sh --dry-run plans without publishing" '(( code == 0 )) && [[ $out == *"Kore $(<VERSION) ("*"as the latest release"* && $out == *"nothing published"* ]]'
 check "  SHA256SUMS: the version line, then every asset" '[[ $(head -1 $dry/SHA256SUMS) == "# kore $(<VERSION) $commit" ]] && (( $(wc -l < $dry/SHA256SUMS) == 5 + tailnets ))'
 check "  kore-host.sh is listed with its hash" 'grep -qx "$(sha scripts/kore-host.sh)  kore-host.sh" $dry/SHA256SUMS'
 check "  signed (64 bytes)" '[[ $(stat -f %z $dry/SHA256SUMS.sig) == 64 ]]'
 check "  absent kore-tailnet and kore.apk are skipped" '[[ $out == *"skipped kore.apk (not built)"* ]] && tailnet_skipped'
-check "  old releases go only after the new one is up" '[[ $out == *"only then delete every other release"* ]]'
+check "  says which releases and tags are there already" '[[ $out == *"already there: releases"* ]]'
+# Publishing takes only a prepared, signed folder for this commit, and asks on a terminal.
+pub=$(KORE_RELEASE_DIR=$tmp/none scripts/release.sh 2>&1 </dev/null); code=$?
+check "release.sh with nothing prepared publishes nothing" '(( code != 0 )) && [[ $pub == *"nothing prepared"* ]]'
+other=$tmp/other; mkdir -p $other; cp $dry/SHA256SUMS $dry/SHA256SUMS.sig $other/
+sed -i '' "1s/.*/# kore $(<VERSION) 0000000000000000000000000000000000000000/" $other/SHA256SUMS
+pub=$(KORE_RELEASE_DIR=$other scripts/release.sh 2>&1 </dev/null); code=$?
+check "  nor a folder prepared for another commit" '(( code != 0 )) && [[ $pub == *"another commit"* ]]'
+grep -q '/dev/tty' scripts/release.sh; check "  and the yes is read from the terminal" '(( $? == 0 ))'
 check "  nothing for boxes' tailnet: they don't run it yet" '! grep -q kore-tailnet-linux $dry/SHA256SUMS'
 notes=$dry/notes.md
-drykey=${${out##*throwaway key }%%;*}
+drykey=${${out##*throwaway key }%%)*}
 check "  notes: the title, three installs, what's new, the signer line" '[[ $(head -1 $notes) == "# Kore $(<VERSION)" ]] && grep -q "install.sh | bash" $notes && grep -q "kore-host.sh | sh" $notes && grep -q "kore.apk](" $notes && grep -q "^### What.s new" $notes && grep -qF "release key \`$drykey\`" $notes'
 bullets=$(awk '/^### What/ { on = 1; next } on && /^- / { n++ } on && /^$/ && n { exit } END { print n + 0 }' $notes)
 check "  3 to 6 one-line highlights" '(( bullets >= 3 && bullets <= 6 ))'

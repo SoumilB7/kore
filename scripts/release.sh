@@ -4,7 +4,12 @@
 # signed SHA256SUMS. Once the new release is up, every other release and its tag is deleted, so
 # the Releases page only ever shows the latest. Tags HEAD; commit first.
 #
-#   scripts/release.sh [--dry-run]
+#   scripts/release.sh --prepare     build every file fresh for HEAD, sign SHA256SUMS with the
+#                                    Keychain key, write notes.md, show the summary; publishes nothing
+#   scripts/release.sh               publish what --prepare made (same commit, signature checked):
+#                                    shows the summary, then asks on the terminal before anything
+#                                    goes up, and again before older releases and tags are deleted
+#   scripts/release.sh --dry-run     everything with a throwaway key; publishes nothing
 #
 # The files, each with one reader:
 #   kore-src.tar.gz             this commit's source: install.sh builds Kore.app from it
@@ -21,7 +26,13 @@
 set -euo pipefail
 
 cd "${0:A:h}/.."
-DRY=""; [[ "${1:-}" == --dry-run ]] && DRY=1
+DRY=""; PREPARE=""; PUBLISH=1
+case "${1:-}" in
+    --dry-run) DRY=1; PUBLISH="" ;;
+    --prepare) PREPARE=1; PUBLISH="" ;;
+    "") ;;
+    *) print -u2 "usage: scripts/release.sh [--prepare | --dry-run]"; exit 2 ;;
+esac
 VERSION="$(<VERSION)"
 TAG="v$VERSION"
 REPO=SoumilB7/kore
@@ -68,11 +79,22 @@ highlights=$(print -r -- "$section" | awk '
     }
   }')
 
-# The files.
+# Publishing takes only what --prepare made for this very commit, signed with the release key.
+if [[ -n $PUBLISH ]]; then
+    [[ -f "$OUT/SHA256SUMS" && -f "$OUT/SHA256SUMS.sig" ]] || { print -u2 "nothing prepared in $OUT: scripts/release.sh --prepare"; exit 1; }
+    head="$(head -1 "$OUT/SHA256SUMS")"
+    [[ $head == "# kore $VERSION $(git rev-parse HEAD)" ]] || { print -u2 "$OUT was prepared for another commit or version ($head): --prepare again"; exit 1; }
+    swift scripts/sign/sign.swift verify "$OUT/SHA256SUMS" "$OUT/SHA256SUMS.sig" "$KEY" >/dev/null || { print -u2 "SHA256SUMS.sig doesn't check out"; exit 1; }
+    (cd "$OUT" && shasum -a 256 -c <(tail -n +2 SHA256SUMS) >/dev/null) || { print -u2 "a prepared file changed since it was signed"; exit 1; }
+fi
+
+# The files: a real build starts from an empty folder, so nothing older slips in.
+[[ -n $PREPARE ]] && rm -rf "$OUT"
 mkdir -p "$OUT"
 built() { # build/release's copy into OUT, when OUT is another folder
     if [[ -f "build/release/$1" && ! "$OUT" -ef build/release ]]; then cp "build/release/$1" "$OUT/"; fi
 }
+if [[ -z $PUBLISH ]]; then
 # A dry run may build fewer (KORE_HOST_ARCHS="x86_64"); a real run needs both.
 for arch in ${=${KORE_HOST_ARCHS:-x86_64 aarch64}}; do
     [[ -f "$OUT/kore-host-linux-$arch.xz" ]] || { scripts/build-host.sh $arch; built kore-host-linux-$arch.xz; }
@@ -111,6 +133,10 @@ if [[ -z $DRY && -f "$OUT/kore.apk" ]]; then
     phone="$HOME/Library/Application Support/Kore/phone-app"
     mkdir -p "$phone" && cp "$OUT/SHA256SUMS" "$OUT/SHA256SUMS.sig" "$OUT/kore.apk" "$phone/"
 fi
+else
+    # Publishing: the files are the ones SHA256SUMS lists (checked above).
+    assets=($(tail -n +2 "$OUT/SHA256SUMS" | awk '{print $2}'))
+fi
 files=("$OUT/SHA256SUMS" "$OUT/SHA256SUMS.sig" "${assets[@]/#/$OUT/}")
 
 title="Kore $VERSION"
@@ -131,15 +157,30 @@ $highlights
 
 <sub>Every file is in SHA256SUMS, signed with Kore's Ed25519 release key \`$KEY\`; the installers and updates check it before anything runs. kore.apk signer SHA-256 \`$SIGNER\`.</sub>"
 
+print -r -- "# $title"$'\n\n'"$notes" > "$OUT/notes.md"
+older=($(gh release list --limit 200 --json tagName --jq '.[].tagName' 2>/dev/null | grep -vx "$TAG" || true))
+oldtags=($(git ls-remote --tags --refs origin 'v*' 2>/dev/null | sed 's|.*refs/tags/||' | grep -vx "$TAG" || true))
+print "\n$title ($(git rev-parse --short HEAD)) as the latest release of github.com/$REPO, with:"
+for f in $files; do printf '  %-28s %8d KB\n' "${f:t}" $(( ($(stat -f %z "$f") + 1023) / 1024 )); done
+print "notes: $OUT/notes.md"
+print "already there: releases ${older[*]:-none}; tags ${oldtags[*]:-none}"
 if [[ -n $DRY ]]; then
-    print -r -- "# $title"$'\n\n'"$notes" > "$OUT/notes.md"
-    print "\ndry run: would publish $TAG ($(git rev-parse --short HEAD)) as the latest release with:"
-    for f in $files; do printf '  %-28s %8d KB\n' "${f:t}" $(( ($(stat -f %z "$f") + 1023) / 1024 )); done
-    print "\nSHA256SUMS:"; sed 's/^/  /' "$OUT/SHA256SUMS"
-    print "\nthrowaway key $KEY; notes in $OUT/notes.md"
-    print "\nthen: tag $TAG and push it; gh release create $TAG --latest with those ${#files} files;"
-    print "check it's up with all ${#files}; only then delete every other release and tag."
+    print "\ndry run (throwaway key $KEY): nothing published"
     exit 0
+fi
+if [[ -n $PREPARE ]]; then
+    print "\nprepared and signed. To publish: scripts/release.sh (it asks first)"
+    exit 0
+fi
+
+# The owner says yes on the terminal, never a pipe or a flag.
+[[ -r /dev/tty ]] || { print -u2 "publishing asks on a terminal: run it in Terminal"; exit 1; }
+print -n "\nPublish $title now? [y/N] " > /dev/tty; read -r answer < /dev/tty
+[[ $answer == [yY] ]] || { print "not published"; exit 1; }
+drop=""
+if (( ${#older} + ${#oldtags} )); then
+    print -n "Then delete releases ${older[*]:-none} and tags ${oldtags[*]:-none}, so only $TAG shows? [y/N] " > /dev/tty
+    read -r answer < /dev/tty; [[ $answer == [yY] ]] && drop=1
 fi
 
 # The tag is the repo owner's, whatever the local git identity is, and dated like the commit.
@@ -151,6 +192,7 @@ gh release create "$TAG" --verify-tag --title "$title" --notes "$notes" --latest
 # Only once the new one is up with every file: every other release and tag goes.
 up=$(gh release view "$TAG" --json assets --jq '.assets | length')
 (( up == ${#files} )) || { print -u2 "$TAG is up with $up of ${#files} files: older releases kept"; exit 1; }
+[[ -n $drop ]] || { echo "published $TAG; older releases and tags kept"; exit 0; }
 for old in $(gh release list --limit 200 --json tagName --jq '.[].tagName'); do
     [[ "$old" == "$TAG" ]] && continue
     gh release delete "$old" --cleanup-tag --yes
