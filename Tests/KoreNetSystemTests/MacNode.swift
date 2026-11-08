@@ -1,0 +1,281 @@
+import Foundation
+import Observation
+import HostClient
+import KoreHost
+import KoreNet
+import KoreTrust
+import LinkProtocol
+import Synchronization
+import Tailnet
+
+@testable import KoreLink
+@testable import KoreUI
+
+/// The boxes' SSH ends by alias, for the Mac's `upgradeDial` (read off the main actor).
+final class SSHRoutes: Sendable {
+    private let routes = Mutex<[String: InProcessAttach]>([:])
+    func set(_ alias: String, _ attach: InProcessAttach) { routes.withLock { $0[alias] = attach } }
+    func dial(_ alias: String) throws -> (fd: Int32, onClose: @Sendable () -> Void) {
+        guard let attach = routes.withLock({ $0[alias] }) else { throw SocketError.failed("ssh", ECONNREFUSED) }
+        return try attach.dial()
+    }
+}
+
+/// Kore.app's KoreNet as it runs, made the way `NetLiveness.start` and `main.swift` make it: the
+/// real `KoreNetSwitch` (global, routing every held link), `NodeDirectory`, `NodeRekeyer`, the
+/// phones' listener `MacNet` following the switch (`MacNetSwitch.follow`), `MacNetDevices`, and
+/// `Devices.shared` over all of them. Kore's settings are the test process's own defaults
+/// (Kore reads `.standard` and `BoxList.shared`/`NetPauses.shared` can't be given others); the
+/// Keychain is memory that outlives a restart, Application Support a scratch folder. A restart
+/// drops every object and makes them again from what was kept.
+@MainActor
+final class MacNode {
+    let ip = "100.64.0.1"
+    let nodeKey = "nodekey:mac"
+    let root: URL
+    let support: URL
+    let defaults = UserDefaults.standard
+    let secrets = MemorySecrets()
+    let net: SharedTailnet
+    let pulse: Pulse
+    let clock: VirtualClock
+    let ssh = SSHRoutes()
+    /// The SSH boxes this Mac set up, by alias (their links' transports).
+    private(set) var sshBoxes: [String: BoxNode] = [:]
+
+    private(set) var switcher: KoreNetSwitch!
+    private(set) var directory: NodeDirectory!
+    private(set) var macNet: MacNet!
+    private(set) var asks: DeviceAsks!
+    /// Each box link made this run, by the key it was made under.
+    private(set) var links: [HostConnection] = []
+    /// Allow cards shown and not answered.
+    private(set) var cards: [DeviceCardInfo] = []
+    private(set) var audits: [String] = []
+    private(set) var starts = 0
+    /// Windows open now, by box key.
+    private(set) var windows: [String: HostConnection] = [:]
+    /// The Devices popup is open (it holds the bus).
+    private(set) var popupOpen = false
+
+    init(root: URL, net: SharedTailnet, pulse: Pulse, clock: VirtualClock) {
+        self.root = root
+        support = root.appendingPathComponent("Kore", isDirectory: true)
+        try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
+        self.net = net
+        self.pulse = pulse
+        self.clock = clock
+        net.add(SharedTailnet.Node(name: "macbook", kind: .mac, ip: ip, nodeKey: nodeKey, bindIP: ip))
+    }
+
+    /// Kore launches: as `NetLiveness.start`, KoreNet on as it was left.
+    func launch() {
+        starts += 1
+        let tailnet = NodeNet(net, ip: ip)
+        let shared = net
+        let ip = ip
+        let ssh = ssh
+        let env = NetEnvironment(
+            installed: {
+                let state = shared.node(ip)?.state ?? .noState
+                return (.state(state), tailnet)
+            },
+            sidecar: { _ in throw TailnetError.sidecar("no helper in tests") }, secrets: secrets, defaults: defaults, support: support,
+            upgradeDial: { alias, _, _ in try ssh.dial(alias) }, macName: { "MacBook" })
+        directory = NodeDirectory(defaults: defaults)
+        NodeDirectory.shared = directory
+        let rekeyer = NodeRekeyer(migration: NodeMigration(root: support, defaults: defaults), center: NotificationCenter())
+        rekeyer.usage = { _, _ in }
+        switcher = KoreNetSwitch(defaults: defaults, directory: directory, rekeyer: rekeyer, environment: { env })
+        KoreNetSwitch.shared = switcher
+        HostConnection.sshNet = switcher
+        let pulse = pulse
+        switcher.settled = { _ in pulse.beat() }
+        BoxList.shared.reload()
+        // Every box this Mac lists gets its link object (asleep: no window holds it).
+        for box in BoxList.shared.boxes { makeLink(box.alias) }
+        switcher.start()
+        asks = DeviceAsks()
+        asks.present = { [weak self] info, _ in
+            self?.cards.append(info)
+            pulse.beat()
+        }
+        asks.dismiss = { pulse.beat() }
+        // `MacNetSwitch.follow`, with the listener's clock on virtual time (its pre-auth limit of
+        // 3 a minute per address counts minutes the world lives through, not the test's ms).
+        let clock = clock
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        macNet = MacNet(host: switcher, feed: LinkFeed(source: EmptySource(), taps: false), asks: asks) {
+            base.addingTimeInterval(Double(clock.nowMS) / 1000)
+        }
+        // Its timers (the Add window's end, a resumed phone's cursor wait) on virtual time too.
+        macNet.schedule = { seconds, work in
+            let task = Task { @MainActor in
+                await clock.wait(.milliseconds(Int64(seconds * 1000)))
+                if !Task.isCancelled { work() }
+            }
+            return { task.cancel() }
+        }
+        asks.schedule = macNet.schedule
+        // Its work off the main actor (binds, WhoIs, the Keychain read), counted while under way.
+        macNet.background = { work in
+            pulse.began()
+            DispatchQueue.global(qos: .utility).async {
+                work()
+                pulse.ended()
+            }
+        }
+        Self.follow(switcher, macNet)
+        MacNetSwitch.apply(switcher.state, to: macNet)
+        MacNet.shared = macNet
+        macNet.changed = { _ in pulse.beat() }
+        NetAudit.watch = { [weak self] line in
+            self?.audits.append(line)
+            pulse.beat()
+        }
+        Devices.shared.phones = MacNetDevices()
+        Devices.shared.macNameOverride = "MacBook"
+        Devices.shared.boxes = nil
+        Devices.shared.net = nil
+        pulse.beat()
+    }
+
+    /// The listener follows the switch's state, as `MacNetSwitch.watch` does.
+    private static func follow(_ net: KoreNetSwitch, _ mac: MacNet) {
+        withObservationTracking { _ = net.state } onChange: { [weak net, weak mac] in
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let net, let mac, MacNet.shared === mac else { return }
+                    MacNetSwitch.apply(net.state, to: mac)
+                    follow(net, mac)
+                }
+            }
+        }
+    }
+
+    /// A box link as Kore makes it (`HostConnection.named`), over the box's SSH `attach --as`.
+    @discardableResult
+    func makeLink(_ key: String) -> HostConnection? {
+        let alias = directory.sshAlias(forKey: key) ?? key
+        guard let box = sshBoxes[alias] else { return nil }
+        let grant = box.grant!
+        let path = box.paths.socket.path
+        let connection = HostConnection(alias: key, grant: "laptop", cache: HostCache(alias: key, root: support.appendingPathComponent("hosts"))) {
+            DaemonTransport(path: path, grant: grant)
+        }
+        connection.router = switcher
+        connection.sleep = clock.sleep
+        let pulse = pulse
+        connection.onLink("world") { _ in pulse.beat() }
+        HostConnection.adopt(connection)
+        // Made, but no window holds it: asleep.
+        connection.release()
+        links.append(connection)
+        return connection
+    }
+
+    /// Kore quits (the process ends: its sockets just go) and launches again from what it kept.
+    func restart() {
+        quit()
+        launch()
+    }
+
+    func quit() {
+        net.cut(ip)
+        for (key, connection) in windows {
+            while connection.inUse { connection.release() }
+            windows[key] = nil
+        }
+        for connection in links { while connection.inUse { connection.release() } }
+        links = []
+        macNet?.stop()
+        MacNet.shared = nil
+        NetAudit.watch = nil
+        if KoreNetSwitch.shared === switcher { KoreNetSwitch.shared = nil }
+        if HostConnection.sshNet === switcher { HostConnection.sshNet = nil }
+        if HostConnection.net === switcher { HostConnection.net = nil }
+        switcher = nil
+        macNet = nil
+        Devices.shared.phones = nil
+        popupOpen = false
+        cards = []
+    }
+
+    // MARK: Set up over SSH (before KoreNet)
+
+    /// "Add a box…" with an SSH alias that runs kore-host (`kore-host allow laptop` done).
+    func addSSHBox(_ box: BoxNode) {
+        sshBoxes[box.alias] = box
+        ssh.set(box.alias, box.attach)
+        BoxList.shared.add(box.alias)
+        makeLink(box.alias)
+    }
+
+    /// The box's link object now (its alias, or its id once rekeyed).
+    func link(_ box: BoxNode) -> HostConnection? {
+        let key = HostConnection.current(box.alias)
+        return links.last { $0.alias == key } ?? links.last { $0.alias == box.alias }
+    }
+
+    // MARK: What the owner does
+
+    /// A box window opens (holds the link) or closes.
+    func openWindow(_ box: BoxNode) {
+        guard let connection = link(box) else { return }
+        windows[connection.alias] = connection
+        connection.retain()
+    }
+
+    func closeWindow(_ box: BoxNode) {
+        guard let connection = link(box), connection.inUse else { return }
+        windows[connection.alias] = nil
+        connection.release()
+    }
+
+    /// The Devices popup opens: it holds the bus and reads the status once (as the view does).
+    func openPopup() {
+        guard !popupOpen else { return }
+        popupOpen = true
+        switcher.hold("popup", true)
+        switcher.readStatus()
+    }
+
+    func closePopup() {
+        guard popupOpen else { return }
+        popupOpen = false
+        switcher.hold("popup", false)
+    }
+
+    /// The Allow card's answer.
+    func answerCard(_ allow: Bool) {
+        guard !cards.isEmpty else { return }
+        cards.removeFirst()
+        asks.answer(allow)
+    }
+
+    // MARK: What it holds
+
+    var identity: MacIdentity { try! MacIdentity.loadOrCreate(secrets: secrets, defaults: defaults) }
+
+    /// This Mac as a phone pins it on first contact.
+    var record: DeviceRecord {
+        let id = identity
+        return DeviceRecord(
+            id: id.device, name: "MacBook", kind: .mac, abilities: [.read, .ask, .run], owner: true, identityKey: id.signer.publicKey, nodeKeys: [nodeKey],
+            userId: 7, fqdn: "macbook.tail.ts.net.", added: Date(timeIntervalSince1970: 0))
+    }
+
+    /// The Mac's own device book (boxes it dials, phones it allowed).
+    /// Off, there's no book (KoreNet's own folder is only read while on: the switch's fallback
+    /// is Kore's real Application Support, never read here).
+    var book: [DeviceRecord] {
+        guard let switcher, let env = switcher.env else { return [] }
+        return (try? switcher.book(env).read().devices) ?? []
+    }
+    var phones: [DeviceRecord] { book.filter { $0.kind == .phone } }
+
+    /// The boxes a phone's welcome lists now: boxes in the book with a tailnet node key.
+    var listedBoxes: [DeviceRecord] {
+        book.filter { $0.kind == .box && !$0.isPaused && $0.nodeKeys.contains { $0 != Binding.Route.sshNodeKey } }
+    }
+}
