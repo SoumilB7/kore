@@ -17,33 +17,34 @@ struct AgentNodeMark: View {
 
     var body: some View {
         let d = 2 * radius
-        // The O and its shape drawn as one view: the graph has one per agent.
-        Canvas { context, size in draw(in: &context, CGRect(origin: .zero, size: size)) }
+        mark(CGRect(x: 0, y: 0, width: d, height: d))
             .frame(width: d, height: d)
+            // One fade over the whole mark, not one for each of its parts.
+            .compositingGroup()
             .opacity(status == .stopped ? 0.35 : 1)
             .overlay { if status == .running { ring } }
             .overlay(alignment: .topTrailing) { if waiting { point(Theme.warning) } }
     }
 
     /// A filled O with its border inside it, and the agent's shape (the root's dot) in the middle.
-    private func draw(in context: inout GraphicsContext, _ box: CGRect) {
+    private func mark(_ box: CGRect) -> some View {
         let border = Stroke.emphasis
-        // Dashed, the fill stays inside the border so the gaps show.
-        context.fill(Circle().path(in: background ? box.insetBy(dx: border, dy: border) : box), with: .color(fill))
-        context.stroke(
-            Circle().path(in: box.insetBy(dx: border / 2, dy: border / 2)), with: .color(stroke),
-            style: StrokeStyle(lineWidth: border, dash: background ? Stroke.backgroundDash : []))
-        switch kind {
-        case .root:
-            let dot = radius * 0.64
-            context.fill(
-                Circle().path(in: CGRect(x: box.midX - dot / 2, y: box.midY - dot / 2, width: dot, height: dot)),
-                with: .color(Theme.secondary))
-        case let .agent(index, status, _):
-            let colour = status == .finished ? Theme.background : status == .failed ? Theme.danger : Theme.agentMark
-            let shape = AgentShape(rawValue: index % AgentShape.allCases.count)!
-            let inner = CGRect(x: box.midX - radius / 2, y: box.midY - radius / 2, width: radius, height: radius)
-            for path in AgentShapeView.paths(shape, in: inner) { context.fill(path, with: .color(colour)) }
+        return ZStack {
+            // Dashed, the fill stays inside the border so the gaps show.
+            Circle().path(in: background ? box.insetBy(dx: border, dy: border) : box).fill(fill)
+            Circle().path(in: box.insetBy(dx: border / 2, dy: border / 2))
+                .stroke(stroke, style: StrokeStyle(lineWidth: border, dash: background ? Stroke.backgroundDash : []))
+            switch kind {
+            case .root:
+                let dot = radius * 0.64
+                Circle().path(in: CGRect(x: box.midX - dot / 2, y: box.midY - dot / 2, width: dot, height: dot)).fill(Theme.secondary)
+            case let .agent(index, status, _):
+                let colour = status == .finished ? Theme.background : status == .failed ? Theme.danger : Theme.agentMark
+                let shape = AgentShape(rawValue: index % AgentShape.allCases.count)!
+                let inner = CGRect(x: box.midX - radius / 2, y: box.midY - radius / 2, width: radius, height: radius)
+                let paths = AgentShapeView.paths(shape, in: inner)
+                ForEach(paths.indices, id: \.self) { paths[$0].fill(colour) }
+            }
         }
     }
 

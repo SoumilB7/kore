@@ -187,17 +187,25 @@ private struct UsageCueBars: View {
     let cue: UsageCueBook.Cue
 
     var body: some View {
-        Canvas { canvas, size in
-            let line = Size.usageCueBar
-            for (row, used) in [cue.fiveHour, cue.weekly].enumerated() {
-                let y = row == 0 ? size.height / 2 - line - Size.usageCueBarGap / 2 : size.height / 2 + Size.usageCueBarGap / 2
-                let track = CGRect(x: 0, y: y, width: size.width, height: line)
-                canvas.fill(Path(roundedRect: track, cornerRadius: line / 2), with: .color(Theme.usageCueTrack))
-                guard let used, used > 0 else { continue }
-                let fill = CGRect(x: 0, y: y, width: max(size.width * used, line), height: line)
-                canvas.fill(Path(roundedRect: fill, cornerRadius: line / 2), with: .color(Theme.usageCueBar(used)))
+        VStack(spacing: Size.usageCueBarGap) {
+            bar(cue.fiveHour)
+            bar(cue.weekly)
+        }
+    }
+
+    private func bar(_ used: Double?) -> some View {
+        ZStack {
+            Capsule().fill(Theme.usageCueTrack)
+            if let used, used > 0 {
+                SizedPath { size in
+                    Path(
+                        roundedRect: CGRect(x: 0, y: 0, width: max(size.width * used, size.height), height: size.height),
+                        cornerRadius: size.height / 2)
+                }
+                .fill(Theme.usageCueBar(used))
             }
         }
+        .frame(height: Size.usageCueBar)
     }
 }
 

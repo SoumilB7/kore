@@ -391,6 +391,24 @@ private struct TreeList: View, Equatable {
     }
 }
 
+/// 1pt lines at each ancestor's chevron centre, one path a colour.
+private struct TreeGuides: Shape {
+    let depth: Int
+    /// All the lines but this one.
+    var except: Int?
+    /// This line alone.
+    var only: Int?
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        for level in 0..<depth where only.map({ $0 == level }) ?? (level != except) {
+            let x = Size.Tree.rowInset + Size.Tree.leading + CGFloat(level) * Size.Tree.indent + Size.Tree.chevronBox / 2
+            path.addRect(CGRect(x: x, y: 0, width: Stroke.hairline, height: rect.height))
+        }
+        return path
+    }
+}
+
 /// One row; drawn again only when what it shows changes (`==`).
 private struct TreeRow: View, Equatable {
     let row: FilesStore.Row
@@ -596,15 +614,14 @@ private struct TreeRow: View, Equatable {
     }
 
     /// 1pt lines at each ancestor's chevron centre.
-    private var guides: some View {
-        Canvas { context, size in
-            for depth in 0..<row.depth {
-                let x = Size.Tree.rowInset + Size.Tree.leading + CGFloat(depth) * Size.Tree.indent + Size.Tree.chevronBox / 2
-                let line = Path(CGRect(x: x, y: 0, width: Stroke.hairline, height: size.height))
-                context.fill(line, with: .color(depth == activeGuide ? Theme.Tree.guideActive : Theme.Tree.guide))
+    @ViewBuilder private var guides: some View {
+        if row.depth > 0 {
+            ZStack {
+                TreeGuides(depth: row.depth, except: activeGuide).fill(Theme.Tree.guide)
+                if let activeGuide { TreeGuides(depth: row.depth, only: activeGuide).fill(Theme.Tree.guideActive) }
             }
+            .allowsHitTesting(false)
         }
-        .allowsHitTesting(false)
     }
 
     /// One click selects (a folder opens or closes; a file opens in the preview tab); the

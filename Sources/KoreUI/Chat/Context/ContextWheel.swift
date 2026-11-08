@@ -346,7 +346,7 @@ private struct ContextCard: View {
 /// The ring laid flat: the base, the used fill, and the auto-compact notch (none when Off). Live
 /// (on intent) it's a track: thicker, with the snap points' dots and the end's mark, and the
 /// notch a knob that a drag or a click moves to the nearest snap point, past 90% to Off at the
-/// end. ← → step, Delete sets Off. Drawn in one canvas, with no animation.
+/// end. ← → step, Delete sets Off. No animation.
 private struct ContextTrack: View {
     let chat: Chat
     let live: Bool
@@ -357,35 +357,32 @@ private struct ContextTrack: View {
         let fraction = context.fraction ?? 0
         let point = context.autoCompactAt
         let fill = Theme.contextArc(fraction, threshold: context.threshold)
-        Canvas { canvas, size in
-            let line = live ? Size.contextTrack.intent : Size.contextTrack.rest
-            let mid = size.height / 2
-            func bar(_ width: CGFloat) -> Path {
-                Path(roundedRect: CGRect(x: 0, y: mid - line / 2, width: width, height: line), cornerRadius: line / 2)
-            }
-            canvas.fill(bar(size.width), with: .color(Theme.contextTrack))
-            if fraction > 0 { canvas.fill(bar(max(size.width * fraction, line)), with: .color(fill)) }
+        let line = live ? Size.contextTrack.intent : Size.contextTrack.rest
+        let knob = live ? Size.contextNotch.intent : Size.contextNotch.rest
+        let ring = Size.contextKnobRing
+        ZStack {
+            Self.bar(1, line).fill(Theme.contextTrack)
+            if fraction > 0 { Self.bar(fraction, line).fill(fill) }
             if live {
-                let dot = Size.contextSnap.dot
-                for snap in ContextStore.snapPoints {
-                    let x = size.width * Double(snap) / 100
-                    canvas.fill(
-                        Path(ellipseIn: CGRect(x: x - dot / 2, y: mid + Size.contextSnap.drop - dot / 2, width: dot, height: dot)),
-                        with: .color(Theme.tertiary))
+                SizedPath { size in
+                    let dot = Size.contextSnap.dot
+                    let y = size.height / 2 + Size.contextSnap.drop - dot / 2
+                    var dots = Path()
+                    for snap in ContextStore.snapPoints {
+                        dots.addEllipse(in: CGRect(x: size.width * Double(snap) / 100 - dot / 2, y: y, width: dot, height: dot))
+                    }
+                    let end = Size.contextTrackEnd
+                    dots.addRect(CGRect(x: size.width - end.width, y: size.height / 2 - end.height / 2, width: end.width, height: end.height))
+                    return dots
                 }
-                let end = Size.contextTrackEnd
-                canvas.fill(
-                    Path(CGRect(x: size.width - end.width, y: mid - end.height / 2, width: end.width, height: end.height)),
-                    with: .color(Theme.tertiary))
+                .fill(Theme.tertiary)
             }
-            guard point != nil || live else { return }
-            let knob = live ? Size.contextNotch.intent : Size.contextNotch.rest
-            let x = min(max(size.width * Double(point ?? 100) / 100, knob.width / 2), size.width - knob.width / 2)
-            let body = CGRect(x: x - knob.width / 2, y: mid - knob.height / 2, width: knob.width, height: knob.height)
-            let ring = Size.contextKnobRing
-            canvas.fill(Path(roundedRect: body.insetBy(dx: -ring, dy: -ring), cornerRadius: knob.width / 2 + ring), with: .color(Theme.surface))
-            canvas.fill(Path(roundedRect: body, cornerRadius: knob.width / 2), with: .color(point == nil ? Theme.tertiary : Theme.contextNotch))
+            if point != nil || live {
+                Self.knob(point, knob, grown: ring, radius: knob.width / 2 + ring).fill(Theme.surface)
+                Self.knob(point, knob, grown: 0, radius: knob.width / 2).fill(point == nil ? Theme.tertiary : Theme.contextNotch)
+            }
         }
+        .transaction { $0.animation = nil }
         .frame(height: Size.contextTrackRow)
         .contentShape(Rectangle())
         .disabled(context.compacting)
@@ -413,6 +410,24 @@ private struct ContextTrack: View {
         .accessibilityValue(Text(Self.spoken(context)))
         .accessibilityAdjustableAction { direction in
             _ = step(direction == .increment ? 1 : -1)
+        }
+    }
+
+    /// The bar `fraction` along, at least as wide as it's tall, centred on the row.
+    private static func bar(_ fraction: Double, _ line: CGFloat) -> SizedPath {
+        SizedPath { size in
+            Path(
+                roundedRect: CGRect(x: 0, y: size.height / 2 - line / 2, width: max(size.width * fraction, line), height: line),
+                cornerRadius: line / 2)
+        }
+    }
+
+    /// The knob at `point` (Off: the end), `grown` on every side.
+    private static func knob(_ point: Int?, _ knob: CGSize, grown: CGFloat, radius: CGFloat) -> SizedPath {
+        SizedPath { size in
+            let x = min(max(size.width * Double(point ?? 100) / 100, knob.width / 2), size.width - knob.width / 2)
+            let body = CGRect(x: x - knob.width / 2, y: size.height / 2 - knob.height / 2, width: knob.width, height: knob.height)
+            return Path(roundedRect: body.insetBy(dx: -grown, dy: -grown), cornerRadius: radius)
         }
     }
 

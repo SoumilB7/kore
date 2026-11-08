@@ -476,13 +476,15 @@ private struct UsageChatRow: View {
 /// Two rings side by side: a chat's agents.
 private struct AgentRings: View {
     var body: some View {
-        Canvas { canvas, size in
+        SizedPath { size in
             let radius = size.height / 2 - Stroke.hairline / 2
+            var rings = Path()
             for x in [size.height / 2, size.width - size.height / 2] {
-                let ring = Path(ellipseIn: CGRect(x: x - radius, y: size.height / 2 - radius, width: radius * 2, height: radius * 2))
-                canvas.stroke(ring, with: .foreground, lineWidth: Stroke.hairline)
+                rings.addEllipse(in: CGRect(x: x - radius, y: size.height / 2 - radius, width: radius * 2, height: radius * 2))
             }
+            return rings
         }
+        .stroke(.foreground, lineWidth: Stroke.hairline)
     }
 }
 

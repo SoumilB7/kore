@@ -104,9 +104,8 @@ private struct SelectionHighlight: View {
             Color.clear.allowsHitTesting(false)
         } else {
             let color = selection.active ? Theme.Selection.active : Theme.Selection.inactive
-            Canvas { context, _ in
-                for rect in rects { context.fill(Path(rect), with: .color(color)) }
-            }
+            Path { $0.addRects(rects) }
+            .fill(color)
             .blendMode(.lighten)
             .allowsHitTesting(false)
             .accessibilityHidden(true)

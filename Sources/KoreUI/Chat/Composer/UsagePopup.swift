@@ -1072,6 +1072,11 @@ enum UsageHatch {
         return min(max(fill * min(kore / used, 1), Size.usageHatchMin), fill)
     }
 
+    /// The fill's shape, `width` along.
+    static func bar(_ width: CGFloat, _ line: CGFloat) -> Path {
+        Path(roundedRect: CGRect(x: 0, y: 0, width: width, height: line), cornerRadius: line / 2)
+    }
+
     /// The bands over `rect`, as one path: lines rising to the right, `Size.usageHatch.period`
     /// apart across them, laid from x = 0 so they stay put as the stretch grows.
     static func bands(_ rect: CGRect) -> Path {
@@ -1089,8 +1094,8 @@ enum UsageHatch {
 
 /// The context card's track at its intent height: the used part from the left, coloured by how
 /// near the limit it is, at least as wide as it is tall so a sliver still shows; Kore's share
-/// hatched at its start (`hatch`: how far it has faded in). Drawn in one canvas; animatable, so a
-/// new value moves it as the ring moves.
+/// hatched at its start (`hatch`: how far it has faded in). Animatable, so a new value moves it as
+/// the ring moves; the hatch's paths are cut to the fill's, with no layer to clip them.
 struct UsageBar: View, @preconcurrency Animatable {
     var fraction: Double
     var kore: Double
@@ -1106,28 +1111,38 @@ struct UsageBar: View, @preconcurrency Animatable {
 
     var body: some View {
         let (fraction, kore, hatch, tint) = (fraction, kore, hatch, tint ?? fraction)
-        Canvas { canvas, size in
-            let line = size.height
-            func bar(_ width: CGFloat) -> Path {
-                Path(roundedRect: CGRect(x: 0, y: 0, width: width, height: line), cornerRadius: line / 2)
-            }
-            canvas.fill(bar(size.width), with: .color(Theme.contextTrack))
-            guard fraction > 0 else { return }
-            let width = UsageHatch.fill(fraction, in: size)
-            let color = Theme.usageFill(tint)
-            let stretch = hatch > 0 ? UsageHatch.width(fill: width, kore: kore, used: fraction) : 0
-            guard stretch > 0 else {
-                canvas.fill(bar(width), with: .color(color))
-                return
-            }
-            canvas.drawLayer { layer in
-                layer.clip(to: bar(width))
-                layer.fill(Path(CGRect(x: stretch, y: 0, width: width - stretch, height: line)), with: .color(color))
-                let hatched = CGRect(x: 0, y: 0, width: stretch, height: line)
-                // Fading in, the gaps go from the fill to the track.
-                if hatch < 1 { layer.fill(Path(hatched), with: .color(color.opacity(1 - hatch))) }
-                layer.clip(to: Path(hatched))
-                layer.stroke(UsageHatch.bands(hatched), with: .color(color), lineWidth: Size.usageHatch.band)
+        let color = Theme.usageFill(tint)
+        ZStack {
+            Capsule().fill(Theme.contextTrack)
+            if fraction > 0 {
+                let shown = kore > 0 && hatch > 0
+                // Solid: all of the fill, or what's past the hatch.
+                SizedPath { size in
+                    let width = UsageHatch.fill(fraction, in: size)
+                    let stretch = shown ? UsageHatch.width(fill: width, kore: kore, used: fraction) : 0
+                    let bar = UsageHatch.bar(width, size.height)
+                    guard stretch > 0 else { return bar }
+                    return bar.intersection(Path(CGRect(x: stretch, y: 0, width: width - stretch, height: size.height)))
+                }
+                .fill(color)
+                if shown {
+                    // Fading in, the gaps go from the fill to the track.
+                    if hatch < 1 {
+                        SizedPath { size in
+                            let width = UsageHatch.fill(fraction, in: size)
+                            let stretch = UsageHatch.width(fill: width, kore: kore, used: fraction)
+                            return UsageHatch.bar(width, size.height).intersection(Path(CGRect(x: 0, y: 0, width: stretch, height: size.height)))
+                        }
+                        .fill(color.opacity(1 - hatch))
+                    }
+                    SizedPath { size in
+                        let width = UsageHatch.fill(fraction, in: size)
+                        let hatched = CGRect(x: 0, y: 0, width: UsageHatch.width(fill: width, kore: kore, used: fraction), height: size.height)
+                        return UsageHatch.bands(hatched).strokedPath(StrokeStyle(lineWidth: Size.usageHatch.band))
+                            .intersection(UsageHatch.bar(width, size.height).intersection(Path(hatched)))
+                    }
+                    .fill(color)
+                }
             }
         }
         .frame(height: height)

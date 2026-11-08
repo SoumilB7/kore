@@ -489,7 +489,7 @@ private struct GraphRootRow: View {
         .padding(.leading, m.leading - m.rootRadius)
         .frame(height: m.row * Zoom.shared.scale)
         .background {
-            if hasChildren { GraphWires(depth: -1, rails: [], isLast: true, hasChildren: true).canvas(elbow: nil) }
+            if hasChildren { GraphWires(depth: -1, rails: [], isLast: true, hasChildren: true).drawn(elbow: nil) }
         }
         .hoverFill(selected || hovered.value, selected ? Theme.Row.selected(.window) : Theme.Row.hover(.window))
         .contentShape(Rectangle())
@@ -524,7 +524,7 @@ private struct ClosedGroupRow: View {
             .frame(height: m.groupRow * Zoom.shared.scale)
             .background {
                 if open {
-                    GraphWires(depth: -1, rails: [], isLast: true, hasChildren: true, mark: Size.disclosure / 2).canvas(elbow: nil)
+                    GraphWires(depth: -1, rails: [], isLast: true, hasChildren: true, mark: Size.disclosure / 2).drawn(elbow: nil)
                 }
             }
             .hoverFill(selected || hovered.value, selected ? Theme.Row.selected(.window) : Theme.Row.hover(.window))
@@ -577,7 +577,7 @@ private struct AgentGraphRow: View {
             }
             .padding(.leading, wires.centre(node.depth) - m.nodeRadius)
             .frame(height: m.row * Zoom.shared.scale)
-            .background { wires.canvas(elbow: elbowColour).storyMark(StoryID.AgentMap.wires(info.id)) }
+            .background { wires.drawn(elbow: elbowColour).storyMark(StoryID.AgentMap.wires(info.id)) }
             .opacity(dimmed ? Theme.dimmed : 1)
             .hoverFill(selected || hovered.value, selected ? Theme.Row.selected(.window) : Theme.Row.hover(.window))
             .contentShape(Rectangle())
@@ -700,15 +700,15 @@ struct GraphWires {
         return path
     }
 
-    /// The spine and the elbow (in `elbow`'s colour, when there's one) as one drawn view the
-    /// size of the row: a view per line made each row several views to build.
-    func canvas(elbow colour: Color?) -> some View {
-        Canvas { context, size in
-            let rect = CGRect(origin: .zero, size: size)
-            context.stroke(spine(in: rect), with: .color(Theme.agentWire), lineWidth: Stroke.emphasis)
+    /// The spine and the elbow (in `elbow`'s colour, when there's one), the size of the row: a
+    /// shape per colour, not per line.
+    func drawn(elbow colour: Color?) -> some View {
+        ZStack {
+            SizedPath { spine(in: CGRect(origin: .zero, size: $0)) }
+                .stroke(Theme.agentWire, lineWidth: Stroke.emphasis)
             if let colour {
-                context.stroke(
-                    elbow(in: rect), with: .color(colour), style: StrokeStyle(lineWidth: Stroke.emphasis, lineCap: .round))
+                SizedPath { elbow(in: CGRect(origin: .zero, size: $0)) }
+                    .stroke(colour, style: StrokeStyle(lineWidth: Stroke.emphasis, lineCap: .round))
             }
         }
     }
