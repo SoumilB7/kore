@@ -78,7 +78,7 @@ struct HostClientTests {
         #expect(send["type"] as? String == "send" && send["text"] as? String == "are you there" && send["id"] as? String == "m1")
         host.send(json: ["t": "result", "id": call["id"] ?? "", "ok": true, "value": ["bool": true]])
         #expect(try await sending.value)
-        #expect(await until { log.events.contains { if case .connection(.ok) = $0 { true } else { false } } })
+        #expect(connection.isOnline)
 
         // The box's copy of a message sent from here isn't shown twice; another client's is.
         host.send(json: [

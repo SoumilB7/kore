@@ -32,18 +32,19 @@ rest itself and says what's missing.
 
 ## Setting it up from Kore
 
-1. In a new window (⌘N), click the box button and choose **Add a box…**. A window is either a
-   folder on this Mac or a folder on a box, chosen when it opens. Type a host from your SSH config
+1. In a new window (⌘N), the switcher at the top reads **This Mac | <boxes> | +**; click **+**
+   (Add a box…). A window is either a folder on this Mac or a folder on a box, chosen when it
+   opens. Type a host from your SSH config
    (it's suggested as you type), or any destination as `user@host` or `user@host:port`. A typed
    destination is kept in Kore's own list, never written into `~/.ssh/config`. Only letters,
    digits, `.`, `_` and `-` make a name, and none starts with `-`; ssh gets the host as one word
    after `--`, and the user and port as options.
 2. Kore checks the machine over one ssh session that only reads (`uname`, `/etc/os-release`,
    `command -v` for the tools it uses, the CLIs' `--version`, `$SHELL`, `$HOME`, free room, the git
-   identity). It keeps what it found for that box and shows it as the row's hover card
-   ("Linux · arm64 · Ubuntu 24.04.1 LTS"). It checks again only on Set up, Update, Set up agents or
-   Check again.
-3. The row says "Not set up on <box> · Set up". **Set up** runs, a line at a time:
+   identity). It keeps what it found for that box. It checks again only on Set up, Update, Set up
+   agents or Check again.
+3. The new window now stands on the box: its name as the title, and under it "Not set up on
+   <box> · Set up". **Set up** runs, a line at a time:
    - **Checking** the machine, and stopping with one line if Kore can't run there (another CPU,
      macOS before 15, under 150 MB free);
    - **Getting** the right kore-host (Linux x86_64 or aarch64, or macOS) from the app, the
@@ -55,7 +56,15 @@ rest itself and says what's missing.
    - **Starting** it: `kore-host install-service` picks systemd, launchd or on demand;
    - **Letting this Mac in**: `kore-host allow <this Mac's name> --control full`;
    - **Connecting**.
-4. Choose **Add folder…** and give a folder on the box, such as `~/Code/project`.
+4. Choose **Open Folder…**: a browser of the box's folders opens at its home. ↑ ↓ light a
+   folder, Return goes into it, ⌫ or ← go up, ⌘⇧. shows dotfiles, and a path typed or pasted in
+   its field goes there (`~` is the box's home). **New Folder** makes one; **Open** adds the lit
+   folder (else the one shown, else the path typed) to what the box serves and opens its window.
+
+The new window switches between this Mac and a box with the switcher, or with the box button in
+its title row (it toggles between This Mac and the last box shown). On a box, the list under
+Open Folder… holds the box's folders and the chats open in them; a chat's row opens its folder's
+window with that chat in front.
 
 Each failure is one line with the one action that fixes it:
 
@@ -74,16 +83,19 @@ Each failure is one line with the one action that fixes it:
 | No agents on <box> yet | Set up agents |
 | N differences from this Mac | Fix |
 
-An update restarts the daemon, which ends any turn that is running on the box; Kore asks first
-when a chat there is working. Nothing runs until the Boxes panel is shown and a row is opened or
-used, and nothing polls.
+These lines show under the box's name in the new window, one at a time, only when there's
+something to do; with nothing else to say, a GitHub line shows while `gh` isn't signed in there.
 
-To remove a box, right-click its row and choose **Remove**. Kore forgets the box on this Mac and
+An update restarts the daemon, which ends any turn that is running on the box; Kore asks first
+when a chat there is working. Nothing dials until the new window stands on a box (or a box
+window opens), and nothing polls.
+
+To remove a box, right-click it in the switcher and choose **Remove**. Kore forgets the box on this Mac and
 changes nothing on the box.
 
 ## Set up agents
 
-**Set up agents** (the row's line, or its right-click menu) opens one popup with a line per
+**Set up agents** (the box's line in the new window, or its right-click menu in the switcher) opens one popup with a line per
 agent:
 - **claude**: installed with its own installer (`curl -fsSL https://claude.ai/install.sh`, into
   `~/.local/bin`);
@@ -97,6 +109,23 @@ with the command that adds it. Once installed, each line signs in on the box thr
 no-browser flow: the page opens in this Mac's browser, the code has Copy, and claude takes the
 code back in a field. The login stays on the box. Kore never copies this Mac's logins, keys or
 settings to a box.
+
+In a box chat, the Account popup is the same as a local chat's, with the box's login for that
+chat's CLI: its sign-in (no browser on the box, no key), sign-out and the account it shows are
+the box's. A box keeps one login per CLI.
+
+## A box window
+
+A box window's left panel is the box folder's files, as Kore's Files explorer shows a Mac
+folder's, read over the link: folders open and close, and a file opens read-only in a file tab
+(text up to 2 MB, the first 2 MB of a larger one; images). Nothing is created, renamed or deleted
+from there. Reload lists the open folders again; so does a turn's end in that window, and the
+link coming back, so the agent's edits show. The box watches nothing for it.
+
+When the link drops for more than 2 seconds, one card over the window says
+"<box> disconnected · last update 14:32", with Reconnecting… and **Try again**, or the action
+that fixes it (Start, Set up, Update). The chats stay readable under it, and a message typed
+meanwhile waits: "Sends when <box> is back". The card goes once the link is back.
 
 Under the agents, the popup lists what else differs from this Mac, so box chats behave the same:
 - each CLI's presence and version (claude, codex, gh, git, node, rsync), when the major or minor
@@ -159,36 +188,38 @@ Run it again after replacing the binary.
 ## Two-way sync
 
 A box folder lives on the box, and its chats work on the box's files. To also have those files on
-the Mac, pair the box folder with a Mac folder: in the box window's Boxes panel, hover the
-folder's row and click its Sync glyph (or right-click the row), choose **Sync with a Mac
-folder…**, and pick or make a folder in the open panel. Kore then:
+the Mac, pair the box folder with a Mac folder: click the Sync button in the box window's title
+row (beside the panel button) and pick or make a folder in the open panel. Kore then:
 - refuses a Mac folder that already syncs, or sits inside or around one that does, and a box
-  folder inside or around a synced one (that row says "inside <folder>, synced"), naming the pair
-  in the way;
+  folder inside or around a synced one (its Sync button says "Inside <folder>, synced"), naming
+  the pair in the way;
 - looks at both folders. When the box folder is empty, the Mac's files go to the box; when the
   Mac folder is empty, the box's files come to the Mac. When both have files it asks once, "Both
   have files · Merge (keeps both on conflicts)": a file on one side only goes to the other, and a
   file on both that differs is kept twice (see below);
 - asks once before carrying more than 1 GB or 20,000 files, and refuses when the other side hasn't
   the room;
-- keeps the pair (the box, the box folder and the Mac folder) in Kore's settings. The row then
-  says "synced locally to ~/Desktop/app", and the window's folder name shows the same on hover.
+- keeps the pair (the box, the box folder and the Mac folder) in Kore's settings. The Sync
+  button's popup then says "Synced locally to ~/Desktop/app", and the window's folder name shows
+  the same on hover.
 
 While the box folder's window is open, Kore keeps both sides the same with rsync over your SSH
 login. The Mac watches its side with FSEvents; kore-host watches the box's with inotify and only
 says what changed. Nothing polls, and nothing syncs while the window is closed: the next open
-catches up. A row whose files are moving shows a small pulsing dot.
+catches up. The Sync button's dot is accent while in sync, pulses while files move, and is grey
+while the sync is paused.
 - Both ends leave out `.git/`, `.build/`, `node_modules/`, `.DS_Store` and what each folder's
   `.gitignore` names. Only regular files are carried.
 - Edits, new files and deletes go both ways: a file deleted on one side is deleted on the other.
 - A file changed on both sides since the last sync is kept twice: the Mac's in place, and the
-  box's beside it as `<name> (<box>).<ext>`. The window's box button marks it.
+  box's beside it as `<name> (<box>).<ext>`. The Sync button's popup says so.
 - A side that is missing or empty, or a round that would delete more than half of what was agreed
-  (10 files or more), pauses the sync; the box button's popup asks before such a delete.
-- When a sync can't run (the box is offline, or rsync is missing), the window's box button says
+  (10 files or more), pauses the sync; the Sync button's popup asks before such a delete.
+- When a sync can't run (the box is offline, or rsync is missing), the Sync button's popup says
   "Sync paused", and the next change tries again.
 
-To stop, right-click the row and choose **Stop syncing**. It ends the sync and forgets the pair;
+To stop, click the Sync button and choose **Stop syncing**; **Open <folder>** shows the Mac
+folder in Finder. It ends the sync and forgets the pair;
 no file is deleted on either side.
 
 What both sides last agreed on (each file's size and mtime) is kept in

@@ -314,3 +314,7 @@ Where a path may lead:
 The Mac asks only while a window or the browser shows the files: a box window lists the
 folders open in its explorer, and lists them again when a turn in that window ends. The box
 watches nothing for it and nothing polls.
+
+Also 1.7: `account.refresh`'s result and a sign-in's `<id>:done`, when `signedIn: true`, carry
+`account: {email?, plan?, organization?, method, changeable, methodID?, platform?}` (who the
+CLI there is signed in as, never a token), so a box chat's Account popup reads as a local one's.
