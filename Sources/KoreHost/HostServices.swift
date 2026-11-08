@@ -8,6 +8,8 @@ import src
 @MainActor
 package final class HostServices: ChatServices {
     package var onEvent: ((Chat, ChatEvent) -> Void)?
+    /// A CLI's model list came: its session's start, or a turn's end read it again (`ModelCatalog`).
+    package var onModels: ((String, [ModelOption]) -> Void)?
     /// Makes the backend; tests set a stand-in.
     package var backend: (ProviderDescriptor, BackendOptions) -> any ChatBackend = { $0.makeBackend($1) }
 
@@ -31,7 +33,7 @@ package final class HostServices: ChatServices {
     package func register(_ chat: Chat) {}
     package func closed(_ chat: Chat) {}
     package func refreshAccount(_ cli: String) {}
-    package func modelsListed(_ cli: String, _ models: [ModelOption]) {}
+    package func modelsListed(_ cli: String, _ models: [ModelOption]) { onModels?(cli, models) }
     package func arsenalFollowMode(_ chat: Chat) {}
     package func tap(_ chat: Chat, _ event: ChatEvent) { onEvent?(chat, event) }
     package func log(_ name: String, _ fields: KeyValuePairs<String, String?>) {}

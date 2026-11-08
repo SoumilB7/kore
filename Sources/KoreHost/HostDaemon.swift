@@ -23,12 +23,16 @@ package final class HostDaemon {
     /// Whether `gh` is signed in, as last read: on a connect and after `auth.gh`.
     package private(set) var ghSignedIn = false
     private var ghLogin: Process?
+    /// Each CLI's models as its CLI last listed them (kept in `models.json`): sent to full grants.
+    package private(set) var clis: [CLIState] = []
     package static let version = "0.1"
 
     package init(paths: HostPaths) {
         self.paths = paths
         config = HostConfig.load(paths.config)
         services.onEvent = { [weak self] chat, event in self?.noted(chat, event) }
+        services.onModels = { [weak self] cli, models in self?.listed(cli, models) }
+        if let data = try? Data(contentsOf: paths.models), let kept = try? JSONDecoder().decode([CLIState].self, from: data) { clis = kept }
         let note = paths.state.appendingPathComponent("instructions.md")
         try? HostPaths.privateFile(Data(HostServices.instructions(host: ProcessInfo.processInfo.hostName).utf8), to: note)
         services.instructions = note
@@ -138,6 +142,23 @@ package final class HostDaemon {
         hc.noted(chat)
         armIdle(hc)
         broadcast(chats: [hc])
+    }
+
+    /// A CLI listed its models (it was running anyway: a session's start, or a turn's end at
+    /// most every 10 minutes). A new list is kept and goes to the full grants.
+    private func listed(_ cli: String, _ models: [ModelOption]) {
+        guard !models.isEmpty else { return }
+        let made = HostMeta.cli(cli, models)
+        guard clis.first(where: { $0.provider == cli }) != made else { return }
+        clis.removeAll { $0.provider == cli }
+        clis.append(made)
+        clis.sort { $0.provider < $1.provider }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        if let data = try? encoder.encode(clis) { try? HostPaths.privateFile(data, to: paths.models) }
+        for connection in connections where connection.proven && connection.grant?.control == .full {
+            connection.send(.delta(rev: connection.nextRev(), windows: nil, chats: nil, removed: nil, extras: LinkExtras(clis: clis)))
+        }
     }
 
     // MARK: Connections
@@ -305,6 +326,26 @@ package final class HostDaemon {
                 chat.launchModel = model
             }
             hc.setModel(model)
+            broadcast(chats: [hc])
+            return .init(id: id, ok: true)
+        case .chatSetEffort:
+            guard let hc = args.chatId.flatMap(chat), let level = args.level, !level.isEmpty else { return fail(.invalid, "Name the chat and the effort.") }
+            if let chat = hc.chat {
+                guard chat.controls.models.isEmpty || chat.controls.effortScale.contains(level) else {
+                    return fail(.invalid, "The chat's CLI doesn't offer that effort.")
+                }
+                chat.setEffort(level)
+                chat.launchEffort = level
+            }
+            hc.setEffort(level)
+            broadcast(chats: [hc])
+            return .init(id: id, ok: true)
+        case .chatSetFast:
+            guard let hc = args.chatId.flatMap(chat), let on = args.on else { return fail(.invalid, "Name the chat and on or off.") }
+            guard let chat = hc.chat, chat.controls.fastModeShown, on == false || chat.controls.fastOffered != false else {
+                return fail(.invalid, "Fast mode isn't offered for this chat now.")
+            }
+            chat.setFastMode(on)
             broadcast(chats: [hc])
             return .init(id: id, ok: true)
         case .foldersList:

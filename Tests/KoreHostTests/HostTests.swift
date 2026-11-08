@@ -264,6 +264,68 @@ struct HostTests {
         #expect(standard?.refused == true)
     }
 
+    @Test func aFullGrantGetsTheControlsAndTheBoxsModels() async throws {
+        let rig = try HostRig()
+        defer { rig.finish() }
+        try rig.host.start()
+        let backend = StandIn()
+        rig.host.services.backend = { _, _ in backend }
+        let hc = try #require(rig.host.newChat(folder: rig.folder.path, provider: "claude", modelId: "haiku"))
+        // Before the CLI runs: the model it will start on, and no list.
+        #expect(HostMeta.meta(hc, raise: true).controls?.modelId == "haiku")
+        #expect(HostMeta.meta(hc).controls == nil)
+        _ = rig.host.apply(.send(chatId: hc.id, text: "hi"), id: "1", control: .act) { _ in }
+        try await until { hc.entries.contains { $0.kind == .answer } }
+        let models = [
+            ModelOption(id: "haiku", name: "Haiku", resolved: "haiku", efforts: ["low", "high"]),
+            ModelOption(id: "other", name: "Other", resolved: "other", efforts: ["low"], supportsFastMode: true),
+        ]
+        backend.sink.yield(.controlsLoaded(src.ChatControls(models: models, model: "haiku", effort: "low", commands: [])))
+        backend.sink.yield(.contextUsage(ContextUsage(used: 30_000, window: 200_000, autoCompacts: true, at: .now)))
+        try await until { rig.host.clis.first?.models.count == 2 && hc.chat?.context.usage != nil }
+        let controls = try #require(HostMeta.meta(hc, raise: true).controls)
+        #expect(controls.modelId == "haiku")
+        #expect(controls.effort == "low")
+        #expect(controls.contextUsed == 30_000)
+        #expect(controls.contextWindow == 200_000)
+        #expect(controls.contextPct == 15)
+        #expect(rig.host.clis.first?.effortScale == ["low", "high"])
+
+        // Effort from a client goes to the chat, and is kept for its next start.
+        #expect(rig.host.apply(.control(.chatSetEffort, ControlArgs(chatId: hc.id, level: "high")), id: "2", control: .act) { _ in }?.ok == true)
+        #expect(hc.chat?.controls.effort == "high")
+        #expect(hc.record.effort == "high")
+        #expect(rig.host.apply(.control(.chatSetEffort, ControlArgs(chatId: hc.id, level: "max")), id: "3", control: .act) { _ in }?.code == .invalid)
+
+        // A full grant's snapshot carries the controls and the list; an act grant's neither.
+        let store = GrantStore(rig.paths.grants)
+        let full = try store.allow("laptop", control: .full, socket: rig.paths.socket)
+        let act = try store.allow("phone", control: .act, socket: rig.paths.socket)
+        func snapshot(_ grant: Grant) async throws -> ([ChatMeta], LinkExtras?) {
+            let client = try Client(rig.paths.socket)
+            try await until { !client.got.isEmpty }
+            client.hello(grant: grant)
+            try await until { client.got.count >= 3 }
+            guard case .snapshot(_, _, let chats, let extras) = client.got[2] else { throw Waited.timeout }
+            return (chats, extras)
+        }
+        let (fullChats, fullExtras) = try await snapshot(full)
+        #expect(fullChats.first?.controls?.effort == "high")
+        #expect(fullChats.first?.controls?.contextWindow == 200_000)
+        #expect(fullExtras?.clis?.first?.models.map(\.id) == ["haiku", "other"])
+        #expect(fullExtras?.clis?.first?.models.last?.fast == true)
+        let (actChats, actExtras) = try await snapshot(act)
+        #expect(actChats.first?.controls == nil)
+        #expect(actExtras?.clis == nil)
+
+        // The list and the chat's last controls outlive a restart: a fresh connection has them at once.
+        rig.restart()
+        #expect(rig.host.clis.first?.models.map(\.id) == ["haiku", "other"])
+        let back = try #require(rig.host.chat(hc.id))
+        #expect(HostMeta.meta(back, raise: true).controls?.contextUsed == 30_000)
+        #expect(HostMeta.meta(back, raise: true).controls?.effort == "high")
+    }
+
     @Test func watchGrantsCantAct() throws {
         let rig = try HostRig()
         defer { rig.finish() }

@@ -209,10 +209,14 @@ package struct ChatControls: Codable, Sendable, Equatable {
     package var autoCompactAt: Int?
     package var compacting: Bool
     package var remote: Remote
+    /// 1.4 (a box): the tokens in context and the window they're measured against, as the CLI
+    /// last said; absent until it says.
+    package var contextUsed: Int?
+    package var contextWindow: Int?
 
     package init(
         modelId: String?, effort: String?, fast: Bool?, fastOffered: Bool, planAllow: Bool, contextPct: Int?, autoCompactAt: Int?,
-        compacting: Bool, remote: Remote
+        compacting: Bool, remote: Remote, contextUsed: Int? = nil, contextWindow: Int? = nil
     ) {
         self.modelId = modelId
         self.effort = effort
@@ -223,6 +227,8 @@ package struct ChatControls: Codable, Sendable, Equatable {
         self.autoCompactAt = autoCompactAt
         self.compacting = compacting
         self.remote = remote
+        self.contextUsed = contextUsed
+        self.contextWindow = contextWindow
     }
 }
 

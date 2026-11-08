@@ -26,6 +26,9 @@ package struct HostPaths: Sendable {
 
     package var grants: URL { state.appendingPathComponent("grants") }
     package var chats: URL { state.appendingPathComponent("chats") }
+    /// Each CLI's model list as it last gave it (`clis[]`), for a client that connects before
+    /// any CLI runs.
+    package var models: URL { state.appendingPathComponent("models.json") }
     package var socket: URL { runtime.appendingPathComponent("link.sock") }
     package var pid: URL { runtime.appendingPathComponent("kore-host.pid") }
 

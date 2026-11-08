@@ -93,7 +93,9 @@ final class LinkClient {
         proven = true
         send(.welcome(host.welcome(control: grant.control)))
         rev += 1
-        send(.snapshot(rev: rev, windows: host.windows, chats: host.chats.map { HostMeta.meta($0, raise: grant.control == .full) }, extras: LinkExtras(ghSignedIn: host.ghSignedIn)))
+        let full = grant.control == .full
+        let clis = full && !host.clis.isEmpty ? host.clis : nil
+        send(.snapshot(rev: rev, windows: host.windows, chats: host.chats.map { HostMeta.meta($0, raise: full) }, extras: LinkExtras(clis: clis, ghSignedIn: host.ghSignedIn)))
         send(.attnState(aid: 0, open: [], recent: []))
     }
 

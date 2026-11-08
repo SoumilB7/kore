@@ -34,7 +34,44 @@ enum HostMeta {
             commands: Set(commands.filter { $0.kind != .kore }.map(\.name)), koreEntries: Set(commands.filter { $0.kind == .kore }.map(\.name)))
     }
 
-    /// `raise`: the grant may raise the mode (a full grant), so every mode is allowed.
+    /// The composer's controls (sent with full control): the live chat's, else as it last had
+    /// them, else the model and effort it will start on.
+    static func controls(_ hc: HostChat) -> LinkProtocol.ChatControls {
+        if let chat = hc.chat { return controls(of: chat) }
+        var kept =
+            hc.record.controls
+            ?? LinkProtocol.ChatControls(
+                modelId: hc.record.modelId, effort: hc.record.effort, fast: nil, fastOffered: false, planAllow: false, contextPct: nil,
+                autoCompactAt: nil, compacting: false, remote: .off)
+        kept.compacting = false
+        return kept
+    }
+
+    /// A live chat's controls, in the shape the Mac's link sends them (§11), plus the context's
+    /// tokens and window.
+    static func controls(of chat: Chat) -> LinkProtocol.ChatControls {
+        let c = chat.controls
+        let usage = chat.context.usage
+        let window = usage?.window.flatMap { $0 > 0 ? $0 : nil }
+        let pct = usage.flatMap { u in window.map { min(100, u.used * 100 / $0) } }
+        let remote: LinkProtocol.ChatControls.Remote =
+            if c.remoteChanging { .changing } else if c.remote != nil { .on } else if c.remoteUnavailable != nil { .unavailable } else { .off }
+        return LinkProtocol.ChatControls(
+            modelId: c.modelId ?? chat.launchModel, effort: c.effort ?? chat.launchEffort, fast: c.fastKnown ? c.fastMode : nil,
+            fastOffered: c.fastModeShown, planAllow: c.planAllow, contextPct: pct, autoCompactAt: chat.context.autoCompactAt,
+            compacting: chat.context.compacting, remote: remote, contextUsed: usage?.used, contextWindow: window)
+    }
+
+    /// A CLI's models as `clis[]` carries them.
+    static func cli(_ provider: String, _ models: [ModelOption]) -> CLIState {
+        CLIState(
+            provider: provider,
+            models: models.map { .init(id: $0.id, name: $0.name, efforts: $0.efforts, fast: $0.supportsFastMode, auto: $0.supportsAutoMode) },
+            effortScale: EffortScale.levels(models))
+    }
+
+    /// `raise`: the grant may raise the mode (a full grant), so every mode is allowed, and the
+    /// chat's controls go too.
     static func meta(_ hc: HostChat, raise: Bool = false) -> ChatMeta {
         let facts = facts(hc, raise: raise)
         let allowed = LinkPolicy.allowedModes(facts, control: raise ? .full : .standard)
@@ -47,12 +84,14 @@ enum HostMeta {
             .filter { $0.kind != .kore && !LinkPolicy.koreOnly.contains($0.name) }
             .prefix(200)
             .map { LinkSlash(name: $0.name, description: String($0.description.prefix(100)), kind: $0.kind == .skill ? .skill : .command) }
-        return ChatMeta(
+        var made = ChatMeta(
             id: hc.id, provider: hc.provider.id, title: hc.title, state: state,
             mode: .init(id: modeID(hc), level: facts.level, planOn: hc.provider.planToggle != nil ? (chat?.controls.planMode ?? false) : nil),
             modeIds: (chat?.controls.availableModes ?? hc.provider.modes).map(\.id), allowedModeIds: allowed.sorted(),
             model: chat?.controls.currentModel?.name ?? hc.record.modelId, queued: chat?.queuedCount ?? 0, running: chat?.isBusy ?? false,
             cards: cards(hc, raise: raise), can: .init(send: !(chat?.accountRestartPending ?? false), stop: chat?.isWorking ?? false), commands: Array(commands))
+        if raise { made.controls = controls(hc) }
+        return made
     }
 
     static func kind(_ approval: Approval) -> LinkCard.Kind {

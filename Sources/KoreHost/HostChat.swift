@@ -14,6 +14,11 @@ package struct ChatRecord: Codable, Sendable, Equatable {
     package var mode: String?
     package var modelId: String?
     package var created: Int
+    /// The effort picked from a client: the next start launches on it.
+    package var effort: String?
+    /// The composer's controls as the live chat last had them (model, effort, context), shown
+    /// while its CLI is stopped.
+    package var controls: LinkProtocol.ChatControls?
 }
 
 /// One line of a chat's log (`log.jsonl`): an entry as it went on the wire, a turn, or the start
@@ -147,6 +152,7 @@ package final class HostChat {
             compactMemory: AutoCompactMemory(defaults: nil), services: services)
         if let mode = record.mode { chat.controls.mode = mode }
         chat.launchModel = record.modelId
+        chat.launchEffort = record.effort
         if let transcript = chat.transcriptView as? HostTranscript {
             transcript.onChange = { [weak self, weak chat] from, reset in
                 guard let self, let chat else { return }
@@ -171,6 +177,9 @@ package final class HostChat {
         next.session = chat.sessionId ?? next.session
         next.title = chat.status.name ?? next.title
         next.mode = chat.controls.mode
+        var kept = HostMeta.controls(of: chat)
+        kept.compacting = false
+        next.controls = kept
         if next != record {
             record = next
             try? saveRecord()
@@ -179,6 +188,13 @@ package final class HostChat {
 
     func setModel(_ id: String) {
         record.modelId = id
+        record.controls?.modelId = id
+        try? saveRecord()
+    }
+
+    func setEffort(_ level: String) {
+        record.effort = level
+        record.controls?.effort = level
         try? saveRecord()
     }
 

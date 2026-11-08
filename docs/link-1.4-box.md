@@ -32,8 +32,24 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 
 - Windows are the box's folders: `{id: "w_<hash of path>", name, path ("~/…"), tabs, activeTabId}`.
   Tabs are the folder's chats, `{id: "t_<chatId>", kind: "chat", title, chatId}`.
-- `ChatMeta` as §4, with no `controls`, `rescue` or `arsenal`. `state` is `needsYou`, `working`
-  or `idle`.
+- `ChatMeta` as §4, with no `rescue` or `arsenal`. `state` is `needsYou`, `working` or `idle`.
+- With a `full` grant, `ChatMeta.controls` as §11: `{modelId, effort, fast, fastOffered,
+  planAllow, contextPct, autoCompactAt, compacting, remote}`, plus two 1.4 fields,
+  `contextUsed` (tokens in context) and `contextWindow` (what they're measured against), both
+  absent until the CLI says. `contextPct` is `contextUsed * 100 / contextWindow`, at most 100.
+  While a chat's CLI is stopped, its controls are as the live chat last had them (kept in its
+  `meta.json`), with `compacting: false`; a chat that never ran has the `modelId` and `effort`
+  it will start on. `act` and `watch` grants get no `controls`.
+- With a `full` grant, the `snapshot` carries `clis: [{provider, models: [{id, name, efforts,
+  fast, auto}], effortScale}]` (no `account`): each CLI's models as the box's own CLI listed
+  them, `effortScale` every effort its models offer, lowest first. Only CLIs that have listed
+  are there; with none, `clis` is absent. A new list goes to full grants as a `delta` with
+  `clis` (the whole array) and nothing else.
+- The lists come only from a CLI already running: the list its session starts with, and a turn's
+  end asking it again (the claude CLI's `list_models` control request, the codex CLI's `model/list`) at most
+  once per 10 minutes per CLI. No CLI starts for a list and nothing polls. The last lists are
+  kept in `${XDG_STATE_HOME:-~/.local/state}/kore-host/models.json` (0600), so a connection
+  gets them in its snapshot before any CLI runs.
 - Cards: a plan card's `plan` is absent; the plan's markdown is in `body` (4 KiB cut,
   `card.more` for the rest). The digest is as §4.
 
@@ -55,6 +71,8 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 |---|---|---|
 | `chat.new` | `folder, provider, modelId?` | `folder` (an absolute path the box serves) in place of `windowId`; `windowId` still works. Result: `chatId`, `windowId`. The CLI starts on the first send. |
 | `chat.setModel` | `chatId, modelId` | Also for an `act` grant. A chat whose CLI isn't running starts on that model. |
+| `chat.setEffort` | `chatId, level` | Also for an `act` grant. A running CLI switches; a stopped one starts on it. `invalid` when the chat's models offer no such level. |
+| `chat.setFast` | `chatId, on` | Also for an `act` grant. Only while the chat's CLI runs and has said fast mode is there for its model; `invalid` otherwise. |
 | `chat.setMode`, `chat.setPlan`, `chat.planReady`, `chat.answer approvePlanAcceptEdits` | as §6 | A `full` grant is full control, which may raise a chat's mode up to Auto (Auto, Approve for me, leaving plan, approving with auto-accept edits), the same rule as the Mac's link (§11). Bypass, Codex's Full access and unknown modes stay refused to every client; `watch` and `act` stay lower-only (`denied.raiseMode`). Under full control `ChatMeta.allowedModeIds` lists every mode up to Auto, and a plan card's `approvePlanAcceptEdits` isn't marked `refused`. Always allow and `!` lines stay refused. |
 | `folders.list` | | Result: `folders: [{windowId, path}]`. |
 | `folder.add` | `path` | An absolute path to an existing folder; it's added to `config.json`. Result: `folders`. `gone.folder` otherwise. |
