@@ -108,6 +108,23 @@ package struct NodeMigration {
         try openJournals().map { try rekey(from: $0.from, to: $0.to) }
     }
 
+    /// Finished rekeys whose old key holds something again run again (a copy still on the alias
+    /// wrote it back after the move: the list's second row for one box), and the box's entry is
+    /// marked rekeyed (a crash between the move and the mark). Only boxes still in `directory`: a
+    /// forgotten one keeps what's under its old key. At launch, after `resume`; twice is once.
+    @discardableResult
+    package func repair(directory: NodeDirectory) throws -> [String] {
+        var repaired: [String] = []
+        for journal in Self.journals(root) where journal.finished && journal.from != journal.to.raw {
+            guard let entry = directory.all[journal.to.raw] else { continue }
+            if !entry.rekeyed { directory.update { $0[journal.to.raw]?.rekeyed = true } }
+            guard holds(journal.from) else { continue }
+            try write(Journal(from: journal.from, to: journal.to, started: journal.started))
+            if try rekey(from: journal.from, to: journal.to) == .done { repaired.append(journal.from) }
+        }
+        return repaired
+    }
+
     package func journal(for old: String) -> Journal? {
         guard let data = try? Data(contentsOf: journalURL(old)) else { return nil }
         return try? Self.decoder.decode(Journal.self, from: data)
@@ -177,16 +194,22 @@ package struct NodeMigration {
         }
         for prefix in Self.prefixes {
             guard let value = defaults.object(forKey: prefix + old) else { continue }
-            if defaults.object(forKey: prefix + new.raw) == nil { defaults.set(value, forKey: prefix + new.raw) }
+            if let kept = defaults.stringArray(forKey: prefix + new.raw), let more = value as? [String] {
+                // Recent folders: the new key's first, then the old key's it lacks.
+                defaults.set(kept + more.filter { !kept.contains($0) }, forKey: prefix + new.raw)
+            } else if defaults.object(forKey: prefix + new.raw) == nil {
+                defaults.set(value, forKey: prefix + new.raw)
+            }
             defaults.removeObject(forKey: prefix + old)
         }
         let pairs = SyncPairs.all(defaults)
         if pairs.contains(where: { $0.alias == old }) {
+            var seen = Set<SyncPair>()
             let moved = pairs.map { pair in
                 var pair = pair
                 if pair.alias == old { pair.alias = new.raw }
                 return pair
-            }
+            }.filter { seen.insert($0).inserted }
             defaults.set(try? JSONEncoder().encode(moved), forKey: SyncPairs.key)
         }
     }

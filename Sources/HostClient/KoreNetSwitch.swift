@@ -443,21 +443,27 @@ package final class KoreNetSwitch: NetRouter {
     package func said(_ node: NetNodeWire.Node, on connection: HostConnection) {
         guard let env else { return }
         defer { nodeWatchers[connection.alias]?(node) }
-        let before = directory.entry(forKey: connection.alias)
-        if let before, before.device == node.device, before.identityKey != node.identityKey {
+        let heard = NodeDirectory.heard(node, before: directory.entry(forKey: connection.alias), ssh: connection.sshAlias)
+        let entry = heard.entry
+        if heard.refused {
+            // Its row says so (Forget and set up again); nothing else is taken from it.
+            if directory.all[entry.id.raw]?.identityChanged != true { directory.upsert(entry) }
             HostLog.note(connection.alias, "korenet refused", "the box's identity key changed")
             return
         }
-        var entry = before ?? NodeDirectory.Entry(device: node.device, name: node.name, ssh: connection.sshAlias, nodeKey: nil, identityKey: node.identityKey)
-        if entry.device != node.device {
-            // Another box behind the same alias: a new entry, never the old one's trust.
-            entry = NodeDirectory.Entry(device: node.device, name: node.name, ssh: connection.sshAlias, nodeKey: nil, identityKey: node.identityKey)
+        directory.update { entries in
+            // One entry per alias: the device that was behind it before goes (its pause stays by
+            // the alias it shares).
+            if let old = heard.replaced { entries[old.id.raw] = nil }
+            entries[entry.id.raw] = entry
         }
-        entry.name = node.name
-        entry.nodeKey = node.on ? node.nodeKey : nil
-        directory.upsert(entry)
+        if let old = heard.replaced {
+            HostLog.audit("replaced", ["alias": connection.sshAlias, "old": old.id.raw, "device": entry.id.raw])
+            // Its stores were kept under the old device's id: they move to the new one's.
+            if connection.alias == old.id.raw { Task { _ = await rekeyer.rekey(connection, to: entry.id, directory: directory) } }
+        }
         if entry.enrolled {
-            if entry.nodeKey != nil { connection.preferNet() }
+            if entry.listening { connection.preferNet() }
             return
         }
         guard connection.boxMinor >= 12, connection.control == .full, case .ssh(let alias, let grant)? = connection.route,

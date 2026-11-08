@@ -133,20 +133,19 @@ package final class Devices {
     /// The icon's look: off costs one read.
     package func look(now: Date = Date()) -> NetIconLook { NetIconLook.of(picture(now: now), now: now) }
 
+    /// One per device: listed aliases keyed as they're kept now, deduped with the directory.
     private func boxFacts() -> [BoxFacts] {
         let directory = NodeDirectory.shared
-        let listed = BoxList.shared.boxes
-        var out = listed.map { box in facts(box.alias, box, directory) }
-        for entry in directory.all.values where entry.enrolled {
-            let known = listed.contains { $0.alias == entry.id.raw || (!entry.rekeyed && $0.alias == entry.ssh) }
-            if !known { out.append(facts(entry.id.raw, nil, directory)) }
+        let list = BoxList.shared
+        return DevicesPicture.boxKeys(listed: list.boxes.map(\.alias), entries: Array(directory.all.values)).map { box in
+            facts(box.key, box.listed.flatMap(list.box), directory)
         }
-        return out
     }
 
     private func facts(_ key: String, _ box: BoxList.Box?, _ directory: NodeDirectory) -> BoxFacts {
         var facts = BoxFacts(key: key, name: NodeNames.name(key))
-        let connection = HostConnection.live(key)
+        // A link still under the alias (opened before the rekey reached it) is this box's too.
+        let connection = HostConnection.live(key) ?? box.flatMap { $0.alias == key ? nil : HostConnection.live($0.alias) }
         facts.listed = box?.status
         facts.older = box?.older == true || connection?.hostOlder == true
         facts.online = connection?.isOnline ?? false

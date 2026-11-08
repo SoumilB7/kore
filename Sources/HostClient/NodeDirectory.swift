@@ -1,5 +1,6 @@
 import Foundation
 import KoreTrust
+import LinkProtocol
 import Synchronization
 
 /// The boxes this Mac knows on KoreNet (phase 18 step 5a), in Kore's settings (`koreNodes`):
@@ -20,8 +21,16 @@ package final class NodeDirectory: Sendable {
         package var enrolled: Bool
         /// Its stores moved to its id (`NodeMigration`).
         package var rekeyed: Bool
+        /// The box is on KoreNet (`kore-host net on`), listening or not.
+        package var on: Bool
+        /// The node key it last listened on, kept while its Tailscale is off.
+        package var lastNodeKey: String?
+        /// It said another identity key under the same id: refused until it's forgotten.
+        package var identityChanged = false
 
-        package init(device: UUID, name: String, ssh: String?, nodeKey: String?, identityKey: Data, enrolled: Bool = false, rekeyed: Bool = false) {
+        package init(
+            device: UUID, name: String, ssh: String?, nodeKey: String?, identityKey: Data, enrolled: Bool = false, rekeyed: Bool = false, on: Bool? = nil
+        ) {
             self.device = device
             self.name = name
             self.ssh = ssh
@@ -29,9 +38,54 @@ package final class NodeDirectory: Sendable {
             self.identityKey = identityKey
             self.enrolled = enrolled
             self.rekeyed = rekeyed
+            self.on = on ?? (nodeKey != nil)
+            lastNodeKey = nodeKey
+        }
+
+        package init(from decoder: any Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            device = try c.decode(UUID.self, forKey: .device)
+            name = try c.decode(String.self, forKey: .name)
+            ssh = try c.decodeIfPresent(String.self, forKey: .ssh)
+            nodeKey = try c.decodeIfPresent(String.self, forKey: .nodeKey)
+            identityKey = try c.decode(Data.self, forKey: .identityKey)
+            enrolled = try c.decode(Bool.self, forKey: .enrolled)
+            rekeyed = try c.decode(Bool.self, forKey: .rekeyed)
+            // Kept before these were: a node key meant on and listening.
+            on = try c.decodeIfPresent(Bool.self, forKey: .on) ?? (nodeKey != nil)
+            lastNodeKey = try c.decodeIfPresent(String.self, forKey: .lastNodeKey) ?? nodeKey
+            identityChanged = try c.decodeIfPresent(Bool.self, forKey: .identityChanged) ?? false
         }
 
         package var id: NodeID { NodeID(device.uuidString.lowercased()) }
+        /// On KoreNet and reachable there now: its node key is the one it listens on.
+        package var listening: Bool { on && nodeKey != nil }
+    }
+
+    /// What a box's `net.node` changes here (`KoreNetSwitch.said`).
+    package struct Heard: Equatable, Sendable {
+        /// The entry to keep.
+        package var entry: Entry
+        /// Another device behind the same alias (a wiped box): its entry goes, the new one replaces it.
+        package var replaced: Entry?
+        /// Same id, another identity key: nothing else is taken from it.
+        package var refused = false
+    }
+
+    /// A box's `net.node`, said over the link `ssh` reaches it by, against the entry its key had.
+    package static func heard(_ node: NetNodeWire.Node, before: Entry?, ssh: String?) -> Heard {
+        let fresh = Entry(device: node.device, name: node.name, ssh: ssh, nodeKey: nil, identityKey: node.identityKey, on: false)
+        guard let before else { return Heard(entry: fresh.hearing(node)) }
+        if before.device != node.device {
+            // Another box behind the same alias: a new entry, never the old one's trust.
+            return Heard(entry: fresh.hearing(node), replaced: before)
+        }
+        if before.identityKey != node.identityKey {
+            var entry = before
+            entry.identityChanged = true
+            return Heard(entry: entry, refused: true)
+        }
+        return Heard(entry: before.hearing(node))
     }
 
     package static let defaultsKey = "koreNodes"
@@ -142,5 +196,19 @@ package final class NodeDirectory: Sendable {
     package func forget(_ key: String) {
         guard let entry = entry(forKey: key) else { return }
         update { $0[entry.id.raw] = nil }
+    }
+}
+
+extension NodeDirectory.Entry {
+    /// What the box said of its KoreNet: on or off, and the node key it listens on now (the last
+    /// one kept while its Tailscale is off).
+    func hearing(_ node: NetNodeWire.Node) -> Self {
+        var entry = self
+        entry.name = node.name
+        entry.identityChanged = false
+        entry.on = node.on
+        entry.nodeKey = node.on ? node.nodeKey : nil
+        if let key = entry.nodeKey { entry.lastNodeKey = key }
+        return entry
     }
 }

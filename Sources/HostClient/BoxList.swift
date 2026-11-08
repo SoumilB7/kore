@@ -99,7 +99,11 @@ package final class BoxList {
 
     package private(set) var boxes: [Box] = []
 
-    package static let shared = BoxList()
+    package static let shared: BoxList = {
+        let list = BoxList()
+        list.follow(.default)
+        return list
+    }()
 
     @ObservationIgnored private let defaults: UserDefaults?
     @ObservationIgnored private let hosts: () -> [String]
@@ -107,6 +111,7 @@ package final class BoxList {
     @ObservationIgnored private let makeSetup: @MainActor (String, String) -> BoxSetup
     @ObservationIgnored private let cacheRoot: URL
     @ObservationIgnored private var probes: [String: Task<Void, Never>] = [:]
+    @ObservationIgnored private var rekeys: (any NSObjectProtocol)?
     @ObservationIgnored private var busy: Set<String> = []
     /// The user said yes to Swift's Linux kit this run (asked once, on the box's line).
     @ObservationIgnored private var kitConsent = false
@@ -143,8 +148,12 @@ package final class BoxList {
         reload()
     }
 
-    /// The kept boxes that are aliases or destinations (`BoxAddress`): any other is left out on load.
-    private var listed: [String] { (defaults?.stringArray(forKey: Self.listedKey) ?? []).filter(BoxAddress.valid) }
+    /// The kept boxes that are aliases or destinations (`BoxAddress`): any other is left out on
+    /// load, and one kept twice is listed once.
+    private var listed: [String] {
+        var seen = Set<String>()
+        return (defaults?.stringArray(forKey: Self.listedKey) ?? []).filter { BoxAddress.valid($0) && seen.insert($0).inserted }
+    }
 
     /// The list again from what's kept; what's known of each box stays.
     package func reload() {
@@ -154,6 +163,34 @@ package final class BoxList {
             if box.folders.isEmpty { box.folders = HostCache(alias: alias, root: cacheRoot).state()?.folders ?? [] }
             if box.machine == nil { box.machine = BoxMachine.cached(alias, root: cacheRoot) }
             return box
+        }
+    }
+
+    /// A box's stores moved from `old` (its alias) to `new` (its KoreNet id): its row goes by the
+    /// id from now on, with what's known of it (status, folders, machine). `NodeMigration` already
+    /// rewrote the kept list; a row the id has already is the one kept.
+    package func rekeyed(from old: String, to new: String) {
+        guard old != new, let i = boxes.firstIndex(where: { $0.alias == old }) else { return }
+        if boxes.contains(where: { $0.alias == new }) {
+            boxes.remove(at: i)
+        } else {
+            boxes[i].alias = new
+        }
+        reload()
+    }
+
+    /// Follows each rekey posted on `center` (`koreNodeRekeyed`): Kore's own list does, from the
+    /// start.
+    package func follow(_ center: NotificationCenter) {
+        if let rekeys { center.removeObserver(rekeys) }
+        // Posted on the main actor (`NodeRekeyer`): followed before the post returns.
+        rekeys = center.addObserver(forName: .koreNodeRekeyed, object: nil, queue: nil) { [weak self] note in
+            guard let old = note.userInfo?["old"] as? String, let new = note.userInfo?["new"] as? String else { return }
+            if Thread.isMainThread {
+                MainActor.assumeIsolated { self?.rekeyed(from: old, to: new) }
+            } else {
+                Task { @MainActor in self?.rekeyed(from: old, to: new) }
+            }
         }
     }
 

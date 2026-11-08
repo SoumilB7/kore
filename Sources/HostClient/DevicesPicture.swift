@@ -102,6 +102,10 @@ package struct DeviceRow: Identifiable, Equatable, Sendable {
     package var canJoin = false
     /// A phone while Tailscale is off on this Mac: it can't reach the Mac.
     package var needsTailscale = false
+    /// A box on KoreNet whose Tailscale is off: SSH only until it's back.
+    package var tailscaleOff = false
+    /// A box that said another identity key under its id: refused until it's forgotten.
+    package var identityChanged = false
 
     package init(id: String, kind: Kind, name: String, status: Status, route: Route? = nil) {
         self.id = id
@@ -241,11 +245,14 @@ extension DevicesPicture {
         func peer(_ key: String?) -> TailnetStatus.Peer? { key.flatMap { k in peers.first { $0.publicKey == k } } }
         for box in boxes {
             var row = DeviceRow(id: box.key, kind: .box, name: box.name, status: boxStatus(box))
-            let tailnetPeer = net.on ? peer(box.entry?.nodeKey) : nil
+            let tailnetPeer = net.on ? peer(box.entry.flatMap { $0.nodeKey ?? $0.lastNodeKey }) : nil
             row.paused = box.paused
             row.keyExpiry = tailnetPeer?.keyExpiry
             row.lastSeen = tailnetPeer?.lastSeen ?? box.lastHeard
-            row.canJoin = net.on && picture.net == .running && box.entry?.nodeKey == nil && box.listed != nil
+            // Join only while the box's KoreNet is off: on with its Tailscale off, it says so.
+            row.canJoin = net.on && picture.net == .running && box.entry?.on != true && box.listed != nil
+            row.tailscaleOff = box.entry.map { $0.on && !$0.listening } ?? false
+            row.identityChanged = box.entry?.identityChanged ?? false
             if box.online {
                 switch box.route {
                 case .net?: row.route = tailnetPeer?.relayed == true ? .relayed : .tailnet
@@ -281,6 +288,38 @@ extension DevicesPicture {
         }
         picture.pending = Array(waiting.sorted { $0.device.lastSeen > $1.device.lastSeen }.prefix(pendingCap))
         return picture
+    }
+
+    /// A box the popup lists: the key it's kept under now, and the key the box list holds it by.
+    package struct BoxKey: Equatable, Sendable {
+        package var key: String
+        package var listed: String?
+
+        package init(_ key: String, listed: String? = nil) {
+            self.key = key
+            self.listed = listed
+        }
+    }
+
+    /// The boxes to list, one per device (I1): each listed key as it's kept now (an alias rekeyed
+    /// to its id is the id), then each enrolled entry the list doesn't hold by its id or, not
+    /// rekeyed yet, by its alias. A key the list holds twice is listed once.
+    package static func boxKeys(listed: [String], entries: [NodeDirectory.Entry]) -> [BoxKey] {
+        var rekeyed: [String: String] = [:]
+        for entry in entries where entry.rekeyed {
+            if let ssh = entry.ssh, rekeyed[ssh] == nil { rekeyed[ssh] = entry.id.raw }
+        }
+        var seen = Set<String>()
+        var out: [BoxKey] = []
+        for alias in listed {
+            let key = NodeDirectory.isNodeKey(alias) ? alias : rekeyed[alias] ?? alias
+            if seen.insert(key).inserted { out.append(BoxKey(key, listed: alias)) }
+        }
+        for entry in entries.sorted(by: { $0.id.raw < $1.id.raw }) where entry.enrolled {
+            if !entry.rekeyed, let ssh = entry.ssh, seen.contains(ssh) { continue }
+            if seen.insert(entry.id.raw).inserted { out.append(BoxKey(entry.id.raw)) }
+        }
+        return out
     }
 
     static func net(_ facts: NetFacts) -> Net {
@@ -346,6 +385,7 @@ package enum DevicesWords {
     /// A row's detail, after its name: what it is, how it's reached, or why it isn't.
     package static func detail(_ row: DeviceRow, now: Date) -> String? {
         if row.paused { return "taken offline" }
+        if row.identityChanged { return "identity changed · Forget and set up again" }
         if row.needsTailscale { return "needs Tailscale on" }
         switch row.status {
         case .needsAllow: return "hasn't allowed this Mac"
@@ -353,6 +393,8 @@ package enum DevicesWords {
         case .stopped: return "kore-host stopped"
         case .notSetUp: return "not set up"
         case .offline: return row.lastSeen.map { "last seen " + ago($0, now: now) } ?? "offline"
+        case .unknown where row.tailscaleOff, .connected where row.tailscaleOff:
+            return "Tailscale is off on \(row.name)" + (row.route == .ssh ? " · via SSH" : "")
         case .unknown: return row.route == .ssh ? "via SSH" : nil
         case .connected: break
         }

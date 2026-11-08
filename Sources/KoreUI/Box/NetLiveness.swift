@@ -28,8 +28,14 @@ enum NetLiveness {
         LinkTaps.netStarted?(net)
         // The Welcome's tailnet boxes (found only when its "+" list or New box… asks).
         if Devices.shared.claims == nil { Devices.shared.claims = TailnetClaims() }
-        // A rekey a crash left half done finishes before anything reads the stores.
-        Task.detached(priority: .utility) { _ = try? NodeMigration().resume() }
+        // A rekey a crash left half done finishes before anything reads the stores; one a stale
+        // copy wrote back to is run again. The box list then goes by the ids.
+        Task.detached(priority: .utility) {
+            let migration = NodeMigration()
+            _ = try? migration.resume()
+            _ = try? migration.repair(directory: .shared)
+            await MainActor.run { BoxList.shared.reload() }
+        }
         wake = LinkWake(center: NSWorkspace.shared.notificationCenter, name: NSWorkspace.didWakeNotification)
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { HostConnection.probeAll("activate") }
