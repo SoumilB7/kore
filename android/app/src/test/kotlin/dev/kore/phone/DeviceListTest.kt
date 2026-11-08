@@ -26,11 +26,11 @@ class DeviceListTest {
             {"id":"two","title":"Kore-2","provider":"claude","state":"idle","lastAt":${now - 14 * min},"last":"Landed 3 commits on main"},
             {"id":"main","title":"Kore-main","provider":"claude","state":"working","lastAt":${now - 30 * min},"last":"You: land it"},
             {"id":"three","title":"Kore-3","provider":"claude","state":"needsYou","lastAt":${now - 90 * min},"cards":[{"id":"c","title":"Allow Bash: swift test\nmore"}]},
-            {"id":"design","title":"Kore-design","provider":"codex","state":"idle","lastAt":${now - 2 * min}}]}""")
+            {"id":"design","title":"Kore-notes","provider":"codex","state":"idle","lastAt":${now - 2 * min}}]}""")
 
     @Test fun needsYouThenWorkingThenTheMostRecent() {
         val rows = DeviceList.rows(mac, null, now, none)
-        assertEquals(listOf("Kore-3", "Kore-main", "Kore-design", "Kore-2"), rows.map { it.title })
+        assertEquals(listOf("Kore-3", "Kore-main", "Kore-notes", "Kore-2"), rows.map { it.title })
         assertEquals(listOf(Cue.NEEDS, Cue.WORKING, Cue.NONE, Cue.NONE), rows.map { it.cue })
     }
 
@@ -42,7 +42,7 @@ class DeviceListTest {
         assertEquals("Landed 3 commits on main", rows.getValue("Kore-2").line)
         assertEquals("14 m", rows.getValue("Kore-2").age)
         // Idle with nothing said: an empty second line, never "idle".
-        assertEquals("", rows.getValue("Kore-design").line)
+        assertEquals("", rows.getValue("Kore-notes").line)
         assertTrue(rows.values.none { "idle" in it.line || "idle" in it.age })
     }
 
@@ -74,7 +74,7 @@ class DeviceListTest {
         }
         val rows = DeviceList.rows(mac, null, now, seen).associateBy { it.title }
         assertTrue(rows.getValue("Kore-2").unread)
-        assertFalse(rows.getValue("Kore-design").unread)
+        assertFalse(rows.getValue("Kore-notes").unread)
     }
 
     @Test fun ages() {
