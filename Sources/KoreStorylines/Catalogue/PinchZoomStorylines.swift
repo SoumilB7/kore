@@ -85,7 +85,8 @@ private struct ZoomRightAtEnd: Step {
 private struct ExpectSideKept: Step {
     let streaming: Bool
     var label: String { "Expect the magnified page's side kept, \(streaming ? "at the end through a streamed reply" : "and its top, with the composer grown")" }
-    var timeout: Duration? { .seconds(15) }
+    // Up to the streamed reply's whole length, at its pace.
+    var timeout: Duration? { .seconds(streaming ? 75 : 15) }
 
     func run(_ story: StoryContext) async throws {
         let chat = try story.activeChat()
@@ -107,9 +108,16 @@ private struct ExpectSideKept: Step {
                 try await story.until("more of the reply") { count(chat) > seen }
                 try check("after delta \(n)")
             }
-            try await story.until("the reply past a screen, still followed", timeout: .seconds(2)) {
+            // The reply streams at its pace (the clock's, which a busy Mac stretches): on until it's
+            // past a screen, or over; past a screen and followed it must be, either way.
+            let followed = {
                 (scroll.documentView?.frame.height ?? 0) > start + clip.bounds.height
                     && PinchZoomKeepsSide.distanceToEnd(scroll) < PinchZoomKeepsSide.atEnd
+            }
+            try? await story.until("the reply past a screen, or over", timeout: .seconds(60)) { followed() || !chat.isRunning }
+            guard followed() else {
+                throw StoryFailure.expectation(
+                    "the reply past a screen, still followed (the page \(Int(scroll.documentView?.frame.height ?? 0)) tall from \(Int(start)), a screen \(Int(clip.bounds.height)), \(Int(PinchZoomKeepsSide.distanceToEnd(scroll))) pt from the end, the reply \(count(chat)) characters, running \(chat.isRunning))")
             }
             try check("at the end")
         } else {
