@@ -31,5 +31,5 @@ final class ImageChipMenu: ChatStoryline {
         ]
     }
 
-    static var board: NSPasteboard { NSPasteboard(name: .init("kore-storylines")) }
+    static var board: NSPasteboard { NSPasteboard(name: StoryHost.board) }
 }

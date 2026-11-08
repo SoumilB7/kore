@@ -70,7 +70,7 @@ final class ComposerCopyWholeDraft: ChatStoryline {
         ]
     }
 
-    static var board: NSPasteboard { NSPasteboard(name: .init("kore-storylines")) }
+    static var board: NSPasteboard { NSPasteboard(name: StoryHost.board) }
 
     @MainActor static func names(_ story: StoryContext) throws -> [String] {
         try story.activeChat().attachments.map(\.name)

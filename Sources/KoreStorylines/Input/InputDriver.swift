@@ -277,7 +277,7 @@ package final class InputDriver {
     /// storyline's own: the owner's clipboard is never touched.
     package func paste(_ text: String) async throws {
         guard let view = try keyWindow().firstResponder as? NSTextView else { throw StoryFailure.other("no text in focus to paste into") }
-        let board = NSPasteboard(name: NSPasteboard.Name("kore-storylines-paste"))
+        let board = NSPasteboard(name: NSPasteboard.Name(StoryHost.board.rawValue + "-paste"))
         board.clearContents()
         board.setString(text, forType: .string)
         defer { board.releaseGlobally() }

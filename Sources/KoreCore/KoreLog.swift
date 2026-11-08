@@ -86,7 +86,10 @@ public final class KoreLog: @unchecked Sendable {
     package static let isTestProcess: Bool = {
         let env = ProcessInfo.processInfo.environment
         let process = ProcessInfo.processInfo.processName
-        return ["xctest", "swiftpm-testing-helper", "kore-storylines"].contains(process) || Bundle.main.bundlePath.hasSuffix(".xctest")
+        // A gate runs them side by side under names of their own (kore-storylines-2,
+        // swiftpm-testing-helper-KoreUITests, …), each its own defaults domain: the same processes.
+        return process == "xctest" || process.hasPrefix("swiftpm-testing-helper") || process.hasPrefix("kore-storylines")
+            || Bundle.main.bundlePath.hasSuffix(".xctest")
             || env["XCTestConfigurationFilePath"] != nil
     }()
 

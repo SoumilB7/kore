@@ -375,7 +375,7 @@ package final class TranscriptSelection: ObservableObject {
     /// Where copies go: the general pasteboard, or under storylines a named one, so a run never
     /// touches the owner's clipboard.
     package static var pasteboard: NSPasteboard {
-        StoryHost.installed ? NSPasteboard(name: .init("kore-storylines")) : .general
+        StoryHost.installed ? NSPasteboard(name: StoryHost.board) : .general
     }
 
     func markdown() -> String {

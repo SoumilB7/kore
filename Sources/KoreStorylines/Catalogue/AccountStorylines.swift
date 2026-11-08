@@ -97,7 +97,7 @@ final class AccountPopup: ChatStoryline {
             Snapshot("account-switching"),
             Press(part(.copy)),
             Expect("the link copied") { _ in
-                NSPasteboard(name: .init("kore-storylines")).string(forType: .string)?.hasPrefix("https://\(host)/") == true
+                NSPasteboard(name: StoryHost.board).string(forType: .string)?.hasPrefix("https://\(host)/") == true
             },
             Press(part(.cancel)),
             lines("cancelled: the old account, at rest", me),

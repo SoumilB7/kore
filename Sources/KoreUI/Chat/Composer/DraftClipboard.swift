@@ -30,7 +30,7 @@ struct DraftClipboard: Codable, Equatable {
 
     /// The clipboard; a storyline's own board in storylines, so the owner's is never touched.
     @MainActor static var pasteboard: NSPasteboard {
-        StoryHost.installed ? NSPasteboard(name: .init("kore-storylines")) : .general
+        StoryHost.installed ? NSPasteboard(name: StoryHost.board) : .general
     }
 
     init(provider: String, text: String, command: ChatDraft.Command?, files: [File]) {

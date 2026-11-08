@@ -7,6 +7,10 @@ import SwiftUI
 @MainActor
 package enum StoryHost {
     package static var installed = false
+
+    /// The host's own pasteboard, never the owner's clipboard: named after the process, so storyline
+    /// hosts run side by side (a gate's shards, each under a name of its own) never share one.
+    package nonisolated static var board: NSPasteboard.Name { .init(ProcessInfo.processInfo.processName) }
 }
 
 /// The elements a storyline can act on, by StoryID (phase 12, §3): what is in a window right now,

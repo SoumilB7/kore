@@ -752,7 +752,7 @@ package final class AccountStore {
 
     /// Copy link / Copy code. A storyline host's copies go to a pasteboard of its own.
     func copy(_ text: String) {
-        let board = StoryHost.installed ? NSPasteboard(name: .init("kore-storylines")) : .general
+        let board = StoryHost.installed ? NSPasteboard(name: StoryHost.board) : .general
         board.clearContents()
         board.setString(text, forType: .string)
     }
