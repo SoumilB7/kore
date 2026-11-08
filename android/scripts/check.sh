@@ -41,7 +41,7 @@ out=$(results app/build/test-results/testDebugUnitTest); say "✔ :app unit test
 GO="${KORE_GO:-/opt/homebrew/bin/go}"
 if [[ -x "$GO" ]]; then
     t0=$SECONDS
-    if (cd tailnet/go && GOFLAGS=-mod=mod GOPROXY=off "$GO" test ./... >"$log.go" 2>&1); then say "✔ tailnet shim go tests ($((SECONDS - t0))s)"; else bad "tailnet shim go tests"; tail -5 "$log.go"; fi
+    if (cd tailnet/go && GOPROXY=off "$GO" test ./... >"$log.go" 2>&1); then say "✔ tailnet shim go tests ($((SECONDS - t0))s)"; else bad "tailnet shim go tests"; tail -5 "$log.go"; fi
 else
     say "· tailnet shim go tests skipped (no go)"
 fi

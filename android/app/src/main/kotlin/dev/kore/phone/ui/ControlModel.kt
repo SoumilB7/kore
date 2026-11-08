@@ -6,12 +6,12 @@ import kotlinx.serialization.json.longOrNull
 
 /** What the full-control screens draw, worked out from the Mac's state without any views. */
 object ControlModel {
-    /** A model family ("Opus") and its versions ("4.8", "4.7"), in the Mac's order. */
+    /** A model family ("Atlas") and its versions ("4.8", "4.7"), in the Mac's order. */
     data class Family(val name: String, val versions: List<Pair<String, String>>) {
         val ids get() = versions.map { it.first }
     }
 
-    /** "Opus 4.8", "Opus 4.7", "Sonnet 4.6" → Opus [4.8, 4.7], Sonnet [4.6]; a name without a version is its own family. */
+    /** "Atlas 4.8", "Atlas 4.7", "Brook 4.6" → Atlas [4.8, 4.7], Brook [4.6]; a name without a version is its own family. */
     fun families(models: List<JsonObject>): List<Family> {
         val out = LinkedHashMap<String, MutableList<Pair<String, String>>>()
         for (m in models) {

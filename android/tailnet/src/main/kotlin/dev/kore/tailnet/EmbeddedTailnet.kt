@@ -116,6 +116,7 @@ class EmbeddedTailnet(private val context: Context, private val hostname: String
     }
 
     /** Every network ConnectivityManager knows, as the shim's rows; the default one marked, with its IPv4 gateway. */
+    @Suppress("DEPRECATION") // allNetworks: the one list of every network without a callback per network.
     private fun interfaces(): JSONArray {
         val rows = JSONArray()
         val active = current

@@ -14,8 +14,8 @@ class ControlModelTest {
     private fun list(s: String) = Json.parseToJsonElement(s).let { it as kotlinx.serialization.json.JsonArray }.map { it.jsonObject }
 
     @Test fun modelFamilies() {
-        val f = ControlModel.families(list("""[{"id":"o48","name":"Opus 4.8"},{"id":"o47","name":"Opus 4.7"},{"id":"s46","name":"Sonnet 4.6"},{"id":"luna","name":"gpt-6-luna"}]"""))
-        assertEquals(listOf("Opus", "Sonnet", "gpt-6-luna"), f.map { it.name })
+        val f = ControlModel.families(list("""[{"id":"o48","name":"Atlas 4.8"},{"id":"o47","name":"Atlas 4.7"},{"id":"s46","name":"Brook 4.6"},{"id":"luna","name":"gpt-6-luna"}]"""))
+        assertEquals(listOf("Atlas", "Brook", "gpt-6-luna"), f.map { it.name })
         assertEquals(listOf("o48" to "4.8", "o47" to "4.7"), f[0].versions)
         assertEquals(listOf("luna" to ""), f[2].versions)
     }

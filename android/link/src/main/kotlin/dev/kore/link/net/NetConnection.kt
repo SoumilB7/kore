@@ -65,6 +65,7 @@ class NetConnection(
     override val peer: NetClientSession.State.Established.Peer get() = session.established?.peer ?: error("not established")
 
     /** Starts the reader and writer; returns once the welcome holds, or throws [NetFailure]. */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     suspend fun handshake(windowMs: Long = NetClientSession.CLIENT_WINDOW_MS, helloSent: () -> Unit = {}): LinkSession {
         scope.launch(io) { readLoop(helloSent) }
         scope.launch(io) { writeLoop() }

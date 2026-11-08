@@ -168,6 +168,7 @@ class NodeClient(
         expiry?.cancel()
     }
 
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private suspend fun run() {
         while (true) {
             val wake = machine.wakeAt

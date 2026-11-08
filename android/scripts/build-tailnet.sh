@@ -21,7 +21,7 @@ aar="$cache/tailnet-$key.aar"
 if [[ ! -f "$aar" ]]; then
     mkdir -p "$cache"
     print "tailnet: building $aar (gomobile, a few minutes the first time)"
-    ( cd "$src" && GOFLAGS=-mod=mod gomobile bind -target=android/arm64 -androidapi "$api" -trimpath \
+    ( cd "$src" && gomobile bind -target=android/arm64 -androidapi "$api" -trimpath \
         -ldflags="$ldflags" -tags "$tags" -javapkg dev.kore.tailnet.bind -o "$aar.tmp.aar" . )
     mv "$aar.tmp.aar" "$aar"
     rm -f "$aar.tmp-sources.jar" "${aar%.aar}-sources.jar"

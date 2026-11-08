@@ -136,7 +136,6 @@ class JoinFlow(
                     if (e.reason == "bye ${dev.kore.link.net.NetControl.Companion.Reason.UNKNOWN}") {
                         // Listening for its allowed phones, but its Add device window isn't open.
                         stepFlow.value = Step.Finding(macs.map { it.shortName })
-                        null
                     } else if (stepFlow.value is Step.Allowing || e.reason.startsWith("bye ")) {
                         // Heard, and said no (or the card timed out): Denied ends the knocking.
                         stepFlow.value = Step.Denied(mac.shortName)
