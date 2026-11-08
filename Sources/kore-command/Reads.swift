@@ -29,7 +29,7 @@ enum Reads {
             case "history": try history(client, options)
             case "options": try Own.options(client, options)
             case "fast", "compact", "rename", "model", "effort", "mode": try Own.set(name, client, options)
-            case "new", "fork", "send", "stop", "tab", "answer", "wait", "open": try Drive.run(name, client, options)
+            case "new", "fork", "send", "stop", "tab", "answer", "wait", "open", "close": try Drive.run(name, client, options)
             default: return fail(usage, code: 2)
             }
             return 0

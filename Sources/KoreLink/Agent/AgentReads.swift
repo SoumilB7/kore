@@ -198,4 +198,30 @@ package enum AgentRefs {
         default: return .ambiguous(holding.map(\.id))
         }
     }
+
+    /// A chat named by its id alone (`chat.close`, the owner, 2026-11-17).
+    package enum IDFound: Equatable, Sendable {
+        case chat(String)
+        case none
+        /// `.`: a chat never closes itself.
+        case itself
+        /// No id is `ref`, but these chats' titles hold it: a title never names one here.
+        case byTitle([String])
+        /// Several chats' ids start the same as their short ids: give the full id.
+        case ambiguous([String])
+    }
+
+    /// Its full id or its short id (`AgentReads.short`, the first 8), nothing else: duplicate
+    /// titles exist, so a title never names the chat, not even one only one chat has.
+    package static func resolveID(_ ref: String, chats: [(id: String, title: String)]) -> IDFound {
+        let lower = ref.trimmingCharacters(in: .whitespaces).lowercased()
+        if lower == "." { return .itself }
+        guard !lower.isEmpty else { return .none }
+        if let exact = chats.first(where: { $0.id.lowercased() == lower }) { return .chat(exact.id) }
+        let short = chats.filter { $0.id.prefix(8).lowercased() == lower }
+        if short.count == 1 { return .chat(short[0].id) }
+        if short.count > 1 { return .ambiguous(short.map(\.id)) }
+        let titled = chats.filter { $0.title.lowercased().contains(lower) }
+        return titled.isEmpty ? .none : .byTitle(titled.map(\.id))
+    }
 }

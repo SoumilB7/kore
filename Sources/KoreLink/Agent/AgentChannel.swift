@@ -512,6 +512,8 @@ package final class AgentChannel {
             chat.stop()
             send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chat.id.uuidString, message: running ? "Stopped." : "Nothing was running.")))
             return chat.id.uuidString
+        case AgentCommand.close.name:
+            return closeChat(args, client, id)
         case AgentCommand.showTab.name:
             guard let chat = changeable(args, client, id) else { return nil }
             guard let workspace = AgentReads.workspace(of: chat), workspace.arsenalShow(chat) else {
@@ -532,6 +534,55 @@ package final class AgentChannel {
             fail(client, id, .unknownCommand, Self.message(.unknownCommand))
         }
         return nil
+    }
+
+    /// A chat closed as its tab's close closes it (`Workspace.arsenalClose`), named by its full or
+    /// short id only (`AgentRefs.resolveID`): titles repeat, so a title names none, and the ids that
+    /// hold it come back to pick from. Never the caller's own; one it drives.
+    private func closeChat(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
+        guard let ref = args.chat, !ref.isEmpty, ref.utf8.count <= 128 else {
+            fail(client, id, .noChat, "Name the chat by its short id (kore ls) or its full id.")
+            return nil
+        }
+        let chats = Dictionary(AgentReads.readable(own: client.chat).map { ($0.id.uuidString, $0) }, uniquingKeysWith: { a, _ in a })
+        let named = { (ids: [String]) in ids.compactMap { chats[$0] }.map { "\(AgentReads.short($0.id.uuidString)) “\(AgentReads.title($0.title))”" }.joined(separator: ", ") }
+        let chat: Chat
+        switch AgentRefs.resolveID(ref, chats: chats.values.map { (id: $0.id.uuidString, title: $0.title) }) {
+        case .chat(let found):
+            guard let found = chats[found] else {
+                fail(client, id, .noChat, "That chat isn't open in Kore.")
+                return nil
+            }
+            chat = found
+        case .itself:
+            fail(client, id, .refused, "A chat never closes itself.")
+            return nil
+        case .none:
+            fail(client, id, .noChat, "No open chat has the id \u{201C}\(ref)\u{201D}.")
+            return nil
+        case .byTitle(let ids):
+            fail(client, id, .ambiguous, "Close takes an id, never a title: " + named(ids))
+            return nil
+        case .ambiguous(let ids):
+            fail(client, id, .ambiguous, "Several chats have that short id: give the full one. " + named(ids))
+            return nil
+        }
+        let chatId = chat.id.uuidString
+        guard chatId != client.chat else {
+            fail(client, id, .refused, "A chat never closes itself.")
+            return chatId
+        }
+        guard drivable(chat, client, id) != nil else { return chatId }
+        guard let window = AgentReads.workspace(of: chat) else {
+            fail(client, id, .noWindow, "That chat has no window.")
+            return chatId
+        }
+        let short = AgentReads.short(chatId)
+        switch window.arsenalClose(chat) {
+        case .failure(let refusal): fail(client, id, .refused, refusal.message)
+        case .success(let said): send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chatId, message: said, short: short)))
+        }
+        return chatId
     }
 
     /// The caller's own chat, when it's one of Kore's.

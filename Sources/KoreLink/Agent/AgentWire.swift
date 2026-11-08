@@ -56,10 +56,12 @@ package struct AgentCommand: Sendable, Equatable {
     package static let answer = Self(name: "cards.answer", tier: .drive)
     /// A past chat opened as History opens it: a new chat for the limits.
     package static let open = Self(name: "chat.open", tier: .drive)
+    /// A chat closed as its tab's close closes it, named by its id only.
+    package static let close = Self(name: "chat.close", tier: .drive)
 
     package static let all: [Self] = [
         whoami, caps, chats, show, read, follow, unfollow, cards, history, wait, options, rename, model, effort, fast, mode, compact,
-        new, fork, send, stop, showTab, answer, open,
+        new, fork, send, stop, showTab, answer, open, close,
     ]
 
     /// Why `tier` may not run `name`; nil when it may.

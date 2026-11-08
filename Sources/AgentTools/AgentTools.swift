@@ -109,6 +109,10 @@ package enum AgentTools {
             description: "Open a past chat (kore_history lists them) in a tab, in front, as History opens it; its tab if it's open already (Act unlimited).",
             args: [("session", "string", "Its session id, or the start of it."), ("folder", "string", "Its folder (default: this chat's window).")],
             required: ["session"]),
+        Tool(
+            name: "kore_close", command: "chat.close",
+            description: "Close another chat as its tab's close does; History keeps it, and kore_open_chat brings it back. By its id only (short or full), never a title. Refused while it works or anything in it would be lost (Act unlimited).",
+            args: [("chat", "string", "Its short id (kore_list_chats) or full id.")], required: ["chat"]),
         Tool(name: "kore_show_tab", command: "tab.show", description: "Bring a chat's tab to the front (Act unlimited).", args: [chatArg], required: ["chat"]),
         Tool(
             name: "kore_answer", command: "cards.answer",
@@ -128,7 +132,7 @@ package enum AgentTools {
 
     /// The tier each command needs, lowest first: wire ids (`tierName` names them).
     package static func tierNeeded(_ command: String) -> String {
-        if ["chat.new", "chat.fork", "chat.send", "chat.stop", "tab.show", "cards.answer", "chat.open"].contains(command) { return "drive" }
+        if ["chat.new", "chat.fork", "chat.send", "chat.stop", "tab.show", "cards.answer", "chat.open", "chat.close"].contains(command) { return "drive" }
         if ownCommands.contains(command) { return "own" }
         return "watch"
     }

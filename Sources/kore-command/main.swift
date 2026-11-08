@@ -37,6 +37,7 @@ let usage = """
            kore tab <chat>       bring its tab to the front
            kore open <session> [--folder F]
                                  open a past chat (kore history lists them) in front
+           kore close <short id> close a chat as its tab's close does; History keeps it
            kore answer <chat> <card> <answer>... | --deny | --allow
                                  answer a question card, one answer per question
            kore logs [--since 10m] [--chat X] [--turn T] [--level warn] [-f] [--json] [log…]
@@ -56,7 +57,7 @@ let usage = """
 let arguments = Array(CommandLine.arguments.dropFirst())
 let reads: Set = [
     "ls", "show", "log", "pending", "history", "whoami", "caps", "mcp", "options", "rename", "model", "effort", "fast", "mode", "compact", "new", "fork",
-    "send", "stop", "tab", "answer", "wait", "open",
+    "send", "stop", "tab", "answer", "wait", "open", "close",
 ]
 
 switch arguments.first {

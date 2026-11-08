@@ -1,13 +1,13 @@
 import Foundation
 
-/// Drive's commands: `kore new`, `send`, `stop`, `tab`, `answer`, on chats at or below this chat's mode.
+/// Drive's commands: `kore new`, `send`, `stop`, `tab`, `answer`, `close`, on chats at or below this chat's mode.
 enum Drive {
     typealias Object = AgentClient.Object
 
     static let usage = [
         "new": "[--claude|--codex] [--model M] [--mode X] [\"message\"]", "send": "<chat> \"message\"", "stop": "<chat>", "tab": "<chat>",
         "fork": "<chat> [--at -N|<message>] [--claude|--codex] [--model M] [\"message\"]", "wait": "<chat> [--timeout s]",
-        "answer": "<chat> <card> <answer>... | <chat> <card> --deny | <chat> <card> --allow", "open": "<session> [--folder F]",
+        "answer": "<chat> <card> <answer>... | <chat> <card> --deny | <chat> <card> --allow", "open": "<session> [--folder F]", "close": "<short id>",
     ]
 
     static func fits(_ name: String, _ o: Reads.Options) -> Bool {
@@ -17,7 +17,7 @@ enum Drive {
         case "fork": return (1...2).contains(n)
         case "wait": return n == 1
         case "send": return n == 2
-        case "stop", "tab", "open": return n == 1
+        case "stop", "tab", "open", "close": return n == 1
         default: return o.deny || o.allow ? n == 2 : n >= 3
         }
     }
@@ -56,6 +56,7 @@ enum Drive {
         case "send": data = try client.run("chat.send", ["chat": p[0], "text": p[1]])
         case "stop": data = try client.run("chat.stop", ["chat": p[0]])
         case "tab": data = try client.run("tab.show", ["chat": p[0]])
+        case "close": data = try client.run("chat.close", ["chat": p[0]])
         case "open":
             var args: Object = ["session": p[0]]
             if let folder = o.folder { args["folder"] = folder }

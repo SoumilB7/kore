@@ -141,6 +141,28 @@ struct AgentGrantTests {
         #expect(AgentRefs.resolve("notes", chats: chats, own: nil) == .chat(chats[2].id))
         #expect(AgentRefs.resolve("nothing", chats: chats, own: nil) == .none)
     }
+
+    /// Close names a chat by its id only: duplicate titles exist, so a title never closes one,
+    /// not even one only one chat has; the ids whose titles hold it come back to pick from.
+    @Test func closeRefsAreIdsOnly() {
+        let chats = [
+            (id: "1A2B3C4D-0000-0000-0000-000000000001", title: "Fix login"),
+            (id: "1A2B3C4D-1111-0000-0000-000000000002", title: "Fix login"),
+            (id: "77777777-0000-0000-0000-000000000003", title: "Release notes"),
+        ]
+        #expect(AgentRefs.resolveID("77777777", chats: chats) == .chat(chats[2].id))
+        #expect(AgentRefs.resolveID(" 77777777-0000-0000-0000-000000000003 ", chats: chats) == .chat(chats[2].id))
+        #expect(AgentRefs.resolveID("1a2b3c4d-1111-0000-0000-000000000002", chats: chats) == .chat(chats[1].id))
+        // Two short ids alike: the full id, then.
+        #expect(AgentRefs.resolveID("1a2b3c4d", chats: chats) == .ambiguous([chats[0].id, chats[1].id]))
+        // A start of an id isn't its short id.
+        #expect(AgentRefs.resolveID("7777", chats: chats) == .none)
+        // Titles: refused with the ids, two alike or one alone.
+        #expect(AgentRefs.resolveID("fix login", chats: chats) == .byTitle([chats[0].id, chats[1].id]))
+        #expect(AgentRefs.resolveID("Release notes", chats: chats) == .byTitle([chats[2].id]))
+        #expect(AgentRefs.resolveID(".", chats: chats) == .itself)
+        #expect(AgentRefs.resolveID("nothing", chats: chats) == .none)
+    }
 }
 
 @Suite("agent secrets")

@@ -664,7 +664,7 @@ final class AgentChannelAll: ChatStoryline {
                 }
                 let tools = (AgentJSON.path(replies[2], "result", "tools") as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
                 return try status == 0 && AgentJSON.path(replies[1], "result", "serverInfo", "name") as? String == "kore"
-                    && tools.count == 22 && tools.contains("kore_new_chat") && tools.contains("kore_read_chat")
+                    && tools.count == 23 && tools.contains("kore_new_chat") && tools.contains("kore_read_chat")
                     && replies[3]?["result"] != nil
                     && AgentJSON.path(text(10), "caller", "chat") as? String == cast.id("a")
                     && text(11)?["tier"] as? String == "watch"
