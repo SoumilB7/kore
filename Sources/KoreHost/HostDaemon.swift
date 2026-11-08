@@ -270,15 +270,27 @@ package final class HostDaemon {
         return standard
     }
 
+    /// `settings`: what came with it (a copy, a move, a fork). Its login when this box has it,
+    /// else the folder's; its Arsenal tier at most one this box takes. What gave way is said in
+    /// `carriedNote`, one line.
     package func newChat(
         folder: String, provider: String, modelId: String?, fork: (from: String, at: String)? = nil, title: String? = nil, mode: String? = nil,
-        effort: String? = nil, session: String? = nil
+        effort: String? = nil, session: String? = nil, settings: ChatSettings? = nil
     ) -> HostChat? {
+        let login = carried(login: settings?.login, provider: provider, fallback: provider == "claude" ? accounts.folderDefault(folder) : nil)
         guard config.folders.contains(folder), !HostConfig.missing(folder), Registry.provider(provider) != nil,
             let chat = try? HostChat.create(
                 provider: provider, folder: folder, modelId: modelId, in: paths.chats, fork: fork, title: title, mode: mode, effort: effort,
-                session: session, account: provider == "claude" ? accounts.folderDefault(folder) : nil)
+                session: session, account: login.account)
         else { return nil }
+        var notes = [login.note].compactMap { $0 }
+        if let settings {
+            chat.carry(settings)
+            let tier = carried(tier: settings.arsenal)
+            chat.arsenal = tier.tier
+            if let note = tier.note { notes.append(note) }
+        }
+        chat.carriedNote = notes.isEmpty ? nil : notes.joined(separator: " · ")
         // A chat in a closed window's folder opens its window again.
         setClosed(folder, false, broadcast: false)
         chats.append(chat)
@@ -288,6 +300,21 @@ package final class HostDaemon {
     }
 
     package func chat(_ id: String) -> HostChat? { chats.first { $0.id == id } }
+
+    /// A login a chat brought: its own when this box has it (nil for the default), else
+    /// `fallback`, said in one line. A Codex chat keeps the box's one login.
+    func carried(login: String?, provider: String, fallback: String?) -> (account: String?, note: String?) {
+        guard provider == "claude", let login else { return (fallback, nil) }
+        if accounts.exists(login) { return (login == LinkAccount.main ? nil : login, nil) }
+        return (fallback, "\(login) isn't signed in here · on \(fallback ?? LinkAccount.main)")
+    }
+
+    /// An Arsenal tier a chat brought: at most one this box takes, said in one line when lower.
+    func carried(tier: String?) -> (tier: String?, note: String?) {
+        let kept = ChatSettings.cap(tier, to: BoxTools.tiers)
+        guard let tier, kept != tier else { return (kept, nil) }
+        return (kept, "Arsenal \(ChatSettings.tierName(tier)) isn't on this box · \(kept.map(ChatSettings.tierName) ?? "off")")
+    }
 
     /// A model the CLI offers on this box: in its list once it has listed one, else a plain id.
     func offers(model: String, _ provider: String) -> Bool {
@@ -824,7 +851,11 @@ package final class HostDaemon {
         if let level = args?.level, !offers(effort: level, provider) { return .init(id: id, ok: false, code: .invalid, message: "The CLI doesn't offer that effort.") }
         // 1.5: a fork's start (`sessionId`, `entryId`), and its title, mode and effort.
         let fork = args?.sessionId.flatMap { from in args?.entryId.map { (from: from, at: $0) } }
-        guard let hc = newChat(folder: folder, provider: provider, modelId: modelId, fork: fork, title: args?.title, mode: args?.mode, effort: args?.level) else {
+        guard
+            let hc = newChat(
+                folder: folder, provider: provider, modelId: modelId, fork: fork, title: args?.title, mode: args?.mode, effort: args?.level,
+                settings: args?.settings?.withoutDraft)
+        else {
             return .init(id: id, ok: false, code: .invalid, message: "No such CLI, or the folder isn't served.")
         }
         return .init(id: id, ok: true, chatId: hc.id, windowId: Self.windowID(folder))
@@ -963,7 +994,7 @@ package final class HostDaemon {
             return account(kind, args, id: id, reply: reply)
         case .chatRename, .chatFork, .chatCompact, .chatSetAutoCompact, .chatRetry, .chatContinue, .chatSendAtReset, .chatCancelContinue,
             .chatSetDraft, .chatSetArsenal, .arsenalStopAll:
-            return chatOp(kind, args, id: id, reply: reply)
+            return chatOp(kind, args, id: id, control: control, reply: reply)
         case .historyOpen, .historyRename, .historyArchive:
             return historyOp(kind, args, id: id, reply: reply)
         default:

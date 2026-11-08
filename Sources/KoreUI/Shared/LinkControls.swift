@@ -211,11 +211,12 @@ extension Workspace {
     }
 
     /// A fork from a user message (or after an answer), in a background tab.
-    package func linkFork(_ chat: Chat, entryId: String, after: Bool) async -> Chat? {
+    /// `arsenal` false: the fork's Arsenal stays off (a grant without full control can't turn it on).
+    package func linkFork(_ chat: Chat, entryId: String, after: Bool, arsenal: Bool) async -> Chat? {
         guard let entry = chat.transcript.linkEntry(entryId) else { return nil }
         let start = after ? await chat.forkStart(after: entry) : await chat.forkStart(entry)
         guard let start else { return nil }
-        let made = newTabs { fork(chat, start, text: after ? "" : entry.text) }
+        let made = newTabs { fork(chat, start, text: after ? "" : entry.text, arsenal: arsenal) }
         return made.first?.chat
     }
 

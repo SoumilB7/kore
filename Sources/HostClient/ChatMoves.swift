@@ -205,10 +205,15 @@ package struct ChatMoves {
     package struct Brought: Sendable, Equatable {
         package var moved: MovedChat
         package var title: String?
-        package var modelId: String?
-        package var effort: String?
-        package var mode: String?
+        /// Its settings as the box had them, its draft with them. `whole`: the box said them all (an
+        /// Arsenal tier absent is off); false, a box from before them said model, effort and mode.
+        package var settings: ChatSettings
+        package var whole = true
         package var cost: MoveCost
+
+        package var modelId: String? { settings.modelId }
+        package var effort: String? { settings.effort }
+        package var mode: String? { settings.mode }
     }
 
     /// Brings box chat `chatId` (in box folder `boxFolder`) to this Mac. `stop`: a working chat
@@ -260,7 +265,10 @@ package struct ChatMoves {
         moved.mirrored = 0
         store.keep(moved)
         HostLog.event(connection.alias, "move here", ["chat": chatId, "files": String(files.count), "bytes": String(cost.rsyncReceived)])
-        return .success(Brought(moved: moved, title: info.title, modelId: info.modelId, effort: info.effort, mode: info.mode, cost: cost))
+        // A box from before `settings` says the four it knows.
+        var settings = (info.settings ?? ChatSettings(modelId: info.modelId, effort: info.effort, mode: info.mode)).linkable
+        settings.at = nil
+        return .success(Brought(moved: moved, title: info.title, settings: settings, whole: info.settings != nil, cost: cost))
     }
 
     static func spellings(_ folder: String) -> [String] {
@@ -270,10 +278,20 @@ package struct ChatMoves {
 
     // MARK: Send back
 
+    /// A chat sent back or sent to a box: its id there, its settings there and what gave way.
+    package struct SentBack: Sendable, Equatable {
+        package var chatId: String
+        package var cost: MoveCost
+        package var settings: ChatSettings
+        package var notes: [String]
+    }
+
     /// Sends a chat this Mac holds back to its box. Its CLI here must have stopped. The box takes
     /// it as the same chat when it still holds the gen it gave; else as a new chat. The box chat's
-    /// id after it.
-    package func sendBack(_ moved: MovedChat, title: String?, modelId: String?, effort: String?, mode: String?, mirrored: Int?) async -> Result<(chatId: String, cost: MoveCost), MoveFailure> {
+    /// id after it, and what gave way there (a login it doesn't have, a tier it doesn't take).
+    /// `settings`: the chat's here, its draft with them; the box keeps its own where one changed
+    /// there since this Mac took the chat (the newer wins).
+    package func sendBack(_ moved: MovedChat, title: String?, settings: ChatSettings, mirrored: Int?) async -> Result<SentBack, MoveFailure> {
         var cost = MoveCost()
         let moveId = UUID().uuidString.lowercased()
         let base = ControlArgs(chatId: moved.boxChat, provider: moved.provider, sessionId: moved.session, gen: moved.gen, moveId: moveId, host: name)
@@ -283,7 +301,7 @@ package struct ChatMoves {
         let prepared = await connection.move(.chatAdopt, prepare)
         cost.linkBytes += connection.lastMoveBytes
         guard prepared.ok, let info = prepared.move else { return .failure(MoveFailure(prepared.message ?? "Couldn't send it back", prepared.code)) }
-        func abort(_ line: String) async -> Result<(chatId: String, cost: MoveCost), MoveFailure> {
+        func abort(_ line: String) async -> Result<SentBack, MoveFailure> {
             var args = base
             args.phase = MovePhase.abort.rawValue
             _ = await connection.move(.chatAdopt, args)
@@ -301,10 +319,13 @@ package struct ChatMoves {
         commit.phase = MovePhase.commit.rawValue
         commit.folder = moved.boxFolder
         commit.folders = Self.spellings(moved.macFolder)
+        var notes: [String] = []
+        let said = settings.said(to: connection, notes: &notes).linkable
         commit.title = title
-        commit.modelId = modelId.flatMap { LinkPolicy.plainID($0) ? $0 : nil }
-        commit.level = effort.flatMap { LinkPolicy.plainID($0) ? $0 : nil }
-        commit.mode = mode
+        commit.modelId = said.modelId
+        commit.level = said.effort
+        commit.mode = said.mode
+        commit.settings = said
         commit.seq = mirrored
         let adopted = await connection.move(.chatAdopt, commit)
         cost.linkBytes += connection.lastMoveBytes
@@ -312,16 +333,19 @@ package struct ChatMoves {
         store.forget(session: moved.session)
         ChatMirrors.shared.ended(session: moved.session)
         HostLog.event(connection.alias, "move back", ["chat": chatId, "files": String(found.files.count), "bytes": String(cost.rsyncSent)])
-        return .success((chatId, cost))
+        if let note = adopted.message { notes.append(note) }
+        // What the box made of them: its own where they were newer there (a box from before says
+        // nothing: they stand as sent).
+        return .success(SentBack(chatId: chatId, cost: cost, settings: adopted.settings?.linkable ?? said.withoutDraft, notes: notes))
     }
 
     /// A chat of this Mac's (never on a box) to box folder `boxFolder`: 1.10's `chat.adopt`, as a
     /// new chat there under the same session. The Mac's copy stays until the caller puts it aside.
     package func send(
-        session: String, provider: String, from macFolder: String, to boxFolder: String, title: String?, modelId: String?, effort: String?, mode: String?
-    ) async -> Result<(chatId: String, cost: MoveCost), MoveFailure> {
+        session: String, provider: String, from macFolder: String, to boxFolder: String, title: String?, settings: ChatSettings
+    ) async -> Result<SentBack, MoveFailure> {
         let moved = MovedChat(alias: connection.alias, boxChat: "", boxFolder: boxFolder, macFolder: macFolder, provider: provider, session: session, gen: 0, title: title)
-        return await sendBack(moved, title: title, modelId: modelId, effort: effort, mode: mode, mirrored: nil)
+        return await sendBack(moved, title: title, settings: settings, mirrored: nil)
     }
 
     // MARK: rsync

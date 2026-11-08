@@ -24,7 +24,8 @@ final class ChatPlaces {
     @ObservationIgnored private var owners: [String: Owner] = [:]
     /// The gen each box chat was last seen at (a return makes it the box's again, at gen + 1).
     @ObservationIgnored private var gens: [String: Int] = [:]
-    /// A line for a box chat once its tab shows (a return that came in as a new chat).
+    /// Lines for a box chat once its tab shows (a return that came in as a new chat, what gave
+    /// way when a chat landed there).
     @ObservationIgnored private var notes: [String: String] = [:]
 
     struct Owner: Equatable {
@@ -116,19 +117,46 @@ final class ChatPlaces {
         return store.boxChat(alias, chatId)
     }
 
-    func leaveNote(_ alias: String, _ chatId: String, _ line: String) { notes[Self.key(alias, chatId)] = line }
+    func leaveNote(_ alias: String, _ chatId: String, _ line: String) {
+        let key = Self.key(alias, chatId)
+        notes[key] = notes[key].map { $0 + " · " + line } ?? line
+    }
 
     func takeNote(_ alias: String, _ chatId: String) -> String? { notes.removeValue(forKey: Self.key(alias, chatId)) }
+
+    /// What a chat that landed on a box carries there, for its tab here: the lines on what gave
+    /// way, and its Arsenal tier (`whole`: the box said its settings, so none is off), kept where
+    /// its tab finds it (`ArsenalMemory`, as after a restart). A tab showing it takes them now.
+    func carried(alias: String, chatId: String, tier: String?, whole: Bool, notes lines: [String]) {
+        let tier = tier.flatMap(ArsenalTier.init(rawValue:))
+        let shown = Workspace.all.allObjects.lazy.filter { !$0.isClosed && $0.box?.alias == alias }
+            .compactMap { $0.tabs.first { ($0.chat?.services as? BoxChatServices)?.chatId == chatId && $0.agent == nil }?.chat }.first
+        if let chat = shown {
+            for line in lines { chat.note(line) }
+            Workspace.carryArsenal(tier, whole: whole, to: chat)
+            return
+        }
+        for line in lines { leaveNote(alias, chatId, line) }
+        guard tier != nil || whole else { return }
+        let key = ArsenalMemory.key(box: alias, chat: chatId)
+        if let tier, let why = Workspace.arsenalOff(tier, nil) {
+            ArsenalMemory.keep(nil, under: key)
+            return leaveNote(alias, chatId, "Arsenal \(tier.title) is off · \(why)")
+        }
+        ArsenalMemory.keep(tier, under: key)
+    }
 }
 
-/// A chat landing in a local window after a move: resumed by its session there, with the
-/// settings it had on the box.
+/// A chat landing in a local window after a move, a copy or a cut: resumed by its session there,
+/// with the settings it had where it was (`ChatSettings`), and lines on what gave way on the way.
 struct ChatLanding {
     var session: SessionSummary
     var alias: String
-    var modelId: String?
-    var effort: String?
-    var mode: String?
+    var settings = ChatSettings()
+    /// The settings came whole (an Arsenal tier absent is off); false: a box from before them
+    /// said model, effort and mode only.
+    var whole = true
+    var notes: [String] = []
 }
 
 extension Workspace {
@@ -149,22 +177,60 @@ extension Workspace {
         return nil
     }
 
-    /// A moved chat in a tab here, in front: resumed by its session, with the box's model when
-    /// this Mac has it (else the default, said once).
+    /// A moved or copied chat in a tab here, in front: resumed by its session, with the settings
+    /// it had. A model this Mac doesn't have, a login it doesn't have, or an Arsenal tier the chat
+    /// can't have here gives way to this Mac's own, said once.
     @discardableResult
     func land(_ landing: ChatLanding) -> Chat? {
         open(landing.session)
         guard let chat = tabs.first(where: { $0.agent == nil && $0.chat?.status.sessionId == landing.session.id })?.chat else { return nil }
-        if let model = landing.modelId {
+        let settings = landing.settings
+        if let model = settings.modelId {
             if Self.usable(model, among: ArsenalModels.seen[chat.provider.id] ?? []) {
                 chat.launchModel = model
             } else {
                 chat.note("\(model) isn't on this Mac · on the default model")
             }
         }
-        if let effort = landing.effort { chat.launchEffort = effort }
-        if let mode = landing.mode, chat.provider.modes.contains(where: { $0.id == mode }) { chat.setMode(mode, remember: false) }
+        if let effort = settings.effort { chat.launchEffort = effort }
+        if let mode = settings.mode, chat.provider.modes.contains(where: { $0.id == mode }) { chat.setMode(mode, remember: false) }
+        if let fast = settings.fast { chat.launchFastMode = fast }
+        if chat.provider.planToggle != nil, let plan = settings.plan, plan != chat.controls.planMode { chat.setPlanMode(plan) }
+        if let allow = settings.planAllow, allow != chat.controls.planAllow { chat.setPlanAllow(allow) }
+        if let point = settings.point { chat.setAutoCompact(point) }
+        if let text = settings.draft, !text.isEmpty, chat.draft.isEmpty, chat.command == nil { chat.restoreDraft(text, commands: chat.controls.commands) }
+        if let login = settings.login, login != LinkAccount.main { chat.note("\(login) isn't signed in on this Mac · on this Mac's login") }
+        Self.carryArsenal(settings.arsenal.flatMap(ArsenalTier.init(rawValue:)), whole: landing.whole, to: chat)
+        for line in landing.notes { chat.note(line) }
+        // What it came with isn't a change made here: on a send back, the box's newer ones stand.
+        chat.settingsChangedAt = nil
         return chat
+    }
+
+    /// A tier a chat brought: on when the chat can have it here, else off, said once. None, when
+    /// the settings came `whole`: off, and a tier kept from before for it isn't restored.
+    static func carryArsenal(_ tier: ArsenalTier?, whole: Bool = true, to chat: Chat) {
+        guard let tier else {
+            guard whole else { return }
+            Arsenal.shared.turnOff(chat)
+            ArsenalMemory.keep(nil, under: ArsenalMemory.key(chat))
+            return
+        }
+        guard chat.arsenal != tier else { return }
+        if let why = arsenalOff(tier, chat) {
+            Arsenal.shared.turnOff(chat)
+            ArsenalMemory.keep(nil, under: ArsenalMemory.key(chat))
+            return chat.note("Arsenal \(tier.title) is off · \(why)")
+        }
+        Arsenal.shared.choose(tier, chat)
+    }
+
+    /// Why a chat can't have `tier` here now (nil: it can). `chat` nil: one not open yet.
+    static func arsenalOff(_ tier: ArsenalTier, _ chat: Chat?) -> String? {
+        if !Arsenal.shared.allowed { return "chats can't use Arsenal here" }
+        if !tier.built { return "not built" }
+        if let chat, Arsenal.unavailable(chat) != nil { return "Codex needs Full access" }
+        return nil
     }
 
     /// A model a chat brought here can start on: one this Mac's CLI lists, or any while it hasn't

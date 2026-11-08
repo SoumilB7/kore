@@ -7,7 +7,9 @@ import src
 /// as a Mac window's menus and buttons do them, on the box's own chat. Each was allowed by
 /// `LinkPolicy.checkBox` first. A full grant driving the chat does the same through `chat.call`.
 extension HostDaemon {
-    func chatOp(_ kind: ControlKind, _ args: ControlArgs, id: String, reply: @escaping @MainActor (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
+    func chatOp(
+        _ kind: ControlKind, _ args: ControlArgs, id: String, control: GrantControl, reply: @escaping @MainActor (LinkMessage.Result) -> Void
+    ) -> LinkMessage.Result? {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
         let done = LinkMessage.Result(id: id, ok: true)
         if kind == .arsenalStopAll {
@@ -68,7 +70,7 @@ extension HostDaemon {
             return nil
         case .chatFork:
             guard let chat = live(hc) else { return fail(.busy, "Too many CLIs are running on this box.") }
-            Task { reply(await fork(hc, chat, args, id: id)) }
+            Task { reply(await fork(hc, chat, args, id: id, arsenal: control == .full)) }
             return nil
         case .chatRollback:
             guard let chat = live(hc) else { return fail(.busy, "Too many CLIs are running on this box.") }
@@ -88,9 +90,10 @@ extension HostDaemon {
 
     /// A fork of the chat as a Mac's message actions make one: from a user message (that message
     /// in the fork's draft, not sent), after an answer (`after`), or from its end (`after` with no
-    /// message). It's a new chat in the same folder, "<title> (fork)", the same model, mode and
-    /// effort.
-    private func fork(_ hc: HostChat, _ chat: Chat, _ args: ControlArgs, id: String) async -> LinkMessage.Result {
+    /// message). It's a new chat in the same folder, "<title> (fork)", with the chat's settings
+    /// (`ChatSettings`: its login, auto-compact point, fast, plan, Arsenal tier; not its draft).
+    /// `arsenal` false: its Arsenal stays off (a grant without full control can't turn it on).
+    private func fork(_ hc: HostChat, _ chat: Chat, _ args: ControlArgs, id: String, arsenal: Bool) async -> LinkMessage.Result {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
         await chat.startOnce()
         guard chat.sessionId != nil else { return fail(.busy, "This chat can't be forked yet.") }
@@ -110,10 +113,12 @@ extension HostDaemon {
         }
         guard let start else { return fail(.busy, "Couldn't fork it: the chat says why.") }
         let from: (from: String, at: String)? = if case .pending(let point) = start { (point.from, point.at) } else { nil }
+        var settings = Self.said(hc)
+        if !arsenal { settings.arsenal = nil }
         guard
             let made = newChat(
                 folder: hc.record.folder, provider: hc.record.provider, modelId: chat.controls.modelId ?? chat.launchModel, fork: from,
-                title: "\(chat.title) (fork)", mode: chat.controls.mode, effort: chat.controls.effort)
+                title: "\(chat.title) (fork)", mode: chat.controls.mode, effort: chat.controls.effort ?? chat.launchEffort, settings: settings)
         else { return fail(.goneFolder, "That folder isn't on this box.") }
         if !draft.isEmpty {
             made.setDraft(draft)

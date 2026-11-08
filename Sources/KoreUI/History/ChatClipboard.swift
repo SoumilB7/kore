@@ -239,7 +239,28 @@ enum ChatPasting {
         }
     }
 
+    /// A Mac chat's settings as a paste carries them: its tab's, else what Kore keeps for its
+    /// session (its auto-compact point, Plan's allow switch, its Arsenal tier, its draft). A box
+    /// chat's come from the box.
+    static func settings(of clip: ChatClipboard.Clip) -> ChatSettings? {
+        guard case .mac(let folder) = clip.spot else { return nil }
+        if let chat = Workspace.localTab(session: clip.id)?.1.chat { return ChatSettings(of: chat, draft: true) }
+        return kept(provider: clip.provider, session: clip.id, folder: folder)
+    }
+
+    /// What Kore keeps for a session of this Mac's whose tab is closed.
+    static func kept(provider: String, session: String, folder: String) -> ChatSettings {
+        var kept = ChatSettings()
+        if let point = AutoCompactMemory.shared.point(chat: session) { kept.autoCompact = point ?? 0 }
+        kept.planAllow = ModeMemory.shared.planAllow(chat: session)
+        kept.arsenal = ArsenalMemory.tier(key: ArsenalMemory.key(cli: provider, session: session))?.rawValue
+        kept.draft = Workspace.local(URL(fileURLWithPath: folder))?.keptDraft(cli: provider, session: session) ?? ""
+        return kept
+    }
+
     private static func run(_ plan: ChatPastePlan, _ clip: ChatClipboard.Clip, to target: ChatSpot, in workspace: Workspace, transfer: UUID, stopper: Spawn) async {
+        // Read before the source's tab closes (a cut stops it first).
+        let carried = settings(of: clip)
         // The boxes on each end, linked for the paste.
         var held: [HostConnection] = []
         defer { held.forEach { $0.release() } }
@@ -263,8 +284,9 @@ enum ChatPasting {
         case (.success(let a), .success(let b)): (from, to) = (a, b)
         case (.failure(let failure), _), (_, .failure(let failure)): return fail(failure.line, in: workspace, transfer: transfer)
         }
-        let source = CopySource(end: from, id: clip.id, provider: clip.provider, title: clip.title, known: clip.known)
+        let source = CopySource(end: from, id: clip.id, provider: clip.provider, title: clip.title, known: clip.known, settings: carried)
         var copies = copies()
+        copies.arsenalAllowed = Arsenal.shared.allowed
         copies.stopper = stopper
         copies.progress = { bytes, total in TransferProgress.shared.update(transfer, bytes: bytes, total: total) }
         switch plan {
@@ -311,7 +333,8 @@ enum ChatPasting {
             let held = ChatPlaces.shared.store.session(clip.id)
             let shown = Workspace.localTab(session: clip.id)
             let chat = shown?.1.chat
-            let settings = (title: chat?.title ?? clip.title, model: chat?.controls.modelId, effort: chat?.controls.effort, mode: chat?.controls.mode)
+            let title = chat?.title ?? clip.title
+            let settings = carried ?? ChatSettings()
             if let (window, tab) = shown {
                 chat?.stop()
                 window.close(tab, remember: false)
@@ -320,17 +343,15 @@ enum ChatPasting {
             }
             let result =
                 if plan == .sendBack, let held {
-                    await moves.sendBack(held, title: settings.title, modelId: settings.model, effort: settings.effort, mode: settings.mode, mirrored: ChatMirrors.shared.count(held))
+                    await moves.sendBack(held, title: title, settings: settings, mirrored: ChatMirrors.shared.count(held))
                 } else {
-                    await moves.send(
-                        session: clip.id, provider: clip.provider, from: mac, to: boxFolder, title: settings.title, modelId: settings.model, effort: settings.effort,
-                        mode: settings.mode)
+                    await moves.send(session: clip.id, provider: clip.provider, from: mac, to: boxFolder, title: title, settings: settings)
                 }
             switch result {
             case .failure(var failure):
                 if failure.code == .staleGen { failure.line = "\(NodeNames.name(moves.connection.alias)) has that chat already · nothing changed" }
                 if let window = shown?.0 {
-                    window.open(SessionSummary(id: clip.id, agent: provider.historyAgent, title: settings.title, updated: .now))
+                    window.open(SessionSummary(id: clip.id, agent: provider.historyAgent, title: title, updated: .now))
                 }
                 return fail(failure.line, in: workspace, transfer: transfer)
             case .success(let back):
@@ -339,6 +360,8 @@ enum ChatPasting {
                 let removed: Result<Void, MoveFailure> = plan == .adopt ? await copies.removeSource(source) : .success(())
                 ChatClipboard.shared.taken()
                 sourceChanged(clip)
+                // Kept for its tab before the box window shows it.
+                ChatPlaces.shared.carried(alias: moves.connection.alias, chatId: back.chatId, tier: back.settings.arsenal, whole: true, notes: back.notes)
                 ChatMoving.returned(alias: moves.connection.alias, boxFolder: boxFolder, chatId: back.chatId)
                 if case .failure(let failure) = removed { return fail(failure.line, in: workspace, transfer: transfer) }
                 done(transfer)
@@ -375,11 +398,13 @@ enum ChatPasting {
     /// The pasted chat in a tab of `workspace`, in front.
     private static func land(_ made: ChatCopy, title: String, rename: Bool, at target: ChatSpot, in workspace: Workspace) {
         if case .box(let alias, let folder) = target, let chatId = made.chatId {
+            // Kept for its tab before the box window shows it.
+            ChatPlaces.shared.carried(alias: alias, chatId: chatId, tier: made.settings.arsenal, whole: made.whole, notes: made.notes)
             return ChatMoving.returned(alias: alias, boxFolder: folder, chatId: chatId)
         }
         guard let provider = Registry.provider(made.provider) else { return }
         let session = SessionSummary(id: made.session, agent: provider.historyAgent, title: title, updated: .now)
-        let chat = workspace.land(ChatLanding(session: session, alias: "", modelId: made.modelId, effort: made.effort, mode: made.mode))
+        let chat = workspace.land(ChatLanding(session: session, alias: "", settings: made.settings, whole: made.whole, notes: made.notes))
         Task { await workspace.refresh() }
         // Codex keeps a thread's name apart from its rollout, and a duplicate takes "(copy)".
         if rename, let chat { Task { await chat.applyRename(title) } }

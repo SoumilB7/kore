@@ -81,10 +81,11 @@ package enum HostWire {
     }
 
     /// `chat.new` in a folder; a fork (1.5) names the session and message it starts from
-    /// (`sessionId`, `entryId`), its title, mode and effort.
+    /// (`sessionId`, `entryId`), its title, mode and effort, and the rest of its original's
+    /// settings (`ChatSettings`).
     package static func newChat(
         id: String, folder: String, provider: String, model: String? = nil, fork: (from: String, at: String)? = nil, title: String? = nil,
-        mode: String? = nil, effort: String? = nil
+        mode: String? = nil, effort: String? = nil, settings: ChatSettings? = nil
     ) -> Data {
         var fields: [String: Any] = ["folder": folder, "provider": provider]
         if let model { fields["modelId"] = model }
@@ -92,6 +93,9 @@ package enum HostWire {
         if let title { fields["title"] = title }
         if let mode { fields["mode"] = mode }
         if let effort { fields["level"] = effort }
+        if let settings, let data = try? JSONEncoder().encode(settings), let object = try? JSONSerialization.jsonObject(with: data) {
+            fields["settings"] = object
+        }
         return command(id: id, type: "chat.new", fields)
     }
 

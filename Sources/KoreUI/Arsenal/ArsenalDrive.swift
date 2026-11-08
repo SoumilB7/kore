@@ -85,7 +85,7 @@ extension Workspace {
         if case .fresh = start, chat.imported != nil {
             return .failure(.init("This chat was imported: only you fork it from its start (its menu's Fork). Fork after a later message instead."))
         }
-        guard let fork = fork(chat, start, text: message ? "" : draft) else {
+        guard let fork = fork(chat, start, text: message ? "" : draft, arsenal: false) else {
             return .failure(.init("Only you fork this chat from its start."))
         }
         if let launch { fork.launchModel = launch }

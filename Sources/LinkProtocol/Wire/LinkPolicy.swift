@@ -273,6 +273,17 @@ package enum LinkPolicy {
             if args.modelId != nil, !plainID(args.modelId) { return .deny(.invalid, "That isn't a model.") }
             if args.level != nil, !plainID(args.level) { return .deny(.invalid, "That isn't an effort.") }
             if let title = args.title, title.count > maxTitle || title.contains(where: \.isNewline) { return .deny(.invalid, "A title is one line, up to 200 characters.") }
+            if let settings = args.settings {
+                if !settings.plain { return .deny(.invalid, "Those aren't a chat's settings.") }
+                if let mode = settings.mode, (levels[mode] ?? .danger) > (control == .full ? raiseCap : leavePlanMaxLevel) {
+                    return .deny(.raiseMode, "A new chat can't start in that mode from here.")
+                }
+                // What only a full grant sets on a chat: an Arsenal tier on, its login, commands
+                // allowed in Plan.
+                if control != .full, settings.arsenal != nil || settings.login != nil || settings.planAllow == true {
+                    return .deny(.deniedControl, "That needs a grant with full control.")
+                }
+            }
             return .allow
         case .chatSetModel:
             return plainID(args.modelId) ? .allow : .deny(.invalid, "Name the chat and the model.")
@@ -441,6 +452,7 @@ package enum LinkPolicy {
                 if args.modelId != nil, !plainID(args.modelId) { return .deny(.invalid, "That isn't a model.") }
                 if args.level != nil, !plainID(args.level) { return .deny(.invalid, "That isn't an effort.") }
                 if let title = args.title, title.count > maxTitle || title.contains(where: \.isNewline) { return .deny(.invalid, "A title is one line, up to 200 characters.") }
+                if let settings = args.settings, !settings.plain { return .deny(.invalid, "Those aren't a chat's settings.") }
             }
             if let host = args.host, host.count > 100 || host.contains(where: \.isNewline) { return .deny(.invalid, "A name is one line.") }
             return .allow
@@ -476,6 +488,7 @@ package enum LinkPolicy {
                 for line in [args.title, args.copiedFrom].compactMap({ $0 }) where line.count > maxTitle * 2 || line.contains(where: \.isNewline) {
                     return .deny(.invalid, "A title is one line.")
                 }
+                if let settings = args.settings, !settings.plain { return .deny(.invalid, "Those aren't a chat's settings.") }
                 return .allow
             }
             return .allow

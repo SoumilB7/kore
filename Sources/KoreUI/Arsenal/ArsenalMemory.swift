@@ -16,9 +16,13 @@ package enum ArsenalMemory {
     /// `<cli>:<session>`, or `box:<alias>:<chat>` for a box's chat; nil before the CLI has named the
     /// session (before the box has made the chat).
     static func key(_ chat: Chat) -> String? {
-        if let box = chat.boxPlace { return box.chatId.map { "box:" + box.connection.alias + ":" + $0 } }
-        return chat.sessionId.map { chat.provider.id + ":" + $0 }
+        if let box = chat.boxPlace { return box.chatId.map { key(box: box.connection.alias, chat: $0) } }
+        return chat.sessionId.map { key(cli: chat.provider.id, session: $0) }
     }
+
+    static func key(box alias: String, chat id: String) -> String { "box:" + alias + ":" + id }
+
+    static func key(cli: String, session: String) -> String { cli + ":" + session }
 
     /// `[key, tier]` pairs, oldest first.
     private static var entries: [[String]] {

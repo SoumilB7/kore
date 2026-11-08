@@ -141,7 +141,7 @@ struct ChatMoveUITests {
         r.store.keep(r.moved)
 
         // No window on the folder yet: the chat waits for it, and lands as it opens.
-        ChatMoving.land(r.moved, title: "Repos", modelId: "haiku", effort: "low", mode: nil)
+        ChatMoving.land(r.moved, title: "Repos", settings: ChatSettings(modelId: "haiku", effort: "low"), whole: true)
         let canonical = AppModel.canonical(r.mac)
         #expect(opened == [canonical])
         let local = Workspace.forWindow(canonical, restore: false)
@@ -155,7 +155,7 @@ struct ChatMoveUITests {
 
         // Brought again while it's open: the same tab, in front.
         local.newTab()
-        ChatMoving.land(r.moved, title: "Repos", modelId: nil, effort: nil, mode: nil)
+        ChatMoving.land(r.moved, title: "Repos", settings: ChatSettings(), whole: true)
         #expect(local.tabs.filter { $0.chat?.status.sessionId == Self.session }.count == 1 && local.activeTab === tab)
 
         // Back: the box window comes forward with the chat.

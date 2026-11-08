@@ -485,18 +485,19 @@ package final class Workspace {
 
     /// A fork of `chat` from one of its user messages, in a new tab right after it: the history
     /// before that message, the message itself in the composer (not sent), the same mode, and
-    /// "<title> (fork)" (the Claude Code extension's fork).
+    /// "<title> (fork)" (the Claude Code extension's fork). Its settings are its original's
+    /// (`open(_:of:)`); `arsenal` false: its Arsenal stays off (an agent's fork).
     @discardableResult
-    func fork(_ chat: Chat, _ start: ForkStart, text: String) -> Chat? {
+    func fork(_ chat: Chat, _ start: ForkStart, text: String, arsenal: Bool = true) -> Chat? {
         let title = "\(chat.title) (fork)"
         let fork: Chat
         // A box's chat forks on the box: its fork is a new chat there, made from the same point.
         if let box {
             switch start {
-            case .pending(let point): fork = box.forkChat(of: chat, from: point.from, at: point.at, title: title)
+            case .pending(let point): fork = box.forkChat(of: chat, from: point.from, at: point.at, title: title, arsenal: arsenal)
             case .fresh: fork = box.newChat(chat.provider)
             }
-            open(fork, of: chat, text: text)
+            open(fork, of: chat, text: text, arsenal: arsenal)
             return fork
         }
         switch start {
@@ -524,7 +525,7 @@ package final class Workspace {
             }
             fork = Chat(provider: chat.provider, folder: folder)
         }
-        open(fork, of: chat, text: text)
+        open(fork, of: chat, text: text, arsenal: arsenal)
         return fork
     }
 
@@ -562,9 +563,11 @@ package final class Workspace {
         open(fork, of: chat, text: text)
     }
 
-    private func open(_ fork: Chat, of chat: Chat, text: String) {
+    private func open(_ fork: Chat, of chat: Chat, text: String, arsenal: Bool = true) {
         fork.controls.mode = chat.controls.mode
         fork.controls.planMode = chat.controls.planMode
+        // Kept under its session once its CLI names one.
+        fork.controls.planAllow = chat.controls.planAllow
         fork.launchModel = chat.controls.modelId ?? chat.launchModel
         fork.launchEffort = chat.controls.effort
         fork.launchFastMode = chat.launchFastMode ?? (chat.controls.fastKnown ? chat.controls.fastMode : nil)
@@ -583,6 +586,7 @@ package final class Workspace {
         let index = tabs.firstIndex { $0.chat === chat && $0.agent == nil } ?? tabs.count - 1
         tabs.insert(tab, at: index + 1)
         activeID = tab.id
+        if arsenal, let tier = chat.arsenal { Self.carryArsenal(tier, to: fork) }
     }
 
     /// Switches to the tab of the chat `chat` was forked from; nil when that tab is closed.
@@ -1421,6 +1425,14 @@ package final class Workspace {
     }
 
     private static func draftKey(_ provider: String, _ session: String) -> String { provider + ":" + session }
+
+    /// The draft kept for a session whose tab is closed, as one line of text (its command, then
+    /// its words): what a cut or a move of it carries.
+    func keptDraft(cli: String, session: String) -> String? {
+        guard let draft = drafts[Self.draftKey(cli, session)], !draft.isEmpty else { return nil }
+        guard let command = draft.command else { return draft.text }
+        return "/" + command.name + (draft.text.isEmpty ? "" : " " + draft.text)
+    }
 
     private func rememberDraft(_ chat: Chat) {
         guard let session = chat.listedId else { return }

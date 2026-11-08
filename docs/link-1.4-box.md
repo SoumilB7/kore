@@ -98,7 +98,7 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 
 | `type` | fields | |
 |---|---|---|
-| `chat.new` | `folder, provider, modelId?, mode?, level?, title?, sessionId?, entryId?` | `folder` (an absolute path the box serves) in place of `windowId`; `windowId` still works. Result: `chatId`, `windowId`. 1.5: `mode` and `level` (effort) to start on, and a fork's start (`sessionId` and the message `entryId`). A `mode` above Manual (`act`) or above Auto (`full`), or one the CLI doesn't list, is `denied.raiseMode`. |
+| `chat.new` | `folder, provider, modelId?, mode?, level?, title?, sessionId?, entryId?` | `folder` (an absolute path the box serves) in place of `windowId`; `windowId` still works. Result: `chatId`, `windowId`. 1.5: `mode` and `level` (effort) to start on, and a fork's start (`sessionId` and the message `entryId`). A `mode` above Manual (`act`) or above Auto (`full`), or one the CLI doesn't list, is `denied.raiseMode`. A fork may also say its original's `settings` (`ChatSettings`, below "How a paste goes"); an Arsenal tier, a login or `planAllow: true` in them needs a full grant (`denied.control`). |
 | `chat.close` | `chatId` | The tab closed: the chat leaves the box's windows (`delta` with `removed`) and its CLI ends. Its record and logs stay on disk, marked closed. 1.5 clients close through `chat.call close`. |
 | `chat.setModel` | `chatId, modelId` | Also for an `act` grant. A chat whose CLI isn't running starts on that model. The model must be one the box's CLI listed (or, before any list, a plain id of letters, digits and `._:[]-`, at most 128); `invalid` otherwise. |
 | `chat.setEffort` | `chatId, level` | Also for an `act` grant. A running CLI switches; a stopped one starts on it. `invalid` when the chat's models offer no such level. |
@@ -673,8 +673,8 @@ and control kind on it, and starts no CLI: code `elsewhere` ("On MacBook · read
 
 Each is a `cmd` checked by `LinkPolicy.checkBox`. The answer is a `result` with these fields
 besides `{id, ok, code?, message?}`: `chatId?, owner?, move?, settled?, pending?, watching?,
-mirrored?` (`MoveResult`). `move` is `MoveInfo {moveId, chatId?, provider, sessionId, folders,
-root, files, gen, title?, modelId?, effort?, mode?, fastForward?}`.
+mirrored?, settings?` (`MoveResult`). `move` is `MoveInfo {moveId, chatId?, provider, sessionId, folders,
+root, files, gen, title?, modelId?, effort?, mode?, fastForward?, settings?}`.
 
 | `type` | fields | |
 |---|---|---|
@@ -824,6 +824,26 @@ Each is a `cmd` checked by `LinkPolicy.checkBox`, answered with a `MoveResult` (
 | Mac → box | `chat.adoptCopy` | A chat the Mac holds from that box folder: 1.10's send back. Else 1.10's `chat.adopt` as a new chat, then the Mac's original into Kore's trash. One held from another box: refused (send it back, or copy it) |
 | Box → Mac | `chat.copy`, then `SessionCopy` on the Mac | An open box chat: 1.10's `chat.release` into the pasted folder (owner, gen). A closed one or a past session: copy, then `chat.copy` commit |
 | Box → box | `chat.copy`, then `chat.adoptCopy` on the other | Copy, then `chat.copy` commit on the source |
+
+#### A chat's settings
+
+Every copy, duplicate, cut, move, send back and fork carries the chat's own settings,
+`ChatSettings {modelId?, effort?, mode?, fast?, plan?, planAllow?, autoCompact?, login?, arsenal?,
+draft?, at?}`: `chat.release` and `chat.copy` prepare answer them as `move.settings`; `chat.adopt`
+and `chat.adoptCopy` commit and a fork's `chat.new` take them as `settings`. The four older fields
+still go beside them, so a box or a Mac from before `settings` reads those and ignores the rest.
+
+| Setting | Carried as |
+|---|---|
+| `fast`, `plan` (Codex's switch), `planAllow`, `autoCompact` (0 is off) | As they are; kept in the chat's `meta.json` until its next start takes them |
+| `login` | A box's Claude login (`main` for the default). Taken where the box has that login; else the folder's, and `message` says so in one line ("work isn't signed in here · on main"). A Mac's chats run on its one login: a box login landing there is said the same way |
+| `arsenal` | A tier the target takes, else the one below, said (`device` to a box without the `arsenalDevice` cap is `drive`). Absent is off. A Mac where chats can't use Arsenal, or a Codex chat outside Full access, has it off, said |
+| `draft` | A move's and a cut's only; a copy or a duplicate leaves it with its original. On a send back the Mac's draft always goes back |
+| `at` | When they last changed where they come from (ms). On a send back the box keeps its own only when one changed there after the Mac took the chat (`owner.since`, the box's clock) and not on the Mac after that; a Mac's carried settings aren't a change until one is made there |
+
+`chat.adopt` and `chat.adoptCopy` commit answer `settings` as the chat has them after (no draft),
+so the Mac's tab shows what stood; `message` says what gave way. A fork by a grant without full
+control (`chat.fork`) keeps Arsenal off.
 
 A cut of a working chat asks first ("Stop and move"). A paste shows on the window's transfer bar,
 as a carry does ("Copying chat to mybox · 1.2 MB of 3.4 MB", Cancel; at the top of the window

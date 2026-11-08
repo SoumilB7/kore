@@ -61,7 +61,9 @@ extension HostDaemon {
     /// record, for its meta, its notes and the calls the box answers itself while the Mac is away.
     /// Its CLI has the server whatever the tier (`server(for:)`), so nothing starts again.
     func arsenalSaid(_ tier: String?, _ hc: HostChat) {
-        hc.arsenal = tier.flatMap { BoxTools.tiers.contains($0) ? $0 : nil }
+        let next = tier.flatMap { BoxTools.tiers.contains($0) ? $0 : nil }
+        if next != hc.arsenal { hc.stamp() }
+        hc.arsenal = next
     }
 
     // MARK: agent.sock

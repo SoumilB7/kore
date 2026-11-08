@@ -62,6 +62,8 @@ package struct ChatRecord: Codable, Sendable, Equatable {
     package var renamePending: Bool?
     /// A CLI was started for it and hasn't been seen to end.
     package var cliStarted: Bool?
+    /// When a client last changed its settings here, ms since 1970: a send back's newer wins.
+    package var settingsAt: Int64?
 }
 
 /// A chat frozen for a move (`chat.release` prepare): which move, the grant it goes to, and since
@@ -140,6 +142,8 @@ package final class HostChat {
             try? saveRecord()
         }
     }
+    /// What gave way when it was made with carried settings (a login not here, a tier capped).
+    package var carriedNote: String?
     var serverGiven: Bool?
     /// The full grant whose call sent each recent message, by the message's id: a message the CLI
     /// drops goes back to that client's composer (its chat restores it from the log), any other
@@ -544,6 +548,7 @@ package final class HostChat {
 
     func setModel(_ id: String) {
         record.modelId = id
+        stamp()
         record.controls?.modelId = id
         try? saveRecord()
     }
@@ -651,6 +656,7 @@ package final class HostChat {
     /// The chat's own auto-compact point (nil: off).
     func setAutoCompact(_ point: Int?) {
         record.autoCompact = point ?? 0
+        stamp()
         record.controls?.autoCompactAt = point
         chat?.setAutoCompact(point)
         try? saveRecord()
@@ -722,14 +728,17 @@ package final class HostChat {
     }
 
     /// The chat's Claude account from now on (nil: the default); its next CLI starts on it.
-    func setAccount(_ id: String?) {
+    /// `stamp` false: not a client's change (a send back's settings).
+    func setAccount(_ id: String?, stamp: Bool = true) {
         guard record.account != id else { return }
         record.account = id
+        if stamp { self.stamp() }
         try? saveRecord()
     }
 
     func setEffort(_ level: String) {
         record.effort = level
+        stamp()
         record.controls?.effort = level
         try? saveRecord()
     }
@@ -739,6 +748,7 @@ package final class HostChat {
         record.fast = on
         record.controls?.fast = on
         chat?.launchFastMode = on
+        stamp()
         try? saveRecord()
     }
 
@@ -750,6 +760,7 @@ package final class HostChat {
     func setPlanMode(_ on: Bool) {
         guard provider.planToggle != nil else { return }
         record.planMode = on
+        stamp()
         try? saveRecord()
     }
 
@@ -757,8 +768,54 @@ package final class HostChat {
     func setPlanAllow(_ on: Bool) {
         record.planAllow = on
         record.controls?.planAllow = on
+        stamp()
         try? saveRecord()
         chat?.setPlanAllow(on)
+    }
+
+    /// A client changed one of its settings (kept with the next save).
+    func stamp() { record.settingsAt = ChatSettings.ms(Date()) }
+
+    // MARK: Settings
+
+    /// Its own settings, as a copy, move or fork carries them (the live chat's where it runs).
+    package var settings: ChatSettings {
+        let controls = HostMeta.controls(self)
+        let live = chat?.controls
+        return ChatSettings(
+            modelId: controls.modelId ?? record.modelId, effort: controls.effort ?? record.effort, mode: live?.mode ?? record.mode,
+            fast: chat.flatMap { $0.launchFastMode ?? ($0.controls.fastKnown ? $0.controls.fastMode : nil) } ?? record.fast,
+            plan: provider.planToggle != nil ? live?.planMode ?? record.planMode ?? false : nil, planAllow: live?.planAllow ?? record.planAllow ?? false,
+            autoCompact: record.autoCompact, login: record.provider == "claude" ? record.account ?? LinkAccount.main : nil, arsenal: arsenal,
+            draft: record.draft ?? "", at: record.settingsAt)
+    }
+
+    /// What came with a new chat (a copy, a move, a fork), kept before its CLI starts on it. Not a
+    /// client's change: the time stays as it was.
+    func carry(_ settings: ChatSettings, draft: Bool = true) {
+        if let fast = settings.fast {
+            record.fast = fast
+            record.controls?.fast = fast
+        }
+        if provider.planToggle != nil, let plan = settings.plan { record.planMode = plan }
+        if let allow = settings.planAllow {
+            record.planAllow = allow
+            record.controls?.planAllow = allow
+        }
+        if let point = settings.autoCompact {
+            record.autoCompact = point
+            record.controls?.autoCompactAt = point == 0 ? nil : point
+        }
+        if draft, let text = settings.draft, record.draft != (text.isEmpty ? nil : text) {
+            record.draft = text.isEmpty ? nil : text
+            record.draftRev = (record.draftRev ?? 0) + 1
+        }
+        if let chat {
+            if let fast = settings.fast { chat.launchFastMode = fast }
+            if let allow = settings.planAllow { chat.setPlanAllow(allow) }
+            if let point = settings.point { chat.setAutoCompact(point) }
+        }
+        try? saveRecord()
     }
 
     // MARK: Projection

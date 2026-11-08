@@ -21,10 +21,14 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         package var title: String?
         package var mode: String?
         package var effort: String?
+        /// The rest of a fork's original's settings (fast, plan, its login, auto-compact point).
+        package var settings: ChatSettings?
 
         package init(
-            model: String? = nil, forkFrom: String? = nil, forkAt: String? = nil, title: String? = nil, mode: String? = nil, effort: String? = nil
+            model: String? = nil, forkFrom: String? = nil, forkAt: String? = nil, title: String? = nil, mode: String? = nil, effort: String? = nil,
+            settings: ChatSettings? = nil
         ) {
+            self.settings = settings
             self.model = model
             self.forkFrom = forkFrom
             self.forkAt = forkAt
@@ -155,7 +159,9 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
             let m = making
             let (folder, provider) = (folder, provider.id)
             let result = await connection.command {
-                HostWire.newChat(id: $0, folder: folder, provider: provider, model: m.model, fork: m.fork, title: m.title, mode: m.mode, effort: m.effort)
+                HostWire.newChat(
+                    id: $0, folder: folder, provider: provider, model: m.model, fork: m.fork, title: m.title, mode: m.mode, effort: m.effort,
+                    settings: m.settings)
             }
             guard result.ok, let id = result.chatId else { throw HostRefusal(result, alias: connection.alias) }
             chatId = id

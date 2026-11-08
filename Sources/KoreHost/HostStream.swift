@@ -718,11 +718,13 @@ extension HostDaemon {
             case .setMode(let mode):
                 try await backend.setMode(mode)
                 chat.controls.mode = mode
+                hc.stamp()
                 hc.noted(chat)
             case .setPlanMode(let on):
                 chat.controls.planMode = on
                 hc.setPlanMode(on)
                 await backend.setPlanMode(on)
+                hc.noted(chat)
             case .setModel(let model):
                 try await backend.setModel(model)
                 chat.controls.modelId = model

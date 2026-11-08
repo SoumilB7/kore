@@ -231,6 +231,9 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     /// 1.14: a login's sha256 (`account.import`), and the fingerprints' key (base64).
     package var sha: String?
     package var key: String?
+    /// A new chat's settings, all of them (`chat.new` for a fork, `chat.adopt` and
+    /// `chat.adoptCopy` commits); the fields above say the four a box from before them reads.
+    package var settings: ChatSettings?
 
     package init(
         chatId: String? = nil, windowId: String? = nil, title: String? = nil, force: Bool? = nil, modelId: String? = nil,
@@ -245,8 +248,9 @@ package struct ControlArgs: Codable, Sendable, Equatable {
         base: FileStamp? = nil, dir: Bool? = nil, from: String? = nil, to: String? = nil, root: String? = nil, query: String? = nil,
         folders: [String]? = nil, phase: String? = nil, gen: Int? = nil, moveId: String? = nil, stop: Bool? = nil, host: String? = nil,
         seq: Int? = nil, events: MirrorItems? = nil, copiedFrom: String? = nil, resume: Bool? = nil, deletes: [String]? = nil,
-        mkdirs: [String]? = nil, landing: Bool? = nil, sha: String? = nil, key: String? = nil
+        mkdirs: [String]? = nil, landing: Bool? = nil, sha: String? = nil, key: String? = nil, settings: ChatSettings? = nil
     ) {
+        self.settings = settings
         self.sha = sha
         self.key = key
         self.deletes = deletes

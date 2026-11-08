@@ -119,6 +119,11 @@ package final class Chat: Identifiable {
     /// The auto-compact point is the chat's own (picked in it, kept for its session, or its
     /// original's when it's a fork), not the provider's: kept under its session id once known.
     @ObservationIgnored private var ownAutoCompact = false
+    /// The point is the chat's own (`ChatSettings` carries it only then).
+    package var ownsAutoCompact: Bool { ownAutoCompact }
+    /// When its settings (mode, plan, model, effort, fast, auto-compact, Arsenal) last changed
+    /// here: on a send back, the newer of the box's and this side's wins.
+    @ObservationIgnored package var settingsChangedAt: Date?
     /// The user's turn may end in an auto-compact: set as it starts, cleared once a compaction
     /// starts or Kore asks for one. So a failed compaction, or one that leaves usage past the
     /// point, waits for the user's next turn.
@@ -1303,6 +1308,7 @@ package final class Chat: Identifiable {
         guard context.autoCompactAt != point || !ownAutoCompact else { return }
         context.autoCompactAt = point
         ownAutoCompact = true
+        settingsChangedAt = Date()
         if let id = sessionId { compactMemory.remember(point, chat: id) }
         backend?.keepAutoCompact(point)
     }
@@ -1718,6 +1724,7 @@ package final class Chat: Identifiable {
     /// `remember`: the user picked it, so new chats start in it.
     package func setMode(_ id: String, remember: Bool = true) {
         controls.changedBy = nil
+        settingsChangedAt = Date()
         let previous = controls.mode
         controls.mode = id
         arsenalFollowMode()
@@ -1744,6 +1751,7 @@ package final class Chat: Identifiable {
 
     package func setPlanMode(_ on: Bool) {
         controls.changedBy = nil
+        settingsChangedAt = Date()
         controls.planMode = on
         let backend = backend
         Task { await backend?.setPlanMode(on) }
@@ -1753,6 +1761,7 @@ package final class Chat: Identifiable {
     /// "Allow commands in Plan", kept for this chat: where it runs when that's elsewhere (a box).
     package func setPlanAllow(_ on: Bool) {
         controls.planAllow = on
+        settingsChangedAt = Date()
         services.log("plan-allow", ["cli": provider.id, "chat": status.sessionId, "on": on ? "yes" : "no"])
         if let backend, backend.keepsPlanAllow { return backend.keepPlanAllow(on) }
         if let id = status.sessionId { controls.keepPlanAllow(chat: id) }
@@ -1815,6 +1824,7 @@ package final class Chat: Identifiable {
     /// slides down to it).
     package func setModel(_ option: ModelOption) {
         controls.modelId = option.id
+        settingsChangedAt = Date()
         let level = EffortScale.fallback(controls.effort, offered: option.efforts, scale: controls.effortScale)
         if let level, level != controls.effort { setEffort(level) }
         let backend = backend
@@ -1829,6 +1839,7 @@ package final class Chat: Identifiable {
 
     package func setEffort(_ level: String) {
         controls.effort = level
+        settingsChangedAt = Date()
         let backend = backend
         Task { await backend?.setEffort(level) }
     }
@@ -1837,6 +1848,7 @@ package final class Chat: Identifiable {
     package func setFastMode(_ on: Bool) {
         guard controls.fastModeEnabled, let backend else { return }
         let previous = controls.fastMode
+        settingsChangedAt = Date()
         controls.fastChanging = true
         controls.fastMode = on
         services.log("fast-mode", ["cli": provider.id, "chat": status.sessionId, "on": on ? "yes" : "no"])

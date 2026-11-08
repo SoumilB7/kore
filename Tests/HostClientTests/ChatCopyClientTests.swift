@@ -202,7 +202,7 @@ struct ChatCopyClientTests {
         // Mac → box: 1.10's adopt as a new chat, same session; the Mac's original then to the trash.
         let folder = try m.folder("app")
         try write(Self.rows(SessionFiles.real(folder)), m.projects(folder).appendingPathComponent("\(Self.session).jsonl"))
-        let sent = try await moves.send(session: Self.session, provider: "claude", from: folder, to: b.folder, title: "Repos", modelId: nil, effort: nil, mode: nil).get()
+        let sent = try await moves.send(session: Self.session, provider: "claude", from: folder, to: b.folder, title: "Repos", settings: ChatSettings()).get()
         let there = try #require(b.rig.host.chat(sent.chatId))
         #expect(there.record.session == Self.session && there.record.from == "MacBook" && there.ownedHere)
         #expect(try read(b.projects.appendingPathComponent("\(Self.session).jsonl")) == Self.rows(b.real))

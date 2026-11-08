@@ -78,6 +78,7 @@ extension HostDaemon {
                     root: found.root.path, files: found.files, gen: hc.gen, title: hc.title, modelId: settings.controls?.modelId ?? settings.modelId,
                     effort: settings.controls?.effort ?? settings.effort, mode: settings.mode))
             answer.move?.bytes = SessionFiles.bytes(found)
+            answer.move?.settings = hc.settings
             return answer
         case .commit:
             guard let hold = hc.record.moving, hold.moveId == args.moveId, hold.grant == grant else { return refused(.staleGen, "That move isn't under way.") }
@@ -185,25 +186,49 @@ extension HostDaemon {
             if let hc = fastForward {
                 // A fast-forward: the box's chat again, its history the one that came back.
                 let complete = hc.record.owner?.mirrored == args.seq && args.seq != nil
-                hc.adopted(session: session, transcript: main, title: args.title, modelId: args.modelId, effort: args.level, mode: args.mode)
+                // The newer settings win: the Mac's, unless one was changed here since the Mac took
+                // the chat and not on the Mac after (each side's own clock decides its own "since").
+                let boxNewer = Self.boxNewer(boxAt: hc.record.settingsAt, since: hc.record.owner?.since, macAt: args.settings?.at)
+                var notes: [String] = []
+                if boxNewer {
+                    hc.adopted(session: session, transcript: main, title: args.title, modelId: nil, effort: nil, mode: nil)
+                } else {
+                    hc.adopted(session: session, transcript: main, title: args.title, modelId: args.modelId, effort: args.level, mode: args.mode)
+                    if let settings = args.settings {
+                        hc.carry(settings.withoutDraft)
+                        let login = carried(login: settings.login, provider: hc.record.provider, fallback: hc.record.account)
+                        hc.setAccount(login.account, stamp: false)
+                        let tier = carried(tier: settings.arsenal)
+                        hc.arsenal = tier.tier
+                        notes += [login.note, tier.note].compactMap { $0 }
+                    }
+                }
+                // The draft is the Mac's whichever settings won: it was typed there.
+                if let draft = args.settings?.draft { hc.carry(ChatSettings(draft: draft)) }
                 hc.setOwner(owner)
                 hc.forgetLog()
                 // Everything said on the Mac is in the replica's events already: nothing is sent
                 // again. Else the next start's history replaces them.
                 if !complete { hc.stream.restart(with: []) }
-                HostJournal.note("move adopt", ["chat": hc.id, "move": moveId, "gen": "\(owner.gen)", "mirrored": complete ? "all" : "some"])
+                HostJournal.note(
+                    "move adopt", ["chat": hc.id, "move": moveId, "gen": "\(owner.gen)", "mirrored": complete ? "all" : "some", "settings": boxNewer ? "box" : "mac"])
                 followersChanged(hc)
                 broadcast(chats: [hc])
-                return MoveResult(id: id, ok: true, chatId: hc.id, owner: owner)
+                return MoveResult(
+                    id: id, ok: true, message: notes.isEmpty ? nil : notes.joined(separator: " · "), chatId: hc.id, owner: owner,
+                    settings: Self.said(hc))
             }
             // Not the gen the box gave (a copy was made meanwhile, or the box never had it): a
             // new chat, said to come from the Mac. Never merged.
-            guard let hc = newChat(folder: folder, provider: provider, modelId: args.modelId, title: args.title, mode: args.mode, effort: args.level, session: session)
+            guard
+                let hc = newChat(
+                    folder: folder, provider: provider, modelId: args.modelId, title: args.title, mode: args.mode, effort: args.level, session: session,
+                    settings: args.settings)
             else { return refused(.invalid, "The box couldn't make the chat.") }
             hc.adoptedNew(from: args.host ?? grant, transcript: main)
             HostJournal.note("move adopt", ["chat": hc.id, "move": moveId, "new": "true"])
             broadcast(chats: [hc])
-            return MoveResult(id: id, ok: true, chatId: hc.id, owner: nil)
+            return MoveResult(id: id, ok: true, message: hc.carriedNote, chatId: hc.id, owner: nil, settings: Self.said(hc))
         case .abort:
             moveClients[moveId] = nil
             try? FileManager.default.removeItem(at: dir)
@@ -241,5 +266,21 @@ extension HostDaemon {
         guard now != hc.followedByOthers else { return }
         hc.followedByOthers = now
         broadcast(chats: [hc])
+    }
+
+    /// On a send back, whether the box's settings stand over the Mac's: one was changed here
+    /// after the Mac took the chat (`since`, this box's clock), and not on the Mac after that
+    /// (`macAt`, the Mac's clock, compared only when both changed). Nil times: never changed.
+    nonisolated static func boxNewer(boxAt: Int64?, since: Int64?, macAt: Int64?) -> Bool {
+        guard let boxAt, boxAt > (since ?? 0) else { return false }
+        guard let macAt else { return true }
+        return boxAt > macAt
+    }
+
+    /// A chat's settings as the box has them now, for the client that brought it (no draft, no time).
+    static func said(_ hc: HostChat) -> ChatSettings {
+        var settings = hc.settings.withoutDraft
+        settings.at = nil
+        return settings
     }
 }

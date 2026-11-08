@@ -51,6 +51,11 @@ enum HostMeta {
         let draft = hc.record.draft ?? ""
         made.draft = draft.utf8.count <= LinkPolicy.maxText ? draft : nil
         if hc.chat == nil, let point = hc.record.autoCompact { made.autoCompactAt = point == 0 ? nil : point }
+        // Fast and Plan's allow switch as its next start takes them (a copy's, a move's or a fork's).
+        if hc.chat == nil {
+            if let fast = hc.record.fast { made.fast = fast }
+            if let allow = hc.record.planAllow { made.planAllow = allow }
+        }
         // 1.14: a Claude chat's account, so a client shows that login's usage.
         made.login = hc.record.provider == "claude" ? hc.record.account ?? LinkAccount.main : nil
         return made
