@@ -2,6 +2,20 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
+## [0.3.4] - 2026-11-20
+
+### Changed
+- Always allow on an Auto asks card keeps the kind of command (`sudo apt install …`) in the
+  project's `.claude/settings.local.json`, and Auto stops asking about it in every chat there.
+  Removing the working folder, home or system folders is never covered.
+
+### Fixed
+- Kore no longer asks for your login keychain password over and over. It reads a Claude login
+  from the Keychain only when you click Move, Move back or Keep; usage and switching go through
+  Claude as before. Seeing the same login on two devices now goes by its account, not its token.
+- A question with one answer holds one pick: choosing an option after Other clears Other, and
+  Other's words are sent only when Other is the pick. On the phone too.
+
 ## [0.3.3] - 2026-11-19
 
 ### Added
