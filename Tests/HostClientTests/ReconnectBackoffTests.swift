@@ -5,12 +5,14 @@ import Testing
 
 /// The reconnect waits on a box that comes up and dies again: a link that dies within seconds of
 /// opening keeps backing off; only one that stayed up `stableAfter` dials again from the shortest.
+/// Time is the test's own (`VirtualClock`): how long a link stayed up is what the clock was moved,
+/// not how fast a busy machine ran.
 @MainActor
 @Suite(.serialized)
 struct ReconnectBackoffTests {
     final class Dials { var hosts: [FakeHost] = [] }
 
-    func connection(_ dials: Dials, stable: Duration) -> HostConnection {
+    func connection(_ dials: Dials, _ clock: VirtualClock, stable: Duration) -> HostConnection {
         let connection = HostConnection(alias: "mybox", cache: HostCache(alias: "mybox", root: Fixture.scratch())) {
             let (client, host) = FakeHost.pair()
             dials.hosts.append(host)
@@ -18,27 +20,36 @@ struct ReconnectBackoffTests {
         }
         connection.backoff = [.milliseconds(30), .seconds(5)]
         connection.stableAfter = stable
+        connection.sleep = clock.sleep
         return connection
     }
 
-    /// Dial `n` answers, comes up, then the box goes.
-    func upThenGone(_ dials: Dials, _ connection: HostConnection, _ n: Int, after: Duration = .zero) async {
-        #expect(await until { dials.hosts.count == n })
+    /// Dial `n` answers, comes up and stays up `up` on the clock, then the box goes.
+    func upThenGone(_ dials: Dials, _ connection: HostConnection, _ clock: VirtualClock, _ n: Int, up: Duration = .zero) async {
+        #expect(await until(30) { dials.hosts.count == n })
         _ = await dials.hosts[n - 1].handshake(windows: [], chats: [])
-        #expect(await until { connection.isOnline })
-        try? await Task.sleep(for: after)
+        #expect(await until(30) { connection.isOnline })
+        if up > .zero {
+            await clock.pending(connection.stableAfter)
+            clock.advance(up)
+        }
         dials.hosts[n - 1].close()
-        #expect(await until { connection.phase == .offline })
+        #expect(await until(30) { connection.phase == .offline })
     }
 
     @Test func aLinkThatDiesAtOnceKeepsBackingOff() async throws {
         let dials = Dials()
-        let connection = connection(dials, stable: .seconds(30))
+        let clock = VirtualClock()
+        let connection = connection(dials, clock, stable: .seconds(30))
         connection.retain()
-        await upThenGone(dials, connection, 1)
-        await upThenGone(dials, connection, 2)
+        await upThenGone(dials, connection, clock, 1)
+        await clock.pending(.milliseconds(30))
+        clock.advance(.milliseconds(30))
+        await upThenGone(dials, connection, clock, 2)
         // The second drop waits the next step (5 s), not the first again.
-        try await Task.sleep(for: .milliseconds(600))
+        await clock.pending(.seconds(5))
+        #expect(clock.asked.filter { $0 == .milliseconds(30) || $0 == .seconds(5) } == [.milliseconds(30), .seconds(5)])
+        clock.advance(.seconds(4))
         #expect(dials.hosts.count == 2)
         connection.release()
     }
@@ -67,11 +78,18 @@ struct ReconnectBackoffTests {
 
     @Test func aLinkThatStayedUpDialsAgainFromTheShortestWait() async throws {
         let dials = Dials()
-        let connection = connection(dials, stable: .milliseconds(100))
+        let clock = VirtualClock()
+        let connection = connection(dials, clock, stable: .milliseconds(100))
         connection.retain()
-        await upThenGone(dials, connection, 1)
-        await upThenGone(dials, connection, 2, after: .milliseconds(300))
-        #expect(await until(1) { dials.hosts.count == 3 })
+        await upThenGone(dials, connection, clock, 1, up: .milliseconds(100))
+        await clock.pending(.milliseconds(30))
+        clock.advance(.milliseconds(30))
+        await upThenGone(dials, connection, clock, 2, up: .milliseconds(300))
+        // Up past `stableAfter`: the wait starts again from the shortest.
+        await clock.pending(.milliseconds(30))
+        clock.advance(.milliseconds(30))
+        #expect(await until(30) { dials.hosts.count == 3 })
+        #expect(clock.asked.filter { $0 == .milliseconds(30) || $0 == .seconds(5) } == [.milliseconds(30), .milliseconds(30)])
         connection.release()
     }
 }

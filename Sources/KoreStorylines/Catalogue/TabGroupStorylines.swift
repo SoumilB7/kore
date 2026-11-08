@@ -63,7 +63,9 @@ struct DwellDrop: Step {
         let to = try await story.element(.id(StoryID.Tabs.tab(workspace.tabs[onto].id)))
         guard let window = from.window, let a = from.frame, let b = to.frame else { throw StoryFailure.modelMissing("the tabs' frames") }
         await story.input.drag(
-            from: CGPoint(x: a.midX, y: a.midY), to: CGPoint(x: b.midX, y: b.midY), in: window, steps: 10, hold: .seconds(2),
+            // Held until the outline shows (the app's own dwell), however long a busy machine
+            // takes to get there: a fixed 2 s let go too early under load.
+            from: CGPoint(x: a.midX, y: a.midY), to: CGPoint(x: b.midX, y: b.midY), in: window, steps: 10, hold: .seconds(8),
             until: { TabGroupProbe.shown(StoryID.TabGroups.target) })
         // Let go once the outline shows: the drop's own pass.
         try await story.idle()

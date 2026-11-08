@@ -24,10 +24,10 @@ struct BoxStallTests {
         try lines.joined(separator: "\n").write(to: root.appendingPathComponent("repo/.gitignore"), atomically: true, encoding: .utf8)
         let tree = SyncTree(root: root)
         let paths = (0..<15_000).map { "repo/projects/p\($0 % 50)/src/mod\($0 % 300)/deep/file\($0).py" }
-        let clock = ContinuousClock()
-        let start = clock.now
+        // This thread's CPU time, not the clock: the work the rules cost, however busy the Mac is.
+        let start = threadCPU()
         let left = paths.filter(tree.ignored).count
-        let took = clock.now - start
+        let took = threadCPU() - start
         #expect(left == 0)
         // Every rule tried per part of each path, as before, took minutes on the box.
         #expect(took < .seconds(2), "took \(took)")
@@ -101,4 +101,11 @@ struct BoxStallTests {
         #expect(processes.allSatisfy { $0.readEndsClosed == 2 }, "\(processes.map(\.readEndsClosed))")
     }
 
+}
+
+/// The calling thread's CPU time.
+func threadCPU() -> Duration {
+    var now = timespec()
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &now)
+    return .seconds(Int64(now.tv_sec)) + .nanoseconds(Int64(now.tv_nsec))
 }

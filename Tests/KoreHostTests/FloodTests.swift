@@ -55,6 +55,17 @@ final class MainGaps {
     func stop() { task?.cancel() }
 }
 
+/// Instructions this process has retired: work, which a busy Mac doesn't stretch as it does time.
+private func instructions() -> UInt64 {
+    #if canImport(Darwin)
+    var info = rusage_info_v4()
+    let ok = withUnsafeMutablePointer(to: &info) { $0.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(getpid(), RUSAGE_INFO_V4, $0) } }
+    return ok == 0 ? info.ri_instructions : 0
+    #else
+    return 0
+    #endif
+}
+
 private func cpu() -> Duration {
     var usage = rusage()
     getrusage(RUSAGE_SELF, &usage)
@@ -68,7 +79,8 @@ private func cpu() -> Duration {
 struct FloodTests {
     /// 50 MB printed by a running tool (Codex's streamed output) and by a command row, in 4 KB
     /// pieces, while another chat answers: the flood costs what it carries, its log stays
-    /// bounded, and the other chat's events keep coming.
+    /// bounded, and the other chat's events keep coming. Cost and fairness are counted in work
+    /// (instructions, events ahead), not time, so a busy machine doesn't fail it.
     @Test func fiftyMegabytesOfOutputLeaveTheOtherChatFlowing() async throws {
         let rig = try HostRig()
         defer { rig.finish() }
@@ -105,16 +117,20 @@ struct FloodTests {
         let clock = ContinuousClock()
         let start = clock.now
         var latencies: [Duration] = []
+        var ahead: [Int] = []
+        let work0 = instructions()
         for i in 0..<pieces {
             loudBackend.sink.yield(.toolOutput(id: "tool1", piece))
             loudBackend.sink.yield(.commandOutput(id: "cmd1", piece))
             if i % 1000 == 0 {
                 // The other chat says something; how long until its log has it.
                 let before = quiet.stream.seq
+                let loudBefore = loud.stream.seq
                 let sent = clock.now
                 quietBackend.sink.yield(.text("qb\(i)", .answer, "tick \(i) ", agent: .main))
                 try await until { quiet.stream.seq > before }
                 latencies.append(clock.now - sent)
+                ahead.append(loud.stream.seq - loudBefore)
             }
             if i % 64 == 0 { await Task.yield() }
         }
@@ -134,12 +150,22 @@ struct FloodTests {
         let spent = cpu() - cpu0
         gaps.stop()
         let logBytes = (try? FileManager.default.attributesOfItem(atPath: loud.stream.url.path)[.size] as? Int) ?? 0
+        let work = instructions() - work0
+        print("FLOOD ahead \(ahead.max() ?? 0) instructions \(work)")
         print("FLOOD wall \(took) cpu \(spent) main-gap \(gaps.longest) worst-latency \(latencies.max() ?? .zero) log \(logBytes)")
 
-        // The whole process's CPU: about 1.8 s alone (other suites may run alongside); copying all
-        // so far at each piece took 20 s for 8 MB, about 13 minutes for this.
-        #expect(spent < .seconds(6), "cpu \(spent)")
-        #expect((latencies.max() ?? .zero) < .milliseconds(500))
+        // What the flood cost, counted in instructions (the whole process's): about 28 billion
+        // alone and 51 billion with the target's other suites alongside, however busy the Mac (its
+        // CPU time went from 4 to 9 s). Copying all so far at each piece took 20 s for 8 MB, about
+        // 13 minutes for this: thousands of billions.
+        #if canImport(Darwin)
+        #expect(work < 100_000_000_000, "instructions \(work), cpu \(spent)")
+        #else
+        #expect(spent < .seconds(30), "cpu \(spent)")
+        #endif
+        // The other chat waits for no more than what was already in flight (about 100 of the
+        // loud chat's events; behind the whole backlog would be up to 2,000), however long that took.
+        #expect((ahead.max() ?? 0) < 1000, "ahead \(ahead.max() ?? 0), latency \(latencies.max() ?? .zero)")
         // Each output's first megabyte is logged whole, then its tail once a second.
         #expect(logBytes < 8 * 1024 * 1024, "log \(logBytes)")
         // The running row keeps a bounded tail, and its end is the output's end.

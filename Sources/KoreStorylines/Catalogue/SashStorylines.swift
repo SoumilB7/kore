@@ -72,6 +72,9 @@ private struct SashRebuildKeeps: Step {
     }
 }
 
+/// This thread's CPU time (the main thread's, where the observer and the drag run).
+func mainCPU() -> Duration { .nanoseconds(Int64(clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID))) }
+
 /// Reads back how far the sash, the chat's frame and its row are, per step of a held drag.
 struct SashSample {
     var chat: CGRect?
@@ -109,7 +112,9 @@ final class SashTrace {
     var commits: [(offset: Double, row: CGFloat?, word: CGFloat?)] = []
     /// After release: when, and whether the last row was on screen and anything drew.
     var released: ContinuousClock.Instant?
-    var after: [(at: Duration, shown: Bool)] = []
+    /// The main thread's own CPU time at release: what drawing again cost it, however busy the Mac.
+    var releasedCPU: Duration?
+    var after: [(at: Duration, cpu: Duration, shown: Bool)] = []
 }
 
 /// The word followed: the text on screen nearest the middle of the view, some way into it.
@@ -200,7 +205,7 @@ struct SashDrag: Step {
                 if let released = trace.released {
                     let view = s.chat ?? chat
                     let shown = (s.row?.intersects(view) ?? false) && (DevNavProbe.transcriptDrawn(workspace) ?? 0) > 0
-                    trace.after.append((ContinuousClock.now - released, shown))
+                    trace.after.append((ContinuousClock.now - released, mainCPU() - (trace.releasedCPU ?? .zero), shown))
                 }
             }
         }
@@ -214,6 +219,7 @@ struct SashDrag: Step {
                 during.append(sample())
             }
             trace.released = ContinuousClock.now
+            trace.releasedCPU = mainCPU()
             await story.input.release(at: CGPoint(x: start.x + by, y: start.y), in: window)
             for _ in 0..<40 {
                 try? await Task.sleep(for: .milliseconds(10))
@@ -282,7 +288,7 @@ struct SashDrag: Step {
         let moves = zip(trace.commits, trace.commits.dropFirst()).filter { abs($0.0.offset - $0.1.offset) > 0.5 }.count
         let gaps = trace.after.filter { !$0.shown }
         let gap = gaps.last?.at ?? .zero
-        try sashNote(story, "  release: \(gaps.count) of \(trace.after.count) passes blank, the last \(gap) after release; \(moves) moves of the view")
+        try sashNote(story, "  release: \(gaps.count) of \(trace.after.count) passes blank, the last \(gap) after release (\(gaps.last?.cpu ?? .zero) of the main thread's CPU); \(moves) moves of the view")
         let want = chat.width - by
         guard let last = settled?.chat, abs(last.width - want) <= 1 else {
             throw StoryFailure.expectation("the chat \(Int(want)) pt wide after release (\(Int(settled?.chat?.width ?? 0)))")
@@ -294,9 +300,11 @@ struct SashDrag: Step {
             guard (settled?.fromEnd ?? .infinity) <= 2 else {
                 throw StoryFailure.expectation("the view at the end after release (above it by \(Int(settled?.fromEnd ?? -1)))")
             }
-            // Blank for a moment can happen; never past a second.
-            guard gap <= .seconds(1), trace.after.last?.shown == true else {
-                throw StoryFailure.expectation("the last row on screen and drawn within a second of release (blank \(gap) after it, and \(trace.after.last?.shown == true ? "drawn" : "still blank") at the end)")
+            // Blank for a moment can happen; never past a second of the main thread's own work (its
+            // CPU time, which a busy Mac doesn't stretch), and never past 5 s on the clock.
+            let work = gaps.last?.cpu ?? .zero
+            guard work <= .seconds(1), gap <= .seconds(5), trace.after.last?.shown == true else {
+                throw StoryFailure.expectation("the last row on screen and drawn within a second of the main thread's work after release (blank through \(work) of it, \(gap) on the clock, and \(trace.after.last?.shown == true ? "drawn" : "still blank") at the end)")
             }
         }
     }

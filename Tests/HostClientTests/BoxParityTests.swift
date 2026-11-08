@@ -283,14 +283,18 @@ struct BoxParityTests {
         defer { rig.finish() }
         let connection = rig.connection()
         connection.retain()
-        #expect(await until(5) { connection.isOnline })
+        #expect(await until(30) { connection.isOnline })
         let (chat, backend) = rig.chat(connection, id: nil)
         await chat.startOnce()
         #expect(chat.sendFromLink("one"))
-        #expect(await until(5) { rows(chat, .answer) == ["Hi: one"] && !chat.isBusy })
+        #expect(await until(30) { rows(chat, .answer) == ["Hi: one"] && !chat.isBusy })
         let chatId = try #require(backend()?.chatId)
-        try await Task.sleep(for: .milliseconds(100))
-        connection.cache.flush()
+        // The copy on disk has every row the box has said (no fixed wait for the writes to land).
+        let said = rig.host.chat(chatId)?.stream.seq
+        #expect(await until(30) {
+            connection.cache.flush()
+            return connection.cache.events(chat: chatId).items.last?.s == said
+        })
         chat.close()
         connection.release()
 
@@ -298,15 +302,15 @@ struct BoxParityTests {
         let hc = try #require(rig.host.chat(chatId))
         let seq = hc.stream.seq
         _ = rig.host.apply(.send(chatId: chatId, text: "two"), id: "p1", control: .act) { _ in }
-        #expect(await until(5) { hc.stream.seq > seq + 3 })
+        #expect(await until(30) { hc.stream.seq > seq + 3 })
 
         // Kore again: the copy shows at once, then only what came since.
         let again = rig.connection()
         let (reopened, _) = rig.chat(again, id: chatId)
         await reopened.startOnce()
-        #expect(await until { rows(reopened, .answer) == ["Hi: one"] })
+        #expect(await until(30) { rows(reopened, .answer) == ["Hi: one"] })
         again.retain()
-        #expect(await until(5) { rows(reopened, .answer) == ["Hi: one", "Hi: two"] })
+        #expect(await until(30) { rows(reopened, .answer) == ["Hi: one", "Hi: two"] })
         #expect(rows(reopened, .user) == ["one", "two"])
         reopened.close()
         again.release()

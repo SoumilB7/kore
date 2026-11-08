@@ -30,6 +30,8 @@ class SwitchTest {
 
     @After fun down() = pool.shutdownNow().let { }
 
+    private companion object { const val WAIT = 60L }
+
     /** A tailnet whose stop blocks until [release]; it records what ran, in order. */
     private class Slow : Tailnet {
         val log: MutableList<String> = Collections.synchronizedList(mutableListOf())
@@ -46,7 +48,7 @@ class SwitchTest {
         override fun stop() {
             log += "stop"
             stopping.countDown()
-            check(release.await(5, TimeUnit.SECONDS))
+            check(release.await(WAIT, TimeUnit.SECONDS))
             on = false
             log += "stopped"
         }
@@ -59,7 +61,9 @@ class SwitchTest {
         override fun logout() { on = false; log += "logout" }
     }
 
-    private fun CountDownLatch.sure() = check(await(5, TimeUnit.SECONDS)) { "timed out" }
+    // Latches open as soon as the other thread gets there; the bound only ends a test that hangs,
+    // so it's generous: a gate's busy machine can keep a pool thread waiting for seconds.
+    private fun CountDownLatch.sure() = check(await(WAIT, TimeUnit.SECONDS)) { "timed out" }
 
     @Test fun aStopThatLandsAfterANewerStartIsUndone() = runBlocking {
         val t = Slow()

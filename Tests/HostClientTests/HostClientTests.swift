@@ -116,16 +116,17 @@ struct HostClientTests {
         connection.release()
     }
 
-    @Test func foldersAndNewChat() async throws {
+    /// Each ask is taken as it comes (no polling window): a busy machine only makes it slower.
+    @Test(.timeLimit(.minutes(1))) func foldersAndNewChat() async throws {
         let dials = Dials()
         let connection = makeConnection(root: Fixture.scratch(), dials: dials)
         connection.retain()
-        #expect(await until { dials.hosts.count == 1 })
+        #expect(await until(30) { dials.hosts.count == 1 })
         let host = dials.hosts[0]
         _ = await host.handshake(windows: [], chats: [])
-        #expect(await until { connection.isOnline })
+        #expect(await until(30) { connection.isOnline })
         Task {
-            let ask = await host.next("cmd")
+            let ask: [String: Any]? = await host.take("cmd")
             host.send(json: ["t": "result", "ok": true, "id": ask?["id"] ?? "", "folders": [["windowId": "w_1", "path": "/home/me/app"], ["windowId": "w_2", "path": "/srv/api"]]])
         }
         let folders = await connection.listFolders()
@@ -133,9 +134,9 @@ struct HostClientTests {
 
         // Add folder…: one not on the box says so; one that is comes back in the list.
         Task {
-            let first = await host.next("cmd")
+            let first: [String: Any]? = await host.take("cmd")
             host.send(.result(.init(id: first?["id"] as? String ?? "", ok: false, code: .goneFolder)))
-            let second = await host.next("cmd")
+            let second: [String: Any]? = await host.take("cmd")
             #expect((second?["cmd"] as? [String: Any])?["path"] as? String == "/srv/data")
             host.send(json: ["t": "result", "ok": true, "id": second?["id"] ?? "", "folders": [["windowId": "w_1", "path": "/home/me/app"], ["windowId": "w_3", "path": "/srv/data"]]])
         }
@@ -145,7 +146,7 @@ struct HostClientTests {
 
         let backend = LinkChatBackend(connection: connection, provider: .codex, folder: "~/app", chatId: nil)
         Task {
-            let new = await host.next("cmd")
+            let new: [String: Any]? = await host.take("cmd")
             let cmd = new?["cmd"] as? [String: Any]
             #expect(cmd?["type"] as? String == "chat.new")
             #expect(cmd?["folder"] as? String == "~/app")
@@ -154,7 +155,7 @@ struct HostClientTests {
         }
         try await backend.start()
         #expect(backend.chatId == "c7")
-        #expect((await host.next("chat.follow"))?["chatId"] as? String == "c7")
+        #expect((await host.take("chat.follow"))["chatId"] as? String == "c7")
         connection.release()
     }
 
