@@ -40,9 +40,44 @@ package final class LoginMoves {
     @ObservationIgnored private var owed: [Owed] = []
     @ObservationIgnored private let file: URL
     /// This Mac's name, for a box's "from MacBook".
-    @ObservationIgnored var hostName: () -> String = { Host.current().localizedName ?? "Mac" }
-    /// The boxes a login can go to: storylines give their own.
-    @ObservationIgnored var boxes: () -> [HostConnection] = { HostConnection.linked }
+    /// A device a login can go to, as a move needs it: a box's link, or a storyline's own.
+    package struct Box {
+        package let key: String
+        package let name: String
+        /// Why it can't take a login now; nil: it can.
+        package let unready: LoginMove.Failure?
+        /// Its KoreNet id, for a phone's point.
+        package let device: String?
+        /// Its side of a move for one login.
+        package let remote: (_ cli: String, _ login: String, _ profile: String?, _ force: Bool) -> any LoginMove.Remote
+        /// Its logins' fingerprints under a key; nil when it can't say.
+        package let prints: (_ cli: String, _ key: Data) async -> [LoginPrint]?
+        /// Its name for the login with this email.
+        package let login: (_ email: String?) async -> String?
+
+        package init(
+            key: String, name: String, unready: LoginMove.Failure?, device: String?,
+            remote: @escaping (String, String, String?, Bool) -> any LoginMove.Remote,
+            prints: @escaping (String, Data) async -> [LoginPrint]?, login: @escaping (String?) async -> String?
+        ) {
+            (self.key, self.name, self.unready, self.device) = (key, name, unready, device)
+            (self.remote, self.prints, self.login) = (remote, prints, login)
+        }
+    }
+
+    /// The boxes a login can go to: each linked box's link; storylines give their own.
+    @ObservationIgnored package var boxes: @MainActor () -> [Box] = { HostConnection.linked.filter { !$0.forgotten }.map { LoginMoves.box($0) } }
+
+    /// A linked box as a move needs it.
+    static func box(_ connection: HostConnection) -> Box {
+        let host = Host.current().localizedName ?? "Mac"
+        return Box(
+            key: connection.alias, name: NodeNames.name(connection.alias), unready: BoxLogins.unready(connection),
+            device: connection.netPeer?.record.id.uuidString.lowercased(),
+            remote: { cli, login, profile, force in BoxLogins(connection: connection, cli: cli, login: login, host: host, profile: profile, force: force) },
+            prints: { cli, key in await BoxLogins.fingerprints(connection, cli: cli, key: key) },
+            login: { email in await LoginMoves.boxLogin(connection, email: email) })
+    }
 
     init(file: URL = KoreFolders.support.appendingPathComponent("login-moves.json")) {
         self.file = file
@@ -51,15 +86,20 @@ package final class LoginMoves {
 
     static func key(_ cli: String, _ id: String?) -> String { cli + "/" + AccountStore.loginKey(id) }
 
-    func line(_ cli: String, _ id: String?) -> Line? { lines[Self.key(cli, id)] }
+    package func line(_ cli: String, _ id: String?) -> Line? { lines[Self.key(cli, id)] }
+
+    /// Storylines: nothing moving, failed, flagged or owed.
+    package func reset() {
+        (lines, incompatible, incompatibleLogin, owed) = ([:], [:], [:], [])
+    }
 
     /// The box this login is also on, if one holds the same sign-in.
-    func alsoOn(_ cli: String, _ id: String?) -> String? { incompatible[Self.key(cli, id)] }
+    package func alsoOn(_ cli: String, _ id: String?) -> String? { incompatible[Self.key(cli, id)] }
 
     /// The boxes (KoreNet ids) holding a login this Mac holds too, for a phone's amber point;
     /// nil when there's none.
     package var alsoOnDevices: [String]? {
-        let ids = Set(incompatible.values).compactMap { connection($0)?.netPeer?.record.id.uuidString.lowercased() }
+        let ids = Set(incompatible.values).compactMap { box($0)?.device }
         return ids.isEmpty ? nil : ids.sorted()
     }
 
@@ -78,14 +118,11 @@ package final class LoginMoves {
     /// The boxes a login could move to, those that can't take one now with their reason.
     func targets(_ cli: String) -> [Target] {
         guard cli == "claude" else { return [] }
-        return boxes().filter { !$0.forgotten }.map { connection in
-            let name = NodeNames.name(connection.alias)
-            return Target(key: connection.alias, name: name, why: BoxLogins.unready(connection).map { Self.words($0, box: name) })
-        }
+        return boxes().map { box in Target(key: box.key, name: box.name, why: box.unready.map { Self.words($0, box: box.name) }) }
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    private func connection(_ key: String) -> HostConnection? { boxes().first { $0.alias == key } ?? HostConnection.existing(key) }
+    private func box(_ key: String) -> Box? { boxes().first { $0.key == key } ?? HostConnection.existing(key).map { Self.box($0) } }
 
     // MARK: Moving
 
@@ -93,8 +130,8 @@ package final class LoginMoves {
     /// first (nil: none left; the caller asked).
     func move(_ cli: String, _ id: String?, to box: String, fallback: String??) {
         let key = Self.key(cli, id)
-        guard lines[key].map({ if case .moving = $0 { false } else { true } }) ?? true, let connection = connection(box) else { return }
-        let name = NodeNames.name(box)
+        guard lines[key].map({ if case .moving = $0 { false } else { true } }) ?? true, let target = self.box(box) else { return }
+        let name = target.name
         lines[key] = .moving(name)
         let store = AccountStore.shared
         let email = Self.email(cli, id)
@@ -106,7 +143,7 @@ package final class LoginMoves {
                 guard working == 0 else { return self.finish(key, .failed(.inUse(working)), box: name) }
                 if case .some(let other) = fallback { store.switchLogin(cli, to: other, LoginPick.byMove()) }
             }
-            let remote = BoxLogins(connection: connection, cli: cli, login: LinkLogins.name(forEmail: email), host: self.hostName(), profile: Self.profile(cli, id))
+            let remote = target.remote(cli, LinkLogins.name(forEmail: email), Self.profile(cli, id), false)
             let outcome = await LoginMove.out(MacLogin(cli: cli, id: id), to: remote)
             if let pending = outcome.pending { self.owe(Owed(box: box, cli: cli, login: AccountStore.loginKey(id), pending: pending)) }
             if outcome.moved {
@@ -126,13 +163,13 @@ package final class LoginMoves {
         let key = Self.key(cli, id)
         let email = Self.email(cli, id)
         guard lines[key].map({ if case .moving = $0 { false } else { true } }) ?? true,
-            let box = CLIProfiles.movedTo(cli, email: email), let connection = connection(box)
+            let box = CLIProfiles.movedTo(cli, email: email), let target = self.box(box)
         else { return }
-        let name = NodeNames.name(box)
+        let name = target.name
         lines[key] = .moving(name)
         Task {
-            guard let login = await Self.boxLogin(connection, email: email) else { return self.finish(key, .failed(.notThere), box: name) }
-            let remote = BoxLogins(connection: connection, cli: cli, login: login, host: self.hostName())
+            guard let login = await target.login(email) else { return self.finish(key, .failed(.notThere), box: name) }
+            let remote = target.remote(cli, login, nil, false)
             let outcome = await LoginMove.back(MacLogin(cli: cli, id: id), from: remote)
             if let pending = outcome.pending { self.owe(Owed(box: box, cli: cli, login: AccountStore.loginKey(id), pending: pending)) }
             if outcome.moved {
@@ -149,12 +186,12 @@ package final class LoginMoves {
     func keep(_ cli: String, _ id: String?, here: Bool) {
         let key = Self.key(cli, id)
         guard lines[key].map({ if case .moving = $0 { false } else { true } }) ?? true,
-            let box = incompatible[key], let login = incompatibleLogin[key], let connection = connection(box)
+            let box = incompatible[key], let login = incompatibleLogin[key], let target = self.box(box)
         else { return }
-        let name = NodeNames.name(box)
+        let name = target.name
         lines[key] = .moving(name)
         Task {
-            let remote = BoxLogins(connection: connection, cli: cli, login: login, host: self.hostName(), force: true)
+            let remote = target.remote(cli, login, nil, true)
             let local = MacLogin(cli: cli, id: id)
             let outcome = here ? await LoginMove.keepHere(local, remote, cli: cli) : await LoginMove.keepThere(local, remote, cli: cli)
             if let pending = outcome.pending { self.owe(Owed(box: box, cli: cli, login: login, pending: pending)) }
@@ -178,7 +215,7 @@ package final class LoginMoves {
     }
 
     /// The box's name for the login with this email (its account list).
-    private static func boxLogin(_ connection: HostConnection, email: String?) async -> String? {
+    static func boxLogin(_ connection: HostConnection, email: String?) async -> String? {
         let result = await connection.command { HostWire.accountList(id: $0, provider: "claude", chatId: nil, folder: nil) }
         guard result.ok, let accounts = result.accounts, let email = email?.lowercased() else { return nil }
         return accounts.first { $0.email?.lowercased() == email }?.id
@@ -204,11 +241,11 @@ package final class LoginMoves {
         Task {
             var left: [Owed] = []
             for item in items {
-                guard let connection = connection(item.box), BoxLogins.unready(connection) == nil else {
+                guard let target = box(item.box), target.unready == nil else {
                     left.append(item)
                     continue
                 }
-                let remote = BoxLogins(connection: connection, cli: item.cli, login: item.login, host: hostName())
+                let remote = target.remote(item.cli, item.login, nil, false)
                 if !(await LoginMove.resend(item.pending, to: remote)) { left.append(item) }
             }
             owed = left
@@ -230,10 +267,10 @@ package final class LoginMoves {
 
     /// Compares each reachable box's logins with this Mac's: one sign-in on both is flagged on
     /// its row. This Mac's are read without a prompt; one Kore may not read is skipped.
-    func check() {
+    package func check() {
         guard let key = Self.fingerprintKey() else { return }
-        let connections = boxes().filter { BoxLogins.unready($0) == nil }
-        guard !connections.isEmpty else { return }
+        let ready = boxes().filter { $0.unready == nil }
+        guard !ready.isEmpty else { return }
         let cli = "claude"
         let ids: [String?] = [nil] + CLIProfiles.added(cli).map(\.id)
         Task {
@@ -245,10 +282,10 @@ package final class LoginMoves {
             }
             var found: [String: String] = [:]
             var names: [String: String] = [:]
-            for connection in connections {
-                for print in await BoxLogins.fingerprints(connection, cli: cli, key: key) ?? [] {
+            for box in ready {
+                for print in await box.prints(cli, key) ?? [] {
                     if let login = mine[print.fingerprint] {
-                        found[login] = connection.alias
+                        found[login] = box.key
                         names[login] = print.login
                     }
                 }

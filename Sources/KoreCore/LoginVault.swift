@@ -187,4 +187,8 @@ package final class MemoryLoginVault: LoginVaultStore, @unchecked Sendable {
     package func delete(_ place: LoginVault.Place) throws { _ = lock.withLock { items.removeValue(forKey: place) } }
 
     package func set(_ data: Data?, _ place: LoginVault.Place) { lock.withLock { items[place] = data } }
+
+    package func held(_ place: LoginVault.Place) -> Data? { lock.withLock { items[place] } }
+
+    package func removeAll() { lock.withLock { items = [:] } }
 }

@@ -62,6 +62,8 @@ package final class ScriptedAccounts {
     package var lookup: Set<String> = []
     /// Kore's Keychain while storylines run.
     package let keychain = MemoryKeychain()
+    /// The CLIs' own logins (Claude's Keychain items, their files) while storylines run: never the real ones.
+    package let loginVault = MemoryLoginVault()
     /// The sign-in waiting for the browser, by provider.
     private var waiting: [String: CheckedContinuation<JSONValue?, any Error>] = [:]
 
@@ -71,6 +73,9 @@ package final class ScriptedAccounts {
         StorylineSeams.opened = { [unowned self] url in log.append(.opened(url.host() ?? "")) }
         StorylineSeams.chooseFile = { [unowned self] in chosenFile }
         Keychain.store.value = keychain
+        LoginVault.store.value = loginVault
+        // No real box ever takes a storyline's login.
+        LoginMoves.shared.boxes = { [] }
     }
 
     /// Back to nothing asked, every CLI signed in as in `signedIn`, and nothing known in Kore.
@@ -90,6 +95,9 @@ package final class ScriptedAccounts {
         CLIInstaller.standIn.value = nil
         StorylineSeams.loginUsage = nil
         keychain.removeAll()
+        loginVault.removeAll()
+        LoginMoves.shared.boxes = { [] }
+        LoginMoves.shared.reset()
         // The run's Claude settings start empty for each storyline.
         try? FileManager.default.removeItem(at: ClaudeSettings.userFile())
         try? FileManager.default.removeItem(at: SettingsFile.backup(of: ClaudeSettings.userFile()))

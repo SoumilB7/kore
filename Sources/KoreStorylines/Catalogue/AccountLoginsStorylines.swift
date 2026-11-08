@@ -363,7 +363,7 @@ private struct FadesEnd: Step {
 }
 
 /// The logins' folder and the CLI's main one, in the run's scratch.
-private struct SeedLogins: Step {
+struct SeedLogins: Step {
     let provider: String
     var label: String { "Give the logins a folder of their own" }
 
