@@ -69,10 +69,15 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         pressable(8)
         visibility = View.GONE
     }
-    /** Arsenal, only while it's on: one glyph in the tier's colour. */
-    private val arsenalMark = activity.label("ϟ", 14f, K.accent).apply {
-        gravity = Gravity.CENTER
-        setPadding(activity.dp(4), activity.dp(7), activity.dp(4), activity.dp(7))
+    /**
+     * Arsenal, only while it's on: the Mac's mark (a bolt in a ring) in the tier's colour, 20 dp in
+     * a 28×36 dp target. A tap opens the options sheet, whose Arsenal part shows the tier and Stop all.
+     */
+    private val arsenalMark = android.widget.ImageView(activity).apply {
+        setImageResource(dev.kore.phone.R.drawable.ic_arsenal)
+        scaleType = android.widget.ImageView.ScaleType.CENTER_INSIDE
+        val pad = activity.dp(4)
+        setPadding(pad, activity.dp(8), pad, activity.dp(8))
         setOnClickListener { chooseMode() }
         pressable(8)
         visibility = View.GONE
@@ -160,7 +165,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                     marginStart = activity.dp(4)
                 })
                 addView(modelChip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
-                addView(arsenalMark, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                addView(arsenalMark, LinearLayout.LayoutParams(activity.dp(28), activity.dp(36)))
                 addView(View(activity), LinearLayout.LayoutParams(0, 1, 1f))
                 addView(ring, LinearLayout.LayoutParams(activity.dp(32), activity.dp(32)).apply { marginEnd = activity.dp(8) })
                 addView(action, LinearLayout.LayoutParams(activity.dp(36), activity.dp(36)))
@@ -236,7 +241,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         modelChip.visibility = if (chip != null) View.VISIBLE else View.GONE
         val tier = chat?.str("arsenal")?.takeIf { it != "off" }
         arsenalMark.visibility = if (tier != null) View.VISIBLE else View.GONE
-        arsenalMark.setTextColor(arsenalColor(tier))
+        arsenalMark.imageTintList = android.content.res.ColorStateList.valueOf(arsenalTint(tier))
         arsenalMark.contentDescription = "Arsenal ${dev.kore.link.node.Control.arsenalName(tier)}"
         refreshAction()
         showStatus()
@@ -614,11 +619,6 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     }
 
     /** The Mac's tier colours: Read b200, Act limited b400, Act unlimited b300. */
-    private fun arsenalColor(tier: String?): Int = when (tier) {
-        "watch" -> android.graphics.Color.parseColor("#A3C3DC")
-        "own" -> android.graphics.Color.parseColor("#3C97DD")
-        else -> android.graphics.Color.parseColor("#6AB1E7")
-    }
 
     private fun modeCmd(id: String) = JsonObject(mapOf("type" to JsonPrimitive("chat.setMode"), "chatId" to JsonPrimitive(chatId), "modeId" to JsonPrimitive(id)))
 
@@ -896,4 +896,15 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) =
             super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(max, MeasureSpec.AT_MOST))
     }
+}
+
+/**
+ * Arsenal's tier colours, the Mac's (Theme.Arsenal): Read (watch) #A3C3DC, Act limited (own)
+ * #3C97DD, Act unlimited (drive) #6AB1E7, Full #E1C08D. ARGB, for the mark's tint.
+ */
+fun arsenalTint(tier: String?): Int = when (tier) {
+    "watch" -> 0xFFA3C3DC.toInt()
+    "own" -> 0xFF3C97DD.toInt()
+    "full" -> 0xFFE1C08D.toInt()
+    else -> 0xFF6AB1E7.toInt()
 }

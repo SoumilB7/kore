@@ -2,6 +2,7 @@ package dev.kore.phone
 
 import dev.kore.link.node.NodeMachine
 import dev.kore.link.node.NodeMachine.State
+import dev.kore.phone.ui.arsenalTint
 import dev.kore.phone.ui.awayFact
 import dev.kore.phone.ui.awayLine
 import dev.kore.phone.ui.lastSeenWords
@@ -88,5 +89,13 @@ class WordsTest {
         assertEquals(State.Connecting, shownState(State.Idle, networkOn = true))
         assertEquals(State.Idle, shownState(State.Idle, networkOn = false))
         assertEquals(State.Up, shownState(State.Up, networkOn = true))
+    }
+
+    /** The Arsenal mark's tier colours are the Mac's, Full included. */
+    @Test fun arsenalTiersMatchTheMac() {
+        assertEquals(0xFFA3C3DC.toInt(), arsenalTint("watch"))
+        assertEquals(0xFF3C97DD.toInt(), arsenalTint("own"))
+        assertEquals(0xFF6AB1E7.toInt(), arsenalTint("drive"))
+        assertEquals(0xFFE1C08D.toInt(), arsenalTint("full"))
     }
 }
