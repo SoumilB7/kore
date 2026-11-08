@@ -12,7 +12,8 @@ package enum AgentGrants {
 
     package static var enabled: Bool { defaults.bool(forKey: switchKey) }
 
-    /// Connects Arsenal to this, at launch. Watch, Own and Drive have commands; a tier not built yet is
+    /// Connects Arsenal to this, at launch, before any chat registers: the switch as saved, so each
+    /// chat's kept tier comes back as it registers. Watch, Own and Drive have commands; a tier not built yet is
     /// Off here, and external callers stay Off.
     package static func install() {
         AgentTaps.setAllowed = { setEnabled($0) }
@@ -28,6 +29,8 @@ package enum AgentGrants {
         AgentTaps.stopAll = { stopAll() }
         AgentBoxCalls.install()
         Arsenal.shared.adopt(allowed: enabled)
+        // Chats open before the switch was read (none at launch) get their kept tiers now.
+        for chat in AgentReads.chatsByID().values { Arsenal.shared.restore(chat) }
     }
 
     /// Each chat's tier, by chat id; a chat not here is Off.

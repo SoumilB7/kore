@@ -5,7 +5,8 @@ import src
 
 /// A chat's Arsenal tier is kept across closing it and coming back (the owner, 2026-11-15): its tab
 /// reopened is a new chat for the same session, as a restart's is, and it's on again at the tier it
-/// had, with the socket. The user's Off, and Stop agent control, forget it.
+/// had, with the socket; so after Kore quits and launches again, the switch read back from its
+/// defaults. The user's Off, and Stop agent control, forget it.
 final class ArsenalKeep: ChatStoryline {
     override class var tags: Set<Tag> { [.agentChannel, .gate] }
     override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("Ready.")]) }
@@ -38,6 +39,37 @@ final class ArsenalKeep: ChatStoryline {
             workspace.perform(.reopenClosedTab)
             try await story.until("\(role)'s session back") { story.app.chat?.sessionId == session && story.app.chat !== (try? cast.chat(role)) }
             cast.chats[role] = try story.activeChat()
+        }
+    }
+
+    /// Kore quit and launched again, in this process: the window saved and closed, the grants (and
+    /// so the socket) and the switch let go from memory, the switch read back from the defaults as
+    /// a launch reads it (`AgentGrants.install`), then the window opened from what it saved.
+    private struct Relaunched: Step {
+        var label: String { "Kore relaunched" }
+        var timeout: Duration? { .seconds(20) }
+
+        @MainActor func run(_ story: StoryContext) async throws {
+            let cast = AgentCast.of(story)
+            let session = try cast.chat("a").sessionId
+            guard let workspace = story.app.workspace, let window = story.window else { throw StoryFailure.modelMissing("the window") }
+            let folder = story.folder
+            let saved = try workspace.storySaved()
+            window.close()
+            try await story.until("the window closed") { story.app.workspace?.window?.isVisible != true }
+            AgentGrants.stopAll()
+            Arsenal.shared.adopt(allowed: false)
+            AgentGrants.install()
+            guard Arsenal.shared.allowed else { throw StoryFailure.expectation("the switch read back on") }
+            guard Workspace.storyRestore(folder: folder, saved: saved) else { throw StoryFailure.other("the folder's window is still open") }
+            try await OpenFolder().run(story)
+            try await story.until("a's session back") {
+                story.app.workspace !== workspace && story.window?.isVisible == true
+                    && story.app.workspace?.tabs.contains { $0.chat?.sessionId == session } == true
+            }
+            guard let now = story.app.workspace, let tab = now.tabs.first(where: { $0.chat?.sessionId == session }) else { return }
+            now.linkSelect(tab)
+            cast.chats["a"] = tab.chat
         }
     }
 
@@ -89,6 +121,21 @@ final class ArsenalKeep: ChatStoryline {
             tier(.drive, "reopened"),
             open,
             Expect("its grant, under the new chat") { story in try AgentGrants.tier(chat: AgentCast.of(story).id("a")) == .drive },
+
+            // Kore quit and launched again (a reinstall's restart): the switch comes back from the
+            // defaults, and with it the tier and the socket.
+            Relaunched(),
+        ] + (codex ? [
+            Expect("Codex: on, or waiting for Full access") { story in
+                let a = try AgentCast.of(story).chat("a")
+                return a.mode == "fullAccess" ? a.arsenal == .drive : a.arsenal == nil && a.arsenalWaiting
+            },
+            Do("the user puts a in Full access") { story in try AgentCast.of(story).chat("a").storySetMode("fullAccess") },
+        ] : []) + [
+            tier(.drive, "relaunched"),
+            kept(.drive, "relaunched"),
+            open,
+            Expect("its grant, under the relaunched chat") { story in try AgentGrants.tier(chat: AgentCast.of(story).id("a")) == .drive },
 
             // The user's Off forgets it.
             Do("the user turns a off") { story in Arsenal.shared.turnOff(try AgentCast.of(story).chat("a")) },
