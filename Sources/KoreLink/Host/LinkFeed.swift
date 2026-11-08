@@ -199,6 +199,7 @@ package final class LinkFeed {
     package func attach(_ client: Client) {
         guard !clients.contains(where: { $0 === client }) else { return }
         clients.append(client)
+        if client.phone { phonesShown() }
         keepTimer?.invalidate()
         keepTimer = nil
         turnOn()
@@ -223,6 +224,7 @@ package final class LinkFeed {
     /// so its resume still hears what finished meanwhile).
     package func detach(_ client: Client) {
         clients.removeAll { $0 === client }
+        if client.phone { phonesShown() }
         if !clients.contains(where: \.sweeps) {
             sweepTimer?.invalidate()
             sweepTimer = nil
@@ -287,8 +289,10 @@ package final class LinkFeed {
     /// missed (every chat's meta diffed, its transcripts whole), at the next tick.
     package func presence(_ client: Client, onScreen: Bool, chat: String? = nil) {
         let back = onScreen && !client.onScreen
+        let flipped = onScreen != client.onScreen
         client.onScreen = onScreen
         client.watching = onScreen ? chat : nil
+        if flipped, client.phone { phonesShown() }
         guard back else { return }
         client.needsAll = true
         for id in client.subs.keys { client.subs[id]?.fresh = true }
@@ -300,6 +304,14 @@ package final class LinkFeed {
         client.holding = false
         client.needsAll = true
         schedule(now: true)
+    }
+
+    /// Phones whose app is on screen now: only these keep the Mac awake (Stay awake).
+    package var phonesOnScreen: Int { clients.count(where: { $0.phone && $0.onScreen }) }
+
+    private func phonesShown() {
+        guard self === Self.shared else { return }
+        StayAwakePhones.connected(phonesOnScreen)
     }
 
     /// A command ran: what it changed goes out at once (as the local link always did).

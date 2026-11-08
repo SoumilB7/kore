@@ -132,7 +132,20 @@ struct NetDot: View {
         .background {
             if let on { Circle().fill(on).frame(width: size + Size.Net.dotRing * 2, height: size + Size.Net.dotRing * 2) }
         }
-        .accessibilityHidden(true)
+        .accessibilityElement()
+        .accessibilityLabel(Text(fill.spoken))
+    }
+}
+
+extension NetDot.Fill {
+    /// What VoiceOver says for the dot (a row's name comes before it).
+    var spoken: String {
+        switch self {
+        case .connected: "connected"
+        case .needsYou: "needs you"
+        case .hollow: "not connected"
+        case .offline: "offline"
+        }
     }
 }
 

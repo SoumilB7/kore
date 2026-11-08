@@ -47,14 +47,16 @@ struct NetJoinSheet: View {
 
     private func check(_ row: BoxNetJoin.Row) -> some View {
         HStack(spacing: Space.md + 1) {
-            Group {
+            // A ZStack, so a mark changing fades out as the next fades in.
+            ZStack {
                 switch row.mark {
-                case .done: Text("✓").foregroundStyle(Theme.success)
-                case .working: NetSpinner()
-                case .attention: Text("●").foregroundStyle(Theme.warning)
-                case .skipped: Text("–").foregroundStyle(Theme.tertiary)
+                case .done: Text("✓").foregroundStyle(Theme.success).transition(.opacity)
+                case .working: NetSpinner().transition(.opacity)
+                case .attention: Text("●").foregroundStyle(Theme.warning).transition(.opacity)
+                case .skipped: Text("–").foregroundStyle(Theme.tertiary).transition(.opacity)
                 }
             }
+            .animation(Motion.fade, value: row.mark)
             .frame(width: Size.Net.mark)
             Text(row.title).foregroundStyle(row.mark == .skipped ? Theme.tertiary : Theme.text).lineLimit(1)
             Spacer(minLength: Space.md)

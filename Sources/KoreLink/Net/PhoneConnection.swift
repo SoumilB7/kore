@@ -58,6 +58,8 @@ package final class PhoneConnection: @unchecked Sendable {
     private var writer: DispatchSourceWrite?
     private var timer: DispatchSourceTimer?
     private var device: UUID?
+    /// The device's record as last read (a read that fails keeps it: only the book removes a phone).
+    private var record: DeviceRecord?
     private var told = Told()
     private let events: @Sendable (Event) -> Void
     private let clock: @Sendable () -> Date
@@ -141,6 +143,7 @@ package final class PhoneConnection: @unchecked Sendable {
             if !told.established {
                 told.established = true
                 device = peer.record.id
+                record = peer.record
                 events(.established(peer, binding: session.bindingDigest ?? Data()))
             }
             var incoming: [Incoming] = []
@@ -159,7 +162,11 @@ package final class PhoneConnection: @unchecked Sendable {
             if !incoming.isEmpty || (settled && !told.settled) {
                 told.settled = told.settled || settled
                 // The record as it is now, read here: a revoked or paused phone stops at its next message.
-                let record = device.flatMap { try? book.record($0) }
+                if let device {
+                    do {
+                        record = try book.record(device)
+                    } catch {}
+                }
                 events(.messages(incoming, record: record, cursorsSettled: settled, cursors: session.cursors))
             }
         case .closed:

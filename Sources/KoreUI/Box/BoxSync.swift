@@ -331,6 +331,18 @@ struct BoxOfflineDialog: View {
             Text(Self.line(box)).font(Chrome.bodyMedium).foregroundStyle(Theme.text).lineLimit(2)
             if let note, let action = note.action, action != .tryAgain {
                 BoxNoteLine(note: note, alias: box.alias)
+            } else if connection.phase == .refused(.paused) {
+                // Taken offline here on purpose: nothing dials, so the one action is to bring it back.
+                HStack(spacing: Space.sm) {
+                    Circle().fill(Theme.tertiary).frame(width: Size.statusPoint, height: Size.statusPoint)
+                    Text(Self.status(box, note: note)).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(2)
+                    Spacer(minLength: Space.sm)
+                    Button("Bring online") {
+                        NetPauses.shared.set(box.alias, paused: false)
+                        connection.bringOnline()
+                        Devices.shared.changed()
+                    }.smallButton()
+                }
             } else {
                 HStack(spacing: Space.sm) {
                     Circle().fill(Theme.accent).frame(width: Size.statusPoint, height: Size.statusPoint)

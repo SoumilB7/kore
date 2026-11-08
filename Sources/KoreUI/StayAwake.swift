@@ -348,10 +348,14 @@ final class StayAwake {
     }
 }
 
-/// Where the link tells Stay awake how many phones are linked (KoreLink can't see `StayAwake`).
+/// Where the link tells Stay awake about its phones (KoreLink can't see `StayAwake`): only a phone
+/// whose app is on screen keeps the Mac awake, so a phone linked in the background doesn't hold
+/// it all night. `onScreen` (KoreLink's feed) is the count when set; `count` otherwise.
 @MainActor
 package enum StayAwakePhones {
-    package static func connected(_ count: Int) { StayAwake.current?.phonesConnected(count) }
+    package static var onScreen: (@MainActor () -> Int)?
+
+    package static func connected(_ count: Int) { StayAwake.current?.phonesConnected(onScreen?() ?? count) }
 }
 
 // MARK: - The hold

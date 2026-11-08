@@ -252,6 +252,17 @@ struct DeviceBookTests {
         #expect(try book.record(record.id)?.nodeKeys == ["nodekey:2", "nodekey:3", "nodekey:4"])
     }
 
+    @Test func aTaggedBoxRotatesUnderTheSameTagsKeepingThree() throws {
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let key = SoftwareIdentity()
+        let record = TestKit.record(kind: .box, abilities: [.read, .ask], key: key, nodeKeys: ["nodekey:1", "nodekey:2", "nodekey:3"], userId: nil, tags: ["tag:a", "tag:b"])
+        try book.update { $0.append(record) }
+        #expect(try book.appendNodeKey(verified(key, record: record, nodeKey: "nodekey:4"), whoisUserId: nil, whoisTags: ["tag:b", "tag:a"]) == .appended(dropped: "nodekey:1"))
+        #expect(throws: TrustError.refused("whois")) { try book.appendNodeKey(verified(key, record: record, nodeKey: "nodekey:5"), whoisUserId: nil, whoisTags: ["tag:a"]) }
+        #expect(throws: TrustError.refused("whois")) { try book.appendNodeKey(verified(key, record: record, nodeKey: "nodekey:5"), whoisUserId: 42, whoisTags: []) }
+        #expect(try book.record(record.id)?.nodeKeys == ["nodekey:2", "nodekey:3", "nodekey:4"])
+    }
+
     @Test func nodeKeyAppendRefusesSSHAndAChangedIdentity() throws {
         defer { try? FileManager.default.removeItem(at: folder) }
         let record = TestKit.record(kind: .phone, abilities: [.read], key: phone, userId: 42)

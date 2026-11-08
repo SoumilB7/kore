@@ -148,7 +148,9 @@ package struct DeviceBook: Sendable {
     }
 
     /// `devices.set{merge}` (phase 18 step 5b): the records an owner Mac issued (its phones) become
-    /// these; every other record stays. A record of another issuer, or a Mac, can't be set so.
+    /// these; every other record stays. A record of another issuer, or a Mac, can't be set so. A
+    /// device another owner Mac issued first (a phone allowed on two Macs) stays that Mac's: its
+    /// copy here is left out, and the rest of the set still applies.
     @discardableResult
     package func applyIssued(_ records: [DeviceRecord], from issuer: VerifiedPeer) throws -> Contents {
         try locked {
@@ -164,8 +166,8 @@ package struct DeviceBook: Sendable {
             let ids = Set(records.map(\.id))
             guard ids.count == records.count else { throw TrustError.invalidRecord("duplicate id") }
             let kept = book.devices.filter { $0.issuedBy != issuer.device }
-            guard !kept.contains(where: { ids.contains($0.id) }) else { throw TrustError.refused("another device's record") }
-            let devices = kept + records
+            let others = Set(kept.map(\.id))
+            let devices = kept + records.filter { !others.contains($0.id) }
             guard devices != book.devices else { return book }
             let before = book
             book.devices = devices

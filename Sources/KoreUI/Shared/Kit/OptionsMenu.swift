@@ -220,7 +220,7 @@ final class OptionsMenu {
             selected = nil
             place()
         } else if let action = item.action {
-            UILog.event("options-pick", ["source": source, "item": String(index)])
+            UILog.event("options-pick", ["source": source, "item": String(index), "title": String(item.title.prefix(40))])
             close()
             action()
         }
@@ -387,11 +387,25 @@ extension View {
     }
 }
 
-/// Its own view, so only the tip, not the row, follows the popup opening and closing.
+/// Its own view, so only the tip, not the row, follows the popup opening and closing. A KoreNet
+/// popup covers it too, except for the popup's own views.
 private struct PopupAwareHelp: ViewModifier {
     let text: String
+    @Environment(\.insideNetPopup) private var inside
     func body(content: Content) -> some View {
-        content.help(OptionsMenu.shared.items.isEmpty ? text : "")
+        content.help(OptionsMenu.shared.items.isEmpty && (inside || NetPopupHost.shared.showing == nil) ? text : "")
+    }
+}
+
+private struct InsideNetPopupKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
+extension EnvironmentValues {
+    /// The view is drawn in a KoreNet popup (`NetPopupHost`).
+    var insideNetPopup: Bool {
+        get { self[InsideNetPopupKey.self] }
+        set { self[InsideNetPopupKey.self] = newValue }
     }
 }
 

@@ -14,6 +14,8 @@ final class LinkClient {
     private(set) var grant: Grant?
     /// Phase 18: the device as its record says now (a KoreNet session's), and its proof.
     private(set) var device: DeviceRecord?
+    /// An upgraded grant's control as its device's record last read it.
+    private var upgraded: GrantControl?
     private(set) var peer: VerifiedPeer?
     /// How it came: KoreNet over the tailnet, or SSH (`attach`, either link).
     let route: Binding.Route
@@ -241,9 +243,16 @@ final class LinkClient {
 
     /// What the link may do as its grant's file or its device's record says now (read on every
     /// command): a revoked or changed one ends the connection, a lowered one takes effect at once.
+    /// A read that fails isn't a revoke: the last record read stands until the book says otherwise.
     func current() -> GrantControl? {
         if let device {
-            guard let now = try? host.devices.book.record(device.id), now.identityKey == device.identityKey, let control = GrantControl(now.abilities) else {
+            let read: DeviceRecord?
+            do {
+                read = try host.devices.book.record(device.id)
+            } catch {
+                read = device
+            }
+            guard let now = read, now.identityKey == device.identityKey, let control = GrantControl(now.abilities) else {
                 HostJournal.audit("revoke", ["device": device.id.uuidString.lowercased(), "name": device.name])
                 end(.revoked)
                 return nil
@@ -264,7 +273,13 @@ final class LinkClient {
         }
         // An upgraded grant is its device's: removing the device ends it as well.
         if let id = now.device {
-            guard let record = try? host.devices.book.record(id), let control = GrantControl(record.abilities) else {
+            let read: DeviceRecord?
+            do {
+                read = try host.devices.book.record(id)
+            } catch {
+                return upgraded
+            }
+            guard let record = read, let control = GrantControl(record.abilities) else {
                 HostJournal.audit("revoke", ["device": id.uuidString.lowercased(), "grant": now.name])
                 end(.revoked)
                 return nil
@@ -274,7 +289,8 @@ final class LinkClient {
                 return nil
             }
             self.grant = now
-            return min(control, now.control)
+            upgraded = min(control, now.control)
+            return upgraded
         }
         self.grant = now
         return now.control

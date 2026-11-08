@@ -206,6 +206,24 @@ struct MacNetTests {
         #expect(await phone.closed() == "bye revoked")
     }
 
+    @Test func aBookThatCantBeReadIsntARevoke() async throws {
+        let rig = try MacRig()
+        defer { rig.finish() }
+        let pixel = Phone()
+        try rig.allow(pixel)
+        let phone = try rig.dial(pixel)
+        await phone.next("attn.state")
+        let good = try #require(try PrivateFile.read(rig.host.book.url))
+        try PrivateFile.write(Data("{".utf8), to: rig.host.book.url)
+        phone.send(#"{"t":"cmd","id":"a","cmd":{"type":"chat.stop","chatId":"no-such"}}"#)
+        #expect(await phone.next("result", id: "a")["code"] as? String == "gone.chat")
+        // Readable again and without it: now it's removed.
+        try PrivateFile.write(good, to: rig.host.book.url)
+        try rig.host.book.remove(pixel.id)
+        phone.send(#"{"t":"presence","onScreen":true}"#)
+        #expect(await phone.closed() == "bye revoked")
+    }
+
     // MARK: Raises
 
     func challenge(_ phone: LiveEnd, id: String, chatId: String = "c-1", modeId: String = "auto") async throws -> Data {

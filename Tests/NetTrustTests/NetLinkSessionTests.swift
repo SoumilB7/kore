@@ -140,6 +140,26 @@ struct DeviceBookMergeTests {
         #expect(throws: TrustError.self) { try book.applyIssued([notMine], from: peer) }
     }
 
+    @Test func aPhoneOnTwoMacsStaysTheFirstMacsAndTheRestStillApplies() throws {
+        let book = DeviceBook(url: try TestKit.scratch("merge2").appendingPathComponent("devices.json"))
+        let (keyA, keyB) = (SoftwareIdentity(), SoftwareIdentity())
+        let macA = TestKit.record(kind: .mac, abilities: .run, key: keyA, nodeKeys: ["nodekey:a"], owner: true)
+        let macB = TestKit.record(kind: .mac, abilities: .run, key: keyB, nodeKeys: ["nodekey:b"], owner: true)
+        let phone = TestKit.record(kind: .phone, abilities: [.read, .ask], key: SoftwareIdentity(), nodeKeys: ["nodekey:p"], issuedBy: macA.id)
+        try book.update { $0 = [macA, macB, phone] }
+        let (a, b) = (try #require(Self.verified(macA, key: keyA)), try #require(Self.verified(macB, key: keyB)))
+        var theirs = phone
+        theirs.issuedBy = macB.id
+        let second = TestKit.record(kind: .phone, abilities: [.read, .ask], key: SoftwareIdentity(), nodeKeys: ["nodekey:p2"], issuedBy: macB.id)
+        let next = try book.applyIssued([theirs, second], from: b)
+        #expect(next.devices.first { $0.id == phone.id }?.issuedBy == macA.id)
+        #expect(next.devices.contains { $0.id == second.id })
+        // Mac A lets it go: Mac B's copy is taken at its next set.
+        _ = try book.applyIssued([], from: a)
+        let after = try book.applyIssued([theirs, second], from: b)
+        #expect(after.devices.first { $0.id == phone.id }?.issuedBy == macB.id)
+    }
+
     @Test func onlyAnOwnerMacMerges() throws {
         let (book, mac, _, _, _) = try book()
         let phoneKey = SoftwareIdentity()

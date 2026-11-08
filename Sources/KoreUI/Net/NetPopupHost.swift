@@ -7,21 +7,21 @@ import SwiftUI
 /// anchor (its trailing or leading edge), sized by what it shows. A click outside or Esc closes
 /// it (a sheet only by its buttons); a click on its own anchor is left to the anchor, which
 /// toggles it.
-@MainActor
+@MainActor @Observable
 final class NetPopupHost {
     static let shared = NetPopupHost()
 
     enum Edge { case leading, trailing, center }
 
-    private var host: NSView?
-    private weak var owner: NSWindow?
-    private weak var anchor: NSView?
-    private var monitor: Any?
-    private var observers: [NSObjectProtocol] = []
-    private var point = CGPoint.zero
-    private var edge = Edge.trailing
-    private var onClose: (() -> Void)?
-    /// What's showing ("devices", "add", "newbox", "join").
+    @ObservationIgnored private var host: NSView?
+    @ObservationIgnored private weak var owner: NSWindow?
+    @ObservationIgnored private weak var anchor: NSView?
+    @ObservationIgnored private var monitor: Any?
+    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+    @ObservationIgnored private var point = CGPoint.zero
+    @ObservationIgnored private var edge = Edge.trailing
+    @ObservationIgnored private var onClose: (() -> Void)?
+    /// What's showing ("devices", "add", "newbox", "join"); tooltips under it step aside.
     private(set) var showing: String?
 
     /// Shows `view` under `anchor` (or at the content's top right with none) in `window`.
@@ -46,7 +46,7 @@ final class NetPopupHost {
             if edge == .leading { self.edge = .trailing }
         }
         NetPopupRoom.shared.measure(below: point, in: content)
-        let hosting = NSHostingView(rootView: view.environment(\.colorScheme, .dark).onGeometryChange(for: CGSize.self) { $0.size } action: { [weak self] size in
+        let hosting = NSHostingView(rootView: view.environment(\.colorScheme, .dark).environment(\.insideNetPopup, true).onGeometryChange(for: CGSize.self) { $0.size } action: { [weak self] size in
             self?.place(size)
         })
         host = hosting
@@ -56,7 +56,8 @@ final class NetPopupHost {
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
             guard let self, let host = self.host else { return event }
             if event.type == .keyDown {
-                if event.keyCode == 53, !modal, !OptionsMenu.shared.isOpen { self.close(); return nil }
+                // Esc in a field of its own (a rename) is the field's: it cancels the edit.
+                if event.keyCode == 53, !modal, !OptionsMenu.shared.isOpen, !self.editing(in: host) { self.close(); return nil }
                 return event
             }
             guard !modal, !OptionsMenu.shared.holds(event) else { return event }
@@ -114,6 +115,12 @@ final class NetPopupHost {
     }
 
     func isShowing(_ id: String) -> Bool { showing == id }
+
+    /// A text field inside the popup is being edited (its field editor has the keys).
+    private func editing(in host: NSView) -> Bool {
+        guard let responder = owner?.firstResponder as? NSText else { return false }
+        return responder.isDescendant(of: host)
+    }
 
     /// The window it shows in.
     var window: NSWindow? { owner }

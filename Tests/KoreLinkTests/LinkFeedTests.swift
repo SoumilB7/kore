@@ -105,6 +105,26 @@ struct LinkFeedTests {
         feed.detach(cb)
     }
 
+    @Test func onlyPhonesOnScreenCountForStayAwake() throws {
+        let feed = LinkFeed(source: CountingSource(), taps: false)
+        let a = KeptClient(), b = KeptClient(), c = KeptClient()
+        let pa = a.make(), pb = b.make(), doorbell = c.make(phone: false, sweeps: true)
+        feed.attach(pa)
+        feed.attach(pb)
+        feed.attach(doorbell)
+        #expect(feed.phonesOnScreen == 2)
+        feed.presence(pb, onScreen: false)
+        #expect(feed.phonesOnScreen == 1)
+        feed.presence(pa, onScreen: false)
+        #expect(feed.phonesOnScreen == 0)
+        feed.presence(pa, onScreen: true)
+        feed.detach(pb)
+        #expect(feed.phonesOnScreen == 1)
+        feed.detach(pa)
+        feed.detach(doorbell)
+        #expect(feed.phonesOnScreen == 0)
+    }
+
     @Test func aChatThatChangesIsReadAgainAloneAndSentAsADelta() async throws {
         let source = CountingSource()
         let feed = LinkFeed(source: source, taps: false)

@@ -401,7 +401,13 @@ package final class NetSession {
             route: server.route.rawValue, nonceS: nonceS, nonceC: hello.nonce, deviceC: hello.device, deviceS: server.local.device,
             nodeKeyC: server.peer.nodeKey, nodeKeyS: server.local.nodeKey)
         else { return fail(NetControl.Reason.unknown) }
-        let known = try? server.book.record(hello.device)
+        // A book that can't be read now isn't "unknown" (a phone would show itself denied): try again.
+        let known: DeviceRecord?
+        do {
+            known = try server.book.record(hello.device)
+        } catch {
+            return fail(NetControl.Reason.limit)
+        }
         var commit: (@Sendable (VerifiedPeer) -> Bool)?
         let record: DeviceRecord
         let peer: VerifiedPeer
