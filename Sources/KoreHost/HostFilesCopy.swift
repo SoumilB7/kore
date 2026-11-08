@@ -21,8 +21,10 @@ extension HostFiles {
     }
 
     /// Copies `from` (recursively, links as links) to `to`, which mustn't be there yet: into a
-    /// hidden name beside `to` first, renamed when whole; a failure leaves nothing.
-    package func copy(id: String, from: String, to: String, run: CopyRun = CopyRun()) -> FilesResult {
+    /// hidden name beside `to` first, renamed when whole; a failure leaves nothing. `resume`: the
+    /// hidden name is `LinkFiles.copyLanding(to)`, kept when it stops (a cancel, the link ending,
+    /// a failure), and a rerun skips files already there with the same size and time.
+    package func copy(id: String, from: String, to: String, run: CopyRun = CopyRun(), resume: Bool = false) -> FilesResult {
         let source: (path: String, real: String)
         let target: (path: String, real: String)
         switch (entry(from), entry(to)) {
@@ -37,10 +39,12 @@ extension HostFiles {
         let name = (target.path as NSString).lastPathComponent
         if Self.look(target.real) != nil { return .refused(id, .invalid, "\(name) is already there.") }
         let folder = (target.real as NSString).deletingLastPathComponent
-        let temp = folder + "/." + name + ".kore-" + String(UUID().uuidString.prefix(8)).lowercased()
+        let temp = resume
+            ? folder + "/" + (LinkFiles.copyLanding(target.path) as NSString).lastPathComponent
+            : folder + "/." + name + ".kore-" + String(UUID().uuidString.prefix(8)).lowercased()
         run.start(total: Self.tally(source.real).bytes)
-        guard Self.copyTree(source.real, temp, run: run) else {
-            try? FileManager.default.removeItem(atPath: temp)
+        guard Self.copyTree(source.real, temp, run: run, resume: resume) else {
+            if !resume { try? FileManager.default.removeItem(atPath: temp) }
             if run.cancelled { return .refused(id, .invalid, "Cancelled.") }
             return .refused(id, .deniedPath, "Can't copy it there on this box.")
         }
@@ -104,19 +108,35 @@ extension HostFiles {
     }
 
     /// One entry copied, a folder with all in it: files with their mode and time, links as the
-    /// same link. False at the first thing that can't be made.
-    static func copyTree(_ from: String, _ to: String, run: CopyRun) -> Bool {
+    /// same link. False at the first thing that can't be made. `resume`: what a copy before left
+    /// is kept: its folders, and its files with the source's size and time (their bytes counted
+    /// on `run` as copied); anything else there is made again.
+    static func copyTree(_ from: String, _ to: String, run: CopyRun, resume: Bool = false) -> Bool {
         guard !run.cancelled else { return false }
         guard let info = linkInfo(from) else { return false }
         let manager = FileManager.default
+        let there = resume ? linkInfo(to) : nil
         switch info.st_mode & mode_t(S_IFMT) {
         case mode_t(S_IFDIR):
-            guard FileCalls.mkdir(to, 0o700) == 0 else { return false }
+            let folderThere = there.map { $0.st_mode & mode_t(S_IFMT) == mode_t(S_IFDIR) } ?? false
+            if there != nil, !folderThere { try? manager.removeItem(atPath: to) }
+            if folderThere {
+                _ = chmod(to, 0o700)
+            } else {
+                guard FileCalls.mkdir(to, 0o700) == 0 else { return false }
+            }
             guard let names = try? manager.contentsOfDirectory(atPath: from) else { return false }
-            for name in names where !copyTree(from + "/" + name, to + "/" + name, run: run) { return false }
+            for name in names where !copyTree(from + "/" + name, to + "/" + name, run: run, resume: resume) { return false }
             _ = chmod(to, info.st_mode & 0o7777)
             return true
         case mode_t(S_IFREG):
+            if let there {
+                if there.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG), there.st_size == info.st_size, millis(there) == millis(info) {
+                    run.add(Int64(info.st_size))
+                    return true
+                }
+                try? manager.removeItem(atPath: to)
+            }
             guard copyFile(from, to, run: run) else { return false }
             _ = chmod(to, info.st_mode & 0o7777)
             let seconds = Double(millis(info)) / 1000
@@ -124,6 +144,7 @@ extension HostFiles {
             return true
         case mode_t(S_IFLNK):
             guard let destination = try? manager.destinationOfSymbolicLink(atPath: from) else { return false }
+            if there != nil { try? manager.removeItem(atPath: to) }
             return (try? manager.createSymbolicLink(atPath: to, withDestinationPath: destination)) != nil
         default:
             // A socket or a pipe: not a file to copy.

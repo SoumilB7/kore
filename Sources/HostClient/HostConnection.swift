@@ -131,6 +131,7 @@ package final class HostConnection {
     @ObservationIgnored private var early: [String: LinkMessage.Result] = [:]
     @ObservationIgnored private var saveQueued = false
     @ObservationIgnored private var snapshotWatchers: [String: @MainActor () -> Void] = [:]
+    @ObservationIgnored private var linkWatchers: [String: @MainActor (Bool) -> Void] = [:]
     /// Told the ids of chats whose meta came (a snapshot's every chat, a delta's), by key.
     @ObservationIgnored private var metaWatchers: [String: @MainActor ([String]) -> Void] = [:]
     /// Told when the box's windows or chats changed (a snapshot, a delta that names either), by key.
@@ -261,6 +262,10 @@ package final class HostConnection {
 
     /// Runs `action` after each snapshot (each time the link comes up); nil stops it.
     package func onSnapshot(_ key: String, _ action: (@MainActor () -> Void)?) { snapshotWatchers[key] = action }
+
+    /// Told, by key, when the link comes up (true, the box's state in) or goes (false): what a
+    /// transfer waiting on the box resumes on, with no polling of its own.
+    package func onLink(_ key: String, _ action: (@MainActor (Bool) -> Void)?) { linkWatchers[key] = action }
 
     /// Hands each `sync.changed` for a box folder to `read` (its frame's bytes); nil stops it.
     /// Watches chats' metas as they come (1.10: a moved chat's replica, followed or not).
@@ -572,6 +577,7 @@ package final class HostConnection {
         phase = .offline
         lastReason = reason
         HostLog.note(alias, "dropped", reason)
+        for watcher in Array(linkWatchers.values) { watcher(false) }
         guard users > 0 else { return }
         let wait = backoff[min(attempts, backoff.count - 1)]
         attempts += 1
@@ -706,6 +712,7 @@ package final class HostConnection {
         phase = .online
         lastHeard = nil
         lateHello = false
+        for watcher in Array(linkWatchers.values) { watcher(true) }
         for follower in liveFollowers {
             askEvents(follower)
             follower.linked(true)

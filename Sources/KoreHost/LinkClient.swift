@@ -351,7 +351,7 @@ final class LinkClient {
                 case .fsCreate: return files.create(id: id, path: args.path ?? "", dir: args.dir == true)
                 case .fsRename: return files.rename(id: id, from: args.from ?? "", to: args.to ?? "")
                 case .fsDelete: return files.delete(id: id, path: args.path ?? "", trash: trash)
-                case .fsCopy: return files.copy(id: id, from: args.from ?? "", to: args.to ?? "", run: copying)
+                case .fsCopy: return files.copy(id: id, from: args.from ?? "", to: args.to ?? "", run: copying, resume: args.resume == true)
                 case .fsCount: return files.count(id: id, path: args.path ?? "")
                 case .fsSearch:
                     return files.search(id: id, root: args.root ?? "", query: args.query ?? "", text: args.mode == "text", max: args.max, run: run)

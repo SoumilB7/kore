@@ -652,9 +652,9 @@ the Mac says the box needs an update. The welcome's `caps` say `copy` to a full 
 
 | `type` | fields | |
 |---|---|---|
-| `fs.copy` | `from, to` | Copies `from` to `to`, a folder with everything in it: files with their mode and modification time, links as the same link (never followed), anything else (a socket, a pipe) left out. Into a hidden name beside `to` first, renamed when whole; a failure leaves nothing. Nothing is replaced (`invalid` when `to` is taken), a folder never goes inside itself, and a served folder's own place isn't a target. Result: `path`, and the copy's `files`, `size`, `dir` as `fs.count` says them. |
+| `fs.copy` | `from, to, resume?` | Copies `from` to `to`, a folder with everything in it: files with their mode and modification time, links as the same link (never followed), anything else (a socket, a pipe) left out. Into a hidden name beside `to` first, renamed when whole; a failure leaves nothing. Nothing is replaced (`invalid` when `to` is taken), a folder never goes inside itself, and a served folder's own place isn't a target. Result: `path`, and the copy's `files`, `size`, `dir` as `fs.count` says them. With `resume: true` (additive; a box without it copies afresh) the hidden name is fixed by `to`: `.<name>.kore-<8 hex>`, the hex the low 32 bits of FNV-1a 64 over `to`'s UTF-8 (`LinkFiles.copyLanding`). It is kept when the copy stops (a cancel, the link ending, a failure), and a rerun to the same `to` keeps its folders and its files that have the source's size and modification time (their bytes counted in `fs.progress` as copied), and makes anything else again. Only the Mac removes it. |
 | `fs.count` | `path` | What's under the entry, links not followed: `files` (a file or a link counts one, folders none), `size` (their bytes) and `dir` (the entry is a folder). |
-| `fs.cancel` | `copyId` | Stops the running `fs.copy` whose command id is `copyId`, at its next MiB: that copy's result is `invalid` "Cancelled." and its hidden partial copy is removed. `gone.file` when no such copy runs. A link that ends stops its copies the same way. |
+| `fs.cancel` | `copyId` | Stops the running `fs.copy` whose command id is `copyId`, at its next MiB: that copy's result is `invalid` "Cancelled." and its hidden partial copy is removed (kept for a `resume` copy). `gone.file` when no such copy runs. A link that ends stops its copies the same way. |
 
 While an `fs.copy` runs, the box pushes `fs.progress {id, bytes, total}` (`id` the command's;
 `total` the source's bytes, counted first; `bytes` copied so far), the first at once and then at
@@ -668,27 +668,54 @@ files (Finder pastes them; Kore pastes Finder's, as copies), a box's as their pa
 
 - Same device: a move is a rename (`fs.rename`, or the Mac's own), a copy the device's own
   (`fs.copy`, or the Mac's). A drop moves; ⌥ copies.
-- Mac and box: `rsync -a` over the box's SSH alias, as the two-way sync runs it (`-e "ssh … --"`,
-  the remote path quoted for the box's shell). Box to box: `tar -C <folder> -cf - ./<name>` on
-  one, piped through the Mac into `tar -C <scratch> -xf -` on the other. Streamed; nothing is held
-  in memory. A drop copies; ⌘ moves.
+- Mac and box: `rsync -a --partial --timeout=60` over the box's SSH alias, as the two-way sync
+  runs it (`-e "ssh … --"`, the remote path quoted for the box's shell), with `--delete` for a
+  folder (into its hidden landing only). Box to box: two rsync legs, box A into a folder kept on
+  the Mac (`~/Library/Application Support/Kore/transfers/<id>/`), then from it into box B; the
+  boxes are never assumed to reach each other. Streamed; nothing is held in memory. A drop copies;
+  ⌘ moves.
 - Every box path is checked first: absolute and normalised on the Mac, then by the box
   (`fs.count` of each source and of the folder it goes into, which must be a folder), so rsync
-  and tar touch only served folders.
-- The copy lands under a hidden name in the folder (`.<name>.kore-<id>`, or a `.kore-copy-<id>`
-  folder for tar), is counted with `fs.count` (or on the Mac) and has to match the source's files
-  and bytes, then takes its name. A taken name is kept as "name 2" ("name copy" in its own
-  folder); with one item the user picks Replace or Keep Both, and Replace sends what was there to
-  its trash only once the copy is whole. Nothing is overwritten otherwise.
+  touches only served folders.
+- The copy lands under a hidden name in the folder (`.<name>.kore-<id>`), is counted with
+  `fs.count` (or on the Mac) and has to match the source's files and bytes, then takes its name.
+  A copy by rsync that doesn't match gets up to two more passes (the source counted again: one
+  that changed meanwhile is sent again, only what differs); one that still doesn't is a failure
+  that keeps the landing. A taken name is kept as "name 2" ("name copy" in its own folder); with
+  one item the user picks Replace or Keep Both, and Replace sends what was there to its trash
+  only once the copy is whole. Nothing is overwritten otherwise.
 - A move across devices sends the source to its trash (`fs.delete`, or the macOS Trash) only
-  after its copy matched. A cancel or a failure stops the copy, removes the hidden partial copy
-  and keeps the source.
+  after its copy matched; after a stop between the two, the copy in place is counted again
+  first, and never on doubt.
+- Every carry is resumable. Its checkpoint, `~/Library/Application Support/Kore/transfers/<id>.json`,
+  holds the items (source, name, replace, landing token, count), the folder, copy or move, the
+  total and landed bytes, how many items are wholly carried, and its state (`running`, `paused`,
+  `failed`); it is written at the start, on progress at most every 5 s, at once on any stop, and
+  removed when done. A stop keeps the landing: rsync's `--partial` keeps a file cut halfway and a
+  rerun skips what's there with the same size and time, `fs.copy` goes with `resume`, and both
+  box-to-box legs rerun the same way.
+  - The link dropping or rsync ending: "Paused · waiting for mybox"; it goes on by itself once
+    the box's link is back (the link's own redial, no polling), after a wait that grows (2 s up to
+    2 min) while tries move no bytes; eight in a row that move nothing make it a failure.
+  - Kore quitting: the quit warning says "2 transfers will pause"; each stops where it is,
+    its checkpoint saying `running`, and the next launch goes on ("Resuming NCDEX to mybox…").
+    One Kore at a time does so (an `flock` on the folder's `.lock`).
+  - The Mac sleeping: the runs stop; on wake waiting ones go on. A box that rebooted: when its
+    kore-host answers again.
+  - Cancel offers Pause (kept; Resume goes on) and "Cancel and remove the partial copy", the
+    only thing that removes a landing.
+- Each carry logs to `hosts.log`, a line per event: `carry-start`, `carry-rsync` (the exit status
+  and rsync's last error lines), `carry-verify` (files and bytes on both sides), on a mismatch
+  `carry-missing` (the first five paths each side lacks: a walk on the Mac, `find` over SSH on a
+  box), and `carry-end`.
 - A carry that takes a while (half a second) shows a bar at the bottom of the explorer it goes
-  into: "Copying 3 items to mybox · 1.2 GB of 3.4 GB · about 2 min left", with Cancel. The bytes
-  come from rsync's `--progress` lines, the tar stream counted as it passes through the Mac, or
-  `fs.progress`, read four times a second. Several carries share the bar ("2 transfers · 38%",
-  each listed under the pointer). Done, it says "Copied to mybox · 3.4 GB" for 2 s and fades; a
-  failure stays, with Retry (what hadn't landed) and a close.
+  into, on two lines: "Copying NCDEX to mybox", then "601 MB of 2.12 GB · 3.1 MB/s · 6 min
+  left" (sizes to three figures, speed to two; a narrow bar drops the speed, then the time left,
+  never cutting a number). The bytes come from rsync's `--progress` lines, the bytes measured
+  where they land, or `fs.progress`, read four times a second. Several carries share the bar ("2
+  transfers · 38%", each listed under the pointer). Done, it says "Copied to mybox · 2.12 GB" for
+  2 s and fades; a failure stays, its words whole, with Retry (going on from what landed) and
+  Cancel.
 
 ### Chats
 

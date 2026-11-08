@@ -189,4 +189,18 @@ package enum LinkFiles {
     package static func inside(_ path: String, _ root: String) -> Bool {
         root == "/" || path == root || path.hasPrefix(root + "/")
     }
+
+    /// 1.11: where a resumable `fs.copy` to `to` lands while it goes: `.<name>.kore-<8 hex>` beside
+    /// it, the hex fixed by `to` (FNV-1a of its UTF-8), so a rerun finds what the last one left.
+    package static func copyLanding(_ to: String) -> String {
+        var hash: UInt64 = 0xcbf2_9ce4_8422_2325
+        for byte in to.utf8 {
+            hash ^= UInt64(byte)
+            hash = hash &* 0x0000_0100_0000_01b3
+        }
+        let hex = String(hash & 0xffff_ffff, radix: 16)
+        let token = String(repeating: "0", count: 8 - hex.count) + hex
+        let name = (to as NSString).lastPathComponent
+        return (to as NSString).deletingLastPathComponent + "/." + name + ".kore-" + token
+    }
 }

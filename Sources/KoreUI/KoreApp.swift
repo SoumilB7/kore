@@ -102,7 +102,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let workspaces = Workspace.all.allObjects
         guard Self.confirmQuit(working: workspaces.reduce(0) { $0 + $1.workingChats },
-                               terminals: workspaces.reduce(0) { $0 + $1.terminals.workingCount }) else { return .terminateCancel }
+                               terminals: workspaces.reduce(0) { $0 + $1.terminals.workingCount },
+                               transfers: FileCarries.shared.active) else { return .terminateCancel }
         for workspace in workspaces { workspace.flushAutoSaves() }
         let files = workspaces.flatMap(\.unsavedFiles)
         guard UnsavedGuard.confirm(files, saveAll: { workspaces.forEach { $0.saveAll() } }) else { return .terminateCancel }
@@ -110,14 +111,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .terminateNow
     }
 
-    /// Quitting ends every CLI, and with it what its chat is doing: asked once, Cancel the default.
-    private static func confirmQuit(working: Int, terminals: Int) -> Bool {
-        guard working > 0 || terminals > 0 else { return true }
+    /// Quitting ends every CLI, and with it what its chat is doing, and pauses file transfers
+    /// (they go on at the next launch): asked once, Cancel the default.
+    private static func confirmQuit(working: Int, terminals: Int, transfers: Int) -> Bool {
+        guard working > 0 || terminals > 0 || transfers > 0 else { return true }
         let alert = NSAlert()
-        alert.messageText = terminals > 0 ? "Work is running in Kore" : (working == 1 ? "1 chat is working" : "\(working) chats are working")
-        alert.informativeText = terminals > 0
-            ? "Quitting stops working chats and terminal commands, and ends every shell."
-            : "Quitting stops their turns, agents and background commands."
+        let pausing = transfers == 1 ? "1 transfer will pause" : "\(transfers) transfers will pause"
+        if working == 0, terminals == 0 {
+            alert.messageText = pausing
+            alert.informativeText = "\(transfers == 1 ? "It goes" : "They go") on from where \(transfers == 1 ? "it" : "they") stopped when Kore opens again."
+        } else {
+            alert.messageText = terminals > 0 ? "Work is running in Kore" : (working == 1 ? "1 chat is working" : "\(working) chats are working")
+            alert.informativeText = (terminals > 0
+                ? "Quitting stops working chats and terminal commands, and ends every shell."
+                : "Quitting stops their turns, agents and background commands.")
+                + (transfers > 0 ? " \(pausing) until Kore opens again." : "")
+        }
         alert.addButton(withTitle: "Cancel")
         let quit = alert.addButton(withTitle: "Quit")
         quit.hasDestructiveAction = true
@@ -128,6 +137,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// in a new process next launch.
     func applicationWillTerminate(_ notification: Notification) {
         LinkTaps.quit?()
+        // Transfers stop where they are, their checkpoints kept: the next launch goes on.
+        FileCarries.shared.quit()
         for workspace in Workspace.all.allObjects { workspace.terminals.shutdown(immediately: true) }
         // Box shells end with Kore too: their closes and a goodbye reach each box before it goes.
         HostConnection.quitAll()
@@ -170,6 +181,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Once the windows have their autosave names.
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { Self.pruneStaleWindowFrames() }
+        // Transfers a quit, a crash or a restart stopped go on from their checkpoints.
+        FileCarries.shared.restore()
     }
 
     /// SwiftUI saves each window's frame under a key naming the window's whole view type,

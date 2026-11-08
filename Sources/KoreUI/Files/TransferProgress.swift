@@ -1,17 +1,24 @@
+import AppKit
 import HostClient
 import SwiftUI
 
 /// Transfers under way: file copies and moves (`FileCarries`), chat moves and copies, anything
 /// whose bytes take a while. Each shows, after half a second, in one quiet bar at the bottom of
-/// the explorer it goes into (`TransferBar`): a determinate bar and one line, with Cancel. A
-/// finished one says so for 2 s and fades; a failed one stays, with Retry, until it's dismissed.
-/// Updates come at most a few times a second from their own meters; nothing runs while idle.
+/// the explorer it goes into (`TransferBar`): a determinate bar and two lines (what goes where;
+/// its numbers), with Cancel. A file carry's Cancel offers Pause (its progress kept) or removing
+/// the partial copy; a paused one shows Resume. A finished one says so for 2 s and fades; a failed
+/// one stays, with Retry, until it's dismissed. Updates come at most a few times a second from
+/// their own meters; nothing runs while idle.
 @MainActor @Observable
 final class TransferProgress {
     static let shared = TransferProgress()
 
     enum State: Equatable {
         case running
+        /// Paused by the user: Resume goes on.
+        case paused
+        /// Stopped by the link, a quit or a sleep: it goes on by itself once its box is back.
+        case waiting
         case done
         case failed(String)
     }
@@ -38,19 +45,29 @@ final class TransferProgress {
         /// When its bytes last rose.
         var moved = Date()
         var stalled = false
+        /// Going on from a checkpoint (after a relaunch), until its bytes move.
+        var resuming = false
+        /// It can pause and resume (a file carry's partial copy is kept).
+        var pausable = false
+        /// A failure it can go on from (Retry resumes; Cancel removes the partial copy).
+        var resumable = false
 
         var fraction: Double? { total > 0 ? min(1, Double(bytes) / Double(total)) : nil }
         var running: Bool { state == .running }
+        /// Still to finish: going, waiting or paused.
+        var live: Bool { state == .running || state == .waiting || state == .paused }
 
         static func == (a: Item, b: Item) -> Bool {
             a.id == b.id && a.title == b.title && a.bytes == b.bytes && a.total == b.total && a.state == b.state && a.shown == b.shown
-                && a.rate == b.rate && a.stalled == b.stalled
+                && a.rate == b.rate && a.stalled == b.stalled && a.resuming == b.resuming && a.resumable == b.resumable
         }
     }
 
     private(set) var items: [Item] = []
     @ObservationIgnored private var cancels: [UUID: @MainActor () -> Void] = [:]
     @ObservationIgnored private var retries: [UUID: @MainActor () -> Void] = [:]
+    @ObservationIgnored private var pauses: [UUID: @MainActor () -> Void] = [:]
+    @ObservationIgnored private var resumes: [UUID: @MainActor () -> Void] = [:]
     /// A transfer quicker than this never shows.
     @ObservationIgnored var showAfter: Duration = .milliseconds(500)
     /// How long a finished one says so before it fades.
@@ -63,22 +80,31 @@ final class TransferProgress {
     @ObservationIgnored var stallCheck: Duration = .seconds(5)
     @ObservationIgnored private var watching = false
 
-    /// A new transfer: shown if it's still going after `showAfter`.
+    /// A new transfer: shown if it's still going after `showAfter` (`shown`: at once).
+    /// `pause` and `resume`: it keeps its progress when stopped (its Cancel offers Pause).
     @discardableResult
     func begin(
-        _ title: String, done: String, place: FilePlace? = nil, window: String? = nil, total: Int64 = 0, peer: String? = nil,
-        cancel: (@MainActor () -> Void)? = nil, retry: (@MainActor () -> Void)? = nil
+        _ title: String, done: String, id: UUID = UUID(), place: FilePlace? = nil, window: String? = nil, total: Int64 = 0, peer: String? = nil,
+        shown: Bool = false, resuming: Bool = false, cancel: (@MainActor () -> Void)? = nil, retry: (@MainActor () -> Void)? = nil,
+        pause: (@MainActor () -> Void)? = nil, resume: (@MainActor () -> Void)? = nil
     ) -> UUID {
-        let id = UUID()
         let started = now()
-        items.append(Item(id: id, title: title, doneTitle: done, place: place, window: window, total: total, sampled: started, peer: peer, moved: started))
+        var item = Item(id: id, title: title, doneTitle: done, place: place, window: window, total: total, sampled: started, peer: peer, moved: started)
+        item.shown = shown
+        item.resuming = resuming
+        item.pausable = pause != nil
+        items.append(item)
         cancels[id] = cancel
         retries[id] = retry
+        pauses[id] = pause
+        resumes[id] = resume
         if peer != nil { watchStalls() }
-        Task { [weak self] in
-            guard let delay = self?.showAfter else { return }
-            try? await Task.sleep(for: delay)
-            self?.edit(id) { if $0.running { $0.shown = true } }
+        if !shown {
+            Task { [weak self] in
+                guard let delay = self?.showAfter else { return }
+                try? await Task.sleep(for: delay)
+                self?.edit(id) { if $0.live { $0.shown = true } }
+            }
         }
         return id
     }
@@ -99,21 +125,58 @@ final class TransferProgress {
             if bytes > item.bytes {
                 item.moved = time
                 item.stalled = false
+                // New bytes past where its checkpoint left it: no longer "resuming".
+                if item.bytes > 0 { item.resuming = false }
             }
             item.bytes = bytes
         }
     }
 
+    /// Going again (resumed, or back after a wait): its rate measured afresh.
+    func running(_ id: UUID) {
+        let time = now()
+        edit(id) {
+            $0.state = .running
+            $0.rate = 0
+            $0.sampled = time
+            $0.sampledBytes = $0.bytes
+            $0.moved = time
+            $0.stalled = false
+        }
+        if items.contains(where: { $0.id == id && $0.peer != nil }) { watchStalls() }
+    }
+
+    /// Paused by the user: "Paused", with Resume.
+    func paused(_ id: UUID) {
+        edit(id) {
+            $0.state = .paused
+            $0.shown = true
+            $0.rate = 0
+            $0.resuming = false
+        }
+    }
+
+    /// Stopped by the link, a quit or a sleep: "Paused · waiting for mybox" until it goes on.
+    func waiting(_ id: UUID) {
+        edit(id) {
+            $0.state = .waiting
+            $0.shown = true
+            $0.rate = 0
+        }
+    }
+
     /// Ended: done says so for `doneHold` then fades (at once when it never showed); a failure
-    /// stays until dismissed.
-    func finish(_ id: UUID, failure: String? = nil, cancelled: Bool = false) {
-        cancels[id] = nil
+    /// stays until dismissed (`resumable`: Retry goes on from it, Cancel removes its partial copy).
+    func finish(_ id: UUID, failure: String? = nil, cancelled: Bool = false, resumable: Bool = false) {
         guard let item = items.first(where: { $0.id == id }) else { return }
+        if !resumable || failure == nil { cancels[id] = nil }
         if cancelled || (failure == nil && !item.shown) { return remove(id) }
         if let failure {
             edit(id) {
                 $0.state = .failed(failure)
                 $0.shown = true
+                $0.resumable = resumable
+                $0.resuming = false
             }
             return
         }
@@ -129,7 +192,12 @@ final class TransferProgress {
         }
     }
 
+    /// Cancel, at once: and with it, the partial copy of one that keeps it.
     func cancel(_ id: UUID) { cancels[id]?() }
+
+    func pause(_ id: UUID) { pauses[id]?() }
+
+    func resume(_ id: UUID) { resumes[id]?() }
 
     /// Running ones that said nothing for `stallAfter` marked so (their line says what they wait on).
     func checkStalls() {
@@ -153,9 +221,10 @@ final class TransferProgress {
         }
     }
 
+    /// Retry: a resumable one goes on (its entry stays); any other starts again.
     func retry(_ id: UUID) {
         let again = retries[id]
-        remove(id)
+        if items.first(where: { $0.id == id })?.resumable != true { remove(id) }
         again?()
     }
 
@@ -168,9 +237,11 @@ final class TransferProgress {
         }
     }
 
-    private func remove(_ id: UUID) {
+    func remove(_ id: UUID) {
         cancels[id] = nil
         retries[id] = nil
+        pauses[id] = nil
+        resumes[id] = nil
         withAnimation(Motion.fade) { items.removeAll { $0.id == id } }
     }
 
@@ -183,41 +254,91 @@ final class TransferProgress {
 
     // MARK: Words
 
-    /// "458.2 MB"; nothing yet is "0 KB" (never "Zero KB").
-    static func size(_ bytes: Int64) -> String { bytes <= 0 ? "0 KB" : ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file) }
+    /// "601 MB", "2.12 GB", "42.5 MB": three figures at most, in Finder's units; nothing yet is
+    /// "0 KB" (never "Zero KB").
+    static func size(_ bytes: Int64) -> String {
+        guard bytes > 0 else { return "0 KB" }
+        guard bytes >= 1000 else { return "\(bytes) bytes" }
+        return figures(Double(bytes), digits: 3)
+    }
 
-    /// "210 KB/s".
-    static func speed(_ rate: Double) -> String { size(Int64(rate.rounded())) + "/s" }
+    /// "3.1 MB/s", "210 KB/s": two figures (three from 100 up).
+    static func speed(_ rate: Double) -> String {
+        rate < 1000 ? "\(Int(rate.rounded())) bytes/s" : figures(rate, digits: 2) + "/s"
+    }
 
-    /// "about 2 min left": nil while there's no rate to go by.
+    /// `value` bytes in the unit that keeps it under 1000, with `digits` significant figures and
+    /// no trailing zeros ("2.1 GB", never "2.10 GB").
+    private static func figures(_ value: Double, digits: Int) -> String {
+        let units = ["KB", "MB", "GB", "TB", "PB"]
+        var amount = value / 1000
+        var unit = 0
+        while true {
+            let decimals = max(0, digits - 1 - (amount >= 1 ? Int(log10(amount).rounded(.down)) : 0))
+            let scale = pow(10, Double(decimals))
+            let rounded = (amount * scale).rounded() / scale
+            if rounded >= 1000, unit < units.count - 1 {
+                amount /= 1000
+                unit += 1
+                continue
+            }
+            var text = String(format: "%.\(decimals)f", rounded)
+            if text.contains(".") {
+                while text.hasSuffix("0") { text.removeLast() }
+                if text.hasSuffix(".") { text.removeLast() }
+            }
+            return text + " " + units[unit]
+        }
+    }
+
+    /// "2 min left": nil while there's no rate to go by.
     static func left(remaining: Int64, rate: Double) -> String? {
         guard rate > 0, remaining > 0 else { return nil }
         let seconds = Double(remaining) / rate
         if seconds < 5 { return "a few seconds left" }
-        if seconds < 60 { return "about \(max(5, Int((seconds / 5).rounded()) * 5)) s left" }
-        if seconds < 3600 { return "about \(max(1, Int((seconds / 60).rounded()))) min left" }
+        if seconds < 60 { return "\(max(5, Int((seconds / 5).rounded()) * 5)) s left" }
+        if seconds < 3600 { return "\(max(1, Int((seconds / 60).rounded()))) min left" }
         let hours = seconds / 3600
-        return "about \(hours < 10 ? String(format: "%.1f", hours) : String(Int(hours.rounded()))) h left"
+        return "\(hours < 10 ? String(format: "%.1f", hours) : String(Int(hours.rounded()))) h left"
     }
 
-    /// One transfer's line: "Copying 3 items to mybox · 1.2 GB of 3.4 GB · 210 KB/s · about 2 min
-    /// left"; stalled, "… · waiting for mybox"; "Copied to mybox · 3.4 GB"; or why it failed.
-    static func line(_ item: Item) -> String {
+    /// Its first line: what goes where. "Copying NCDEX to mybox"; after a relaunch, until its
+    /// bytes move, "Resuming NCDEX to mybox…"; "Copied to mybox · 2.12 GB" when done.
+    static func head(_ item: Item) -> String {
         switch item.state {
-        case .failed(let why): return why
         case .done: return item.doneTitle + (item.total > 0 ? " · " + size(item.total) : "")
-        case .running:
-            let waiting = item.stalled ? item.peer.map { "waiting for \($0)" } : nil
-            guard item.total > 0 else { return waiting.map { item.title + " · " + $0 } ?? item.title + "…" }
-            var parts = [item.title, "\(size(item.bytes)) of \(size(item.total))"]
-            if let waiting {
-                parts.append(waiting)
-            } else if item.rate > 0, item.bytes > 0, item.bytes < item.total {
-                parts.append(speed(item.rate))
-                if let left = left(remaining: item.total - item.bytes, rate: item.rate) { parts.append(left) }
-            }
-            return parts.joined(separator: " · ")
+        case .running where item.resuming:
+            let rest = item.title.split(separator: " ", maxSplits: 1).dropFirst().first.map(String.init) ?? item.title
+            return "Resuming " + rest + "…"
+        case .running where item.total == 0 && !item.stalled: return item.title + "…"
+        default: return item.title
         }
+    }
+
+    /// Its second line, longest first: each one after drops a part (the speed, then the time
+    /// left), so the bar takes the longest that fits and never cuts a number. Empty: one line.
+    static func details(_ item: Item) -> [String] {
+        let amount = item.total > 0 ? "\(size(item.bytes)) of \(size(item.total))" : nil
+        let waitingFor = item.peer.map { "waiting for \($0)" } ?? "waiting"
+        switch item.state {
+        case .done: return []
+        case .failed(let why): return [why]
+        case .paused: return [[amount, "Paused"].compactMap { $0 }.joined(separator: " · ")]
+        case .waiting: return [[amount, "Paused · " + waitingFor].compactMap { $0 }.joined(separator: " · ")]
+        case .running:
+            guard let amount else { return item.stalled ? [waitingFor] : [] }
+            if item.stalled { return [amount + " · " + waitingFor, amount] }
+            guard item.rate > 0, item.bytes > 0, item.bytes < item.total, !item.resuming else { return [amount] }
+            let rate = speed(item.rate)
+            guard let left = left(remaining: item.total - item.bytes, rate: item.rate) else { return [amount + " · " + rate, amount] }
+            return [amount + " · " + rate + " · " + left, amount + " · " + left, amount]
+        }
+    }
+
+    /// Both lines in one, for its help and for tests: "Copying NCDEX to mybox · 601 MB of 2.12 GB
+    /// · 3.1 MB/s · 6 min left".
+    static func line(_ item: Item) -> String {
+        ([head(item)] + details(item).prefix(1)).joined(separator: " · ")
     }
 
     /// Several at once: "2 transfers · 38%" (their bytes together).
@@ -271,23 +392,68 @@ struct TransferBar: View {
         }
     }
 
+    /// Its bar, then two lines: what goes where (cut in the middle when narrow) with its
+    /// actions, and its numbers, the longest that fits (`details`) so no number is ever cut. A
+    /// failure's words wrap whole, all of it on hover too.
     @ViewBuilder private func row(_ item: TransferProgress.Item) -> some View {
         let failed: Bool = if case .failed = item.state { true } else { false }
+        let details = TransferProgress.details(item)
         VStack(alignment: .leading, spacing: Space.xxs) {
             if !failed { bar(item.state == .done ? 1 : item.fraction, failed: false) }
             HStack(spacing: Space.sm) {
-                Text(TransferProgress.line(item))
-                    .font(Chrome.caption).foregroundStyle(failed ? Theme.text : Theme.secondary).lineLimit(2).truncationMode(.middle)
+                Text(TransferProgress.head(item))
+                    .font(Chrome.caption).foregroundStyle(failed ? Theme.text : Theme.secondary).lineLimit(1).truncationMode(.middle)
                 Spacer(minLength: 0)
-                if item.running {
-                    action("Cancel") { TransferProgress.shared.cancel(item.id) }
-                } else if failed {
-                    action("Retry") { TransferProgress.shared.retry(item.id) }
-                    Button { TransferProgress.shared.dismiss(item.id) } label: { Image(systemName: "xmark").font(Chrome.caption) }
-                        .buttonStyle(.plain).foregroundStyle(Theme.tertiary).help("Dismiss")
+                actions(item, failed: failed)
+            }
+            if failed, let why = details.first {
+                Text(why).font(Chrome.caption).foregroundStyle(Theme.secondary).lineLimit(4).fixedSize(horizontal: false, vertical: true).help(why)
+            } else if !details.isEmpty {
+                ViewThatFits(in: .horizontal) {
+                    ForEach(details, id: \.self) { Text($0).lineLimit(1).fixedSize() }
                 }
+                .font(Chrome.caption).monospacedDigit().foregroundStyle(Theme.tertiary)
             }
         }
+        .help(failed ? "" : TransferProgress.line(item))
+    }
+
+    /// Cancel while it goes (a carry's: Pause or remove its partial copy, asked in a popup);
+    /// Resume when paused; Retry after a failure.
+    @ViewBuilder private func actions(_ item: TransferProgress.Item, failed: Bool) -> some View {
+        let progress = TransferProgress.shared
+        switch item.state {
+        case .running, .waiting:
+            action("Cancel") {
+                guard item.pausable else { return progress.cancel(item.id) }
+                Self.ask(item.id, pause: true)
+            }
+        case .paused:
+            action("Resume") { progress.resume(item.id) }
+            action("Cancel") { Self.ask(item.id, pause: false) }
+        case .failed:
+            action("Retry") { progress.retry(item.id) }
+            if item.resumable {
+                action("Cancel") { Self.ask(item.id, pause: false) }
+            } else {
+                Button { progress.dismiss(item.id) } label: { Image(systemName: "xmark").font(Chrome.caption) }
+                    .buttonStyle(.plain).foregroundStyle(Theme.tertiary).help("Dismiss")
+            }
+        case .done:
+            EmptyView()
+        }
+    }
+
+    /// A carry's Cancel: Pause (kept) or remove the partial copy, in a Kore popup where the
+    /// pointer is.
+    static func ask(_ id: UUID, pause: Bool) {
+        let progress = TransferProgress.shared
+        if let confirm = StorylineSeams.confirm { return confirm("remove partial") ? progress.cancel(id) : progress.pause(id) }
+        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        var entries: [OptionItem] = []
+        if pause { entries.append(OptionItem("Pause") { progress.pause(id) }) }
+        entries.append(OptionItem("Cancel and remove the partial copy", destructive: true) { progress.cancel(id) })
+        OptionsMenu.shared.show(entries, at: window.mouseLocationOutsideOfEventStream, in: window, source: "transfer")
     }
 
     private func action(_ title: String, _ run: @escaping () -> Void) -> some View {

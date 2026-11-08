@@ -135,4 +135,42 @@ struct FilesCopyTests {
         #expect(LinkPolicy.checkBox(.fsCancel, cancel, nil, control: .standard) != .allow)
         #expect(LinkPolicy.checkBox(.fsCancel, ControlArgs(), nil, control: .full) != .allow)
     }
+
+    /// `resume`: a stopped copy's landing (fixed by `to`) is kept, and the next run keeps its
+    /// finished files (same size and time, not written again), makes a half-written one again,
+    /// and lands whole.
+    @Test func aResumedCopySkipsWhatItFinished() throws {
+        let rig = try Rig()
+        defer { rig.finish() }
+        let files = rig.files
+        let to = rig.other + "/src"
+        let landing = LinkFiles.copyLanding(to)
+        // Stopped before it began: refused, its landing kept.
+        let stopped = CopyRun()
+        stopped.cancel()
+        #expect(files.copy(id: "1", from: rig.work + "/src", to: to, run: stopped, resume: true).message == "Cancelled.")
+        // What a stopped run left: one file whole, one cut short.
+        try FileManager.default.createDirectory(atPath: landing + "/deep", withIntermediateDirectories: true)
+        try FileManager.default.copyItem(atPath: rig.work + "/src/a.swift", toPath: landing + "/a.swift")
+        try Data("de".utf8).write(to: URL(fileURLWithPath: landing + "/deep/b.md"))
+        let kept = try #require(try FileManager.default.attributesOfItem(atPath: landing + "/a.swift")[.systemFileNumber] as? Int)
+        let copied = files.copy(id: "2", from: rig.work + "/src", to: to, resume: true)
+        #expect(copied.ok && copied.files == 3 && copied.size == 15)
+        #expect(rig.text(to + "/deep/b.md") == "deep\n" && rig.text(to + "/a.swift") == "let a = 1\n")
+        #expect(try FileManager.default.destinationOfSymbolicLink(atPath: to + "/up") == "../a.txt")
+        // The finished file kept as it was (the same file), the landing renamed into place.
+        #expect((try FileManager.default.attributesOfItem(atPath: to + "/a.swift")[.systemFileNumber] as? Int) == kept)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: rig.other) == ["src"])
+        // A failure with resume keeps the landing; without, nothing is left.
+        let unreadable = rig.work + "/locked"
+        try FileManager.default.createDirectory(atPath: unreadable + "/inner", withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: URL(fileURLWithPath: unreadable + "/inner/x"))
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: unreadable + "/inner")
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: unreadable + "/inner") }
+        #expect(!files.copy(id: "3", from: unreadable, to: rig.other + "/locked", resume: true).ok)
+        #expect(FileManager.default.fileExists(atPath: LinkFiles.copyLanding(rig.other + "/locked")))
+        #expect(!files.copy(id: "4", from: unreadable, to: rig.other + "/locked2").ok)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: rig.other).filter { $0.contains("locked2") }.isEmpty)
+    }
 }
+

@@ -65,8 +65,9 @@ package protocol BoxFileSource: AnyObject {
     /// the folders that changed. False when the box can't watch them.
     func watch(_ key: String, _ folders: Set<String>, changed: (@MainActor (BoxChange) -> Void)?) async -> Bool
     // 1.11: an entry copied within the served folders, and an entry's files and bytes counted.
-    /// `run`: the box's progress as it comes, and its Cancel.
-    func copy(_ from: String, to: String, run: BoxCopyRun?) async -> Result<String, HostRefusal>
+    /// `run`: the box's progress as it comes, and its Cancel. `resume`: what a stopped copy to the
+    /// same `to` left is kept and finished (`LinkFiles.copyLanding`).
+    func copy(_ from: String, to: String, run: BoxCopyRun?, resume: Bool) async -> Result<String, HostRefusal>
     func count(_ path: String) async -> Result<CarryCount, HostRefusal>
 }
 
@@ -87,7 +88,7 @@ extension BoxFileSource {
     package func read(_ path: String, max: Int?) async -> Result<BoxFileRead, HostRefusal> { await read(path, max: max, base: nil) }
 
     /// A stand-in that doesn't copy: as a box from before 1.11 answers.
-    package func copy(_ from: String, to: String, run: BoxCopyRun?) async -> Result<String, HostRefusal> {
+    package func copy(_ from: String, to: String, run: BoxCopyRun?, resume: Bool) async -> Result<String, HostRefusal> {
         .failure(HostRefusal(message: "\(alias) needs an update to copy files"))
     }
 
@@ -180,8 +181,8 @@ extension HostConnection: BoxFileSource {
         return result.ok ? .success(()) : .failure(refusal(result))
     }
 
-    package func copy(_ from: String, to: String, run: BoxCopyRun?) async -> Result<String, HostRefusal> {
-        let result = await files(.fsCopy, ControlArgs(from: from, to: to), copy: run)
+    package func copy(_ from: String, to: String, run: BoxCopyRun?, resume: Bool) async -> Result<String, HostRefusal> {
+        let result = await files(.fsCopy, ControlArgs(from: from, to: to, resume: resume ? true : nil), copy: run)
         return result.ok ? .success(result.path ?? to) : .failure(refusal(result, copying: true))
     }
 
