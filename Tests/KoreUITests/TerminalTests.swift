@@ -296,4 +296,50 @@ struct TerminalTests {
         #expect(Layout.Terminal.fitting(1, available: 400, maximized: false) == 120)
         #expect(Layout.Terminal.fitting(240, available: 400, maximized: true) == 280)
     }
+
+    /// A shell somewhere else (a box's): the panel names, shows and closes it as its own.
+    @MainActor private final class Elsewhere: NSObject, TerminalSession {
+        let id = UUID()
+        var title = "bash"
+        var ended = false
+        var failure: String?
+        let terminalView = TerminalView(frame: .zero)
+        var hasWork: Bool { false }
+        var started = 0
+        var closed = 0
+        let folder: URL?
+        init(_ folder: URL?) { self.folder = folder }
+        func start() { started += 1 }
+        func close(immediately: Bool) { closed += 1 }
+    }
+
+    @Test func aRemoteWindowsShellsComeFromItsOwnSessions() throws {
+        let folder = try temporary()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let panel = TerminalPanel(folder: folder)
+        var made: [Elsewhere] = []
+        panel.remote = { start, _, _ in
+            let session = Elsewhere(start)
+            made.append(session)
+            return session
+        }
+        let first = panel.newShell()
+        let second = panel.newShell(folder: folder.appendingPathComponent("src"))
+        #expect(made.count == 2 && first.shell == nil && first.session === made[0])
+        #expect(made[0].folder == nil && made[1].folder?.lastPathComponent == "src")
+        #expect(panel.title(of: first) == "bash" && panel.title(of: second) == "bash 2")
+        #expect(first.view === made[0].terminalView)
+        panel.requestClose(first)
+        #expect(made[0].closed == 1 && panel.entries.count == 1)
+        made[1].ended = true
+        panel.shutdown()
+        #expect(made[1].closed == 1)
+    }
+
+    @Test func aBoxWindowsStandInPathsLeadBackToTheBox() {
+        let box = BoxBinding(alias: "mybox", folder: "/home/me/app")
+        #expect(box.boxPath(box.folderURL) == "/home/me/app")
+        #expect(box.boxPath(box.standIn("/home/me/app/src/a.swift")) == "/home/me/app/src/a.swift")
+        #expect(box.boxPath(URL(fileURLWithPath: "/Users/someone/elsewhere")) == "/home/me/app")
+    }
 }

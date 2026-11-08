@@ -8,7 +8,10 @@ import SwiftTerm
 @MainActor @Observable
 final class TerminalEntry: Identifiable {
     let id: UUID
-    @ObservationIgnored let shell: TerminalShell?
+    /// The tab's shell: one on this Mac (`TerminalShell`) or on a box (`BoxTerminalShell`).
+    @ObservationIgnored let session: (any TerminalSession)?
+    /// A shell on this Mac.
+    var shell: TerminalShell? { session as? TerminalShell }
     @ObservationIgnored weak var chat: Chat?
     private(set) var customTitle: String?
     private(set) var original: ActiveCommand?
@@ -17,16 +20,16 @@ final class TerminalEntry: Identifiable {
     private(set) var truncated = false
     @ObservationIgnored private var lastText: String?
 
-    init(shell: TerminalShell) {
+    init(shell: any TerminalSession) {
         id = shell.id
-        self.shell = shell
+        session = shell
         original = nil
         output = nil
     }
 
     init(command: ActiveCommand, chat: Chat) {
         id = UUID()
-        shell = nil
+        session = nil
         self.chat = chat
         original = command
         let view = TerminalView(frame: CGRect(x: 0, y: 0, width: 760, height: 220),
@@ -50,14 +53,14 @@ final class TerminalEntry: Identifiable {
         original = command
         chat = nil
     }
-    var title: String { customTitle ?? shell?.title ?? command?.title ?? "Command" }
+    var title: String { customTitle ?? session?.title ?? command?.title ?? "Command" }
 
     func rename(_ name: String) {
         let clean = name.components(separatedBy: .controlCharacters).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
         customTitle = clean.isEmpty ? nil : clean
         UILog.event("terminal-rename", ["id": id.uuidString, "custom": "\(customTitle != nil)"])
     }
-    var view: TerminalView { shell?.view ?? output! }
+    var view: TerminalView { session?.terminalView ?? output! }
 
     func refreshOutput() async {
         guard let chat, let command else { outputAvailable = false; return }
@@ -90,6 +93,9 @@ final class TerminalPanel {
     @ObservationIgnored weak var window: NSWindow?
     @ObservationIgnored private weak var returnResponder: NSResponder?
     @ObservationIgnored var environment = ProcessInfo.processInfo.environment
+    /// Where this window's shells run when not on this Mac (a box window's): a session for a
+    /// folder (nil: the window's), a command to prepare, and what to show first.
+    @ObservationIgnored var remote: (@MainActor (_ folder: URL?, _ draft: String?, _ history: String?) -> any TerminalSession)?
     private(set) var focusSerial = 0
     @ObservationIgnored private(set) var focusPending = false
 
@@ -104,7 +110,7 @@ final class TerminalPanel {
         let earlier = entries.prefix { $0 !== entry }.filter { $0.customTitle == nil && $0.title == base }.count
         return earlier == 0 ? base : "\(base) \(earlier + 1)"
     }
-    var workingCount: Int { entries.filter { $0.shell?.hasWork == true }.count }
+    var workingCount: Int { entries.filter { $0.session?.hasWork == true }.count }
 
     func toggle() {
         if isOpen { hide() } else if entries.isEmpty { newShell() } else {
@@ -127,7 +133,9 @@ final class TerminalPanel {
 
     /// A new shell, in the window's folder or in `in` (the explorer's Open in Terminal).
     @discardableResult func newShell(draft: String? = nil, history: String? = nil, folder start: URL? = nil) -> TerminalEntry {
-        let entry = TerminalEntry(shell: TerminalShell(folder: start ?? folder, draft: draft, history: history, environment: environment))
+        let session: any TerminalSession =
+            remote?(start, draft, history) ?? TerminalShell(folder: start ?? folder, draft: draft, history: history, environment: environment)
+        let entry = TerminalEntry(shell: session)
         entry.view.suspendsRenderingWhenNotVisible = suspendsRenderingWhenNotVisible
         entries.append(entry)
         select(entry)
@@ -200,7 +208,7 @@ final class TerminalPanel {
     }
 
     func requestClose(_ entry: TerminalEntry) {
-        guard Self.confirm(working: entry.shell?.hasWork == true ? 1 : 0) else { return }
+        guard Self.confirm(working: entry.session?.hasWork == true ? 1 : 0) else { return }
         close(entry)
     }
 
@@ -208,7 +216,7 @@ final class TerminalPanel {
         let wasRenaming = renaming == entry.id
         if wasRenaming { finishRename(commit: false, restoreFocus: false) }
         if entries.count == 1 { restoreFocus(force: wasRenaming) }
-        entry.shell?.close()
+        entry.session?.close(immediately: false)
         entry.output?.updateUiClosed()
         let index = entries.firstIndex { $0 === entry } ?? 0
         entries.removeAll { $0 === entry }
@@ -228,7 +236,7 @@ final class TerminalPanel {
     func shutdown(immediately: Bool = false) {
         finishRename(commit: false, restoreFocus: false)
         for entry in entries {
-            entry.shell?.close(immediately: immediately)
+            entry.session?.close(immediately: immediately)
             entry.output?.updateUiClosed()
         }
         entries = []

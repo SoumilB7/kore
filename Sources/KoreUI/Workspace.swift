@@ -112,6 +112,8 @@ package final class Workspace {
         let workspace = Workspace(folder: box.folderURL, restore: false, box: box)
         open[box.key] = workspace
         box.workspace = workspace
+        // Its terminals run on the box, in its folder.
+        workspace.terminals.remote = { box.terminal($0, draft: $1, history: $2) }
         box.windowOpened()
         // Opened from a chat's row on the Welcome: that chat in front.
         if let chat = BoxBinding.pendingChat.removeValue(forKey: box.key) { box.select(chat) }

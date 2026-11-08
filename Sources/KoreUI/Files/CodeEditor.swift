@@ -393,7 +393,9 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
             let edits = editCount
             let text = document.storage.string
             let result: LineChanges
-            if let base = await GitBaseline.head(of: url) {
+            // A box's file: its HEAD text from the box (`BoxGitStatus`); the diff runs here.
+            let base = document.box != nil ? await BoxGitHook.base(of: document) : await GitBaseline.head(of: url)
+            if let base {
                 result = await GitBaseline.changes(from: base, to: text)
             } else {
                 result = LineChanges()

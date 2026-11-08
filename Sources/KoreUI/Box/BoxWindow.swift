@@ -71,6 +71,9 @@ final class BoxBinding {
         filesMade = true
     }
 
+    /// The folder's git (link 1.8): the explorer's colours, the editor's bars, the diffs.
+    private(set) lazy var git: BoxGitStatus = makeGit()
+
     /// A box path's stand-in under `folderURL`, for a file tab's path row.
     func standIn(_ path: String) -> URL {
         let inside = path.hasPrefix(folder + "/") ? String(path.dropFirst(folder.count)) : "/" + BoxFolder.lastPart(path)

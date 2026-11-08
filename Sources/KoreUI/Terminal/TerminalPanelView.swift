@@ -46,7 +46,7 @@ private struct TerminalPanelView: View {
                     VStack(alignment: .leading, spacing: 0) {
                         TerminalHost(entry: active, panel: panel)
                             .storyMark(StoryID.Terminal.output)
-                        if let failure = active.shell?.failure {
+                        if let failure = active.session?.failure {
                             Text(failure).font(Chrome.label).foregroundStyle(Theme.warning).padding(Space.sm)
                         } else if let failure = active.command?.failure {
                             Text(failure).font(Chrome.label).foregroundStyle(Theme.warning).padding(Space.sm)
@@ -62,7 +62,7 @@ private struct TerminalPanelView: View {
                     .padding(.top, Layout.Terminal.top)
                     .padding(.bottom, Space.xs)
                     .task(id: "\(active.id)-\(active.command?.isLive ?? false)-\(panel.windowVisible)") {
-                        guard active.shell == nil, panel.windowVisible else { return }
+                        guard active.session == nil, panel.windowVisible else { return }
                         repeat {
                             await active.refreshOutput()
                             guard !Task.isCancelled, active.command?.isLive == true else { return }
@@ -101,7 +101,7 @@ private struct TerminalPanelView: View {
                     IconButton(symbol: "pencil", help: "Rename terminal") { panel.startRename(active) }
                         .storyID(StoryID.Terminal.rename)
                 }
-                if active.shell == nil {
+                if active.session == nil {
                     if active.command?.isLive == true { BlinkingDot() }
                     Text(active.command?.isLive == true ? "Read only · running" : "Read only · ended")
                         .font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1)
@@ -110,7 +110,7 @@ private struct TerminalPanelView: View {
                             .smallButton().disabled(command.stopping)
                             .storyID(StoryID.Terminal.stop)
                     }
-                } else if active.shell?.ended == true {
+                } else if active.session?.ended == true {
                     Text("Exited").font(Chrome.label).foregroundStyle(Theme.tertiary)
                 }
             }
@@ -126,7 +126,7 @@ private struct TerminalPanelView: View {
             if let active = panel.active {
                 Rectangle().fill(Theme.border).frame(width: Size.divider.width, height: Size.divider.height)
                 IconButton(symbol: "trash", hoverTint: Theme.danger,
-                           help: active.shell == nil ? "Close output" : "Close terminal") { panel.requestClose(active) }
+                           help: active.session == nil ? "Close output" : "Close terminal") { panel.requestClose(active) }
                     .storyID(StoryID.Terminal.close)
             }
         }
@@ -144,7 +144,7 @@ private struct TerminalListRow: View {
         HStack(spacing: Space.xs) {
             Button { panel.select(entry) } label: {
                 HStack(spacing: Space.sm) {
-                    Image(systemName: entry.shell == nil ? "doc.text" : "terminal").font(Chrome.label)
+                    Image(systemName: entry.session == nil ? "doc.text" : "terminal").font(Chrome.label)
                     Text(panel.title(of: entry)).font(Chrome.label).lineLimit(1).truncationMode(.middle)
                     // The header says it for the shown one; a row says it for the rest.
                     if let command = entry.command, command.isLive {
@@ -158,7 +158,7 @@ private struct TerminalListRow: View {
             }
             .buttonStyle(.plain)
             .storyID(StoryID.Terminal.entry(entry.id))
-            IconButton(symbol: "xmark", help: entry.shell == nil ? "Close output" : "Close terminal") { panel.requestClose(entry) }
+            IconButton(symbol: "xmark", help: entry.session == nil ? "Close output" : "Close terminal") { panel.requestClose(entry) }
                 .opacity(hovered.value || panel.selected == entry.id ? 1 : 0)
                 .storyID(StoryID.Terminal.entry(entry.id).part(.close), press: { panel.requestClose(entry) })
         }
@@ -287,7 +287,7 @@ private struct TerminalHost: NSViewRepresentable {
             super.layout()
             guard let entry, window != nil, bounds.width > 0, bounds.height > 0 else { return }
             entry.view.frame = bounds
-            entry.shell?.start()
+            entry.session?.start()
             if needsFocus {
                 needsFocus = false
                 let serial = focus

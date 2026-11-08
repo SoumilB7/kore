@@ -333,17 +333,16 @@ private struct TerminalCommands: View {
     @FocusedValue(\.workspace) private var workspace
 
     var body: some View {
-        // A box's window has no terminal here yet.
         Button("Show / Hide Terminal") { workspace?.terminals.toggle() }
             .keyboardShortcut("`", modifiers: [.control])
-            .disabled(workspace == nil || workspace?.box != nil)
+            .disabled(workspace == nil)
         Button("Rename Terminal…") {
             if let panel = workspace?.terminals, let entry = panel.active { panel.startRename(entry) }
         }
         .disabled(workspace?.terminals.isOpen != true || workspace?.terminals.active == nil)
         Button("New Terminal") { workspace?.terminals.newShell() }
             .keyboardShortcut("`", modifiers: [.control, .shift])
-            .disabled(workspace == nil || workspace?.box != nil)
+            .disabled(workspace == nil)
     }
 }
 

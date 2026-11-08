@@ -130,6 +130,8 @@ package final class HostConnection {
     @ObservationIgnored var fileHits: [String: @MainActor ([FileHit]) -> Void] = [:]
     /// `sync.changed`'s readers, by the box folder they sync.
     @ObservationIgnored private var syncReaders: [String: @MainActor (Data) -> Void] = [:]
+    /// 1.8's pushes' readers (`BoxStreams.key`): a terminal's, a git root's.
+    @ObservationIgnored var boxReaders: [String: @MainActor (Data) -> Void] = [:]
 
     private struct Weak {
         weak var follower: (any HostFollower)?
@@ -239,6 +241,15 @@ package final class HostConnection {
 
     /// The box streams chats to this grant (1.5, full control).
     package var streams: Bool { caps.contains("stream") }
+
+    /// Sends a message that gets no answer (a key, a size) while linked; false, and nothing
+    /// sent, while not: it isn't kept for later.
+    @discardableResult
+    package func post(_ payload: Data) -> Bool {
+        guard ready, let transport else { return false }
+        transport.send(payload)
+        return true
+    }
 
     private func askEvents(_ follower: any HostFollower) {
         guard streams else {
@@ -523,6 +534,8 @@ package final class HostConnection {
         switch inbound {
         case .events(let events):
             followers[events.chatId]?.follower?.streamed(events)
+        case .box(let type, let data):
+            if let key = BoxStreams.key(type, data) { boxReaders[key]?(data) }
         case .folders(let id, let list):
             // `folders.list`'s own answer; any other result with folders (`folder.add`) is a result.
             if folderAsks[id] != nil {

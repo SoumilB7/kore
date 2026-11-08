@@ -18,7 +18,7 @@ extension Workspace {
 
     package var storyTerminal: (open: Bool, count: Int, shell: Bool, text: String, focused: Bool, foreground: Int, id: UUID?) {
         let entry = terminals.active
-        return (terminals.isOpen, terminals.entries.count, entry?.shell != nil,
+        return (terminals.isOpen, terminals.entries.count, entry?.session != nil,
                 entry.map { String(decoding: $0.view.getBufferAsData(), as: UTF8.self) } ?? "",
                 entry.map { window?.firstResponder === $0.view } ?? false, terminals.workingCount, entry?.id)
     }

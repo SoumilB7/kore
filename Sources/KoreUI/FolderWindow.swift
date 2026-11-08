@@ -51,6 +51,7 @@ struct FolderWindow: View {
                     if docked, let box = workspace.box {
                         // The box folder's files, read over the link (never the Mac's disk for it).
                         BoxExplorer(workspace: workspace, box: box, floating: false).frame(width: workspace.explorerWidth)
+                            .boxGitShown(box, in: workspace)
                         ExplorerSash(width: Binding(get: { workspace.explorerWidth }, set: { workspace.explorerWidth = $0 })) { held in
                             heldContent.value = held ? content : nil
                         }
@@ -90,6 +91,7 @@ struct FolderWindow: View {
                         ZStack(alignment: .leading) {
                             Color.clear.contentShape(Rectangle()).onTapGesture { workspace.explorerOpen = false }
                             BoxExplorer(workspace: workspace, box: box, floating: true)
+                                .boxGitShown(box, in: workspace)
                                 .frame(width: min(Layout.Explorer.width, geometry.size.width - Layout.Explorer.overlayMargin))
                                 .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: Radius.panel, topTrailingRadius: Radius.panel))
                                 .overlay(

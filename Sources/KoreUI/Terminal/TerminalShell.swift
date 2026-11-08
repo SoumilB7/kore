@@ -8,7 +8,7 @@ import SwiftUI
 /// One real local PTY. Its view and process belong to the window store, independent of view
 /// rebuilds, tab changes or hiding the terminal. SwiftTerm handles IO, VT rendering and resize.
 @MainActor @Observable
-final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate {
+final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate, TerminalSession {
     let id = UUID()
     private(set) var title: String
     private(set) var ended = false
@@ -60,6 +60,8 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate {
         view.processDelegate = self
         Self.style(view)
     }
+
+    var terminalView: TerminalView { view }
 
     static var loginShell: String {
         guard let entry = getpwuid(getuid()), let shell = entry.pointee.pw_shell else { return "/bin/zsh" }
