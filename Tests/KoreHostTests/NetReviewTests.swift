@@ -274,10 +274,18 @@ struct NetReviewTests {
         await rig.net.settled()
         let fd = try #require(rig.net.firstListener)
         let port = try #require(rig.net.listenerPort)
+        // The socket itself, not its number: tests running alongside get freed numbers at once.
+        func identity(_ fd: Int32) -> (UInt64, UInt64)? {
+            var info = stat()
+            guard fstat(fd, &info) == 0 else { return nil }
+            return (UInt64(info.st_dev), UInt64(info.st_ino))
+        }
+        let was = try #require(identity(fd))
         rig.net.leave()
-        let end = ContinuousClock.now + .seconds(5)
-        while fcntl(fd, F_GETFD) != -1, ContinuousClock.now < end { await Task.yield() }
-        #expect(fcntl(fd, F_GETFD) == -1)
+        let closed = { identity(fd).map { $0 != was } ?? true }
+        let end = ContinuousClock.now + .seconds(30)
+        while !closed(), ContinuousClock.now < end { await Task.yield() }
+        #expect(closed())
         // Nothing of the box's listens any more. (A connect to the port isn't the check: it was the
         // system's pick, and another test running alongside can be given it once it's free.)
         #expect(rig.net.firstListener == nil)
