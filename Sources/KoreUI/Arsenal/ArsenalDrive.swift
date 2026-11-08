@@ -229,6 +229,26 @@ extension Workspace {
         return .success(chat)
     }
 
+    /// A fork into the other CLI, as Import in a new chat makes one: a new chat of `provider` in a
+    /// tab of its own in front, its mode no freer than the caller's (as `chat.new`'s), the whole
+    /// conversation carried by Kore's handoff, and the tab carrying on in it. Its Arsenal off.
+    package func arsenalForkAcross(_ chat: Chat, to provider: String, model: String?, under caller: Chat) async -> Result<Chat, ArsenalRefusal> {
+        guard let session = chat.sessionId else { return .failure(.init("Nothing to fork yet: it hasn't started.")) }
+        guard !chat.status.isRunning else { return .failure(.init("It's working: fork it into \(Registry.provider(provider)?.name ?? provider) once it's idle.")) }
+        let fresh: Chat
+        switch arsenalNewChat(provider: provider, model: model, mode: nil, under: caller) {
+        case .failure(let refusal): return .failure(refusal)
+        case .success(let chat): fresh = chat
+        }
+        guard let tab = tab(of: fresh) else { return .failure(.init("Kore couldn't open a chat.")) }
+        if let refusal = await importChat(.session(provider: chat.provider.id, id: session), into: fresh) {
+            close(tab, remember: false)
+            return .failure(.init(refusal.reason ?? "Kore can't carry this chat into \(fresh.provider.name)."))
+        }
+        guard let carried = tab.chat, carried !== fresh else { return .failure(.init("Kore couldn't open a chat.")) }
+        return .success(carried)
+    }
+
     /// The models a CLI lists, from a chat of it in this window that has them (the caller's first,
     /// when it runs where this window's chats do), else as any chat of it last listed them in this
     /// run (`ArsenalModels`); a box window's, as its box last listed them.

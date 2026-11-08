@@ -123,7 +123,8 @@ extension Workspace {
     private func historyFile(_ source: HandoffSource) async -> URL? {
         switch source {
         case .file(let url): url
-        case .session(let provider, let id): await Registry.provider(provider)?.historyFile(id, folder)
+        case .session(let provider, let id):
+            if let file = StorylineSeams.historyFile?(provider, id) { file } else { await Registry.provider(provider)?.historyFile(id, folder) }
         }
     }
 

@@ -6,7 +6,7 @@ enum Drive {
 
     static let usage = [
         "new": "[--claude|--codex] [--model M] [--mode X] [\"message\"]", "send": "<chat> \"message\"", "stop": "<chat>", "tab": "<chat>",
-        "fork": "<chat> [--at -N|<message>] [--model M] [\"message\"]", "wait": "<chat> [--timeout s]",
+        "fork": "<chat> [--at -N|<message>] [--claude|--codex] [--model M] [\"message\"]", "wait": "<chat> [--timeout s]",
         "answer": "<chat> <card> <answer>... | <chat> <card> --deny | <chat> <card> --allow", "open": "<session> [--folder F]",
     ]
 
@@ -28,6 +28,7 @@ enum Drive {
         switch name {
         case "new":
             var args: Object = [:]
+            if let provider = o.provider { args["provider"] = provider }
             if let model = o.model { args["model"] = model }
             if let mode = o.mode { args["mode"] = mode }
             if let text = p.first { args["text"] = text }

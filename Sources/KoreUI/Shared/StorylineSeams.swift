@@ -25,4 +25,7 @@ package enum StorylineSeams {
     /// The scripted CLI's chats in a folder's history, by provider id: added to the CLI's own
     /// list, or in place of it (`own` false: a real Codex would read the owner's threads).
     package static var sessions: ((_ provider: String, _ folder: URL) -> (own: Bool, extra: [SessionSummary]))?
+    /// A session's history file, by provider id and session id, in place of the CLI's (a scripted
+    /// Codex has no `thread/read`); nil, the CLI's own.
+    package static var historyFile: ((_ provider: String, _ id: String) -> URL?)?
 }

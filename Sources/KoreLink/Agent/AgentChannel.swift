@@ -671,34 +671,47 @@ package final class AgentChannel {
             return chat.id.uuidString
         }
         let at = args.at.map { String($0.prefix(4096)) }
+        // Into the other CLI: the whole conversation, carried as Import carries it.
+        let across = args.provider.flatMap { $0 == chat.provider.id ? nil : $0 }
+        if across != nil, at != nil {
+            fail(client, id, .invalid, "A fork into another CLI carries the whole conversation: leave out at.")
+            return chat.id.uuidString
+        }
+        let message = args.text.flatMap { $0.isEmpty ? nil : $0 }
         Task { @MainActor [weak self, weak client] in
-            let start = await chat.arsenalForkStart(at: at)
+            let start = across == nil ? await chat.arsenalForkStart(at: at) : nil
             // Its access, its reach and the limits again, after the wait for the CLI.
             guard let self, let client, AgentChannel.current === self, self.tier(client) >= .drive else { return }
             guard let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }), chat === own || chat.noFreer(than: own),
                 let window = AgentReads.workspace(of: chat)
             else { return self.fail(client, id, .notOwn, "That chat's mode is above this one's: only you drive it.") }
             guard self.roomForNew(client, id) else { return }
-            switch start {
+            let opened: Result<Chat, ArsenalRefusal>
+            if let across {
+                opened = await window.arsenalForkAcross(chat, to: across, model: args.model, under: own)
+                guard AgentChannel.current === self, self.tier(client) >= .drive else { return }
+            } else {
+                switch start {
+                case .failure(let refusal): opened = .failure(refusal)
+                case .success(let (start, draft)):
+                    opened = window.arsenalOpenFork(chat, start, draft: draft, model: args.model, message: message != nil)
+                case nil: return
+                }
+            }
+            switch opened {
             case .failure(let refusal):
                 self.fail(client, id, .refused, refusal.message)
-            case .success(let (start, draft)):
-                let message = args.text.flatMap { $0.isEmpty ? nil : $0 }
-                switch window.arsenalOpenFork(chat, start, draft: draft, model: args.model, message: message != nil) {
-                case .failure(let refusal):
-                    self.fail(client, id, .refused, refusal.message)
-                case .success(let fork):
-                    self.spentNew(fork, client)
-                    var said = "Forked it."
-                    if let message {
-                        switch fork.arsenalSend(message, from: self.callerName(client)) {
-                        case .success: said += " Sent."
-                        case .failure(let refusal): said += " " + refusal.message
-                        }
+            case .success(let fork):
+                self.spentNew(fork, client)
+                var said = across == nil ? "Forked it." : "Forked it into \(fork.provider.name)."
+                if let message {
+                    switch fork.arsenalSend(message, from: self.callerName(client)) {
+                    case .success: said += " Sent."
+                    case .failure(let refusal): said += " " + refusal.message
                     }
-                    let forkId = fork.id.uuidString
-                    self.send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: forkId, message: said, short: AgentReads.short(forkId))))
                 }
+                let forkId = fork.id.uuidString
+                self.send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: forkId, message: said, short: AgentReads.short(forkId))))
             }
         }
         return chat.id.uuidString

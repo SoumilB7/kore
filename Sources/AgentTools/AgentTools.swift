@@ -93,7 +93,8 @@ package enum AgentTools {
             args: [
                 ("chat", "string", "The chat to fork: . for this one, or another it reaches (title, short id)."),
                 ("at", "string", "Fork before this user message: -N for the Nth from the end (-1 the last, as the chat's message scroller counts), its row id (kore_read_chat) or its text. Default: after the last answer."),
-                ("model", "string", "A model the chat's CLI lists (default: the chat's)."), ("text", "string", "A message to send the fork."),
+                ("provider", "string", "claude or codex: fork into the other CLI, carrying the whole conversation (no at). Default: the chat's own."),
+                ("model", "string", "A model the fork's CLI lists (default: the chat's, or that CLI's usual)."), ("text", "string", "A message to send the fork."),
             ], required: ["chat"]),
         Tool(
             name: "kore_wait", command: "chat.wait",
