@@ -24,6 +24,23 @@ cp -R Resources/ThirdParty "$APP/Contents/Resources/ThirdParty"
 # The package's resource bundles (mermaid.js).
 cp -R "${BIN:h}"/*.bundle "$APP/Contents/Resources/"
 
+# kore-host for Linux boxes, which Set up in the Boxes panel copies over SSH: static (musl) builds
+# for x86_64 and aarch64, packed with xz. They need a swift.org toolchain with its Static Linux SDK
+# (`swift sdk install …static-linux…`); without one, or with KORE_NO_BOX_HOST=1, the app is built
+# without them and Set up says so.
+LINUX_SWIFT="${KORE_LINUX_SWIFT:-$HOME/Library/Developer/Toolchains/swift-6.4.2-RELEASE.xctoolchain/usr/bin/swift}"
+if [[ -n "${KORE_NO_BOX_HOST:-}" ]]; then
+    echo "kore-host for boxes: skipped (KORE_NO_BOX_HOST)"
+elif [[ ! -x "$LINUX_SWIFT" ]] || ! "$LINUX_SWIFT" sdk list 2>/dev/null | grep -q static-linux || ! command -v xz >/dev/null; then
+    echo "kore-host for boxes: skipped (needs $LINUX_SWIFT with the Static Linux SDK, and xz)" >&2
+else
+    for arch in x86_64 aarch64; do
+        linux=(--swift-sdk "$arch-swift-linux-musl" -c release --product kore-host --scratch-path .build-linux)
+        "$LINUX_SWIFT" build "${linux[@]}" -Xlinker --strip-all
+        xz -9 -T0 -c "$("$LINUX_SWIFT" build "${linux[@]}" --show-bin-path)/kore-host" > "$APP/Contents/Resources/kore-host-linux-$arch.xz"
+    done
+fi
+
 # App icon, rendered from the SVGs in Resources/.
 ICONSET="build/AppIcon.iconset"
 rm -rf "$ICONSET"
