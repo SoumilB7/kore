@@ -118,9 +118,13 @@ package final class Workspace {
         box.workspace = workspace
         // Its terminals run on the box, in its folder.
         workspace.terminals.remote = { box.terminal($0, draft: $1, history: $2) }
-        box.windowOpened()
-        // Opened from a chat's row on the Welcome: that chat in front.
-        if let chat = BoxBinding.pendingChat.removeValue(forKey: box.key) { box.select(chat) }
+        // This runs while SwiftUI makes the window (a StateObject's init, inside a view update):
+        // linking up and picking a chat change observed state, so they wait for the next turn.
+        DispatchQueue.main.async {
+            box.windowOpened()
+            // Opened from a chat's row on the Welcome: that chat in front.
+            if let chat = BoxBinding.pendingChat.removeValue(forKey: box.key) { box.select(chat) }
+        }
         return workspace
     }
 
@@ -260,8 +264,12 @@ package final class Workspace {
     }
 
     /// A box's link came or went (its window opened or closed): the paired windows' cues read it again.
+    /// Called while a box window is being made (inside a SwiftUI update), so the cues change on the
+    /// next turn of the run loop: setting observed state mid-update aborts the app.
     static func boxLinkChanged(_ alias: String) {
-        for workspace in all.allObjects where !workspace.isClosed && workspace.paired?.alias == alias { workspace.paired?.refresh() }
+        DispatchQueue.main.async {
+            for workspace in all.allObjects where !workspace.isClosed && workspace.paired?.alias == alias { workspace.paired?.refresh() }
+        }
     }
 
     /// History opened: the paired box's open chats at once, then its closed ones once linked.
