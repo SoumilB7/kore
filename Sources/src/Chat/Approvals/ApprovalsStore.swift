@@ -20,7 +20,11 @@ package final class ApprovalsStore {
             offerImplementPlan = true
         case .turnStarted:
             offerImplementPlan = false
-        case .turnFinished, .exited:
+        case .turnFinished:
+            // Held messages wait whatever the turns do; so do Auto's cards, and a background
+            // agent's ask, which can come or stay after the turn that started it.
+            pending.removeAll { $0.held == nil && !$0.autoStop && $0.agent == .main }
+        case .exited:
             pending.removeAll()
         case .replayed(let events):
             events.forEach(apply)

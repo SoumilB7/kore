@@ -31,6 +31,8 @@ object DeviceList {
         val unread: Boolean,
         /** Link 1.13: what it waits on in the background (symbols on its second line). */
         val waiting: Waiting? = null,
+        /** Only background commands run, the model idle or waiting on you: ">_" leads (bg-command-cue C). */
+        val prompt: Boolean = false,
     )
 
     /** Which chats moved since this phone last showed them: unread (its own record, nothing on the wire). */
@@ -123,7 +125,10 @@ object DeviceList {
         val row = Row(
             key = "c:$id", chatId = id, windowId = wid, boardIds = null, title = chat.str("title") ?: "Chat",
             provider = chat.str("provider"), age = if (cue == Cue.WORKING) "now" else age(at, now), line = line, cue = cue,
-            unread = cue == Cue.NONE && seen.unread(id, at), waiting = waiting,
+            unread = cue == Cue.NONE && seen.unread(id, at),
+            // The ">_" lead says the command itself, so its symbol isn't repeated on the line.
+            waiting = if (Waiting.promptOnly(chat)) waiting?.let { w -> Waiting(w.agents, 0).takeIf { it.agents > 0 } } else waiting,
+            prompt = Waiting.promptOnly(chat),
         )
         return row
     }

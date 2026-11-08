@@ -273,8 +273,11 @@ struct DevicesPopup: View {
         guard let view = more ?? anchors.value["row:" + row.id], let window = view.window else { return }
         let x = more == nil ? view.bounds.maxX - Size.Net.more : view.bounds.minX
         let point = view.convert(CGPoint(x: x, y: view.isFlipped ? view.bounds.maxY : view.bounds.minY), to: nil)
-        var items = [OptionItem("Rename") { startRename(row) }]
-        items.append(row.paused ? OptionItem("Bring online") { devices.setPaused(row, false) } : OptionItem("Take offline") { devices.setPaused(row, true) })
+        // Another of the owner's Macs: Remove only (it pairs again from its Add device window).
+        var items = row.kind == .mac ? [] : [OptionItem("Rename") { startRename(row) }]
+        if row.kind != .mac {
+            items.append(row.paused ? OptionItem("Bring online") { devices.setPaused(row, false) } : OptionItem("Take offline") { devices.setPaused(row, true) })
+        }
         // A linked phone's own log, to debug it without a cable.
         if row.kind == .phone, row.status == .connected { items.append(OptionItem("Get logs") { devices.fetchLogs(row) }) }
         if row.canJoin { items.append(OptionItem(row.upgradeNote == nil ? "Join KoreNet" : "Try again") { join(row) }) }
@@ -297,7 +300,7 @@ struct DevicesPopup: View {
         default:
             break
         }
-        items.append(.rule)
+        if !items.isEmpty { items.append(.rule) }
         let forget = DevicesWords.remove(row.name, kind: row.kind, enrolled: row.enrolled)
         items.append(OptionItem("Remove", destructive: true, children: [OptionItem(forget, destructive: true) { devices.remove(row) }]))
         menuFor.value = row.id

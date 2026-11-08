@@ -565,7 +565,8 @@ package final class LinkFeed {
         return withObservationTracking { source.windows(view: view) } onChange: { [weak self] in self?.observedLayout(view: view) }
     }
 
-    /// A phone's extras: the CLIs' models without their accounts (accounts stay on the Mac).
+    /// A phone's extras: the CLIs' models without their accounts (accounts stay on the Mac); their
+    /// logins' usage goes (`clis[].usage`, read-only, emails as privacy mode shows them).
     static func asked(_ extras: LinkExtras) -> LinkExtras {
         LinkExtras(mac: extras.mac, clis: extras.clis?.map { var cli = $0; cli.account = nil; return cli })
     }

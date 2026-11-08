@@ -134,8 +134,12 @@ package final class Devices {
 
     package func changed() { revision += 1 }
 
+    /// Devices came on screen (Kore: the paired Macs are looked at again).
+    @ObservationIgnored package var onOpen: @MainActor () -> Void = {}
+
     func openedPopup() {
         popupOpen = true
+        onOpen()
         holdBoxes()
         // The owner is looking: a box whose upgrade failed tries again.
         upgrades?.retryFailed()
@@ -151,6 +155,7 @@ package final class Devices {
     func openedPane() {
         panes += 1
         guard panes == 1 else { return }
+        onOpen()
         holdBoxes()
         upgrades?.retryFailed()
     }
@@ -355,14 +360,13 @@ package final class Devices {
 
     package func remove(_ row: DeviceRow) {
         switch row.kind {
-        case .phone: if let id = UUID(uuidString: row.id) { phones?.remove(id) }
+        case .phone, .mac: if let id = UUID(uuidString: row.id) { phones?.remove(id) }
         case .box:
             // Every trace of it on this Mac, by its id and its alias (`BoxForget`): a re-add is
             // a first add.
             BoxList.shared.remove(row.id)
             // The popup's hold on its link went with it.
             popupLinks.removeAll(where: \.forgotten)
-        case .mac: break
         }
         changed()
     }

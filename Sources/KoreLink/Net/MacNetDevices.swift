@@ -23,13 +23,22 @@ package final class MacNetDevices: PhoneDevices {
     /// At launch: Devices reads phones through this.
     package static func install() {
         Devices.shared.phones = MacNetDevices()
+        Devices.shared.onOpen = { MacPeers.shared.refresh() }
+        MacPeers.shared.changed = { Devices.shared.changed() }
         StayAwakePhones.onScreen = { LinkFeed.shared.phonesOnScreen }
     }
 
     package var phones: [PhoneFacts] {
         guard let mac = net() else { return [] }
+        // The owner's other Macs first: online as the tailnet last said, else when last seen.
+        let online = Set(MacPeers.shared.paired().filter(\.online).map(\.id))
+        let macs = mac.pairedMacs().map { record in
+            PhoneFacts(
+                id: record.id, name: record.name, connected: online.contains(record.id) || mac.macs[record.id] != nil, lastSeen: record.lastSeen,
+                nodeKeys: record.nodeKeys, kind: .mac)
+        }
         let titles = mac.phones.values.contains { $0.client.watching != nil } ? LinkSnapshot.chatsByID() : [:]
-        return allowedPhones(mac).map { record in
+        return macs + allowedPhones(mac).map { record in
             let link = mac.phones[record.id].flatMap { $0.ended ? nil : $0 }
             let presence = link?.client.watching.flatMap { titles[$0]?.title }.flatMap { $0.isEmpty ? nil : $0 }
             return PhoneFacts(
@@ -60,6 +69,7 @@ package final class MacNetDevices: PhoneDevices {
         }
         NetAudit.line("revoke", ["device": id.uuidString.lowercased()])
         mac.phones[id]?.end(NetControl.Reason.revoked)
+        mac.macs[id]?.end(NetControl.Reason.revoked)
         mac.phonesChanged()
     }
 

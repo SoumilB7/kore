@@ -147,6 +147,11 @@ package final class PhoneLink {
             logWaits.removeValue(forKey: id)?.resume(returning: (offset, total, text))
             return
         }
+        // A login moves only between the owner's Macs: never at a phone's word, whatever it may do.
+        if case .cmd(let id, .control(let kind, _)) = message, MacPeerLink.loginKinds.contains(kind) {
+            peer.client.sink.send(.result(.init(id: id, ok: false, code: .deniedControl, message: LinkLogins.ownerOnly)))
+            return
+        }
         if case .cmd(let id, let command) = message {
             let chat = command.chatId.flatMap { LinkSnapshot.chatsByID()[$0] }
             if let digest = LinkAsk.proofNeeded(command, chat.map(LinkSnapshot.facts)) {

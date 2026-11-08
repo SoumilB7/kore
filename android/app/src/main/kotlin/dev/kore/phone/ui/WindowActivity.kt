@@ -23,6 +23,7 @@ class WindowActivity : NodeActivity() {
     private var newSheet: Sheet? = null
 
     private var more: android.view.View? = null
+    private val isBox get() = link?.device?.value?.kind == dev.kore.link.trust.NodeKind.BOX
 
     override fun body(): View {
         more = barButton(barTitle, "⋮", "More") { windowSheet() }.apply { visibility = View.GONE }
@@ -38,7 +39,7 @@ class WindowActivity : NodeActivity() {
         lateinit var s: Sheet
         s = Sheet(this).show {
             title(w.str("name") ?: "Window", w.str("path"))
-            item("Show on the Mac", glyph = "Show on the Mac", enabled = shown != null) { s.dismiss(); shown?.let { id -> act(Control.select(id)) { Quiet.say(this@WindowActivity, "Shown on $macName") } } }
+            if (link?.device?.value?.kind != dev.kore.link.trust.NodeKind.BOX) item("Show on the Mac", glyph = "Show on the Mac", enabled = shown != null) { s.dismiss(); shown?.let { id -> act(Control.select(id)) { Quiet.say(this@WindowActivity, "Shown on $macName") } } }
             item("Close window", glyph = "Close window", danger = true) {
                 s.dismiss()
                 act(Control.windowClose(windowId), forced = Control.windowClose(windowId, force = true), ask = "A chat in ${w.str("name") ?: "this window"} is working. Closing stops it.")
@@ -80,6 +81,8 @@ class WindowActivity : NodeActivity() {
         if (w.objs("tabs").none { it.str("kind") == "chat" || it.str("kind") == "agent" || it.str("kind") == "board" }) {
             content.addView(emptyState(dev.kore.phone.R.drawable.i_chat, "No chats here yet", "A new chat opens as a tab in ${w.str("name") ?: "this window"} on $macName.",
                 if (control) "New chat" to { openNew() } else null))
+            // Its past chats stay a tap away with no tab open (one opens here).
+            if (control) historyRow(w)
             return
         }
         val segments = ControlModel.segments(w)
@@ -104,10 +107,15 @@ class WindowActivity : NodeActivity() {
             }
         }
         // One grouped History row closes the list (spec §6).
-        if (control) content.addView(grouped(listOf(groupRow(dev.kore.phone.R.drawable.i_archive, "History", "Closed chats in ${w.str("name") ?: "this window"}", chevron = true) {
+        if (control) historyRow(w)
+        newSheet?.takeIf { it.isShowing }?.refresh()
+    }
+
+    /** The window's History: its closed chats, a tap opening one here. */
+    private fun historyRow(w: JsonObject) {
+        content.addView(grouped(listOf(groupRow(dev.kore.phone.R.drawable.i_archive, "History", "Closed chats in ${w.str("name") ?: "this window"}", chevron = true) {
             startActivity(Intent(this, HistoryActivity::class.java).putExtra("window", windowId))
         })), LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(16) })
-        newSheet?.takeIf { it.isShowing }?.refresh()
     }
 
     /** The chats this window's tabs and boards show, in order. */
@@ -198,7 +206,7 @@ class WindowActivity : NodeActivity() {
         val boards = w.objs("tabs").filter { it.str("kind") == "board" }
         val items = ArrayList<PopMenu.Item>()
         items += PopMenu.Item("Rename…", enabled = can?.bool("rename") != false) { renameSheet(chat.str("title").orEmpty()) { act(Control.rename(chatId, it)) } }
-        items += PopMenu.Item("Show on the Mac") { act(Control.select(chatId)) { Quiet.say(this, "Shown on the Mac") } }
+        if (!isBox) items += PopMenu.Item("Show on the Mac") { act(Control.select(chatId)) { Quiet.say(this, "Shown on the Mac") } }
         items += PopMenu.Item("Group", sub = {
             groups.map { g ->
                 PopMenu.Item(g.str("name")?.ifBlank { null } ?: "Group", dot = groupColor(g.str("color")), checked = g.str("id") == tab.str("groupId")) {
@@ -217,7 +225,7 @@ class WindowActivity : NodeActivity() {
                     PopMenu.Item("$name · New section") { act(Control.boardAttach(windowId, chatId, bid, Control.NEW_SECTION)) }
             }
         })
-        items += PopMenu.Item("Close tab", danger = true, rule = true, enabled = can?.bool("close") != false) { closeChat(chat) }
+        if (CloseHold.offered(chat, isBox)) items += PopMenu.Item("Close tab", danger = true, rule = true) { closeChat(chat) }
         PopMenu(this).show(anchor, items)
     }
 
@@ -225,11 +233,11 @@ class WindowActivity : NodeActivity() {
         val chatId = chat?.str("id") ?: return
         val boardId = board.str("id") ?: return
         val can = chat.obj("can")
-        PopMenu(this).show(anchor, listOf(
+        PopMenu(this).show(anchor, listOfNotNull(
             PopMenu.Item("Rename…", enabled = can?.bool("rename") != false) { renameSheet(chat.str("title").orEmpty()) { act(Control.rename(chatId, it)) } },
             PopMenu.Item("Show on the Mac") { act(Control.select(chatId)) { Quiet.say(this, "Shown on the Mac") } },
             PopMenu.Item("Move to its own tab") { act(Control.boardDetach(windowId, boardId, chatId, toTab = false)) },
-            PopMenu.Item("Close", danger = true, rule = true, enabled = can?.bool("close") != false) { closeChat(chat) },
+            PopMenu.Item("Close", danger = true, rule = true) { closeChat(chat) }.takeIf { CloseHold.offered(chat, isBox) },
         ))
     }
 
@@ -268,13 +276,6 @@ class WindowActivity : NodeActivity() {
             }),
             PopMenu.Item("Remove", danger = true, rule = true) { act(Control.boardSection(windowId, bid, sid, Control.SectionChange.Remove)) },
         ))
-    }
-
-    private fun closeChat(chat: JsonObject) {
-        val chatId = chat.str("id") ?: return
-        val line = "${chat.str("title") ?: "This chat"} is working. Closing stops it."
-        if (chat.bool("running") || chat.str("state") == "working") confirmClose(line) { act(Control.close(chatId, force = true)) }
-        else act(Control.close(chatId), forced = Control.close(chatId, force = true), ask = line)
     }
 
     // ＋ (frame 4, middle): a new chat with its model, a board, where it goes, and Reopen closed tab.

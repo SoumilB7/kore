@@ -33,6 +33,8 @@ package enum MacNetSwitch {
             MacNet.shared?.retire()
             MacNet.shared = follow(net)
         }
+        // A login's ⋯ lists the paired Macs beside the boxes.
+        MacPeers.installLoginPlaces()
         // Every box link that comes up is caught up on the phones this Mac issued.
         HostConnection.devicesCatchUp = { MacNet.shared?.catchUp($0) }
         HostConnection.devicesResult = { _, result in MacNet.shared?.took(result) }

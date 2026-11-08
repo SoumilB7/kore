@@ -144,11 +144,15 @@ package enum UILog {
     private static let stallAfter: Double = 0.25
 
     private static func watchStalls() {
+        // A step held past 2 s also leaves the main thread's frames (`stall-stack`).
+        let stacks = StallStacks.shared
+        stacks.start()
         var began = 0.0, last = 0.0, worst = 0.0
         let steps: CFRunLoopActivity = [.afterWaiting, .beforeTimers, .beforeSources, .beforeWaiting]
         // Last of each step's observers: the commit before waiting counts as the work it is.
         let observer = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, steps.rawValue, true, CFIndex.max) { _, activity in
             let now = CACurrentMediaTime()
+            if activity == .beforeWaiting { stacks.idle() } else { stacks.step(now) }
             if activity == .afterWaiting {
                 (began, last, worst) = (now, now, 0)
                 return
@@ -167,6 +171,12 @@ package enum UILog {
                     "ms": String(ms), "busy": String(busy), "tab": Workspace.frontTab, "last_event": lastEvent, "active": NSApp.isActive ? "yes" : "no",
                     "shown": shown ? "yes" : "no",
                 ])
+                // What held it, when it was held long enough to be sampled: symbols and offsets.
+                if let frames = stacks.take() {
+                    log.write(.warn, "stall-stack", [
+                        "frames": frames.prefix(6).joined(separator: " < "), "frames2": frames.dropFirst(6).joined(separator: " < "),
+                    ])
+                }
             }
         }
         CFRunLoopAddObserver(CFRunLoopGetMain(), observer, .commonModes)

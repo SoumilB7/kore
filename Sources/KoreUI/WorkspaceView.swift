@@ -882,6 +882,32 @@ struct TabStrip: Equatable {
     }
 }
 
+/// What a tab keeps around its title, so the strip's widths say how much of a name shows: its
+/// mark, the room before and after it, and on a named tab whose × always shows, the ×'s.
+enum TabTitle {
+    /// Before the mark.
+    static func lead(_ label: TabStrip.Label) -> CGFloat {
+        switch label {
+        case .name: Space.xl
+        case .letters: Space.md
+        case .mark: Space.sm
+        }
+    }
+
+    /// Between the mark and the title.
+    static func gap(_ label: TabStrip.Label) -> CGFloat { label == .letters ? Space.sm : Space.md }
+
+    /// After the title: `Space.md`; before an × that always shows, its glyph, its reach to the
+    /// tab's edge (`Space.sm`) and `Space.xs`.
+    static func trail(keepsClose: Bool) -> CGFloat { keepsClose ? Size.closeGlyph + Space.sm + Space.xs : Space.md }
+
+    /// The title's room in a tab `width` wide.
+    static func room(_ width: CGFloat, _ label: TabStrip.Label, keepsClose: Bool) -> CGFloat {
+        guard label != .mark else { return 0 }
+        return width - lead(label) - Size.logoTab - gap(label) - trail(keepsClose: keepsClose && label == .name)
+    }
+}
+
 /// The strip's AppKit scroll view, found from inside it (`Finder`): where it's scrolled, read and
 /// set at once, and `moved` on every change, the reader's or ours (SwiftUI's own scroll geometry
 /// missed a move made between two layouts).
@@ -1295,16 +1321,20 @@ private struct TabItem: View {
     /// The × shows: on hover, on the active tab, and as a dirty file's dot.
     private var closeShown: Bool { hovered.value || isActive || dirty }
 
+    /// A name ends before an × that always shows (the active tab's, a dirty file's dot); any
+    /// other × shows over the title's end, which fades out under it.
+    private var keepsClose: Bool { label == .name && (isActive || dirty) }
+
     private var item: some View {
         // Two sibling buttons (select, close) rather than tap gestures: plain clicks, nothing
         // to compete with the title bar's own window dragging.
         HStack(spacing: 0) {
             select
-            if label != .letters { close }
+            if label == .mark { close }
         }
-        // Over the letters' end, so nothing moves as it shows.
+        // Over the title's end, so an inactive tab keeps no room for it and nothing moves as it shows.
         .overlay(alignment: .trailing) {
-            if label == .letters { close }
+            if label != .mark { close }
         }
     }
 
@@ -1315,30 +1345,17 @@ private struct TabItem: View {
             // no second gesture competes with the button or the window drag.
             if NSApp.mouseClickCount == 2 { workspace.keep(tab) }
         } label: {
-            HStack(spacing: label == .letters ? Space.sm : Space.md) {
+            HStack(spacing: TabTitle.gap(label)) {
                 TabMark(tab: tab, active: isActive, story: StoryID.Tabs.tab(tab.id), tint: TabMark.fileTint(tab, in: workspace.files))
                     .frame(maxWidth: label == .mark ? .infinity : nil)
                 if label == .letters {
-                    letters
+                    letters.storyMark(storyKey.part(.title))
                 } else if label == .name {
-                    Text(tab.title)
-                        .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
-                        .foregroundStyle(TabMark.fileTint(tab, in: workspace.files) ?? (isActive ? Theme.text : Theme.secondary))
-                        .strikethrough(tab.file?.notice == .deleted)
-                        .lineLimit(1)
-                        // A fork's title is cut in the middle, so " (fork)" always shows.
-                        .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
-                    if let from = movedFrom {
-                        Text("from \(from)").font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).layoutPriority(-1)
-                    }
-                    if let parent = duplicateParent {
-                        Text(parent).font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.head)
-                    }
-                    Spacer(minLength: 0)
+                    name.storyMark(storyKey.part(.title))
                 }
             }
-            .padding(.leading, label == .name ? Space.xl : label == .letters ? Space.md : Space.sm)
-            .padding(.trailing, label == .letters ? Space.md : 0)
+            .padding(.leading, TabTitle.lead(label))
+            .padding(.trailing, label == .mark ? 0 : TabTitle.trail(keepsClose: keepsClose))
             .frame(maxHeight: .infinity)
             // A replica: dimmed, it lives elsewhere.
             .opacity(isReplica ? 0.5 : 1)
@@ -1350,6 +1367,28 @@ private struct TabItem: View {
         .help(help)
         .accessibilityLabel(tab.title)
         .storyID(storyKey)
+    }
+
+    /// The name, cut with an ellipsis where the room ends, in all the room to the tab's end but
+    /// the ×'s when that always shows; fading out under the × hover shows over it.
+    private var name: some View {
+        HStack(spacing: Space.md) {
+            Text(tab.title)
+                .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
+                .foregroundStyle(TabMark.fileTint(tab, in: workspace.files) ?? (isActive ? Theme.text : Theme.secondary))
+                .strikethrough(tab.file?.notice == .deleted)
+                .lineLimit(1)
+                // A fork's title is cut in the middle, so " (fork)" always shows.
+                .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
+            if let from = movedFrom {
+                Text("from \(from)").font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).layoutPriority(-1)
+            }
+            if let parent = duplicateParent {
+                Text(parent).font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.head)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(UnderClose(shown: closeShown && !keepsClose))
     }
 
     /// The name's first letters, as many as the room takes, cut with no ellipsis; fading out
@@ -1365,16 +1404,7 @@ private struct TabItem: View {
                     .fixedSize()
             }
             .clipped()
-            .mask {
-                HStack(spacing: 0) {
-                    Rectangle()
-                    if closeShown {
-                        LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
-                            .frame(width: Size.tabLettersFade)
-                        Color.clear.frame(width: Size.tabLettersClear)
-                    }
-                }
-            }
+            .modifier(UnderClose(shown: closeShown))
     }
 
     private var close: some View {
@@ -1412,10 +1442,48 @@ private struct TabItem: View {
     }
 }
 
+/// A title with the × over its end: it fades out before the ×'s glyph, clear under it. Masked
+/// only while the × shows, so a tab at rest draws its title alone.
+private struct UnderClose: ViewModifier {
+    let shown: Bool
+
+    func body(content: Content) -> some View {
+        if shown {
+            content.mask {
+                HStack(spacing: 0) {
+                    Rectangle()
+                    LinearGradient(colors: [.black, .clear], startPoint: .leading, endPoint: .trailing)
+                        .frame(width: Size.tabTitleFade)
+                    Color.clear.frame(width: Size.tabTitleClear)
+                }
+            }
+        } else {
+            content
+        }
+    }
+}
+
 /// A tab follows the work owned by its chat, including helpers and commands that outlive
 /// a turn. An agent tab follows that agent alone; sibling work stays on the parent chat.
 @MainActor
 enum TabWork {
+    /// What a chat's mark shows: the model at work (the CLI's spinner), only background commands
+    /// running while the model is idle or waits on an approval (">_", bg-command-cue.html C), or
+    /// nothing. A running sub-agent is the model at work.
+    enum Kind: Equatable { case idle, working, background }
+
+    static func kind(working: Bool, waitingForNetwork: Bool, approvalWaiting: Bool, commands: Bool) -> Kind {
+        if commands, approvalWaiting || (!working && !waitingForNetwork) { return .background }
+        return working || waitingForNetwork || commands ? .working : .idle
+    }
+
+    static func kind(_ chat: Chat) -> Kind {
+        guard chat.hasWork else { return .idle }
+        return kind(
+            working: chat.isWorking, waitingForNetwork: chat.isWaitingForNetwork,
+            approvalWaiting: !chat.approvals.pending.isEmpty, commands: !chat.commands.stoppable.isEmpty)
+    }
+
     static func running(_ chat: Chat, agent: String? = nil) -> Bool {
         guard chat.hasWork else { return false }
         guard let agent else {
@@ -1466,6 +1534,12 @@ private struct TabMark: View {
                 TabWarning()
                     .help(chat.connection.word ?? "")
                     .storyMark(story.part(.stuck))
+            } else if running, tab.agent == nil, TabWork.kind(chat) == .background {
+                // Only background commands run: ">_", the amber point on it while an approval waits.
+                let needsYou = !chat.approvals.pending.isEmpty
+                BackgroundPrompt(provider: chat.provider, needsYou: needsYou)
+                    .storyMark(story.part(.background))
+                    .overlay { if needsYou { Color.clear.storyMark(story.part(.needsYou)) } }
             } else if running {
                 // The system spinner is grey: multiplied, it takes the CLI's colour.
                 ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
@@ -1497,10 +1571,16 @@ private struct BoardMark: View {
         let state = board.urgent
         switch state {
         case .working:
-            let provider = board.orderedChats.first { TabWork.running($0) }?.provider ?? .claude
-            ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
-                .colorMultiply(WorkingSpinner.tint(provider))
-                .storyMark(story.part(.working))
+            let running = board.orderedChats.filter { TabWork.running($0) }
+            if running.allSatisfy({ TabWork.kind($0) == .background }) {
+                // Every running chat only waits on background commands.
+                BackgroundPrompt(provider: running.first?.provider ?? .claude).storyMark(story.part(.background))
+            } else {
+                let provider = running.first { TabWork.kind($0) == .working }?.provider ?? .claude
+                ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
+                    .colorMultiply(WorkingSpinner.tint(provider))
+                    .storyMark(story.part(.working))
+            }
         case .stuck:
             TabWarning().storyMark(story.part(.stuck))
         default:

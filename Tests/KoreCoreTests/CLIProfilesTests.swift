@@ -14,6 +14,49 @@ import Testing
         #expect(CLIProfiles.mainFolder("claude", environment: ["CLAUDE_CONFIG_DIR": "/Users/someone/claude-work"]).path == "/Users/someone/claude-work")
     }
 
+    /// While a login moves to or from another device (two copies exist), no CLI starts on it;
+    /// one pinned to a folder of its own (a box's account) isn't held back.
+    @Test func noCLIStartsOnALoginWhileItMoves() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        CLIProfiles.root.value = base.appendingPathComponent("accounts")
+        CLIProfiles.reload()
+        defer {
+            CLIProfiles.moving.value.remove("codex/main")
+            CLIProfiles.root.value = nil
+            CLIProfiles.reload()
+            try? FileManager.default.removeItem(at: base)
+        }
+        #expect(throws: Never.self) { try CLIProfiles.repairForLaunch("codex") }
+        CLIProfiles.moving.value.insert("codex/main")
+        #expect(throws: CLIProfiles.Moving.self) { try CLIProfiles.repairForLaunch("codex") }
+        #expect(throws: CLIProfiles.Moving.self) { try CLIProfiles.$pinned.withValue(CLIProfiles.Pin(cli: "codex", id: nil)) { try CLIProfiles.repairForLaunch("codex") } }
+        #expect(throws: Never.self) { try CLIProfiles.$pinned.withValue(CLIProfiles.Pin(cli: "codex", id: "other")) { try CLIProfiles.repairForLaunch("codex") } }
+        #expect(throws: Never.self) { try CLIProfiles.$pinned.withValue(CLIProfiles.Pin(cli: "codex", folder: base)) { try CLIProfiles.repairForLaunch("codex") } }
+        CLIProfiles.moving.value.remove("codex/main")
+        #expect(throws: Never.self) { try CLIProfiles.repairForLaunch("codex") }
+    }
+
+    /// A login moved here from another device is listed, and the active login stays as it was:
+    /// only the owner's pick (or a sign-in landing) makes a login active.
+    @Test func aPlacedLoginIsListedAndNeverMadeActive() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let main = base.appendingPathComponent("main", isDirectory: true)
+        try FileManager.default.createDirectory(at: main.appendingPathComponent("sessions"), withIntermediateDirectories: true)
+        CLIProfiles.root.value = base.appendingPathComponent("accounts")
+        CLIProfiles.mains.value = ["codex": main]
+        CLIProfiles.reload()
+        defer {
+            CLIProfiles.root.value = nil
+            CLIProfiles.mains.value = [:]
+            CLIProfiles.reload()
+            try? FileManager.default.removeItem(at: base)
+        }
+        let id = try CLIProfiles.prepare("codex")
+        CLIProfiles.place("codex", id, email: "work@acme.dev")
+        #expect(CLIProfiles.added("codex").map(\.id) == [id] && CLIProfiles.added("codex").first?.email == "work@acme.dev")
+        #expect(CLIProfiles.active("codex") == nil)
+    }
+
     @Test func anAddedLoginKeepsItsOwnLoginAndSharesTheRest() throws {
         let files = FileManager.default
         let base = files.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

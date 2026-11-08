@@ -505,6 +505,7 @@ fun refusalWords(code: String?): String = when {
     code == "offline" -> "Not connected."
     code == "timeout" -> "No answer. Try again."
     code == "invalid" -> "Kore there doesn't take that yet."
+    code == "confirm.close" -> "It's working: stop it first."
     code.startsWith("busy") -> "Busy there. Try again in a moment."
     code.startsWith("gone") -> "That's no longer there."
     code.startsWith("stale") -> "That changed. Look again."
@@ -629,7 +630,8 @@ fun iconFor(glyphOrTitle: String): Int? = when (glyphOrTitle.trim()) {
     "□", "▦" -> dev.kore.phone.R.drawable.i_folder
     "⇢", "Show on the Mac" -> dev.kore.phone.R.drawable.i_mac_display
     "×", "Close window", "Close tab" -> dev.kore.phone.R.drawable.i_close_window
-    "Copy" -> dev.kore.phone.R.drawable.i_copy
+    "Copy", "Copy table" -> dev.kore.phone.R.drawable.i_copy
+    "History", "From History" -> dev.kore.phone.R.drawable.i_archive
     "Fork from here", "Fork after this" -> dev.kore.phone.R.drawable.i_fork
     "Revert to here" -> dev.kore.phone.R.drawable.i_revert
     "Forget on this phone" -> dev.kore.phone.R.drawable.i_logout

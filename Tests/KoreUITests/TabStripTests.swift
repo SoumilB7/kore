@@ -15,13 +15,13 @@ struct TabStripTests {
     }
 
     @Test func narrowTabsKeepTheirFirstLettersAndTheActiveNameShowsBefore() {
-        // Ten tabs in 925: 72 each beside the name, too narrow for names.
-        let strip = TabStrip(count: 10, width: 925)
+        // Ten tabs in 1040: 84 each beside the name, too narrow for names.
+        let strip = TabStrip(count: 10, width: 1040)
         #expect(strip.label == .letters && !strip.overflows)
         #expect(strip.name == Size.tabNameMax)
         #expect(strip.tab >= Size.tabLetters && strip.tab < Size.tabNamed)
         // The name and the tabs fill the width, nothing scrolls.
-        #expect(abs(strip.name + Size.tabGap + strip.content - 925) < 0.01)
+        #expect(abs(strip.name + Size.tabGap + strip.content - 1040) < 0.01)
         #expect(strip.visible > strip.content - 0.01)
     }
 
@@ -40,6 +40,61 @@ struct TabStripTests {
         let strip = TabStrip(count: 30, width: 100)
         #expect(strip.overflows && strip.label == .mark && strip.tab == Size.tabMinWidth)
         #expect(strip.visible < Size.tabLetters)
+    }
+
+    // MARK: How much of a name a tab's width leaves
+
+    @Test func theThresholdsLeaveTheLeastTitleRoom() {
+        // Names: the active tab's name, ended before its ×, has the least at their narrowest.
+        #expect(TabTitle.room(Size.tabNamed, .name, keepsClose: true) == Size.tabTitleMin)
+        // Letters: at their narrowest, before the strip scrolls.
+        #expect(TabTitle.room(Size.tabLetters, .letters, keepsClose: false) == Size.tabTitleMin)
+        #expect(TabTitle.room(Size.tabMinWidth, .mark, keepsClose: true) == 0)
+    }
+
+    @Test func anInactiveNamedTabKeepsNoRoomForItsHiddenClose() {
+        // Its name runs to `Space.md` from its end: only the mark and the paddings come off.
+        let width: CGFloat = 120
+        #expect(TabTitle.room(width, .name, keepsClose: false) == width - Space.xl - Size.logoTab - Space.md - Space.md)
+        // The active one's name ends before its × and `Space.xs`.
+        #expect(TabTitle.room(width, .name, keepsClose: false) - TabTitle.room(width, .name, keepsClose: true) == Size.closeGlyph + Space.sm + Space.xs - Space.md)
+        // Letters never keep room for the ×: it lies over their end.
+        #expect(TabTitle.room(width, .letters, keepsClose: true) == TabTitle.room(width, .letters, keepsClose: false))
+    }
+
+    @Test func everyStripLeavesItsTitlesTheLeastRoom() {
+        for count in 1...40 {
+            for width in stride(from: CGFloat(60), through: 3000, by: 3) {
+                let strip = TabStrip(count: count, width: width)
+                switch strip.label {
+                case .name:
+                    #expect(TabTitle.room(strip.tab, .name, keepsClose: true) >= Size.tabTitleMin - 0.01, "\(count) tabs in \(width)")
+                case .letters:
+                    #expect(TabTitle.room(strip.tab, .letters, keepsClose: false) >= Size.tabTitleMin - 0.01, "\(count) tabs in \(width)")
+                case .mark:
+                    // Only where one tab with letters won't fit.
+                    #expect(strip.overflows && strip.visible < Size.tabLetters, "\(count) tabs in \(width)")
+                }
+            }
+        }
+    }
+
+    @Test func aWiderStripNeverCutsTheTitlesItShowsAll() {
+        // Every tab in view (no scrolling): an inactive tab's title room never shrinks as the
+        // strip widens, across the switch from letters to names too.
+        for count in 2...20 {
+            var last: CGFloat?
+            for width in stride(from: CGFloat(200), through: 4000, by: 1) {
+                let strip = TabStrip(count: count, width: width)
+                guard !strip.overflows else {
+                    last = nil
+                    continue
+                }
+                let room = TabTitle.room(strip.tab, strip.label, keepsClose: false)
+                if let last { #expect(room >= last - 0.01, "\(count) tabs, \(width - 1) to \(width): \(last) to \(room)") }
+                last = room
+            }
+        }
     }
 
     @Test func oneTabNeverOverflows() {

@@ -101,7 +101,7 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 | `account.refresh` | `provider, chatId?, login?` | Result `message`: "Signed in as …" / "… isn't signed in.". With `chatId` (or `login`), Claude's status in that chat's (or that) account's folder. |
 | `account.list` | `provider, chatId?, folder?` | Claude only. Result `accounts: [{id, email?, organization?, plan?, signedIn?}]`: the default (`id: "main"`, `~/.claude`) and each folder of the box's `~/.config/claude-accounts` by name, each read with `claude auth status` there when asked (a list read in the last 30 s is answered as it is); `signedIn` absent when it couldn't be read. `login`: the account `chatId` runs on; `folderLogin`: the one new chats in `folder` (or the chat's) start on. |
 | `account.switch` | `provider, login, chatId?, folder?` | Claude only. The chat runs on `login` from now on (its work stops, its CLI starts again on its session with `CLAUDE_CONFIG_DIR` at that account's folder), and its folder's new chats start on it; with `folder` alone, only the folder's default. `gone.login` for an account that isn't there. |
-| `account.usage` | `provider, login` | Claude only. Result `reading`: that account's plan and limits (`get_usage` on a message-less `claude -p` there). |
+| `account.usage` | `provider, login?` | With `login`: result `reading`, that account's plan and limits (Claude's: `get_usage` on a message-less `claude -p` there; Codex's one login, `main`: `account/rateLimits/read` on a short-lived `codex app-server`); a full grant's. Without `login` (1.14, any grant that acts, a phone): result `ok`, and each of the CLI's logins not read in the last minute is read, one at a time; what they say comes in `clis[].usage`. |
 | `account.signIn` | `provider, method?` | Result `message`: the page to open (and `code …` for a device code), space-separated. When the sign-in ends: `result {id: "<id>:done", ok, message}`. |
 | `account.submit` | `provider, serial, input` | The code from the page. |
 | `account.cancel` | `provider` | |
@@ -109,7 +109,14 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 | `auth.gh` | | `gh auth login --web` on the box. Result: `url` and `authCode` (the one-time code to type at `url`; `code` stays the error field). When it ends: `result {id: "<id>:done", ok}`, `gh auth setup-git` run, and a `delta` with `ghSignedIn`. |
 
 Every control command goes through the box's rule table (`LinkPolicy.checkBox`); all other
-1.2/1.3 commands are `invalid` on the box. `account.*` and `auth.gh` need a `full` grant.
+1.2/1.3 commands are `invalid` on the box. `account.*` and `auth.gh` need a `full` grant, but
+`account.usage` without a login.
+
+1.14: `clis[]` (act and full grants) carries `usage` per CLI: each login (`login`, `"main"` first,
+then each account folder), its `email` always masked (`ku••••@••il.com`), `active` (the default),
+its `plan` ("Max", "Pro") and `limits`: `{kind: "5h"|"7d", used, resetsAt?}`, whole percent and ms.
+They are what the box hears (a turn's windows, a read), pushed as a `delta` when they change and
+only to a client on screen. A Claude chat's `controls.login` names the account it runs on.
 `account.signIn` takes only the box's no-browser flows, and uses them without `method`: Codex's
 device code (`chatgptDeviceCode`: open `url`, type the code) and Claude's page (`claudeai`: open
 the page, then send the code it shows with `account.submit`). No message carries a key.
@@ -284,15 +291,28 @@ and never sees the new messages.
   given is refused there, and goes nowhere.
 - `agent.call {id, chatId, tool, args}`, box to client, full grants only: kore-host passes the
   call to the full grant that follows the chat, else the last full grant to connect. With none,
-  the answer is "Kore isn't connected to <box> right now"; a link that ends, or 30 s with no
-  answer (330 s for `kore_wait`, 75 s for `kore_fork`), ends the call so too.
+  the answer is "Kore isn't connected to <box> right now"; a link that ends, or no answer in as
+  long as a chat on the Mac waits for that command (`AgentTools.answerWait`: 10 s, a fork 75 s,
+  an open 30 s, a fetch or a reply 120 s, a wait its `timeout` + 15 s) and 20 s for the link,
+  ends the call so too ("Kore didn't answer in time.", as `kore mcp` says it).
 - `agent.result {id, ok, code?, text}`, client to box: `text` is what the agent reads, the
   command's data as JSON or why not. `code` is the agent channel's (`denied`, `tier`, `limit`,
   `no_chat`, …). The box takes an answer only from the connection the call went to.
 - The Mac answers a call only for its own tab of that chat on that box (`no_chat` otherwise), and
   only at that chat's tier: off is `denied`, a tool above it is `tier`. Its limits are that
   chat's, counted with everything else it does: 30 commands a minute, 10 messages a minute, 10 new
-  chats an hour and 6 of them open, wherever they opened.
+  chats an hour and 6 of them open, wherever they opened; 4 calls in flight at once, as a Mac
+  chat's process holds 4 connections.
+- Chat to chat goes both ways alike: a box chat's `kore_ask` reaches a Mac chat as a Mac chat's
+  reaches a box chat's (both at Act unlimited, by id, one hop, 20 an hour). Only files stay behind
+  the owner's switch: `kore_fetch` from a box into the Mac's folders needs `arsenalBoxReachesMac`.
+- `kore` in a box chat's shell: kore-host keeps a link named `kore` to itself in
+  `$XDG_RUNTIME_DIR/kore-host/bin/` and puts that folder at the front of each chat CLI's PATH
+  (`kore-host kore …` is the same). It runs the Mac `kore`'s chat commands (`ls`, `show`, `log`,
+  `pending`, `history`, Own's and Drive's, `whoami`, `caps`, `mcp`), each one tool call on
+  `agent.sock` as `kore-host mcp` makes it, with the same tiers, words and exit codes (5 refused,
+  2 usage, 1 failed). `kore new --place mac` opens on the Mac. Not on a box: `kore log -f` (the
+  tools are one call each), and the Mac's own `kore`, `kore <folder>`, `setup`, `update`, `logs`.
 
 
 ## Link 1.7: a box's files

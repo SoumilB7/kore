@@ -16,6 +16,8 @@ package final class HostServices: ChatServices {
     package var backend: (ProviderDescriptor, BackendOptions) -> any ChatBackend = { $0.makeBackend($1) }
     /// What a Claude chat's CLI starts with for its account (`HostAccounts.environment`).
     package var accountEnvironment: ((String?) throws -> [String: String])?
+    /// What a Codex chat's CLI starts with: refused while the box's Codex login moves (1.14).
+    package var codexEnvironment: (() throws -> [String: String])?
 
     /// The box's paragraph for every chat (`HostDaemon` writes it): where it runs, and when
     /// Kore's tools are there.
@@ -44,7 +46,7 @@ package final class HostServices: ChatServices {
 
     /// Told with the `kore_app` server, after the box's paragraph.
     package static let toolInstructions = """
-        Kore gives you `kore_app` tools to act on Kore on the user's Mac: kore_new_chat opens a new tab with a claude \
+        Kore gives you `kore_app` tools (and a `kore` command on PATH) to act on Kore on the user's Mac: kore_new_chat opens a new tab with a claude \
         or codex chat (on this machine, or with place mac on the Mac), kore_send sends a message to another chat, \
         kore_list_chats and kore_read_chat read chats, kore_set_model changes this chat's model, and more. \
         Ordinary coding needs none of them. Use them when the user asks for something in Kore, such as another tab \
@@ -54,7 +56,9 @@ package final class HostServices: ChatServices {
         """
 
     package func makeBackend(_ provider: ProviderDescriptor, _ options: BackendOptions) -> any ChatBackend { backend(provider, options) }
-    package func planWindows(_ cli: String, _ snapshot: PlanSnapshot?) {}
+    /// A turn's plan windows (`HostPlanUsage`): what the box pushes as its logins' usage.
+    package var onPlanWindows: ((String, PlanSnapshot?) -> Void)?
+    package func planWindows(_ cli: String, _ snapshot: PlanSnapshot?) { onPlanWindows?(cli, snapshot) }
     package func makeTranscript() -> any ChatTranscript { HostTranscript() }
     package func makeViewState() -> AnyObject { HostViewState.shared }
     package func register(_ chat: Chat) {}

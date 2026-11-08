@@ -15,9 +15,10 @@ import Musl
 /// kore-host on KoreNet (phase 18 §4), only while the box is on it (`kore-host net on`, `join`;
 /// off by default, and a Mac's `net.set` can switch it off): port 47470 on this box's tailnet addresses only (on Linux
 /// also held to `tailscale0` with `SO_BINDTODEVICE`), never 0.0.0.0 or ::. Bound while Tailscale
-/// is up: an interface or address change (netlink on Linux; the IPN bus on a Mac dev build, held
-/// only until bound) makes it look again, nothing polls. An unclaimed box listens too: its first
-/// owner Mac has to reach it.
+/// is up: an interface or address change (netlink on Linux) makes it look again, and while
+/// Tailscale isn't running yet (Starting, signed out, its LocalAPI not there at boot) its IPN bus
+/// is held until bound, reopened after 1, 2, 5, 10, 30, 60 s when it can't be; nothing polls. An
+/// unclaimed box listens too: its first owner Mac has to reach it.
 ///
 /// Each connection: the pre-auth limits (3 a minute per source, one frame of at most 4 KiB, 2 s),
 /// a WhoIs of its address, then a KoreNet session (the device's identity proof over B). A device
@@ -97,6 +98,24 @@ package final class HostNet {
     package private(set) var bindProblem: String?
     private var netlink: (fd: Int32, source: DispatchSourceRead)?
     private var busWatch: Task<Void, Never>?
+    /// Installed Tailscale's choice as its state last said (`TailnetChooser`): a box that came up
+    /// signed out or starting ends `installed` once it runs.
+    package private(set) var choice: TailnetChooser.Choice?
+    /// Waiting for installed Tailscale and its bus couldn't be held: its next try, the tries that
+    /// failed in a row, and which bus is current (an older one's end is dropped).
+    private var busRetry: (@MainActor () -> Void)?
+    private var busTries = 0
+    private var busGeneration = 0
+    /// The waits before each new try at the bus; the last repeats.
+    package static let busBackoff: [TimeInterval] = [1, 2, 5, 10, 30, 60]
+    /// Runs `work` on the main queue after a delay; returns its cancel (tests: their own clock).
+    package var later: @MainActor (TimeInterval, @escaping @MainActor @Sendable () -> Void) -> @MainActor () -> Void = { delay, work in
+        let item = DispatchWorkItem { MainActor.assumeIsolated { work() } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+        return { item.cancel() }
+    }
+    /// A try at the bus waits now.
+    package var retrying: Bool { busRetry != nil }
     private var ssh: (fd: Int32, source: DispatchSourceRead)?
     private var handshakes: [ObjectIdentifier: Handshake] = [:]
     /// WhoIs lookups under way (each a LocalAPI round trip off the main thread), counted with the
@@ -162,12 +181,13 @@ package final class HostNet {
     package func start() { openSSH() }
 
     /// On KoreNet: watch the interface, bind the port (`userspace`: Kore's own tailnet, whose
-    /// listen and bus are its socket's).
-    package func join(_ tailnet: any Tailnet, userspace: Bool = false) {
+    /// listen and bus are its socket's). `choice`: installed Tailscale's, as the daemon chose it.
+    package func join(_ tailnet: any Tailnet, userspace: Bool = false, choice: TailnetChooser.Choice? = nil) {
         guard self.tailnet == nil else { return }
         joins += 1
         self.tailnet = tailnet
         self.userspace = userspace
+        self.choice = choice
         watchInterfaces()
         rebind()
     }
@@ -180,11 +200,11 @@ package final class HostNet {
         try? FileManager.default.removeItem(at: host.paths.netState)
         netlink?.source.cancel()
         netlink = nil
-        busWatch?.cancel()
-        busWatch = nil
+        stopWaiting()
         tailnet = nil
         userspace = false
         selfNode = nil
+        choice = nil
         for (key, shake) in handshakes where shake.route == .tailnet {
             shake.cancel()
             shake.session.close(NetControl.Reason.off)
@@ -203,8 +223,8 @@ package final class HostNet {
 
     /// A tailnet is being chosen (Kore's own may take a few seconds to start).
     package func choosing() { writeState("not listening: choosing a tailnet") }
-    /// Whether anything watches the network now (netlink, the IPN bus).
-    package var watching: Bool { netlink != nil || busWatch != nil }
+    /// Whether anything watches the network now (netlink, the IPN bus, a try at it).
+    package var watching: Bool { netlink != nil || busWatch != nil || busRetry != nil }
 
     package func stop() {
         leave()
@@ -296,7 +316,8 @@ package final class HostNet {
             closeListeners()
             selfNode = nil
             noteProblem("Tailscale isn't answering (\(error))")
-            return
+            // Not there yet (kore-host up before tailscaled at boot): its bus says when it is.
+            return waitForTailnet()
         }
         let before = selfNode?.publicKey
         selfNode = status.selfNode
@@ -315,17 +336,27 @@ package final class HostNet {
             return
         }
         if userspace { return applyUserspace(status, want: want, keyChanged: keyChanged, listened: listened) }
+        noteChoice(TailnetChooser.choose(.state(status.backendState)))
         let index = interfaceIndex()
         if Self.keeps(want: want, bound: bound, listening: !listeners.isEmpty, boundIndex: boundIndex, index: index) {
             if keyChanged { host.netNodeChanged() }
-            return
+            return stopWaiting()
         }
         closeListeners()
-        guard !want.isEmpty else { return noteProblem("Tailscale is \(status.backendState.rawValue)") }
+        guard !want.isEmpty else {
+            noteProblem("Tailscale is \(status.backendState.rawValue)")
+            // Starting or signed out: no interface or address change need come when it runs
+            // (tailscale0 and its addresses can be up already at boot), its bus says.
+            return waitForTailnet()
+        }
         #if os(Linux)
         let device: String? = index > 0 ? Self.interface : nil
-        // Userspace Tailscale has no interface: its addresses aren't this kernel's to bind.
-        guard device != nil else { return noteProblem("no \(Self.interface) interface") }
+        // Userspace Tailscale has no interface: its addresses aren't this kernel's to bind. Its
+        // bus can't change that; netlink says when `tailscale0` comes.
+        guard device != nil else {
+            stopWaiting()
+            return noteProblem("no \(Self.interface) interface")
+        }
         #else
         let device: String? = nil
         #endif
@@ -361,8 +392,7 @@ package final class HostNet {
         }
         // Now taking connections: every linked Mac hears the node key (it moves to KoreNet).
         host.netNodeChanged()
-        busWatch?.cancel()
-        busWatch = nil
+        stopWaiting()
         HostJournal.note("korenet listening", ["addresses": want.joined(separator: ","), "port": "\(port)"])
     }
 
@@ -439,8 +469,8 @@ package final class HostNet {
         bound = []
     }
 
-    /// Linux: netlink says when `tailscale0` or its addresses come or go. A Mac dev build: the
-    /// IPN bus, held only until the port is bound.
+    /// Linux: netlink says when `tailscale0` or its addresses come or go. Installed Tailscale's
+    /// state changes come over its bus, held only while waiting for it (`waitForTailnet`).
     private func watchInterfaces() {
         if userspace { return watchBus() }
         #if os(Linux)
@@ -456,21 +486,39 @@ package final class HostNet {
         source.setCancelHandler { close(fd) }
         source.resume()
         netlink = (fd, source)
-        #else
-        watchBus()
         #endif
     }
 
-    /// The tailnet's bus: each state it says makes a look (installed Tailscale on a Mac: held
-    /// until bound; Kore's own: held while on, its sign-ins come this way).
+    /// Installed Tailscale isn't running yet (or its LocalAPI isn't answering): its bus is held
+    /// until the port is bound. Kore's own holds its bus while on already.
+    private func waitForTailnet() {
+        guard !userspace, tailnet != nil, busWatch == nil, busRetry == nil else { return }
+        watchBus()
+    }
+
+    /// Bound, or off: the bus and any try at it go.
+    private func stopWaiting() {
+        busGeneration += 1
+        busWatch?.cancel()
+        busWatch = nil
+        busRetry?()
+        busRetry = nil
+        busTries = 0
+    }
+
+    /// The tailnet's bus: each state it says makes a look (installed Tailscale: held until bound;
+    /// Kore's own: held while on, its sign-ins come this way). Its first message is the state now.
     private func watchBus() {
         guard let tailnet else { return }
+        busGeneration += 1
+        let mine = busGeneration
         let events = tailnet.events()
         busWatch = Task { [weak self] in
             for await event in events {
                 guard let self else { return }
                 switch event {
-                case .state: break
+                // It answered: the next try, if one is needed, starts from the first wait.
+                case .state: self.busTries = 0
                 // Kore's own: its addresses can come after its state says Running.
                 case .status where self.userspace && !self.listening: break
                 default: continue
@@ -478,7 +526,31 @@ package final class HostNet {
                 // Bound, the read drops the bus (and ends this loop's stream).
                 self.rebind()
             }
+            self?.busEnded(mine)
         }
+    }
+
+    /// The bus ended by itself (tailscaled not there yet, or restarted) while still waiting: tried
+    /// again after the next wait, never at once.
+    private func busEnded(_ generation: Int) {
+        guard generation == busGeneration, !Task.isCancelled else { return }
+        busWatch = nil
+        guard !userspace, tailnet != nil, !listening else { return }
+        let wait = Self.busBackoff[min(busTries, Self.busBackoff.count - 1)]
+        busTries += 1
+        busRetry = later(wait) { [weak self] in
+            guard let self else { return }
+            self.busRetry = nil
+            guard self.tailnet != nil, !self.listening else { return }
+            self.waitForTailnet()
+        }
+    }
+
+    /// Installed Tailscale's choice as its state says now; a change is journaled.
+    private func noteChoice(_ now: TailnetChooser.Choice) {
+        guard now != choice else { return }
+        if let was = choice { HostJournal.note("korenet choice", ["tailnet": "tailscale", "choice": "\(now)", "was": "\(was)"]) }
+        choice = now
     }
 
     // MARK: Accepting

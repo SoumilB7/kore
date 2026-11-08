@@ -1,4 +1,6 @@
 import Foundation
+import KoreCore
+import LinkProtocol
 import src
 
 // What the local link (the KoreLink module) may read and do with a CLI's account under full control
@@ -84,6 +86,46 @@ extension AccountStore {
         case .unknown: break
         }
         return account
+    }
+
+    /// Each login's plan windows for the link (`clis[].usage`): what this Mac already holds,
+    /// the usage mark's windows (a turn's report, a read) and the Account card's readings, never
+    /// a read of its own. Emails masked while privacy mode is on; a login moved to a box isn't
+    /// this Mac's to show.
+    package func linkUsage(_ provider: String) -> [AccountUsage] {
+        let privacy = AccountPrivacy.shared.on
+        let shown: (String?) -> String? = { $0.map { privacy ? AccountPrivacy.mask($0) : $0 } }
+        let tracks = UsageCues.shared.tracks
+        let identity: AccountIdentity? = if case .signedIn(let identity) = status(provider) { identity } else { nil }
+        func windows(_ email: String?) -> [AccountUsage.Limit] {
+            guard let hash = PlanSnapshot.account(email: email), let mine = tracks[provider + ":" + hash] else { return [] }
+            return AccountUsage.limits(mine)
+        }
+        var logins = logins(provider).filter { $0.onBox == nil }
+        // Main alone and not listed (no logins folder): the signed-in account.
+        if logins.isEmpty, let identity { logins = [Login(id: nil, email: identity.email, active: true, workspace: identity.organization)] }
+        return logins.compactMap { login in
+            var limits = windows(login.email)
+            var plan = login.active ? AccountUsage.pill(plan: identity?.plan, perToken: false) : nil
+            let key = LoginUsage.Key(provider, login, generation: generation(provider))
+            if case .ready(let reading, _) = loginUsage.state(key), LoginUsage.matches(reading.account, key) {
+                limits = AccountUsage.merge(limits, AccountUsage.limits(UsageCueBook.Reading.from(reading)))
+                plan = AccountUsage.pill(reading) ?? plan
+            }
+            // A login with no account read (signed out, never signed in) isn't one to show.
+            guard login.email != nil || !limits.isEmpty else { return nil }
+            return AccountUsage(login: Self.loginKey(login.id), email: shown(login.email), active: login.active, plan: plan, limits: limits)
+        }
+    }
+
+    /// A phone asked for its usage (`account.usage` without a login): the active login is read
+    /// as the Account card reads it, at most once a minute (`LoginUsage.activeCache`); what it
+    /// finds goes out in `clis[].usage`.
+    package func linkReadUsage(_ provider: String) {
+        let keys = logins(provider).map { LoginUsage.Key(provider, $0, generation: generation(provider)) }
+        guard keys.contains(where: \.active) else { return }
+        let usage = loginUsage
+        Task { await usage.refresh(keys) }
     }
 
     /// A method the link can see through to the end without the Mac: Claude's sign-in with its

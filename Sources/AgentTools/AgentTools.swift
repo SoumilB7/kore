@@ -132,10 +132,10 @@ package enum AgentTools {
         Tool(name: "kore_show_tab", command: "tab.show", description: "Bring a chat's tab to the front (Act unlimited).", args: [chatArg], required: ["chat"]),
         Tool(
             name: "kore_answer", command: "cards.answer",
-            description: "Answer another chat's question card (kore_pending lists them), one answer per question; deny any card; or allow a permission card once, from a chat at Auto or above. Plans, Always allow and sign-ins stay the user's (Act unlimited).",
+            description: "Answer another chat's question card (kore_pending lists them), one answer per question; deny any card; or allow a permission card once, from a chat at Auto or above. A peer-hold card (messages from other sessions Claude held) is let in with allow, never by a chat whose own message is held. Plans, Always allow and sign-ins stay the user's (Act unlimited).",
             args: [
                 chatArg, ("card", "string", "The card's id."), ("answers", "array", "One option label (or typed text) per question, in order."),
-                ("deny", "boolean", "Deny the card instead."), ("allow", "boolean", "Allow a permission card once (this chat at Auto or above)."),
+                ("deny", "boolean", "Deny the card instead."), ("allow", "boolean", "Allow a permission card once (this chat at Auto or above), or let a peer-hold card's messages in."),
             ], required: ["chat", "card"]),
     ]
 
@@ -167,6 +167,32 @@ package enum AgentTools {
         }
     }
 
+    /// How long a caller waits for Kore's answer to a command, in seconds: the same for `kore`,
+    /// `kore mcp` and a box chat's calls (which add `linkMargin`). A wait holds until the chat's
+    /// turn ends (`timeout`, 300 s at most); the CLI makes a fork; a file crosses to or from a box;
+    /// a box's History opens its chat over the link.
+    package static func answerWait(_ command: String, _ args: Object = [:]) -> Int {
+        switch command {
+        case "chat.wait": min(max(args["timeout"] as? Int ?? 300, 1), 300) + 15
+        case "chat.fork": 75
+        case "file.fetch", "chat.reply": 120
+        case "chat.open": 30
+        default: 10
+        }
+    }
+
+    /// A box chat's call crosses the box's link to the Mac and back: kore-host waits this much
+    /// longer than a caller on the Mac would.
+    package static let linkMargin = 20
+
+    /// Nothing came back within `answerWait`: what the agent reads on the Mac and on a box.
+    package static let noAnswerLine = "Kore didn't answer in time."
+
+    /// More calls at once than a chat may make: a chat's own process on the Mac
+    /// (`AgentSlots.perProcess`), a box chat's calls in flight.
+    package static let callsAtOnce = 4
+    package static let tooManyLine = "Too many connections to Kore from this process, or at once."
+
     /// A call's arguments as the command takes them: only the tool's own, and Own's tools act on
     /// the chat this runs in unless one is named.
     package static func arguments(_ tool: Tool, _ given: Object) -> Object {
@@ -187,6 +213,16 @@ package enum AgentTools {
     package static func tierLine(_ command: String, has tier: String) -> String {
         "This needs Arsenal's \(tierName(tierNeeded(command))) tier; this chat has \(tierName(tier)). "
             + "The user picks a tier from the Arsenal icon at the top right of Kore's window."
+    }
+
+    /// Kore's line for a call (its result, or a `bye`) as the agent reads it, the same from
+    /// `kore mcp` on the Mac and from kore-host on a box: the command's data, or why not. Off, or
+    /// turned off as it asked, says how the user turns Arsenal on (`inChat`: a chat's caller).
+    package static func answer(_ line: Object, box: Bool, inChat: Bool = true) -> (ok: Bool, code: String?, text: String) {
+        if line["type"] as? String == "result", line["ok"] as? Bool == true { return (true, nil, text(line["data"] as? Object ?? [:])) }
+        let code = line["code"] as? String ?? "refused"
+        let off = inChat && ["denied", "stopped"].contains(code)
+        return (false, code, off ? offLine(box: box) : line["message"] as? String ?? "Kore refused.")
     }
 
     /// A command's data as the agent reads it.

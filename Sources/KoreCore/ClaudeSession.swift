@@ -37,6 +37,8 @@ public actor ClaudeSession {
         /// The CLI's `switchModelsOnFlag`: a turn the model's safeguards refuse goes again on the
         /// CLI's fallback model. Nil leaves the user's settings to say.
         public var switchModelsOnFlag: Bool?
+        /// The shell command of Kore's PreToolUse hook (`'<kore>' hook pretool`), its path quoted.
+        public var askHook: String?
 
         public init(
             cwd: URL,
@@ -84,6 +86,12 @@ public actor ClaudeSession {
             var settings: [String] = []
             if let fastMode { settings.append(#""fastMode":\#(fastMode)"#) }
             if let switchModelsOnFlag { settings.append(#""switchModelsOnFlag":\#(switchModelsOnFlag)"#) }
+            // Kore's ask list (`kore hook pretool`): a PreToolUse hook for this process only, never a
+            // settings file. It asks only in Auto, so it rides every launch and a later switch to
+            // Auto has it too.
+            if let askHook, let command = try? JSONEncoder().encode(askHook), let quoted = String(data: command, encoding: .utf8) {
+                settings.append(#""hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":\#(quoted)}]}]}"#)
+            }
             if !settings.isEmpty { args += ["--settings", "{" + settings.joined(separator: ",") + "}"] }
             if thinkingSummaries { args += ["--thinking-display", "summarized"] }
             return args + extraArgs
@@ -192,6 +200,19 @@ public actor ClaudeSession {
     /// "low", "medium", "high", "xhigh", "max". Applies from the next request.
     public func setEffort(_ level: String) async throws {
         try await control("apply_flag_settings", ["settings": ["effortLevel": .string(level)]])
+    }
+
+    /// Kore's ask-list hook in the flag settings, for this process only: on (`command`) while the
+    /// chat is in Auto, off (nil) otherwise, so other modes run no hook at all.
+    public func setAskHook(_ command: String?) async throws {
+        let hooks: JSONValue = command.map { ["PreToolUse": [["matcher": "Bash", "hooks": [["type": "command", "command": .string($0)]]]]] } ?? .null
+        try await control("apply_flag_settings", ["settings": ["hooks": hooks]])
+    }
+
+    /// `crossSessionInbound` as a flag setting, for this process only: `accept`, `refuse`, or nil
+    /// to clear it (the user's own settings and the mode decide again).
+    public func setCrossSessionInbound(_ value: String?) async throws {
+        try await control("apply_flag_settings", ["settings": ["crossSessionInbound": value.map(JSONValue.string) ?? .null]])
     }
 
     /// Fast mode, from the next request. The CLI says whether it took (`result`'s `fast_mode_state`).

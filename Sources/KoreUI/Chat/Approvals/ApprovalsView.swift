@@ -1,3 +1,4 @@
+import KoreCore
 import src
 import SwiftUI
 
@@ -16,7 +17,7 @@ struct ApprovalsView: View {
             } else if approval.questions.isEmpty {
                 PermissionCard(
                     approval: approval, asker: asker(approval), folder: chat.folder,
-                    corners: Theme.modeCorners(chat.controls.activeMode.rung)
+                    corners: Theme.modeCorners(chat.controls.activeMode.rung), settings: askSettings(approval)
                 ) {
                     chat.answer(approval, $0)
                 }
@@ -30,6 +31,30 @@ struct ApprovalsView: View {
         if chat.approvals.offerImplementPlan && !chat.status.isRunning {
             ImplementPlanCard(implement: chat.implementPlan, stay: chat.stayInPlanMode)
         }
+    }
+
+    /// An Auto ask in a Claude chat on this Mac: Kore's ask list into the user's Claude settings,
+    /// or out again. Only on the owner's click.
+    private func askSettings(_ approval: Approval) -> (label: String, run: () -> Void)? {
+        guard approval.autoStop, !approval.id.hasPrefix(ClaudeAutoStops.idPrefix), chat.provider.id == "claude", chat.boxPlace == nil,
+            let command = ClaudeBackend.askHook
+        else { return nil }
+        let file = ClaudeAskSettings.file()
+        let chat = chat
+        if ClaudeAskSettings.installed(file) {
+            return ("Stop asking for these in my settings", {
+                do {
+                    try ClaudeAskSettings.remove(file)
+                    chat.note("Kore's ask list is out of your Claude settings (\(file.path)).")
+                } catch { chat.note("Couldn't change your Claude settings: \(error)") }
+            })
+        }
+        return ("Always ask for these in my settings", {
+            do {
+                try ClaudeAskSettings.install(file, command: command)
+                chat.note("Kore's ask list is in your Claude settings (\(file.path)): Claude asks about these outside Kore too.")
+            } catch { chat.note("Couldn't change your Claude settings: \(error)") }
+        })
     }
 
     private func asker(_ approval: Approval) -> (index: Int, name: String)? {

@@ -129,9 +129,9 @@ package struct DeviceRow: Identifiable, Equatable, Sendable {
         self.route = route
     }
 
-    /// Down for the icon: a Mac or box not connected (phones never count, they're away most of
-    /// the day), and not taken offline on purpose.
-    package var down: Bool { kind != .phone && !paused && ![.connected, .unknown, .notSetUp].contains(status) }
+    /// Down for the icon: a box not connected (phones and the owner's other Macs never count,
+    /// they're away much of the day), and not taken offline on purpose.
+    package var down: Bool { kind == .box && !paused && ![.connected, .unknown, .notSetUp].contains(status) }
 }
 
 /// A device that reached a box without a record: listed under Waiting, never pushed as a card.
@@ -183,8 +183,15 @@ package struct PhoneFacts: Equatable, Sendable {
     package var lastSeen: Date?
     package var paused: Bool
     package var nodeKeys: [String]
+    /// A phone, or another of the owner's Macs paired with this one (its row: name, online or
+    /// last seen, Remove).
+    package var kind: DeviceRow.Kind = .phone
 
-    package init(id: UUID, name: String, connected: Bool, presence: String? = nil, lastSeen: Date? = nil, paused: Bool = false, nodeKeys: [String] = []) {
+    package init(
+        id: UUID, name: String, connected: Bool, presence: String? = nil, lastSeen: Date? = nil, paused: Bool = false, nodeKeys: [String] = [],
+        kind: DeviceRow.Kind = .phone
+    ) {
+        self.kind = kind
         self.id = id
         self.name = name
         self.connected = connected
@@ -312,7 +319,7 @@ extension DevicesPicture {
             picture.devices.append(row)
         }
         for phone in phones {
-            var row = DeviceRow(id: phone.id.uuidString.lowercased(), kind: .phone, name: phone.name, status: phone.connected ? .connected : .offline)
+            var row = DeviceRow(id: phone.id.uuidString.lowercased(), kind: phone.kind, name: phone.name, status: phone.connected ? .connected : .offline)
             row.paused = phone.paused
             row.presence = phone.connected ? phone.presence : nil
             row.lastSeen = phone.lastSeen

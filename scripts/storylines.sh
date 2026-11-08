@@ -9,7 +9,8 @@
 #                         [--real-input | --real-input-dry [--real-keys]]
 #
 # Each run gets a folder of its own ($TMPDIR/kore-storylines/<time>, or --out) for its scratch
-# folders, report.json / report.txt, event logs, dumps and failure snapshots. The app's settings
+# folders, report.json / report.txt, event logs, dumps and failure snapshots; an --out inside a
+# git work tree is refused (quick open would list only what git shows there). The app's settings
 # live in the `kore-storylines` defaults domain, emptied first, and its Application Support, Logs
 # and Caches in <out>/kore-data (`KoreFolders`), so the owner's Kore settings and folders are never
 # read or written. Chats talk to the scripted CLI unless --cli process (recorded cassettes,
@@ -38,6 +39,16 @@ while (( $# )); do
   esac
   shift
 done
+# An --out inside a git work tree breaks quick open: its folders are listed by `git ls-files
+# --exclude-standard`, which hides whatever that repo ignores (a clone's runs/, say).
+if [[ -n $out ]]; then
+  probe=$out
+  while [[ ! -d $probe ]]; do probe=${probe:h}; done
+  if [[ $(git -C "$probe" rev-parse --is-inside-work-tree 2>/dev/null) == true ]]; then
+    echo "storylines.sh: --out $out is inside a git work tree, where quick open lists only what git shows; use a folder outside any repo (the default is under \$TMPDIR)" >&2
+    exit 2
+  fi
+fi
 # kore-command: the `kore` binary the agent channel's storylines run.
 products=(kore-storylines kore-command)
 (( process )) && products+=(kore-fake-cli)
@@ -53,12 +64,19 @@ bins="$(swift build -c $build --show-bin-path)"
 (( process )) && args+=(--fake-cli "$bins/kore-fake-cli")
 [[ -n $out ]] || out="${TMPDIR:-/tmp}/kore-storylines/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$out"
-defaults delete kore-storylines >/dev/null 2>&1
+# The run's own name (a link beside the binary), so its own defaults domain: another run's
+# `defaults delete` never empties this one's settings mid-run (the agent switch is read there).
+name=kore-storylines-run$$
+ln -sf kore-storylines "$bins/$name"
+defaults delete $name >/dev/null 2>&1
+cleanup() { rm -f "$bins/$name"; defaults delete $name >/dev/null 2>&1; }
 # Recorded Codex threads take one writer at a time: replays wait for any other run's (the lock
 # verify-landing takes too). A caller that already holds it says so with KORE_REPLAY_LOCK_HELD.
 lock=/private/tmp/kore-verify-replay.lock
 if (( replay )) && [[ -z ${KORE_REPLAY_LOCK_HELD:-} ]]; then
   until mkdir $lock 2>/dev/null; do sleep 2; done
-  trap "rmdir $lock 2>/dev/null" EXIT
+  trap "rmdir $lock 2>/dev/null; cleanup" EXIT
+else
+  trap cleanup EXIT
 fi
-"$bins/kore-storylines" "${args[@]}" --cassettes "$PWD/Tests/Fixtures/cassettes" --out "$out" 2>"$out/stderr.log"
+"$bins/$name" "${args[@]}" --cassettes "$PWD/Tests/Fixtures/cassettes" --out "$out" 2>"$out/stderr.log"

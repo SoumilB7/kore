@@ -207,6 +207,12 @@ public actor CodexSession {
         return accepted["turnId"]?.string ?? turnId
     }
 
+    /// One retry of an action the reviewer denied (`thread/approveGuardianDeniedAction`): the
+    /// model sees the approval, and the retry still goes through the reviewer.
+    public func approveDenied(_ event: JSONValue) async throws {
+        _ = try await server.request("thread/approveGuardianDeniedAction", ["threadId": .string(threadId), "event": event])
+    }
+
     /// `input` is an array of Codex UserInput items (text, localImage, image, mention, skill).
     @discardableResult
     public func send(input: JSONValue, clientId: String? = nil) async throws -> String? {

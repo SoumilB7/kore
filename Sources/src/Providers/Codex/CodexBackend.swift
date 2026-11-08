@@ -500,7 +500,27 @@ package final class CodexBackend: ChatBackend {
 
     // MARK: - Events
 
+    /// Calls Approve for me's reviewer refused: their cards (`CodexAutoStops`).
+    private let stops = CodexAutoStops()
+
+    private func reviewed(_ event: CodexEvent) {
+        switch event {
+        case .raw("item/autoApprovalReview/completed", let params):
+            guard let card = stops.reviewed(params) else { return }
+            var approval = Approval(id: card.id, title: card.title, detail: card.refusal, body: nil, canAlwaysAllow: false, questions: [])
+            approval.autoStop = true
+            approval.allowNote = card.refusal
+            approval.retryMessage = card.refusal == nil ? CodexAutoStops.retry(card.command) : nil
+            approval.tool = "commandExecution"
+            yield(.approvalRequested(approval))
+        case .exited:
+            for id in stops.exited() { yield(.approvalWithdrawn(id)) }
+        default: break
+        }
+    }
+
     private func handle(_ event: CodexEvent) {
+        reviewed(event)
         if case .raw("account/rateLimits/updated", let params) = event {
             // The plan's windows as Codex pushed them during a turn: kept for usage attribution,
             // and the usage mark.
@@ -681,6 +701,12 @@ package final class CodexBackend: ChatBackend {
     }
 
     package func respond(to approvalID: String, _ decision: Decision) async {
+        if approvalID.hasPrefix(CodexAutoStops.idPrefix) {
+            // Run once: Codex's own one retry of the denied action; Deny: the card goes.
+            guard let card = stops.take(approvalID), card.refusal == nil, case .allow = decision, let session else { return }
+            do { try await session.approveDenied(card.event) } catch { yield(.notice("Couldn't let it run once: \(Chat.reason(error))")) }
+            return
+        }
         guard let request = translator.request(approvalID), let session else { return }
         let mapped: CodexDecision =
             switch decision {

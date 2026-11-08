@@ -21,6 +21,7 @@ import android.widget.TextView
 import dev.kore.link.node.NodeClient
 import dev.kore.phone.kore
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -149,7 +150,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             val clip = payload.clip
             val items = (0 until clip.itemCount).map { clip.getItemAt(it) }
             val (files, rest) = items.partition { it.uri != null }
-            files.forEach { add(it.uri) }
+            addAll(files.map { it.uri })
             when {
                 files.isEmpty() -> payload
                 rest.isEmpty() -> null
@@ -507,7 +508,8 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
 
     // Attachments: picked with the system's own pickers, uploaded at once, sent with the message.
 
-    private class Attachment(val name: String, val thumb: Bitmap?) {
+    /** [uri]: where it was picked, pasted or shot; an image opens full screen from it. */
+    private class Attachment(val name: String, val thumb: Bitmap?, val uri: Uri) {
         var blobId: String? = null
         var failed = false
     }
@@ -547,7 +549,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             orientation = LinearLayout.HORIZONTAL
             setPadding(activity.dp(4), 0, activity.dp(4), 0)
             val go = listOf(
-                tile(dev.kore.phone.R.drawable.i_image, "Photos") { activity.startActivityForResult(Intent(MediaStore.ACTION_PICK_IMAGES), PICK) },
+                tile(dev.kore.phone.R.drawable.i_image, "Photos") { pickPhotos() },
                 tile(dev.kore.phone.R.drawable.i_camera, "Camera") {
                     val dir = java.io.File(activity.cacheDir, "shots").apply { mkdirs() }
                     val file = java.io.File(dir, "shot-${System.currentTimeMillis()}.jpg")
@@ -558,7 +560,8 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                             .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION), CAMERA)
                 },
                 tile(dev.kore.phone.R.drawable.i_file_doc, "File") {
-                    activity.startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"), PICK)
+                    activity.startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
+                        .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true), PICK)
                 },
             )
             go.forEachIndexed { i, t -> addView(t, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = activity.dp(10) }) }
@@ -566,48 +569,89 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         s = Sheet(activity).show {
             title("Attach")
             custom(tiles)
-            custom(activity.label("Up to 12 MB each").apply {
+            custom(activity.label("Up to ${Uploads.MAX_FILES}, 12 MB each").apply {
                 type(Type.Caption); setTextColor(Tone.faint); gravity = Gravity.CENTER
                 setPadding(0, activity.dp(14), 0, 0)
             })
         }
     }
 
-    /** From the activity: a picked or shot file. */
-    fun onResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (resultCode != Activity.RESULT_OK) return
-        val uri = when (requestCode) {
-            PICK -> data?.data
-            CAMERA -> shot
-            else -> null
-        } ?: return
-        add(uri)
+    /**
+     * Photos (spec §6): the system's photo picker, several at once, up to what the message has
+     * room for (10 in all); a pick of one where only one fits.
+     */
+    private fun pickPhotos() {
+        val room = Uploads.room(attachments.size + queued)
+        if (room == 0) return quiet("A message takes ${Uploads.MAX_FILES} attachments at most.")
+        val pick = Intent(MediaStore.ACTION_PICK_IMAGES).setType("image/*")
+        if (room > 1) pick.putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, minOf(room, MediaStore.getPickImagesMaxLimit()))
+        activity.startActivityForResult(pick, PICK)
     }
 
-    private fun add(uri: Uri) {
+    /** From the activity: the picked files (one or several) or the shot. */
+    fun onResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        if (resultCode != Activity.RESULT_OK) return
+        val uris = when (requestCode) {
+            PICK -> data?.clipData?.let { clip -> (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri } } ?: listOfNotNull(data?.data)
+            CAMERA -> listOfNotNull(shot)
+            else -> emptyList()
+        }
+        addAll(uris)
+    }
+
+    /** Files read and uploaded one at a time: one picture decoded at once, and the Mac takes 3 uploads at a time. */
+    private val uploading = kotlinx.coroutines.sync.Mutex()
+    /** Picked, not yet read: counted against the message's 10. */
+    private var queued = 0
+
+    /**
+     * Attaches [uris] in order: each read, checked (the message's 10, 12 MB, this hour's 256 MB)
+     * and uploaded in turn, its chip shown once read. What didn't come is said once, in one line,
+     * each with why.
+     */
+    private fun addAll(uris: List<Uri>) {
+        if (uris.isEmpty()) return
         val resolver = activity.contentResolver
-        val mime = resolver.getType(uri) ?: "application/octet-stream"
-        val name = resolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
-            if (c.moveToFirst()) c.getString(0) else null
-        } ?: uri.lastPathSegment ?: "file"
+        val room = Uploads.room(attachments.size + queued)
+        val taken = uris.take(room)
+        val refused = java.util.Collections.synchronizedList(ArrayList<Pair<String, String>>())
+        uris.drop(room).forEach { refused += nameOf(it) to Uploads.tooMany() }
+        queued += taken.size
         activity.kore.scope.launch {
-            val read = runCatching { Uploads.read(resolver, uri, mime) }.getOrNull()
-            val item = Attachment(read?.name ?: name, read?.thumb)
-            activity.runOnUiThread { attachments.add(item); showChips() }
-            if (read == null) { activity.runOnUiThread { attachments.remove(item); showChips(); quiet("Couldn't read that file.") }; return@launch }
-            if (read.bytes.size > Uploads.MAX_BYTES) { activity.runOnUiThread { attachments.remove(item); showChips(); quiet("That file is over 12 MB.") }; return@launch }
-            val blob = runCatching { link()?.upload(read.name ?: name, read.mime, read.bytes) }
-            activity.runOnUiThread {
-                val id = blob.getOrNull()
-                if (id == null) {
-                    attachments.remove(item)
-                    val why = blob.exceptionOrNull()?.message?.takeIf { it.isNotBlank() }?.take(60) ?: "the Mac didn't take it"
-                    quiet("Couldn't attach ${item.name}: $why.")
-                } else item.blobId = id
-                showChips()
+            for (uri in taken) uploading.withLock {
+                val name = nameOf(uri)
+                val mime = resolver.getType(uri) ?: "application/octet-stream"
+                val read = runCatching { Uploads.read(resolver, uri, mime) }.getOrNull()
+                val why = when {
+                    read == null -> Uploads.unread()
+                    read.bytes.size > Uploads.MAX_BYTES -> Uploads.tooBig()
+                    !Uploads.budget.fits(read.bytes.size.toLong(), System.currentTimeMillis()) -> Uploads.pastHour()
+                    else -> null
+                }
+                if (read == null || why != null) {
+                    refused += name to (why ?: Uploads.unread())
+                    activity.runOnUiThread { queued-- }
+                    return@withLock
+                }
+                val item = Attachment(read.name ?: name, read.thumb, uri)
+                activity.runOnUiThread { queued--; attachments.add(item); showChips() }
+                val r = runCatching { link()?.uploadResult(read.name ?: name, read.mime, read.bytes) }.getOrNull()
+                val id = r?.takeIf { it.bool("ok") }?.str("blobId")
+                if (id != null) Uploads.budget.spend(read.bytes.size.toLong(), System.currentTimeMillis())
+                else refused += name to Uploads.refused(r?.str("code"), r?.str("message"))
+                activity.runOnUiThread {
+                    if (id == null) attachments.remove(item) else item.blobId = id
+                    showChips()
+                }
             }
+            Uploads.refusedLine(refused.toList())?.let { line -> activity.runOnUiThread { quiet(line) } }
         }
     }
+
+    /** A picked file's name as its provider says it. */
+    private fun nameOf(uri: Uri): String = runCatching {
+        activity.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c -> if (c.moveToFirst()) c.getString(0) else null }
+    }.getOrNull() ?: uri.lastPathSegment ?: "file"
 
     /** The attachments as 52 thumbnails (radius 12), each with its × as a 20 circle on `l3`; a file shows its icon. */
     private fun showChips() {
@@ -621,7 +665,11 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                 background = activity.shape(Tone.l2, 12, Tone.hair2)
                 clipToOutline = true
                 contentDescription = a.name
-                if (a.thumb != null) { setImageBitmap(a.thumb); scaleType = ImageView.ScaleType.CENTER_CROP }
+                if (a.thumb != null) {
+                    setImageBitmap(a.thumb); scaleType = ImageView.ScaleType.CENTER_CROP
+                    // A tap shows it full screen, decoded at the screen's size from where it came.
+                    setOnClickListener { ImageActivity.open(activity, a.uri, a.name) }
+                }
                 else {
                     setImageResource(dev.kore.phone.R.drawable.i_file_doc)
                     imageTintList = android.content.res.ColorStateList.valueOf(Tone.b200)
@@ -695,7 +743,9 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
      * model offers them. Its corners take the mode's colour.
      */
     private fun chooseMode() {
-        if (chat == null) return
+        val chat = chat ?: return
+        // Its account's usage read again where due (at most once a minute); it comes in `clis`.
+        chat.str("provider")?.let { link()?.askUsage(listOf(it)) }
         openLive { modeSheet() }
     }
 
@@ -712,6 +762,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         val current = chat.obj("mode")
         corner = modeColor(current?.get("level").int())
         modelPart(chat)
+        usagePart(chat)
         val allowed = chat.strs("allowedModeIds")
         val offered = chat.strs("modeIds")
         val modes = modes(chat).filter { it.str("id") in offered || it.str("id") == current?.str("id") }.sortedBy { it["level"].int() ?: 1 }
@@ -767,6 +818,16 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             val on = want["fast"]?.toBoolean() ?: controls.bool("fast")
             toggle("Fast mode", on) { pick("fast", it.toString()) }
         }
+    }
+
+    /**
+     * The chat's account under the model (link 1.14): its login, plan and meters, as the device
+     * pushed them; nothing from a device that sends none.
+     */
+    private fun Sheet.usagePart(chat: JsonObject) {
+        val row = UsageMeters.forChat(snapshot, chat, System.currentTimeMillis()) ?: return
+        section("Usage")
+        custom(activity.usageRow(row, logo = false).apply { setPadding(activity.dp(4), activity.dp(2), activity.dp(4), activity.dp(4)) })
     }
 
     /** Arsenal at the foot of the options sheet: its tiers in one segment, a raise marked; the reason when it can't. */
@@ -868,12 +929,12 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             val at = want["autoCompact"]?.let { it.toIntOrNull() } ?: if (want["autoCompact"] == "off") null else controls["autoCompactAt"].int()
             item("Auto-compact", glyph = "⤓", detail = at?.let { "at $it%" } ?: "Off", chevron = true) { dismiss(); compactSheet() }
         }
-        if (link().hasControl(snapshot)) item("Show on the Mac", glyph = "⇢") { run("select", dev.kore.link.node.Control.select(chatId)); dismiss() }
-        if (has("close")) item("Close tab", glyph = "×", danger = true, enabled = can!!.bool("close")) {
+        val box = link()?.device?.value?.kind == dev.kore.link.trust.NodeKind.BOX
+        if (link().hasControl(snapshot) && !box) item("Show on the Mac", glyph = "⇢") { run("select", dev.kore.link.node.Control.select(chatId)); dismiss() }
+        // As Arsenal's close: refused, with its reason, while closing would lose work (this composer's too).
+        if (CloseHold.offered(chat, box)) item("Close tab", glyph = "×", danger = true) {
             dismiss()
-            val working = chat.bool("running") || chat.str("state") == "working"
-            if (working) activity.confirmClose("${chat.str("title") ?: "This chat"} is working. Closing stops it.") { run("close", dev.kore.link.node.Control.close(chatId, force = true)) }
-            else run("close", dev.kore.link.node.Control.close(chatId))
+            activity.closeChat(chat, field.text.toString(), attachments.size) { activity.finish() }
         }
     }
 

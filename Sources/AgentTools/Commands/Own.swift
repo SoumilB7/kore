@@ -3,7 +3,7 @@ import Foundation
 /// Own's commands: the chat `kore` runs in, changed as its composer would. Each takes `.` (or no
 /// chat) and the value: `kore model haiku`, `kore mode plan`, `kore fast on`.
 enum Own {
-    typealias Object = AgentClient.Object
+    typealias Object = AgentTools.Object
 
     /// What each takes after its name, for its usage line.
     static let usage = [
@@ -24,7 +24,7 @@ enum Own {
         return positional.count == 2 ? (positional[0], positional[1]) : (".", positional.first)
     }
 
-    static func set(_ name: String, _ client: AgentClient, _ o: Reads.Options) throws(AgentClient.Failure) {
+    static func set(_ name: String, _ client: any AgentCalls, _ o: Reads.Options) throws(AgentFailure) {
         let (chat, value) = split(o.positional, valued: name != "compact")
         var args: Object = ["chat": chat]
         if name == "fast" { args["on"] = value == "on" } else if let value { args["to"] = value }
@@ -33,7 +33,7 @@ enum Own {
         Reads.say(Reads.str(data["message"]))
     }
 
-    static func options(_ client: AgentClient, _ o: Reads.Options) throws(AgentClient.Failure) {
+    static func options(_ client: any AgentCalls, _ o: Reads.Options) throws(AgentFailure) {
         let data = try client.run("chat.options", ["chat": o.positional.first ?? "."])
         if o.json { return Reads.printJSON(data) }
         let models = data["models"] as? [Object] ?? []

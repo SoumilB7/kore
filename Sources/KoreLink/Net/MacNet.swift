@@ -142,11 +142,19 @@ package final class MacNet {
     private var generation = 0
     private let acceptQueue = DispatchQueue(label: "dev.kore.net.accept")
     package private(set) var phones: [UUID: PhoneLink] = [:]
+    /// The owner's other Macs linked now (a login moving), by device.
+    package private(set) var macs: [UUID: MacPeerLink] = [:]
+    /// This Mac's side of a login moved from or to another of the owner's Macs.
+    package lazy var loginMoves = MacLoginMoves()
+    /// While the Add device window is open: knocks at the owner's other Macs, to pair.
+    package lazy var pairing = MacPairing(net: self)
     /// What changed, for tests awaiting it: `listening`, `closed`, `kept` (a rebind failed, the
     /// working listener stayed), `up <id>`, `gone <id>`, `kept <id>`.
     package var changed: (@MainActor (String) -> Void)?
     /// Handshakes held for an Allow, by connection.
     private var held: [ObjectIdentifier: (connection: PhoneConnection, ask: DeviceAsks.Ask)] = [:]
+    /// The device each held handshake is, by connection.
+    private var heldDevices: [ObjectIdentifier: UUID] = [:]
     /// Connections whose handshake is under way.
     private var shaking: [ObjectIdentifier: PhoneConnection] = [:]
     /// WhoIs lookups under way (counted against `maxHandshakes` with the handshakes).
@@ -203,9 +211,9 @@ package final class MacNet {
     // MARK: When it listens
 
     /// The rule (owner, phase 18 §11 answer 3): KoreNet on, its tailnet running, and a phone
-    /// allowed or the Add device window open.
-    nonisolated package static func listens(on: Bool, running: Bool, phones: Int, addOpen: Bool) -> Bool {
-        on && running && (phones > 0 || addOpen)
+    /// allowed, another of the owner's Macs paired, or the Add device window open.
+    nonisolated package static func listens(on: Bool, running: Bool, phones: Int, macs: Int = 0, addOpen: Bool) -> Bool {
+        on && running && (phones > 0 || macs > 0 || addOpen)
     }
 
     /// The addresses to bind: this node's tailnet addresses while Tailscale runs; none otherwise.
@@ -227,6 +235,13 @@ package final class MacNet {
     }
     private var bookCache: DeviceBookCache?
 
+    /// The owner's other Macs paired with this one (kind mac, owner, in its own book; never itself).
+    package func pairedMacs() -> [DeviceRecord] {
+        if bookCache?.book.url != host.book.url { bookCache = DeviceBookCache(host.book) }
+        let me = device
+        return (bookCache?.read().devices ?? []).filter { $0.kind == .mac && $0.owner && $0.id != me }
+    }
+
     /// Opens the Add device window for 10 minutes (step 7's "+" drives it): the port opens, and a
     /// phone's enroll is taken while it's open.
     package func openAddWindow() {
@@ -237,6 +252,7 @@ package final class MacNet {
         addCancel = schedule(Self.addWindowLength) { [weak self] in self?.closeAddWindow() }
         NetAudit.line("add-window", ["open": "1"])
         refresh()
+        pairing.start()
         Devices.shared.changed()
     }
 
@@ -247,6 +263,7 @@ package final class MacNet {
         addCancel?()
         addCancel = nil
         refusals = []
+        pairing.stop()
         refresh()
         Devices.shared.changed()
     }
@@ -273,8 +290,9 @@ package final class MacNet {
         guard !retired else { return }
         generation += 1
         let mine = generation
-        host.hold(Self.busKey, !allowedPhones().isEmpty || addOpen)
-        guard let tailnet = host.tailnet, Self.listens(on: true, running: true, phones: allowedPhones().count, addOpen: addOpen) else {
+        let macs = pairedMacs().count
+        host.hold(Self.busKey, !allowedPhones().isEmpty || macs > 0 || addOpen)
+        guard let tailnet = host.tailnet, Self.listens(on: true, running: true, phones: allowedPhones().count, macs: macs, addOpen: addOpen) else {
             cancelRetry()
             // No port, but pushes still need who this Mac is (a revoke owed to a box).
             learnIdentity()
@@ -580,6 +598,7 @@ package final class MacNet {
         closeAddWindow()
         // Switched off, not refused: each phone retries by itself and is back once it's on.
         for phone in Array(phones.values) { phone.end(NetControl.Reason.off) }
+        for mac in Array(macs.values) { mac.end(NetControl.Reason.off) }
         for (_, entry) in held { asks.cancel(entry.ask) }
         for connection in shaking.values { connection.end(NetControl.Reason.off) }
         held = [:]
@@ -594,6 +613,7 @@ package final class MacNet {
     /// and dials again when the Mac is back. The port stays as it is.
     package func sleeps() {
         for phone in Array(phones.values) { phone.end(NetControl.Reason.sleep) }
+        for mac in Array(macs.values) { mac.end(NetControl.Reason.sleep) }
         for connection in shaking.values { connection.end(NetControl.Reason.sleep) }
     }
 
@@ -717,7 +737,12 @@ package final class MacNet {
         let clock = clock
         setup.stranger = { hello in MacNet.stranger(hello, whois: whois, state: shared.withLock { $0 }, now: clock()) }
         let book = host.book
-        setup.directory = { record in record.kind == .phone ? MacNet.directory(state: shared.withLock { $0 }, book: book) : nil }
+        // A phone hears this Mac and its boxes; another of the owner's Macs, this Mac only (what it pins).
+        // Read on the connection's queue: nothing of the main actor's.
+        setup.directory = { @Sendable record in
+            guard record.kind != .box, let all = MacNet.directory(state: shared.withLock { $0 }, book: book) else { return nil }
+            return record.kind == .mac ? Array(all.prefix(1)) : all
+        }
         let seen = firstSeen[whois.node.key] ?? clock()
         if firstSeen[whois.node.key] == nil {
             // Bounded: the oldest goes first.
@@ -768,9 +793,10 @@ package final class MacNet {
     /// Anything else is refused (`bye unknown`), nothing kept: shared-in nodes, other people's,
     /// enrolls outside the window.
     nonisolated static func stranger(_ hello: NetControl.Hello, whois: TailnetWhoIs, state: Shared, now: Date) -> NetSession.Stranger {
-        guard let enroll = hello.enroll, (enroll.kind ?? .phone) == .phone, let until = state.addUntil, now < until,
-              let issuer = state.identity?.device
+        guard let enroll = hello.enroll, let until = state.addUntil, now < until, let issuer = state.identity?.device
         else { return .refuse(NetControl.Reason.unknown) }
+        if enroll.kind == .mac { return macStranger(hello, enroll: enroll, whois: whois, state: state, issuer: issuer, now: now) }
+        guard (enroll.kind ?? .phone) == .phone else { return .refuse(NetControl.Reason.unknown) }
         let tagged = !whois.node.tags.isEmpty
         let abilities: Ability
         if tagged {
@@ -789,6 +815,22 @@ package final class MacNet {
         held.model = enroll.model.map(clean)
         guard (try? held.validate()) != nil else { return .refuse(NetControl.Reason.unknown) }
         return .hold(held, seconds: state.holdFor)
+    }
+
+    /// Another of the owner's Macs, inside the Add device window: the same Tailscale user, never a
+    /// tagged node, never this Mac. It waits for the owner's card; Allowed, it's kept as an owner
+    /// Mac that may move logins to and from this one (`MacPeerLink`), nothing more.
+    nonisolated static func macStranger(
+        _ hello: NetControl.Hello, enroll: NetControl.Enroll, whois: TailnetWhoIs, state: Shared, issuer: UUID, now: Date
+    ) -> NetSession.Stranger {
+        guard whois.node.tags.isEmpty, let own = state.ownUser, whois.userId == own, hello.device != issuer else {
+            return .refuse(NetControl.Reason.unknown)
+        }
+        let record = DeviceRecord(
+            id: hello.device, name: clean(enroll.name), kind: .mac, abilities: .run, owner: true, identityKey: enroll.identityKey,
+            nodeKeys: [whois.node.key], userId: whois.userId, fqdn: whois.node.name, issuedBy: issuer, added: now, lastSeen: now)
+        guard (try? record.validate()) != nil else { return .refuse(NetControl.Reason.unknown) }
+        return .hold(record, seconds: state.holdFor)
     }
 
     /// What a phone's welcome tells it: this Mac's record first (pinned on first contact), then
@@ -817,9 +859,15 @@ package final class MacNet {
         switch event {
         case .held(let record):
             NetAudit.line("enroll", ["device": record.id.uuidString.lowercased(), "kind": record.kind.rawValue, "node": connection.whois.node.key])
-            let info = DeviceCardInfo.phone(
-                name: record.name, node: Self.shortName(connection.whois.node.name), address: connection.remote, login: connection.whois.user.loginName,
-                firstSeen: connection.firstSeen)
+            let node = Self.shortName(connection.whois.node.name)
+            let login = connection.whois.user.loginName
+            let info = record.kind == .mac
+                ? DeviceCardInfo.mac(name: record.name, node: node, address: connection.remote, login: login, firstSeen: connection.firstSeen)
+                : DeviceCardInfo.phone(name: record.name, node: node, address: connection.remote, login: login, firstSeen: connection.firstSeen)
+            // This Mac paired with it meanwhile (its own knock was Allowed there): no second card.
+            if record.kind == .mac, let pinned = pairedMacs().first(where: { $0.id == record.id }) {
+                return pinned.identityKey == record.identityKey ? connection.admit(pinned) : connection.admit(nil, reason: NetControl.Reason.unknown)
+            }
             // The tailnet now (one status read, off the main actor): a record this phone clearly
             // replaces (reinstalled or left) shows on the card; Allow looks again before retiring.
             peers { [weak self] peers in
@@ -837,22 +885,27 @@ package final class MacNet {
                     }
                 }
                 self.held[key] = (connection, ask)
+                self.heldDevices[key] = record.id
             }
         case .established(let peer, let binding):
             shaking[key] = nil
             shared.withLock { $0.handshakes = max(0, $0.handshakes - 1) }
+            if peer.record.kind == .mac { return macUp(peer, connection: connection) }
             phoneUp(peer, connection: connection, binding: binding)
         case .messages(let incoming, let record, let settled, let cursors):
             for phone in phones.values where phone.connection === connection {
                 phone.take(incoming, record: record, cursorsSettled: settled, cursors: cursors)
             }
+            for mac in macs.values where mac.connection === connection { mac.take(incoming, record: record) }
         case .closed(let reason):
             if shaking.removeValue(forKey: key) != nil { shared.withLock { $0.handshakes = max(0, $0.handshakes - 1) } }
+            heldDevices[key] = nil
             if let entry = held.removeValue(forKey: key) { asks.cancel(entry.ask) }
             if let phone = phones.values.first(where: { $0.connection === connection }) {
                 if !phone.ended { HostLog.note("korenet", "phone gone", reason) }
                 phone.gone()
             }
+            macs.values.first { $0.connection === connection }?.gone()
         }
     }
 
@@ -876,6 +929,7 @@ package final class MacNet {
     /// The owner's answer to a phone's card; Allow retires the records it replaces (`retire`).
     private func answered(_ answer: DeviceAsks.Answer, record: DeviceRecord, connection: PhoneConnection, retire: [UUID] = []) {
         held[ObjectIdentifier(connection)] = nil
+        heldDevices[ObjectIdentifier(connection)] = nil
         let id = record.id.uuidString.lowercased()
         switch answer {
         case .allow:
@@ -968,6 +1022,44 @@ package final class MacNet {
         } else {
             phone.begin(cursors: nil)
         }
+    }
+
+    /// Paired from this side: another Mac's Allow card took this Mac's knock, and its record is
+    /// pinned here. That Mac's own knock, waiting here for a card, is welcomed as it is now (one
+    /// Allow pairs both ways); the port follows.
+    package func paired(with record: DeviceRecord) {
+        for (key, device) in heldDevices where device == record.id {
+            heldDevices[key] = nil
+            guard let entry = held.removeValue(forKey: key) else { continue }
+            asks.cancel(entry.ask)
+            entry.connection.admit(record)
+        }
+        NetAudit.line("pair", ["device": record.id.uuidString.lowercased()])
+        refresh()
+        Devices.shared.changed()
+    }
+
+    /// This Mac's identity, once read (what it dials another Mac with).
+    package var identity: (device: UUID, signer: any IdentitySigner)? {
+        guard let device, let signer else { return nil }
+        return (device, signer)
+    }
+
+    /// The tailnet's own word about this node (its user, its node key), once read.
+    package var selfNode: TailnetStatus.SelfNode? { shared.withLock { $0.selfNode } }
+
+    /// Another of the owner's Macs linked (a login moving): the lean link, never a phone's.
+    private func macUp(_ peer: NetPeer, connection: PhoneConnection) {
+        guard peer.record.owner else { return connection.end(NetControl.Reason.refused) }
+        if let old = macs[peer.record.id] { old.end(LinkMessage.ByeReason.replaced.rawValue) }
+        macs[peer.record.id] = MacPeerLink(net: self, record: peer.record, connection: connection)
+        NetAudit.line("connect", ["device": peer.record.id.uuidString.lowercased(), "kind": "mac"])
+        changed?("mac up \(peer.record.id.uuidString)")
+    }
+
+    func macGone(_ mac: MacPeerLink) {
+        if macs[mac.id] === mac { macs[mac.id] = nil }
+        changed?("mac gone \(mac.id.uuidString)")
     }
 
     /// Phones that keep the Mac awake: linked and served (a parked one, taken offline, doesn't).

@@ -134,6 +134,10 @@ enum LinkControlActions {
         case .accountRefresh:
             await store.refresh(provider)
             outcome = .ok
+        case .accountUsage:
+            // Read-only: the active login read again; its windows follow in `clis[].usage`.
+            store.linkReadUsage(provider)
+            outcome = .ok
         default:
             outcome = .invalid("Kore doesn't know that command.")
         }

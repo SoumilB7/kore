@@ -180,6 +180,61 @@ final class PinchedTabKeepsItsPlace: OpenEndStoryline {
     }
 }
 
+/// A tab left at its end while a reply comes in behind another tab comes back at its end, a few
+/// times over; pinched first and back at its natural size, the same. Scrolled up by the reader
+/// before it's left, it comes back where the reader was.
+class TabComesBackAtEndAfterReply: OpenEndStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    /// Pinched and back at its natural size before it's left.
+    class var pinches: Bool { false }
+    static let rounds = 3
+    static func reply(_ round: Int) -> String {
+        (1...40).map { "Paragraph \($0) of reply \(round), which came while the tab was out of sight." }.joined(separator: "\n\n")
+    }
+    override class var script: CLIScript {
+        CLIScript(turns: (1...rounds + 1).map { round -> [Beat] in
+            [.startTurn, .tool(name: "Bash", detail: "sleep \(round)", output: "woke", wait: .release), .stream(.answer, reply(round), chunk: 4000), .finishTurn(.completed)]
+        })
+    }
+
+    override func steps() -> [any Step] {
+        let tab = Self.tab(of: session)
+        let left = UnloadStoryline.Left()
+        func away(_ round: Int, scrolledUp: Bool = false) -> [any Step] {
+            [
+                Send("Go on \(round)"),
+                WaitForEvent("command \(round) running") { if case .toolStarted(let call, _) = $0 { call.detail == "sleep \(round)" } else { false } },
+                UnloadStoryline.GlideEnds(),
+            ] + (scrolledUp ? [Scroll(Self.lastAnswer, to: .by(-1500)), WaitIdle(), NotePlace()] : []) + [
+                Do("Note the chat") { story in
+                    left.chat = try story.activeChat()
+                    left.backend = ScriptedWorld.shared.backend(session: left.chat?.sessionId)
+                },
+                round == 1 ? StartChat() : Press(.tab(1)), WaitIdle(),
+                Do("Reply \(round) arrives behind the other tab") { _ in left.backend?.release() },
+                Expect("reply \(round) in, behind the tab", timeout: .seconds(8)) { _ in
+                    left.chat.map { !$0.isRunning && $0.rows.contains { $0.text == Self.reply(round) } } ?? false
+                },
+                WaitIdle(),
+                Press(tab), WaitIdle(),
+            ]
+        }
+        let pinch: [any Step] = Self.pinches ? [
+            PinchedTabKeepsItsPlace.Pinch(at: CGPoint(x: 0.75, y: 0.5), amount: 0.5, to: 1.5),
+            PinchedTabKeepsItsPlace.Pinch(at: CGPoint(x: 0.5, y: 0.98), amount: -1, to: 1),
+            UnloadStoryline.ToEnd(), WaitIdle(),
+        ] : []
+        return opened() + pinch
+            + (1...Self.rounds).flatMap { away($0) + [AtEnd(when: "back after reply \($0) came")] }
+            + away(Self.rounds + 1, scrolledUp: true) + [KeptPlace()]
+    }
+}
+
+/// The same, pinched and back at its natural size first.
+final class PinchedTabComesBackAtEnd: TabComesBackAtEndAfterReply {
+    override class var pinches: Bool { true }
+}
+
 extension OpenEndStoryline {
     /// The chat's last answer: on screen at the end, so the scroll view it's in is the
     /// transcript's wherever the view is.
@@ -370,8 +425,14 @@ extension OpenEndStoryline {
         var label: String { "Note where the reader is" }
         func run(_ story: StoryContext) async throws {
             try await story.idle()
+            // The scroll's own pass may still be to come on a busy Mac: the view's taken as left
+            // once it has.
+            do {
+                try await story.until("the reader above the end", timeout: .seconds(2)) { (try? story.activeChat().storyTranscript.readerAtEnd) == false }
+            } catch StoryFailure.timedOut {
+                throw StoryFailure.expectation("the reader above the end (\(Look(story).described))")
+            }
             guard let row = OpenedChatLandsAtEnd.rowAcross(story) else { throw StoryFailure.other("no row on screen") }
-            guard (try? story.activeChat().storyTranscript.readerAtEnd) != true else { throw StoryFailure.expectation("the reader above the end") }
             story.stash(Place.self) { Place() }.row = row
         }
     }

@@ -102,7 +102,7 @@ let package = Package(
                 "KoreLink", "LinkProtocol", "HostClient", "KoreHost", "AgentTools", "KoreUI", "src", "KoreCore", "kore-host", "KoreTrust", "Tailnet", "KoreNet",
                 "KoreHostSys",
             ]),
-        .testTarget(name: "KoreHostTests", dependencies: ["KoreHost", "HostClient", "LinkProtocol", "src", "KoreCore", "kore-host", "KoreTrust", "Tailnet", "KoreNet"]),
+        .testTarget(name: "KoreHostTests", dependencies: ["KoreHost", "AgentTools", "HostClient", "LinkProtocol", "src", "KoreCore", "kore-host", "KoreTrust", "Tailnet", "KoreNet"]),
         .testTarget(name: "HostClientTests", dependencies: ["HostClient", "KoreHost", "LinkProtocol", "src", "KoreCore", "KoreTrust", "Tailnet", "KoreNet"]),
         // KoreNet end to end in one process: the real Mac stack, real kore-host daemons and an
         // emulated phone over a shared in-memory tailnet, played through many event orders.

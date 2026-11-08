@@ -52,17 +52,39 @@ package final class LoginMoves {
         package let remote: (_ cli: String, _ login: String, _ profile: String?, _ force: Bool) -> any LoginMove.Remote
         /// Its logins' fingerprints under a key; nil when it can't say.
         package let prints: (_ cli: String, _ key: Data) async -> [LoginPrint]?
-        /// Its name for the login with this email.
-        package let login: (_ email: String?) async -> String?
+        /// Its name for the CLI's login with this email.
+        package let login: (_ cli: String, _ email: String?) async -> String?
+        /// Another of the owner's Macs (it keeps many logins of each CLI), not a box.
+        package let mac: Bool
 
         package init(
             key: String, name: String, unready: LoginMove.Failure?, device: String?,
             remote: @escaping (String, String, String?, Bool) -> any LoginMove.Remote,
-            prints: @escaping (String, Data) async -> [LoginPrint]?, login: @escaping (String?) async -> String?
+            prints: @escaping (String, Data) async -> [LoginPrint]?, login: @escaping (String, String?) async -> String?, mac: Bool = false
         ) {
-            (self.key, self.name, self.unready, self.device) = (key, name, unready, device)
+            (self.key, self.name, self.unready, self.device, self.mac) = (key, name, unready, device, mac)
             (self.remote, self.prints, self.login) = (remote, prints, login)
         }
+    }
+
+    /// The owner's other Macs paired with this one (`MacPeers`, set by the link at launch).
+    @ObservationIgnored package var macs: @MainActor () -> [Box] = { [] }
+    /// Asks the Macs again who's online and what they take (the popup opening).
+    @ObservationIgnored package var lookAgain: @MainActor () -> Void = {}
+    /// Goes up when a place's state changed (a Mac came online, said what it takes).
+    private var placesVersion = 0
+    package func placesChanged() { placesVersion += 1 }
+
+    /// Where a login can go: the boxes, then the Macs.
+    private func places() -> [Box] { boxes() + macs() }
+
+    /// A place's key for a Mac: its KoreNet id.
+    package static func macKey(_ device: UUID) -> String { "mac:" + device.uuidString.lowercased() }
+
+    /// A place's name, as a row says "On …": a Mac's name, else the box's.
+    package func placeName(_ key: String) -> String {
+        guard key.hasPrefix("mac:") else { return NodeNames.name(key) }
+        return macs().first { $0.key == key }?.name ?? "another Mac"
     }
 
     /// The boxes a login can go to: each linked box's link; storylines give their own.
@@ -76,7 +98,7 @@ package final class LoginMoves {
             device: connection.netPeer?.record.id.uuidString.lowercased(),
             remote: { cli, login, profile, force in BoxLogins(connection: connection, cli: cli, login: login, host: host, profile: profile, force: force) },
             prints: { cli, key in await BoxLogins.fingerprints(connection, cli: cli, key: key) },
-            login: { email in await LoginMoves.boxLogin(connection, email: email) })
+            login: { _, email in await LoginMoves.boxLogin(connection, email: email) })
     }
 
     init(file: URL = KoreFolders.support.appendingPathComponent("login-moves.json")) {
@@ -99,7 +121,7 @@ package final class LoginMoves {
     /// The boxes (KoreNet ids) holding a login this Mac holds too, for a phone's amber point;
     /// nil when there's none.
     package var alsoOnDevices: [String]? {
-        let ids = Set(incompatible.values).compactMap { box($0)?.device }
+        let ids = Set(incompatible.values).compactMap { self.box($0)?.device }
         return ids.isEmpty ? nil : ids.sorted()
     }
 
@@ -116,13 +138,16 @@ package final class LoginMoves {
     }
 
     /// The boxes a login could move to, those that can't take one now with their reason.
-    func targets(_ cli: String) -> [Target] {
-        guard cli == "claude" else { return [] }
-        return boxes().map { box in Target(key: box.key, name: box.name, why: box.unready.map { Self.words($0, box: box.name) }) }
+    package func targets(_ cli: String) -> [Target] {
+        guard LinkLogins.clis.contains(cli) else { return [] }
+        _ = placesVersion
+        return places().map { box in Target(key: box.key, name: box.name, why: box.unready.map { Self.words($0, box: box.name, mac: box.mac) }) }
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
-    private func box(_ key: String) -> Box? { boxes().first { $0.key == key } ?? HostConnection.existing(key).map { Self.box($0) } }
+    private func box(_ key: String) -> Box? {
+        places().first { $0.key == key } ?? (key.hasPrefix("mac:") ? nil : HostConnection.existing(key).map { Self.box($0) })
+    }
 
     // MARK: Moving
 
@@ -143,18 +168,21 @@ package final class LoginMoves {
                 guard working == 0 else { return self.finish(key, .failed(.inUse(working)), box: name) }
                 if case .some(let other) = fallback { store.switchLogin(cli, to: other, LoginPick.byMove()) }
             }
-            let remote = target.remote(cli, LinkLogins.name(forEmail: email), Self.profile(cli, id), false)
+            // A box keeps one Codex login ("main"); a Claude one goes in a folder named for its
+            // email. A Mac makes a new login of either.
+            let login = cli == "codex" && !target.mac ? LinkAccount.main : LinkLogins.name(forEmail: email)
+            let remote = target.remote(cli, login, Self.profile(cli, id), false)
             let outcome = await LoginMove.out(MacLogin(cli: cli, id: id), to: remote, cli: cli)
             if let pending = outcome.pending { self.owe(Owed(box: box, cli: cli, login: AccountStore.loginKey(id), pending: pending)) }
             if outcome.moved {
                 CLIProfiles.markMoved(cli, email: email, box: box)
                 store.loginsChanged(cli)
-                UILog.event("login-move", ["cli": cli, "login": AccountStore.loginKey(id), "to": "box", "outcome": "moved"])
+                UILog.event("login-move", ["cli": cli, "login": AccountStore.loginKey(id), "to": target.mac ? "mac" : "box", "outcome": "moved"])
             } else if wasActive, case .some(let other) = fallback, CLIProfiles.active(cli) == other {
                 // Not moved: its chats come back to it.
                 store.switchLogin(cli, to: id, LoginPick.byMove())
             }
-            self.finish(key, outcome, box: name)
+            self.finish(key, outcome, box: name, mac: target.mac)
         }
     }
 
@@ -168,16 +196,17 @@ package final class LoginMoves {
         let name = target.name
         lines[key] = .moving(name)
         Task {
-            guard let login = await target.login(email) else { return self.finish(key, .failed(.notThere), box: name) }
+            let found = cli == "codex" && !target.mac ? LinkAccount.main : await target.login(cli, email)
+            guard let login = found else { return self.finish(key, .failed(.notThere), box: name, mac: target.mac) }
             let remote = target.remote(cli, login, nil, false)
             let outcome = await LoginMove.back(MacLogin(cli: cli, id: id), from: remote, cli: cli)
             if let pending = outcome.pending { self.owe(Owed(box: box, cli: cli, login: AccountStore.loginKey(id), pending: pending)) }
             if outcome.moved {
                 CLIProfiles.noteBack(cli, email: email)
                 AccountStore.shared.loginsChanged(cli)
-                UILog.event("login-move", ["cli": cli, "login": AccountStore.loginKey(id), "to": "mac", "outcome": "moved"])
+                UILog.event("login-move", ["cli": cli, "login": AccountStore.loginKey(id), "to": "here", "outcome": "moved"])
             }
-            self.finish(key, outcome, box: name, here: true)
+            self.finish(key, outcome, box: name, here: true, mac: target.mac)
         }
     }
 
@@ -199,15 +228,15 @@ package final class LoginMoves {
                 CLIProfiles.markMoved(cli, email: Self.email(cli, id), box: box)
                 AccountStore.shared.loginsChanged(cli)
             }
-            UILog.event("login-keep", ["cli": cli, "login": AccountStore.loginKey(id), "where": here ? "mac" : "box", "outcome": outcome.failure.map(Self.code) ?? "kept"])
-            self.finish(key, outcome, box: name, here: here)
+            UILog.event("login-keep", ["cli": cli, "login": AccountStore.loginKey(id), "where": here ? "here" : target.mac ? "mac" : "box", "outcome": outcome.failure.map(Self.code) ?? "kept"])
+            self.finish(key, outcome, box: name, here: here, mac: target.mac)
         }
     }
 
     /// `here`: the login ended up on this Mac (a move back, a Keep here).
-    private func finish(_ key: String, _ outcome: LoginMove.Outcome, box: String, here: Bool = false) {
+    private func finish(_ key: String, _ outcome: LoginMove.Outcome, box: String, here: Bool = false, mac: Bool = false) {
         if let failure = outcome.failure {
-            lines[key] = .failed(Self.words(failure, box: box))
+            lines[key] = .failed(Self.words(failure, box: box, mac: mac))
             UILog.event("login-move", ["login": key, "outcome": Self.code(failure)])
         } else {
             // Moved; then read where it is now (one copy left): one that doesn't work there says so.
@@ -271,24 +300,26 @@ package final class LoginMoves {
     /// its row. This Mac's are read without a prompt; one Kore may not read is skipped.
     package func check() {
         guard let key = Self.fingerprintKey() else { return }
-        let ready = boxes().filter { $0.unready == nil }
+        let ready = places().filter { $0.unready == nil }
         guard !ready.isEmpty else { return }
-        let cli = "claude"
-        let ids: [String?] = [nil] + CLIProfiles.added(cli).map(\.id)
         Task {
-            var mine: [String: String] = [:]
-            for id in ids {
-                let place = MacLogin(cli: cli, id: id).place
-                let data = try? await Task.detached { try LoginVault.store.value.read(place, prompt: false) }.value
-                if let data = data ?? nil, let print = LoginFingerprint.of(data, cli: cli, key: key) { mine[print] = Self.key(cli, id) }
-            }
             var found: [String: String] = [:]
             var names: [String: String] = [:]
-            for box in ready {
-                for print in await box.prints(cli, key) ?? [] {
-                    if let login = mine[print.fingerprint] {
-                        found[login] = box.key
-                        names[login] = print.login
+            for cli in LinkLogins.clis.sorted() {
+                let ids: [String?] = [nil] + CLIProfiles.added(cli).map(\.id)
+                var mine: [String: String] = [:]
+                for id in ids {
+                    let place = MacLogin(cli: cli, id: id).place
+                    let data = try? await Task.detached { try LoginVault.store.value.read(place, prompt: false) }.value
+                    if let data = data ?? nil, let print = LoginFingerprint.of(data, cli: cli, key: key) { mine[print] = Self.key(cli, id) }
+                }
+                guard !mine.isEmpty else { continue }
+                for box in ready {
+                    for print in await box.prints(cli, key) ?? [] {
+                        if let login = mine[print.fingerprint] {
+                            found[login] = box.key
+                            names[login] = print.login
+                        }
                     }
                 }
             }
@@ -300,8 +331,10 @@ package final class LoginMoves {
     // MARK: Words
 
     /// The row's one line for a move that didn't happen.
-    static func words(_ failure: LoginMove.Failure, box: String) -> String {
+    static func words(_ failure: LoginMove.Failure, box: String, mac: Bool = false) -> String {
         switch failure {
+        case .tooOld where mac: "\(box) needs a newer Kore"
+        case .keychainDenied where mac: "\(box)'s Keychain didn't let Kore read it"
         case .busy: "It's already moving"
         case .inUse(let n): n == 1 ? "A chat is using it here" : "\(n) chats are using it here"
         case .notThere: "It isn't on \(box)"
@@ -312,6 +345,7 @@ package final class LoginMoves {
         case .sentWrong: "It arrived changed on \(box): not moved"
         case .notSignedIn: "\(box) doesn't read it signed in"
         case .notALogin: "It isn't a complete login: not moved"
+        case .occupied: "\(box) has its own Codex login: a box keeps one"
         case .changedMeanwhile: "It refreshed while moving: try again"
         case .failed(let words): words
         case .refused(let words): words == "not on KoreNet" ? "\(box) isn't on KoreNet" : words
@@ -330,6 +364,7 @@ package final class LoginMoves {
         case .sentWrong: "sentWrong"
         case .notSignedIn: "notSignedIn"
         case .notALogin: "notALogin"
+        case .occupied: "occupied"
         case .changedMeanwhile: "changedMeanwhile"
         case .failed: "failed"
         case .refused: "refused"

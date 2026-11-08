@@ -29,6 +29,7 @@ class ChatActivity : NodeActivity() {
     private lateinit var openingSpinner: Spinner
     private lateinit var leadLogo: android.widget.ImageView
     private lateinit var leadSpin: Spinner
+    private lateinit var leadPrompt: PromptMark
     /** The transcript showed its end before a resize (the keyboard, the card): it shows it after. */
     private var atEnd = true
     private lateinit var openingText: TextView
@@ -51,6 +52,8 @@ class ChatActivity : NodeActivity() {
         leadSpin = Spinner(this@ChatActivity, Tone.spinClaude).apply { visibility = View.GONE }
         barLead.addView(leadLogo, android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
         barLead.addView(leadSpin, android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
+        leadPrompt = PromptMark(this@ChatActivity).apply { visibility = View.GONE }
+        barLead.addView(leadPrompt, android.widget.FrameLayout.LayoutParams(dp(17), dp(17)))
         // Opening (spec §6): a 28 spinner over "Opening on {device}" (Callout, dim), centred.
         openingSpinner = Spinner(this@ChatActivity, Tone.accent)
         openingText = label("Opening on $macName").apply { type(Type.Callout); setTextColor(Tone.dim); gravity = Gravity.CENTER }
@@ -198,6 +201,8 @@ class ChatActivity : NodeActivity() {
         chat?.let { kore.seen.opened(chatId, (it["lastAt"] as? kotlinx.serialization.json.JsonPrimitive)?.content?.toLongOrNull()) }
         actions.render(chat, snapshot)
         adapter.queued = (chat?.get("queued") as? kotlinx.serialization.json.JsonPrimitive)?.content?.toIntOrNull() ?: 0
+        // A chat not in the snapshot yet keeps what it showed (no fold-and-unfold on a reconnect).
+        if (chat != null) adapter.running = chat.bool("running")
         adapter.canFork = chat?.obj("can")?.let { if (it.containsKey("fork")) it.bool("fork") else null }
         adapter.rescue = ControlModel.rescue(chat?.obj("rescue")) { at -> whenText(at) }
         menuButton?.visibility = if (chat != null && (chat.containsKey("controls") || link.hasControl(snapshot))) View.VISIBLE else View.GONE
@@ -210,11 +215,18 @@ class ChatActivity : NodeActivity() {
         // Between turns, a sub-agent or a background command keeps it working (link 1.13).
         val waiting = Waiting.of(chat)
         val working = chat?.bool("running") == true || waiting != null
-        barAfter.showWaiting(waiting)
+        // Only background commands, the model idle or waiting on you: ">_" leads, and the bar's
+        // symbols drop the ">_" it would repeat (bg-command-cue C).
+        val prompt = Waiting.promptOnly(chat)
+        barAfter.showWaiting(if (prompt) waiting?.let { w -> Waiting(w.agents, 0).takeIf { it.agents > 0 } } else waiting)
+        leadPrompt.visibility = if (prompt) View.VISIBLE else View.GONE
+        leadPrompt.needsYou = prompt && chat?.str("state") == "needsYou"
         provider?.let { leadLogo.setImageResource(providerLogo(it)) }
         leadSpin.tint = if (provider == "codex") Tone.spinCodex else Tone.spinClaude
-        leadLogo.visibility = if (working) View.INVISIBLE else View.VISIBLE
-        leadSpin.visibility = if (working) View.VISIBLE else View.GONE
+        leadPrompt.tint = leadSpin.tint
+        leadPrompt.ring = Tone.bg
+        leadLogo.visibility = if (working || prompt) View.INVISIBLE else View.VISIBLE
+        leadSpin.visibility = if (working && !prompt) View.VISIBLE else View.GONE
         barLead.visibility = if (provider != null) View.VISIBLE else View.GONE
     }
 
@@ -234,15 +246,18 @@ class ChatActivity : NodeActivity() {
         list.postDelayed({ if (askedEarlier) { askedEarlier = false; adapter.earlier = transcript.hasEarlier; adapter.submit(transcript.entries) } }, 8_000)
     }
 
-    /** Long-press a message: Copy, Fork from here / Fork after this, and Revert to here (the Mac's rollback). */
-    private fun messageMenu(anchor: View, e: JsonObject) {
+    /**
+     * Long-press a message: Copy, Fork from here / Fork after this, and Revert to here (the Mac's
+     * rollback); on a table, Copy table first, as the Mac's table Copy copies it ([TableCopy]).
+     */
+    private fun messageMenu(anchor: View, e: JsonObject, table: String? = null) {
         val id = e.str("id") ?: return
         val after = e.str("kind") != "user"
         val text = e.str("text")?.takeIf { it.isNotEmpty() } ?: Doc.render(e.objs("doc")).toString()
-        val items = mutableListOf(PopMenu.Item("Copy") {
-            val clip = getSystemService(android.content.ClipboardManager::class.java)
-            clip.setPrimaryClip(android.content.ClipData.newPlainText("Message", text))
-        })
+        val clip = getSystemService(android.content.ClipboardManager::class.java)
+        val items = mutableListOf<PopMenu.Item>()
+        if (table != null) items += PopMenu.Item("Copy table") { clip.setPrimaryClip(android.content.ClipData.newPlainText("Table", table)) }
+        items += PopMenu.Item("Copy") { clip.setPrimaryClip(android.content.ClipData.newPlainText("Message", text)) }
         adapter.canFork?.let { can -> items += PopMenu.Item(if (after) "Fork after this" else "Fork from here", enabled = can) { actions.fork(id, after) } }
         adapter.canFork?.let { can -> items += PopMenu.Item("Revert to here", danger = true, enabled = can && !actions.turnRunning) { actions.revert(id, after) } }
         PopMenu(this).show(anchor, items)
@@ -276,6 +291,10 @@ class ChatActivity : NodeActivity() {
         /** A rescue row under the turn: Retry, Continue, "Continues at …" ×. */
         data class Rescue(val line: ControlModel.RescueLine) : Item()
         data class Work(val key: String, val steps: List<JsonObject>, val open: Boolean) : Item()
+        /** The running turn's current step, one line by the spinner (`LiveWork`). */
+        data class Live(val e: JsonObject) : Item()
+        /** The turn runs with nothing of it on screen yet: the spinner and "Working…". */
+        object Pending : Item()
         /** Messages waiting behind the running turn or a compaction (the Mac's queued rows), counted. */
         data class Queued(val count: Int) : Item()
     }
@@ -289,6 +308,9 @@ class ChatActivity : NodeActivity() {
         private var turned: String? = null
         var queued = 0
             set(value) { if (field != value) { field = value; rebuild() } }
+        /** A turn runs: its last steps stay out as live lines; when it ends they fold. */
+        var running = false
+            set(value) { if (field != value) { field = value; rebuild() } }
         var earlier = false
         /** Null when the Mac doesn't offer forks; false while it can't fork now. */
         var canFork: Boolean? = null
@@ -301,24 +323,16 @@ class ChatActivity : NodeActivity() {
             rebuild()
         }
 
-        /** Runs of tool, thinking and agent rows fold into "Worked · N steps", except the live tail. */
+        /** Runs of tool, thinking and agent rows fold into "Worked · N steps"; a running turn's last 3 stay out, one line each. */
         private fun rebuild() {
             val out = ArrayList<Item>()
             if (earlier && entries.isNotEmpty()) out.add(Item.Earlier)
-            var run = ArrayList<JsonObject>()
-            fun flush(live: Boolean) {
-                if (run.isEmpty()) return
-                val key = run.first().str("id") ?: ""
-                if (live || run.size < 2 || key in open) {
-                    if (run.size >= 2 && key in open) out.add(Item.Work(key, run.toList(), true))
-                    run.forEach { out.add(Item.One(it)) }
-                } else out.add(Item.Work(key, run.toList(), false))
-                run = ArrayList()
-            }
-            for (e in entries) {
-                if (e.str("kind") in setOf("tool", "thinking", "agent")) run.add(e) else flush(false).also { out.add(Item.One(e)) }
-            }
-            flush(true)
+            for (f in LiveWork.fold(entries, open, running)) out.add(when (f) {
+                is LiveWork.Fold.One -> Item.One(f.e)
+                is LiveWork.Fold.Work -> Item.Work(f.key, f.steps, f.open)
+                is LiveWork.Fold.Live -> Item.Live(f.e)
+                LiveWork.Fold.Pending -> Item.Pending
+            })
             if (queued > 0) out.add(Item.Queued(queued))
             rescue.forEach { out.add(Item.Rescue(it)) }
             // Only what changed is drawn again: a streaming answer rebinds its own row, not the page.
@@ -335,6 +349,8 @@ class ChatActivity : NodeActivity() {
         private fun keyOf(item: Item): String = when (item) {
             is Item.One -> "e:" + (item.e.str("id") ?: System.identityHashCode(item.e).toString())
             is Item.Work -> "w:" + item.key
+            is Item.Live -> "l:" + (item.e.str("id") ?: System.identityHashCode(item.e).toString())
+            Item.Pending -> "pending"
             is Item.Rescue -> "r:" + item.line.key
             Item.Earlier -> "earlier"
             is Item.Queued -> "queued"
@@ -344,6 +360,8 @@ class ChatActivity : NodeActivity() {
         private fun sameContent(a: Item, b: Item): Boolean = when {
             a is Item.One && b is Item.One -> a.e === b.e || a.e == b.e
             a is Item.Work && b is Item.Work -> a.steps.size == b.steps.size && a.open == b.open
+            a is Item.Live && b is Item.Live -> a.e === b.e || a.e == b.e
+            a is Item.Pending && b is Item.Pending -> true
             a is Item.Rescue && b is Item.Rescue -> a == b
             else -> false
         }
@@ -368,6 +386,9 @@ class ChatActivity : NodeActivity() {
                     android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                         topMargin = dp(6); bottomMargin = dp(6)
                     })
+                // The running step's spinner (it ticks only while shown).
+                addView(Spinner(this@ChatActivity, Tone.spinClaude).apply { visibility = View.GONE },
+                    android.widget.FrameLayout.LayoutParams(dp(13), dp(13), Gravity.START or Gravity.CENTER_VERTICAL).apply { leftMargin = dp(16) })
             },
         ) {}
 
@@ -376,12 +397,15 @@ class ChatActivity : NodeActivity() {
             val rule = frame.getChildAt(0)
             val v = frame.getChildAt(1) as TextView
             val docBox = frame.getChildAt(2) as LinearLayout
+            val spin = frame.getChildAt(3) as Spinner
             rule.visibility = View.GONE
             docBox.visibility = View.GONE
+            spin.visibility = View.GONE
             v.visibility = View.VISIBLE
             v.maxWidth = Int.MAX_VALUE
             v.background = null
             v.setOnClickListener(null)
+            v.setOnTouchListener(null)
             v.setOnLongClickListener(null)
             v.movementMethod = null
             v.isLongClickable = false
@@ -400,10 +424,10 @@ class ChatActivity : NodeActivity() {
                 is Item.Work -> {
                     // "Worked · N steps" (spec §5): Callout, faint, a 15 chevron before it that turns 90° in 120 ms when open.
                     val expanded = item.key in open
-                    v.text = "Worked · ${item.steps.size} steps"
+                    v.text = "Worked · ${item.steps.size} ${if (item.steps.size == 1) "step" else "steps"}"
                     v.setTextColor(Tone.faint)
                     v.type(Type.Callout)
-                    v.contentDescription = "Worked, ${item.steps.size} steps, ${if (expanded) "open" else "closed"}"
+                    v.contentDescription = "Worked, ${item.steps.size} ${if (item.steps.size == 1) "step" else "steps"}, ${if (expanded) "open" else "closed"}"
                     val chevron = android.graphics.drawable.RotateDrawable().apply {
                         drawable = getDrawable(dev.kore.phone.R.drawable.i_chevron)?.mutate()?.apply { setTint(Tone.faint) }
                         fromDegrees = 0f; toDegrees = 90f
@@ -430,7 +454,11 @@ class ChatActivity : NodeActivity() {
                     } else bind(v, item.e)
                     if (item.e.str("kind") == "divider") rule.visibility = View.VISIBLE
                     if (item.e.str("kind") in setOf("user", "answer", "plan")) {
-                        val hold = View.OnLongClickListener { messageMenu(if (v.visibility == View.VISIBLE) v else docBox, item.e); true }
+                        val hold = View.OnLongClickListener { pressed ->
+                            val table = DocViews.tableText(pressed)
+                            messageMenu(if (table != null) pressed else if (v.visibility == View.VISIBLE) v else docBox, item.e, table)
+                            true
+                        }
                         frame.setOnLongClickListener(hold)
                         v.setOnLongClickListener(hold)
                         holdAll(docBox, hold)
@@ -445,6 +473,16 @@ class ChatActivity : NodeActivity() {
                     if (!askedEarlier) v.setOnClickListener { loadEarlier() }
                     return
                 }
+                is Item.Live -> bindLive(v, spin, item)
+                Item.Pending -> {
+                    v.text = "Working…"
+                    v.setTextColor(Tone.faint); v.type(Type.Callout)
+                    v.maxLines = 1
+                    v.setPadding(dp(26), dp(5), dp(4), dp(5))
+                    spin.tint = if (provider == "codex") Tone.spinCodex else Tone.spinClaude
+                    spin.visibility = View.VISIBLE
+                    (v.layoutParams as android.widget.FrameLayout.LayoutParams).leftMargin = dp(10)
+                }
                 is Item.Rescue -> { bindRescue(v, item.line); return }
                 is Item.Queued -> {
                     v.text = if (item.count == 1) "⟳ 1 message queued · goes when the turn ends" else "⟳ ${item.count} messages queued · go when the turn ends"
@@ -453,6 +491,25 @@ class ChatActivity : NodeActivity() {
                     (v.layoutParams as android.widget.FrameLayout.LayoutParams).leftMargin = dp(10)
                 }
             }
+        }
+
+        /**
+         * The running turn's current step, one quiet line by the spinner: the newest line of a
+         * thought, or a tool or sub-agent as its short name · its target.
+         */
+        private fun bindLive(v: TextView, spin: Spinner, item: Item.Live) {
+            val line = LiveWork.line(item.e)
+            v.text = if (line.thought) line.what else listOfNotNull(line.what, line.on).joinToString(" · ")
+            v.type(Type.Callout)
+            v.setTextColor(Tone.faint)
+            if (line.thought) v.setTypeface(v.typeface, android.graphics.Typeface.ITALIC)
+            v.maxLines = 1
+            v.ellipsize = android.text.TextUtils.TruncateAt.END
+            v.setPadding(dp(26), dp(5), dp(4), dp(5))
+            (v.layoutParams as android.widget.FrameLayout.LayoutParams).apply { leftMargin = dp(10); topMargin = dp(1); bottomMargin = dp(1) }
+            v.contentDescription = listOfNotNull("Working", line.what, line.on).joinToString(", ")
+            spin.tint = if (provider == "codex") Tone.spinCodex else Tone.spinClaude
+            spin.visibility = View.VISIBLE
         }
 
         /** Every view of a rendered answer takes the long-press (its text views would swallow it). */
@@ -489,7 +546,10 @@ class ChatActivity : NodeActivity() {
             (v.layoutParams as android.widget.FrameLayout.LayoutParams).leftMargin = dp(10)
         }
 
-        /** The message, then each attachment: its thumbnail once the Mac sent it, else its name. */
+        /**
+         * The message, then each attachment: its thumbnail once the Mac sent it, else its name. An
+         * image is marked with its ref ([ImageRef]): a tap on it opens it full screen.
+         */
         private fun userText(e: JsonObject): CharSequence {
             val text = e.str("text").orEmpty()
             val files = e.objs("attachments")
@@ -498,6 +558,7 @@ class ChatActivity : NodeActivity() {
                 for (f in files) {
                     val ref = f.str("ref") ?: continue
                     if (isNotEmpty()) append("\n")
+                    val from = length
                     val thumb = Thumbs.get(ref)
                     if (thumb != null) {
                         val w = dp(160)
@@ -509,7 +570,22 @@ class ChatActivity : NodeActivity() {
                         val l = link
                         if (l != null && f.str("kind") == "image") Thumbs.fetch(kore.scope, l, chatId, ref) { runOnUiThread { changed(e.str("id")) } }
                     }
+                    if (f.str("kind") == "image") setSpan(ImageRef(ref, f.str("name")), from, length, android.text.Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 }
+            }
+        }
+
+        /** A tap on a bubble's image (where the finger went down) opens it full screen. */
+        private fun tapImages(v: TextView) {
+            val spanned = v.text as? android.text.Spanned ?: return
+            if (spanned.getSpans(0, spanned.length, ImageRef::class.java).isEmpty()) return
+            var x = 0f
+            var y = 0f
+            v.setOnTouchListener { _, ev -> if (ev.actionMasked == android.view.MotionEvent.ACTION_DOWN) { x = ev.x; y = ev.y }; false }
+            v.setOnClickListener {
+                val at = v.getOffsetForPosition(x, y)
+                val hit = spanned.getSpans(maxOf(0, at - 1), at + 1, ImageRef::class.java).firstOrNull() ?: return@setOnClickListener
+                ImageActivity.open(this@ChatActivity, chatId, hit.ref, hit.name)
             }
         }
 
@@ -517,6 +593,7 @@ class ChatActivity : NodeActivity() {
             when (e.str("kind")) {
                 "user" -> {
                     v.text = userText(e)
+                    tapImages(v)
                     // The user bubble (spec §5): l2, radius 18 18 6 18, padding 9 × 14, at most 82 % of the column.
                     v.background = corners(Tone.l2, 18, 18, 6, 18)
                     v.setPadding(dp(14), dp(9), dp(14), dp(9))
@@ -635,7 +712,6 @@ class ChatActivity : NodeActivity() {
         val window = snap.objs("windows").firstOrNull { w -> w.objs("tabs").any { it.str("chatId") == chatId } }
             ?: snap.objs("windows").firstOrNull { it.str("id") == chat?.str("windowId") }
             ?: return Quiet.say(this, "This chat's window isn't open any more.")
-        val box = link?.device?.value?.kind == dev.kore.link.trust.NodeKind.BOX
         val providers = link?.welcome?.value?.objs("providers").orEmpty()
         lateinit var s: Sheet
         s = Sheet(this).show {
@@ -644,14 +720,21 @@ class ChatActivity : NodeActivity() {
                 val pid = p.str("id") ?: continue
                 item("${p.str("name") ?: pid} chat", glyph = providerMark(pid), checked = pid == chat?.str("provider"), tag = "New ${p.str("name")} chat") {
                     s.dismiss()
-                    val path = window.str("path")
-                    val cmd = if (box && path != null) dev.kore.link.node.Control.newChatInFolder(path, pid) else dev.kore.link.node.Control.newChat(window.str("id") ?: "", pid)
-                    act(cmd) { r ->
+                    // By the window's id, on a box too: its windows say their folder as `~/…`.
+                    act(dev.kore.link.node.Control.newChat(window.str("id") ?: "", pid)) { r ->
                         r.str("chatId")?.let { startActivity(android.content.Intent(this@ChatActivity, ChatActivity::class.java).putExtra("chat", it)) }
                             ?: Quiet.say(this@ChatActivity, "Started on $macName")
                     }
                 }
             }
+            // A past chat back, in this window (a tap in History opens it here).
+            item("From History", glyph = "From History", chevron = true) {
+                dismiss()
+                startActivity(android.content.Intent(this@ChatActivity, HistoryActivity::class.java).putExtra("window", window.str("id")))
+            }
         }
     }
 }
+
+/** Marks a sent image's place in a user bubble (its thumbnail or its name): what a tap there opens. */
+private class ImageRef(val ref: String, val name: String?)

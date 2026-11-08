@@ -52,6 +52,12 @@ extension Chat {
 
     /// Files picked with +.
     package func storyAttach(_ urls: [URL]) { attach(urls) }
+    /// Every chip's ×.
+    package func storyDetachAll() { for a in attachments { removeAttachment(a.id) } }
+    /// Typed into the composer.
+    package func storyType(_ text: String) { draft = text }
+    /// How far the composer has grown past its smallest (the message rail sits lower by half).
+    package var storyComposerGrowth: CGFloat { transcript.composerGrowth }
 
     /// The composer's Send (or a queued send, while a turn runs).
     package func storySend(_ text: String) {

@@ -95,15 +95,20 @@ enum Size {
     /// A tab at its narrowest: its mark and its ×.
     static let tabMinWidth: CGFloat = 48
     static let tabMaxWidth: CGFloat = 220
+    /// The least room a tab's title gets in the strip: four or five characters at 13pt, a cut
+    /// name's ellipsis among them (`TabTitle.room`).
+    static let tabTitleMin: CGFloat = 44
     /// Narrower than this, tabs show their names' first letters, clipped, and the active one's
-    /// name shows before them, at most `tabNameMax` wide (and a quarter of the room).
-    static let tabNamed: CGFloat = 90
-    /// The narrowest a tab with its first letters gets: past it the strip scrolls, and only a
-    /// strip too narrow for one such tab shows marks alone. The × lies over the letters' end,
-    /// which fade out under it, clear for its last `tabLettersClear`.
-    static let tabLetters: CGFloat = 72
-    static let tabLettersFade: CGFloat = 10
-    static let tabLettersClear: CGFloat = 14
+    /// name shows before them, at most `tabNameMax` wide (and a quarter of the room). Here the
+    /// active tab's name, ended before its ×, has `tabTitleMin`.
+    static let tabNamed: CGFloat = 106
+    /// The narrowest a tab with its first letters gets, `tabTitleMin` for them: past it the strip
+    /// scrolls, and only a strip too narrow for one such tab shows marks alone.
+    static let tabLetters: CGFloat = 80
+    /// An × shown over a title's end (on hover, or on a tab showing letters): the title fades
+    /// out before it, clear for its last `tabTitleClear`.
+    static let tabTitleFade: CGFloat = 10
+    static let tabTitleClear: CGFloat = 14
     static let tabNameMax: CGFloat = 160
     /// `»N` after a strip that scrolls.
     static let tabOverflow: CGFloat = 36
@@ -133,6 +138,10 @@ enum Size {
     static let logoRow: CGFloat = 13
     static let logoPicker: CGFloat = 16
     static let spinner: CGFloat = 14
+    /// The amber point on a background-only chat's ">_" mark while an approval waits.
+    static let backgroundPromptPoint: CGFloat = 6
+    /// The ground's ring round that point, so it reads apart from an orange ">_".
+    static let backgroundPromptRing: CGFloat = 1.5
     /// The empty chat's "Import a chat" line, the picker's search line, and its rows (as high as
     /// a usage reset's), seven of them before the list scrolls; a row's running spinner.
     static let importLine: CGFloat = 22

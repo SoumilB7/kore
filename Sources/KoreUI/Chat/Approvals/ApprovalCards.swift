@@ -10,6 +10,8 @@ struct PermissionCard: View {
     var folder: URL?
     /// The mode it asks past: its corner marks' colour.
     var corners: Color?
+    /// An Auto ask's "Always ask for these in my settings" (or its undo): its label and action.
+    var settings: (label: String, run: () -> Void)?
     let decide: (Decision) -> Void
 
     var body: some View {
@@ -48,10 +50,17 @@ struct PermissionCard: View {
                     .panel(.well)
             }
             AdaptiveButtons {
-                Button("Deny") { decide(.deny) }
+                // A call Auto already refused has nothing to deny: its card is dismissed.
+                Button(approval.autoStop && approval.allowNote != nil ? "OK" : "Deny") { decide(.deny) }
                     .buttonStyle(SubtleButtonStyle())
                     .storyID(StoryID.Approval.card(approval.id).part(.deny))
-                if approval.canAlwaysAllow {
+                if approval.canAlwaysAllow, approval.autoStop {
+                    // One exact rule for this command, in the project's local settings.
+                    Button("Always allow this command") { decide(.allowAlways) }
+                        .buttonStyle(SubtleButtonStyle())
+                        .help("Kept in this project's local Claude settings. In Auto it also skips Auto's check for this command.")
+                        .storyID(StoryID.Approval.card(approval.id).part(.always))
+                } else if approval.canAlwaysAllow, !approval.autoStop {
                     Button("Always allow") { decide(.allowAlways) }
                         .buttonStyle(SubtleButtonStyle())
                         .storyID(StoryID.Approval.card(approval.id).part(.always))
@@ -63,9 +72,22 @@ struct PermissionCard: View {
                         .help(note)
                         .storyID(StoryID.Approval.card(approval.id).part(.always))
                 }
-                Button("Allow") { decide(.allow) }
-                    .buttonStyle(SubtleButtonStyle(prominent: true))
-                    .storyID(StoryID.Approval.card(approval.id).part(.allow))
+                // A call Auto refused outright has no Run once: its line says why, and OK.
+                if !(approval.autoStop && approval.allowNote != nil) {
+                    Button(approval.autoStop ? "Run once" : "Allow") { decide(.allow) }
+                        .buttonStyle(SubtleButtonStyle(prominent: true))
+                        // Held by a setting Kore can't change: dim, saying so.
+                        .disabled(approval.allowNote != nil)
+                        .help(approval.allowNote ?? "")
+                        .storyID(StoryID.Approval.card(approval.id).part(.allow))
+                }
+            }
+            if let settings {
+                Button(settings.label, action: settings.run)
+                    .buttonStyle(.plain)
+                    .font(TextStyle.label)
+                    .foregroundStyle(Theme.secondary)
+                    .storyID(StoryID.Approval.card(approval.id).part(.settings))
             }
         }
         .padding(Inset.card)

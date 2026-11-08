@@ -151,7 +151,8 @@ enum LinkSnapshot {
         return (out, change.isTruncated)
     }
 
-    /// Each CLI's models, read from its open chats (a CLI says them once it runs), and its account.
+    /// Each CLI's models, read from its open chats (a CLI says them once it runs), its account,
+    /// and its logins' usage as this Mac knows it (`AccountStore.linkUsage`).
     static func clis(_ chats: [Chat]) -> [CLIState] {
         Registry.all.compactMap { provider in
             let chat = chats.first(where: { $0.provider.id == provider.id && !$0.linkModels.isEmpty })
@@ -161,7 +162,7 @@ enum LinkSnapshot {
                 models: (chat?.linkModels ?? []).map {
                     .init(id: $0.id, name: $0.name, efforts: $0.efforts, fast: $0.supportsFastMode, auto: $0.supportsAutoMode)
                 },
-                effortScale: chat?.linkEffortScale ?? [], account: account)
+                effortScale: chat?.linkEffortScale ?? [], account: account, usage: AccountStore.shared.linkUsage(provider.id))
         }
     }
 
@@ -347,9 +348,10 @@ enum LinkSnapshot {
             }
             actions = [.init(id: .submitAnswers, label: "Submit", style: .primary), .init(id: .deny, label: "Skip", style: .neutral)]
         case .permission, .planReady:
-            actions =
-                [.init(id: .allow, label: "Allow", style: .primary)]
-                + (approval.canAlwaysAllow ? [.init(id: .allowAlways, label: "Always allow", style: .neutral, refused: true)] : [])
+            // A call Auto refused outright: OK only, its line says why.
+            actions = approval.autoStop && approval.allowNote != nil ? [.init(id: .deny, label: "OK", style: .neutral)] :
+                [.init(id: .allow, label: approval.autoStop ? "Run once" : "Allow", style: .primary, refused: approval.allowNote != nil ? true : nil)]
+                + (approval.canAlwaysAllow && !approval.autoStop ? [.init(id: .allowAlways, label: "Always allow", style: .neutral, refused: true)] : [])
                 + [.init(id: .deny, label: "Deny", style: .destructive)]
         }
         let digest = LinkCardDigest(

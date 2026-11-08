@@ -136,6 +136,7 @@ package final class PinchZoom {
         if let window, Self.windows.object(forKey: window) === self { Self.windows.removeObject(forKey: window) }
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        updatePointer()
         observers.forEach(NotificationCenter.default.removeObserver)
         observers = []
         window = nil
@@ -156,6 +157,7 @@ package final class PinchZoom {
         cancel(resumeFollowing: false)
         if let previous = pages[activeTab] { deactivate(previous) }
         activeTab = id
+        updatePointer()
         scheduleActivation()
     }
 
@@ -249,7 +251,7 @@ package final class PinchZoom {
             scroll.reflectScrolledClipView(clip)
         }
         if !pinching { fitSides(scroll, page) }
-        ScrollShift.magnified(scroll)
+        magnified(scroll)
     }
 
     /// Sideways only while magnified: trackpad panning then, even without a visible scroller. At
@@ -285,7 +287,120 @@ package final class PinchZoom {
             scroll.reflectScrolledClipView(clip)
         }
         page.original = nil
+        self.magnified(scroll)
+    }
+
+    // MARK: Pointer on a magnified page
+
+    /// SwiftUI's own scroll view reads a pointer event as if its page weren't magnified: the
+    /// clip's origin a plain offset, the distance from the view's corner unscaled. So a click
+    /// lands on whatever sits there at the natural size, and a hover on that row. While the
+    /// active page is magnified, a press over SwiftUI's content, its drags and release, and the
+    /// pointer's moves over it are re-aimed to the point SwiftUI reads as the one drawn under
+    /// the pointer, and the press is routed to the view AppKit finds there (`PressRoute`), as it
+    /// is unmagnified. Nothing is redrawn or laid out for it: a hit test per pointer move (two
+    /// per press), only while magnified; nothing per frame or per scroll. AppKit views in the
+    /// page (text views, diffs) hit-test magnified themselves and keep their events.
+    private var pointer: Any?
+    private let route = PressRoute()
+    /// The press went in re-aimed: its drags and release go so too.
+    private var pressAimed = false
+    private static let swiftUI = Bundle(for: NSHostingView<EmptyView>.self)
+    /// Re-aimed events and where the pointer really was, for readers that convert through
+    /// AppKit's own (magnified) geometry: `NSEvent.drawnLocation`.
+    fileprivate static let originals = NSMapTable<NSEvent, NSValue>(keyOptions: [.weakMemory, .objectPointerPersonality], valueOptions: .strongMemory)
+
+    /// Whether pointer events are being re-aimed (a magnified SwiftUI page is active).
+    var aiming: Bool { pointer != nil }
+
+    private func magnified(_ scroll: NSScrollView) {
         ScrollShift.magnified(scroll)
+        updatePointer()
+    }
+
+    /// The monitor and the route are there only while the active page is magnified.
+    private func updatePointer() {
+        let page = pages[activeTab]
+        let scroll = window == nil || page?.original == nil ? nil
+            : page?.scroll.flatMap { $0.magnification > 1.001 && Self.hostsSwiftUI($0) ? $0 : nil }
+        if route.superview !== scroll {
+            route.removeFromSuperview()
+            route.reset()
+            if let scroll {
+                route.frame = scroll.bounds
+                scroll.addSubview(route)
+            }
+        }
+        guard (scroll != nil) != (pointer != nil) else { return }
+        if scroll != nil {
+            pointer = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .mouseMoved]) { [weak self] event in
+                self?.aim(event) ?? event
+            }
+        } else if let pointer {
+            NSEvent.removeMonitor(pointer)
+            self.pointer = nil
+            pressAimed = false
+        }
+    }
+
+    /// SwiftUI's scroll view (a transcript, a preview's column): one of Kore's own (the editor, a
+    /// tree's canvas) hosts AppKit views that hit-test magnified already.
+    private static func hostsSwiftUI(_ scroll: NSScrollView) -> Bool { Bundle(for: type(of: scroll)) == swiftUI }
+
+    /// Where SwiftUI reads `point` as the one drawn there: towards the view's top-left `corner`
+    /// (window coordinates) by the magnification.
+    static func aimed(_ point: CGPoint, corner: CGPoint, scale: CGFloat) -> CGPoint {
+        CGPoint(x: corner.x + (point.x - corner.x) / scale, y: corner.y + (point.y - corner.y) / scale)
+    }
+
+    func aim(_ event: NSEvent) -> NSEvent {
+        guard event.window === window, let scroll = pages[activeTab]?.scroll, scroll.magnification > 1.001,
+              let content = window?.contentView else { return event }
+        let point = event.locationInWindow
+        func hit(_ point: CGPoint) -> NSView? { content.hitTest(content.superview?.convert(point, from: nil) ?? point) }
+        /// SwiftUI's content in the page under the drawn point.
+        func page() -> NSView? {
+            guard let view = hit(point), let document = scroll.documentView,
+                  Bundle(for: type(of: view)) == Self.swiftUI, view.isDescendant(of: document) else { return nil }
+            return view
+        }
+        switch event.type {
+        case .leftMouseDown:
+            pressAimed = false
+            route.reset()
+            // ⌃-click is a context click: Kore's menus find their row through AppKit.
+            guard !event.modifierFlags.contains(.control), let target = page(), let aimed = aimed(event, in: scroll) else { return event }
+            // Whatever AppKit finds at the re-aimed point, the press goes to the view drawn under
+            // the pointer: unless something over the page is there.
+            route.open(for: target)
+            guard hit(aimed.locationInWindow) === route else {
+                route.reset()
+                return event
+            }
+            pressAimed = true
+            return aimed
+        case .leftMouseDragged, .leftMouseUp:
+            guard pressAimed else { return event }
+            if event.type == .leftMouseUp { pressAimed = false }
+            return aimed(event, in: scroll) ?? event
+        default:
+            return page() == nil ? event : aimed(event, in: scroll) ?? event
+        }
+    }
+
+    private func aimed(_ event: NSEvent, in scroll: NSScrollView) -> NSEvent? {
+        let clip = scroll.contentView
+        guard clip.isFlipped else { return nil }
+        let point = event.locationInWindow
+        let moved = event.type == .mouseMoved
+        let at = Self.aimed(point, corner: clip.convert(clip.bounds.origin, to: nil), scale: scroll.magnification)
+        guard let aimed = NSEvent.mouseEvent(
+            with: event.type, location: at,
+            modifierFlags: event.modifierFlags, timestamp: event.timestamp, windowNumber: event.windowNumber, context: nil,
+            eventNumber: event.eventNumber, clickCount: moved ? 0 : event.clickCount, pressure: moved ? 0 : event.pressure)
+        else { return nil }
+        Self.originals.setObject(NSValue(point: point), forKey: aimed)
+        return aimed
     }
 
     private func magnify(_ session: Session, to scale: CGFloat) {
@@ -310,7 +425,7 @@ package final class PinchZoom {
         session.scale = scroll.magnification
         session.heldOrigin = scroll.contentView.bounds.origin
         counts.previews += 1
-        ScrollShift.magnified(scroll)
+        magnified(scroll)
     }
 
     private func finish(_ session: Session) {
@@ -339,7 +454,7 @@ package final class PinchZoom {
         releaseViewport(session)
         if let scroll = session.scroll {
             scroll.magnification = session.base
-            ScrollShift.magnified(scroll)
+            magnified(scroll)
             let clip = scroll.contentView
             clip.scroll(to: clip.constrainBoundsRect(CGRect(origin: session.baseOrigin, size: clip.bounds.size)).origin)
             scroll.reflectScrolledClipView(clip)
@@ -465,8 +580,56 @@ package final class PinchZoom {
         guard let page = controller.pages[controller.activeTab], page.original != nil else { return 1 }
         return page.scroll?.magnification ?? 1
     }
+    package static func storyAiming(in window: NSWindow) -> Bool { windows.object(forKey: window)?.aiming ?? false }
+    package static func storyAim(in window: NSWindow, _ event: NSEvent) -> NSEvent { windows.object(forKey: window)?.aim(event) ?? event }
     package static func storyScale() -> CGFloat { Zoom.shared.scale }
     package static func storyRestoreScale(_ scale: CGFloat) { Zoom.shared.commitPinch(scale) }
+}
+
+/// Over a magnified page, at the top of its scroll view: AppKit's hit test lands here only for
+/// a press `PinchZoom` re-aimed, which it hands to the view drawn under the pointer, with the
+/// press's drags and release after it. Otherwise it's never hit.
+private final class PressRoute: NSView {
+    private weak var target: NSView?
+    private var opened = false
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        autoresizingMask = [.width, .height]
+        setAccessibilityElement(false)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    func open(for view: NSView) {
+        target = view
+        opened = true
+        // Only for this press's dispatch: one taken before the window had it closes again.
+        DispatchQueue.main.async { [weak self] in self?.opened = false }
+    }
+
+    func reset() {
+        target = nil
+        opened = false
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { opened && frame.contains(point) ? self : nil }
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { target?.acceptsFirstMouse(for: event) ?? false }
+    override func mouseDown(with event: NSEvent) {
+        opened = false
+        target?.mouseDown(with: event)
+    }
+    override func mouseDragged(with event: NSEvent) { target?.mouseDragged(with: event) }
+    override func mouseUp(with event: NSEvent) {
+        target?.mouseUp(with: event)
+        target = nil
+    }
+}
+
+extension NSEvent {
+    /// Where the pointer really was in the window: for a press or move a magnified page re-aimed
+    /// for SwiftUI (`PinchZoom`), the drawn point, as AppKit's own conversions expect it.
+    @MainActor var drawnLocation: CGPoint { PinchZoom.originals.object(forKey: self)?.pointValue ?? locationInWindow }
 }
 
 struct PinchZoomHost: NSViewRepresentable {

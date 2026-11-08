@@ -86,6 +86,35 @@ extension Chat {
     /// by a caller at Auto or above (one whose own mode lets its CLI run commands without asking
     /// first), in a chat it reaches (the owner, 2026-11-15). Never Always allow, a plan, a
     /// sign-in or a secret question: those stay the user's.
+    /// Held cross-session messages let in by another chat's agent at Act unlimited (the owner,
+    /// 2026-11-18: ask here, answer there): never by a chat whose own message is held there, and
+    /// never a hold a flag can't lift. The chat's line says who let them in.
+    func arsenalLetIn(_ card: Approval, senders: [Approval.HeldSender], by caller: Chat?) -> Result<String, ArsenalRefusal> {
+        guard let caller else { return .failure(.init("Only a chat in Kore lets held messages in.")) }
+        if let note = card.allowNote { return .failure(.init(note)) }
+        if Self.sentAny(senders, caller: caller) {
+            return .failure(.init("This chat sent one of the held messages: only you or another chat lets them in."))
+        }
+        let short = String(caller.id.uuidString.prefix(8)).lowercased()
+        answerHeld(card, allow: true, by: short)
+        UILog.event("arsenal-held-let-in", ["chat": String(id.uuidString.prefix(8)).lowercased(), "by": short, "messages": "\(senders.count)"])
+        return .success("Let in.")
+    }
+
+    /// One of `senders` is `caller`: by its address while its CLI runs, or by its name.
+    package static func sentAny(_ senders: [Approval.HeldSender], caller: Chat) -> Bool {
+        sentAny(senders, address: caller.peerAddress, name: caller.title)
+    }
+
+    /// The same, from an address (`uds:/tmp/cc-socks/<pid>.sock`, `/private/tmp` or `/tmp`) and a name.
+    package static func sentAny(_ senders: [Approval.HeldSender], address: String?, name: String) -> Bool {
+        let socket = address.map { "/cc-socks/" + ($0 as NSString).lastPathComponent }
+        return senders.contains { sender in
+            if let socket, sender.from.hasSuffix(socket) { return true }
+            return sender.name?.lowercased() == name.lowercased()
+        }
+    }
+
     package func arsenalAnswer(_ cardId: String, _ choices: [String], deny: Bool, allow: Bool = false, by caller: Chat? = nil) -> Result<String, ArsenalRefusal> {
         guard let card = approvals.pending.first(where: { $0.id == cardId }) else { return .failure(.init("That card was answered or withdrawn.")) }
         guard !card.signIn else { return .failure(.init("Only you answer a sign-in.")) }
@@ -94,6 +123,11 @@ extension Chat {
             note("Arsenal · denied “\(card.title)”")
             return .success("Denied.")
         }
+        if allow, let senders = card.held {
+            return arsenalLetIn(card, senders: senders, by: caller)
+        }
+        // A call Auto stopped is a person's to run, at every tier.
+        if allow, card.autoStop { return .failure(.init("Only you can run a command Auto asks about.")) }
         if allow {
             guard card.isPermission else { return .failure(.init("Only a permission card is allowed this way; plans stay yours to approve.")) }
             guard let caller, Self.mayApprove(caller) else {
@@ -164,6 +198,8 @@ extension Chat {
     private func scrollerMessage(_ back: Int) async -> Result<TranscriptLog.Entry, ArsenalRefusal> {
         let store = transcript
         if store.earlierAvailable, store.earlierMarks.isEmpty { await readEarlierMessages() }
+        // A chat nobody sees builds its rows only as it shows: its marks are counted from them.
+        store.catchUp()
         var marks = store.messageMarks
         guard back <= marks.count else {
             return .failure(.init(marks.isEmpty ? "It has no messages to fork at yet." : "It has \(marks.count) message(s): -1 to -\(marks.count)."))
@@ -192,7 +228,7 @@ extension Workspace {
     package func arsenalOpenFork(_ chat: Chat, _ start: ForkStart, draft: String, model: String?, message: Bool) -> Result<Chat, ArsenalRefusal> {
         var launch: String?
         if let model {
-            let known = chat.controls.models.isEmpty ? ArsenalModels.seen[chat.provider.id] ?? [] : chat.controls.models
+            let known = chat.controls.models.isEmpty ? arsenalModels(chat.provider.id, caller: chat) : chat.controls.models
             switch ArsenalModels.find(model, in: known, cli: chat.provider.name) {
             case .success(let option): launch = option.id
             case .failure(let refusal): return .failure(refusal)
@@ -266,6 +302,8 @@ extension Workspace {
     /// tab of its own in front, its mode no freer than the caller's (as `chat.new`'s), the whole
     /// conversation carried by Kore's handoff, and the tab carrying on in it. Its Arsenal off.
     package func arsenalForkAcross(_ chat: Chat, to provider: String, model: String?, under caller: Chat) async -> Result<Chat, ArsenalRefusal> {
+        // Import carries a history file on this Mac: a box's chats aren't, so none opens there for it.
+        if let box { return .failure(.init("A chat on \(NodeNames.name(box.alias)) forks into its own CLI only: leave out provider.")) }
         guard let session = chat.sessionId else { return .failure(.init("Nothing to fork yet: it hasn't started.")) }
         guard !chat.status.isRunning else { return .failure(.init("It's working: fork it into \(Registry.provider(provider)?.name ?? provider) once it's idle.")) }
         let fresh: Chat

@@ -656,7 +656,9 @@ package enum Observed {
         }
     }
 
-    /// One wake, whichever comes first.
+    /// One wake, whichever comes first. Gone unopened, it ends the wait: what the condition
+    /// read is gone too (its object freed, or nothing it read is observable), so no change can
+    /// come, and a wait left suspended would never end. The caller reads its state again.
     @MainActor
     private final class Gate {
         private var wake: CheckedContinuation<Bool, Never>?
@@ -665,6 +667,7 @@ package enum Observed {
             wake?.resume(returning: holds)
             wake = nil
         }
+        deinit { wake?.resume(returning: true) }
     }
 }
 

@@ -4,7 +4,7 @@ import Testing
 
 /// Policy table v1, walked whole: every pair × service × queue × path × ability × proof, against
 /// the plan's table written out again here. Listed rows allow exactly what they say; everything
-/// else, Mac→Mac included, is unlisted and refused.
+/// else is unlisted and refused. Mac→Mac is the link only (a paired Mac's login moves).
 @Suite("policy table")
 struct PolicyTableTests {
     typealias P = PolicyTable
@@ -26,6 +26,7 @@ struct PolicyTableTests {
         Planned(pairs: ["box→mac"], service: "agent.call", queues: ["interactive"], paths: ["tailnet", "ssh"], needs: .ask, cap: [.read, .ask], proof: .none),
         Planned(pairs: ["phone→mac", "phone→box"], service: "link", queues: ["interactive", "stream"], paths: ["tailnet"], needs: .read, cap: [.read, .ask], proof: .none),
         Planned(pairs: ["phone→mac", "phone→box", "phone→phone"], service: "blob.put", queues: ["stream"], paths: ["tailnet"], needs: .ask, cap: [.read, .ask], proof: .none),
+        Planned(pairs: ["mac→mac"], service: "link", queues: ["interactive"], paths: ["tailnet"], needs: .run, cap: [.read, .ask, .run], proof: .none),
         Planned(pairs: ["box→box"], service: "pipe", queues: ["bulk"], paths: ["tailnet"], needs: [], cap: [], proof: .macTicket),
         Planned(
             pairs: ["mac→box", "mac→phone", "box→mac", "box→box", "box→phone", "phone→mac", "phone→box", "phone→phone"], service: "raise",
@@ -90,11 +91,14 @@ struct PolicyTableTests {
         ])
         #expect(limits("phone→mac", .blobPut) == [.maxBytes(12 << 20), .bytesPerHour(P.blobBytesPerHour)])
         #expect(limits("box→box", .pipe) == [.ttlSeconds(60), .singleUse])
+        #expect(limits("mac→mac", .link) == [.concurrent(1)])
         #expect(limits("phone→box", .raise) == [.onePerNonce])
     }
 
     @Test(arguments: [
-        P.Request(pair: .init(.mac, .mac), service: .link, queue: .interactive, path: .tailnet, abilities: .run),
+        P.Request(pair: .init(.mac, .mac), service: .link, queue: .stream, path: .tailnet, abilities: .run),
+        P.Request(pair: .init(.mac, .mac), service: .link, queue: .interactive, path: .ssh, abilities: .run),
+        P.Request(pair: .init(.mac, .mac), service: .pipe, queue: .bulk, path: .tailnet, abilities: .run),
         P.Request(pair: .init(.mac, .mac), service: .raise, queue: .interactive, path: .tailnet, abilities: .run, proof: .signature),
         P.Request(pair: .init(.phone, .phone), service: .link, queue: .interactive, path: .tailnet, abilities: .run),
         P.Request(pair: .init(.box, .phone), service: .link, queue: .interactive, path: .tailnet, abilities: .run),

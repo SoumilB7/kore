@@ -502,6 +502,27 @@ class NodeClient(
     /** A message with no answer of its own ([Control.txEarlier], [Control.txMore]); false without a link. */
     fun post(message: JsonObject): Boolean = session?.send(message.bytes()) ?: false
 
+    /** When each CLI's usage was last asked for (ms), so screens opening often ask once a minute. */
+    private val usageAsked = java.util.concurrent.ConcurrentHashMap<String, Long>()
+
+    /**
+     * A screen that shows usage opened: each of [providers] asks the node to read its logins
+     * again ([Control.accountUsage]), at most once a minute per CLI and only while the link is
+     * up (never queued: the next opening asks again). The answer is the next `clis[].usage`; the
+     * `result` is nobody's. Returns the CLIs asked.
+     */
+    fun askUsage(providers: Collection<String>): List<String> {
+        val link = session ?: return emptyList()
+        if (machine.state != NodeMachine.State.Up) return emptyList()
+        val now = clock()
+        return providers.distinct().filter { p ->
+            val last = usageAsked[p]
+            if (last != null && now - last < USAGE_EVERY_MS) return@filter false
+            usageAsked[p] = now
+            link.send(Control.envelope(UUID.randomUUID().toString(), Control.accountUsage(p)).bytes())
+        }
+    }
+
     /**
      * Raises the chat's mode (or an Arsenal tier, `arsenal.<tier>`) with the fingerprint: the node's
      * nonce, the `kore_raise` signature over `SHA256("kore-raise/1" | B | nonce | chatId | modeId)`,
@@ -529,13 +550,16 @@ class NodeClient(
      * Uploads one file for a later [send] (link 1.1: `blob.put.begin`, base64 chunks, `blob.put.end`);
      * the node answers `result {id: "blob.put:<id>", ok, blobId}`. The blob id, or null.
      */
-    suspend fun upload(name: String, mime: String, bytes: ByteArray): String? {
+    suspend fun upload(name: String, mime: String, bytes: ByteArray): String? =
+        uploadResult(name, mime, bytes)?.takeIf { it["ok"]?.jsonPrimitive?.contentOrNull == "true" }?.str("blobId")
+
+    /** The upload's `result` as the node answered it (its `code` and `message` when it refused); null when nothing answered. */
+    suspend fun uploadResult(name: String, mime: String, bytes: ByteArray): JsonObject? {
         val link = session ?: return null
         val uploadId = UUID.randomUUID().toString()
         val answer = scope.async(start = CoroutineStart.UNDISPATCHED) { resultFlow.first { it.str("id") == "blob.put:$uploadId" } }
         for (frame in uploadFrames(uploadId, name, mime, bytes)) if (!link.send(frame.toByteArray())) break
-        val r = withTimeoutOrNull(60_000) { answer.await() } ?: run { answer.cancel(); return null }
-        return if (r["ok"]?.jsonPrimitive?.contentOrNull == "true") r.str("blobId") else null
+        return withTimeoutOrNull(60_000) { answer.await() } ?: run { answer.cancel(); null }
     }
 
     /** An attachment's bytes (`variant` thumb or full) for a ref in [chatId]'s transcript; null when refused. */
@@ -695,6 +719,9 @@ class NodeClient(
         const val LEAVE_MS = 2_000L
         /** Bytes per upload chunk, before base64. */
         const val UPLOAD_CHUNK = 48 * 1024
+
+        /** How often a CLI's usage is asked for at most ([askUsage]); the node reads no more often either. */
+        const val USAGE_EVERY_MS = 60_000L
 
         /** A delta onto the snapshot: windows and extras replaced when sent, chats upserted by id, removed ids dropped. */
         fun merge(snapshot: JsonObject, delta: JsonObject): JsonObject {

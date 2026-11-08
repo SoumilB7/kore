@@ -104,6 +104,33 @@ final class SelectWordsAndParagraphs: ChatStoryline {
     }
 }
 
+/// A table copies whole by a drag across it, as tabbed rows under its header. (Its Copy row is
+/// off for now: the room kept for it moved the reader on a quick resize.)
+final class TableCopy: ChatStoryline {
+    static let reply = """
+        Totals so far:
+
+        | Name | Qty |
+        |---|--:|
+        | alpha | 3 |
+        | beta | 12 |
+
+        Done counting.
+        """
+    static let tabbed = "Name\tQty\nalpha\t3\nbeta\t12"
+
+    override class var tags: Set<Tag> { [.chat] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(reply)]) }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("Count them"), TurnFinished(1), WaitIdle(),
+            DragSelect(from: .answer(1, [0], at: "Totals so far:", "so far"), to: .answer(1, [2], at: "Done counting.", " counting")),
+            CopySelection("so far:\n\n" + Self.tabbed + "\n\nDone"),
+        ]
+    }
+}
+
 /// A click puts the start down; a ⇧-click in the next turn selects everything between.
 final class ShiftClickExtends: ChatStoryline {
     static let first = "The first answer has a sentence to start in."

@@ -200,14 +200,18 @@ package struct HostConfig: Codable, Sendable, Equatable {
     /// Phase 18: whether the box is on KoreNet (`kore-host net on|off`, `join`, a Mac's
     /// `net.set`). Off unless set: no tailnet listener, no LocalAPI or netlink watching.
     package var net: Bool?
+    /// Served folders whose window a client closed (`window.close`): still served (their files,
+    /// History, a new chat there), shown as a window again once one opens it or a chat starts there.
+    package var closed: [String]?
     /// Why `config.json` couldn't be read; nil when it could (or isn't there).
     package var unreadable: String?
 
-    private enum CodingKeys: String, CodingKey { case folders, net }
+    private enum CodingKeys: String, CodingKey { case folders, net, closed }
 
-    package init(folders: [String] = [], net: Bool? = nil, unreadable: String? = nil) {
+    package init(folders: [String] = [], net: Bool? = nil, closed: [String]? = nil, unreadable: String? = nil) {
         self.folders = folders
         self.net = net
+        self.closed = closed
         self.unreadable = unreadable
     }
 
@@ -231,7 +235,9 @@ package struct HostConfig: Codable, Sendable, Equatable {
             }
             if !folders.contains(path) { folders.append(path) }
         }
-        return HostConfig(folders: folders, net: config.net)
+        // A closed window is one of the folders, or nothing.
+        let closed = (config.closed ?? []).compactMap { normalised($0, home: home) }.filter(folders.contains)
+        return HostConfig(folders: folders, net: config.net, closed: closed.isEmpty ? nil : closed)
     }
 
     /// An absolute path as the box keeps it: `~` is this user's home, `.` and `..` are resolved,

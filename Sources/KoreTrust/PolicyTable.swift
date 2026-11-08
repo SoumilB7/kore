@@ -90,6 +90,10 @@ package enum PolicyTable {
             ]),
         Row(pairs: Set(NodeKind.allCases.map { Pair(phone, $0) }), service: .blobPut, queues: [.stream], paths: [.tailnet], needs: .ask,
             cap: [.read, .ask], proof: .none, limits: [.maxBytes(12 << 20), .bytesPerHour(blobBytesPerHour)]),
+        // Two of the owner's Macs, paired once by an Allow card: a login moved between them
+        // (`LinkLogins`), nothing else (the link answers only those).
+        Row(pairs: [Pair(mac, mac)], service: .link, queues: [.interactive], paths: [.tailnet], needs: .run, cap: all, proof: .none,
+            limits: [.concurrent(1)]),
         // The Mac's ticket is the authority; neither box needs a record for the other.
         Row(pairs: [Pair(box, box)], service: .pipe, queues: [.bulk], paths: [.tailnet], needs: [], cap: [], proof: .macTicket,
             limits: [.ttlSeconds(60), .singleUse]),

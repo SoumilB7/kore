@@ -29,9 +29,25 @@ class Hooks : BroadcastReceiver() {
                 resultData = "clipped $uri"
                 return
             }
+            // A tap on the screen in front, by the view's identity (its content description,
+            // `--es desc Mode`), never by a point: for screenshots of what it opens.
+            "dev.kore.android.debug.TAP" -> {
+                val desc = intent.getStringExtra("desc") ?: return run { resultData = "no desc" }
+                val front = (context.applicationContext as KoreApp).frontActivity ?: return run { resultData = "no screen" }
+                front.runOnUiThread { (find(front.window.decorView) { it == desc } ?: find(front.window.decorView) { it.startsWith(desc) })?.performClick() }
+                resultData = "tapped $desc"
+                return
+            }
         }
         val mesh = (context.applicationContext as KoreApp).mesh
         val nodes = mesh.nodes.value.joinToString(",") { "${it.device.value.kind.wire}:${it.state.value::class.simpleName}" }
         resultData = "joined=${mesh.joined} network=${mesh.networkOn} join=${mesh.join.step.value::class.simpleName} nodes=[$nodes] logs=${(dev.kore.phone.StandIns.current as? Demo)?.logsRead}"
+    }
+
+    /** The first shown view whose content description [matches] (exact first, then by its start: `Mode` finds "Mode: Manual"). */
+    private fun find(v: android.view.View, matches: (String) -> Boolean): android.view.View? {
+        if (v.contentDescription?.toString()?.let(matches) == true && v.isShown) return v
+        if (v is android.view.ViewGroup) for (i in 0 until v.childCount) find(v.getChildAt(i), matches)?.let { return it }
+        return null
     }
 }

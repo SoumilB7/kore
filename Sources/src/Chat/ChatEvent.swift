@@ -620,6 +620,30 @@ package struct Approval: Identifiable, Sendable, Codable {
     package var tool: String? = nil
     /// The paths the ask would write, as the CLI gave them.
     package var targets: [String]? = nil
+    /// Cross-session messages the CLI held (`ClaudePeerHolds`): who says they sent them. Set,
+    /// this is that card, not the CLI's: Allow lets them in, Deny refuses them.
+    package var held: [HeldSender]? = nil
+    /// Why Allow can't be picked here (a hold a flag can't lift): the card shows it dim, saying so.
+    package var allowNote: String? = nil
+    /// A call Auto asks a person about (Kore's ask list, a safety check, the classifier) or
+    /// refused (`ClaudeAutoStops`): Allow reads Run once, and only a person runs it.
+    package var autoStop = false
+    /// Run once's follow-up (a Codex review's one retry): sent once the answer's in, when the chat
+    /// is idle, so the agent tries it again.
+    package var retryMessage: String? = nil
+    /// Its Always allow writes one exact rule for this command (`Approval.exactRule`), not the CLI's
+    /// broader suggestion.
+    package var exactRule: String? = nil
+
+    package struct HeldSender: Equatable, Sendable, Codable {
+        /// Its address (`uds:/tmp/cc-socks/<pid>.sock`) and name, as it gave them.
+        package let from: String
+        package let name: String?
+        package init(from: String, name: String?) {
+            self.from = from
+            self.name = name
+        }
+    }
 
     package init(id: String, title: String, detail: String?, body: String?, canAlwaysAllow: Bool, questions: [Question], plan: String? = nil, changes: [FileChange] = [], agent: AgentID = .main) {
         self.id = id
@@ -642,6 +666,11 @@ package struct Approval: Identifiable, Sendable, Codable {
         copy.signIn = signIn
         copy.tool = tool
         copy.targets = targets
+        copy.held = held
+        copy.allowNote = allowNote
+        copy.autoStop = autoStop
+        copy.exactRule = exactRule
+        copy.retryMessage = retryMessage
         if canAlwaysAllow { copy.alwaysAllowNote = note }
         return copy
     }
@@ -698,5 +727,58 @@ extension AgentID {
     package var sub: String? {
         if case .sub(let id) = self { return id }
         return nil
+    }
+}
+
+extension Approval {
+    enum CodingKeys: String, CodingKey {
+        case id, title, detail, body, canAlwaysAllow, questions, plan, changes, agent, signIn, alwaysAllowNote, tool, targets, held,
+            allowNote, autoStop, retryMessage, exactRule
+    }
+
+    // Written by hand only so `autoStop` (0.3.3) is optional on the wire: an older box or phone
+    // sends approvals without it, and a card that isn't one leaves it out.
+    package init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        title = try c.decode(String.self, forKey: .title)
+        detail = try c.decodeIfPresent(String.self, forKey: .detail)
+        body = try c.decodeIfPresent(String.self, forKey: .body)
+        canAlwaysAllow = try c.decode(Bool.self, forKey: .canAlwaysAllow)
+        questions = try c.decode([Question].self, forKey: .questions)
+        plan = try c.decodeIfPresent(String.self, forKey: .plan)
+        changes = try c.decodeIfPresent([FileChange].self, forKey: .changes) ?? []
+        agent = try c.decodeIfPresent(AgentID.self, forKey: .agent) ?? .main
+        signIn = try c.decodeIfPresent(Bool.self, forKey: .signIn) ?? false
+        alwaysAllowNote = try c.decodeIfPresent(String.self, forKey: .alwaysAllowNote)
+        tool = try c.decodeIfPresent(String.self, forKey: .tool)
+        targets = try c.decodeIfPresent([String].self, forKey: .targets)
+        held = try c.decodeIfPresent([HeldSender].self, forKey: .held)
+        allowNote = try c.decodeIfPresent(String.self, forKey: .allowNote)
+        autoStop = try c.decodeIfPresent(Bool.self, forKey: .autoStop) ?? false
+        retryMessage = try c.decodeIfPresent(String.self, forKey: .retryMessage)
+        exactRule = try c.decodeIfPresent(String.self, forKey: .exactRule)
+    }
+
+    package func encode(to encoder: any Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(title, forKey: .title)
+        try c.encodeIfPresent(detail, forKey: .detail)
+        try c.encodeIfPresent(body, forKey: .body)
+        try c.encode(canAlwaysAllow, forKey: .canAlwaysAllow)
+        try c.encode(questions, forKey: .questions)
+        try c.encodeIfPresent(plan, forKey: .plan)
+        try c.encode(changes, forKey: .changes)
+        try c.encode(agent, forKey: .agent)
+        try c.encode(signIn, forKey: .signIn)
+        try c.encodeIfPresent(alwaysAllowNote, forKey: .alwaysAllowNote)
+        try c.encodeIfPresent(tool, forKey: .tool)
+        try c.encodeIfPresent(targets, forKey: .targets)
+        try c.encodeIfPresent(held, forKey: .held)
+        try c.encodeIfPresent(allowNote, forKey: .allowNote)
+        if autoStop { try c.encode(autoStop, forKey: .autoStop) }
+        try c.encodeIfPresent(retryMessage, forKey: .retryMessage)
+        try c.encodeIfPresent(exactRule, forKey: .exactRule)
     }
 }

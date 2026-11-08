@@ -178,6 +178,8 @@ package enum LinkPolicy {
             guard args.provider != nil, args.login != nil else { return .deny(.invalid, "Name the CLI and the login.") }
         case .accountCancel, .accountSignOut, .accountRefresh:
             guard args.provider != nil else { return .deny(.invalid, "Name the CLI.") }
+        case .accountUsage:
+            guard let provider = args.provider, LinkLogins.clis.contains(provider) else { return .deny(.invalid, "Name the CLI.") }
         case .accountPrivacy:
             guard args.on != nil else { return .deny(.invalid, "Say on or off.") }
         case .chatSetArsenal:
@@ -350,6 +352,9 @@ package enum LinkPolicy {
             // 1.13: a folder's window on the box closes, its chats as tabs closing (kept, reopenable).
             // The box asks (`confirm.close`) when one is working, unless `force`, as a Mac does.
             return args.windowId != nil ? .allow : .deny(.invalid, "Name the window.")
+        case .windowOpen:
+            // 1.13: a closed folder's window back, by its `windowId` (a Mac's recents aren't a box's).
+            return args.windowId != nil ? .allow : .deny(.invalid, "Name the window.")
         // 1.9: a chat's own operations, as a Mac window offers them. An act grant does the
         // ordinary ones; a full grant also what raises (an Arsenal tier on) or acts at a plan's
         // limit (Continue, a message at the reset). Always allow, `!` lines and keys stay refused.
@@ -396,7 +401,15 @@ package enum LinkPolicy {
         case .accountList:
             if case .deny(let code, let message) = full() { return .deny(code, message) }
             return args.provider == "claude" ? .allow : .deny(.invalid, boxAccountsClaudeOnly)
-        case .accountUsage, .accountSwitch:
+        case .accountUsage:
+            guard let provider = args.provider, LinkLogins.clis.contains(provider) else { return .deny(.invalid, "Name the CLI.") }
+            // 1.14: without a login, a read of what the box pushes (`clis[].usage`): any grant
+            // that acts (a phone). With one, that login's reading: full grants (the Mac).
+            guard let login = args.login else { return .allow }
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            guard plainID(login), provider == "claude" || login == LinkAccount.main else { return .deny(.invalid, "Name the account.") }
+            return .allow
+        case .accountSwitch:
             if case .deny(let code, let message) = full() { return .deny(code, message) }
             guard args.provider == "claude" else { return .deny(.invalid, boxAccountsClaudeOnly) }
             guard let login = args.login, plainID(login) else { return .deny(.invalid, "Name the account.") }

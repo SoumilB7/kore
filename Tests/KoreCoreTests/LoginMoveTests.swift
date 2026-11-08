@@ -17,17 +17,27 @@ struct LoginMoveTests {
     final class Server: @unchecked Sendable {
         var current: String
         var issued = 1
-        init(_ current: String) { self.current = current }
+        let cli: String
+        init(_ current: String, cli: String = "claude") { (self.current, self.cli) = (current, cli) }
+
+        /// A credential file as `cli` writes it: its refresh token, refreshed at `at`.
+        static func login(_ token: String, _ at: Int, cli: String) -> Data {
+            if cli == "codex" {
+                let when = ISO8601DateFormatter().string(from: Date(timeIntervalSince1970: 1_800_000_000 + Double(at)))
+                return Data(#"{"tokens":{"access_token":"a","refresh_token":"\#(token)","account_id":"acct"},"last_refresh":"\#(when)"}"#.utf8)
+            }
+            return Data(#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"\#(token)","expiresAt":\#(at)}}"#.utf8)
+        }
 
         /// What one status read does to `copy`; whether the CLI says it's signed in.
         func status(_ copy: inout Data?) -> Bool {
-            guard let data = copy, let token = LoginCredential.refreshToken(data, cli: "claude") else { return false }
+            guard let data = copy, let token = LoginCredential.refreshToken(data, cli: cli) else { return false }
             if token == current {
                 issued += 1
                 current = "r-\(issued)"
-                copy = Data(#"{"claudeAiOauth":{"accessToken":"a\#(issued)","refreshToken":"\#(current)","expiresAt":\#(issued)}}"#.utf8)
+                copy = Self.login(current, issued, cli: cli)
             } else {
-                copy = Data(#"{"claudeAiOauth":{"accessToken":"","refreshToken":"","expiresAt":0}}"#.utf8)
+                copy = Self.login("", 0, cli: cli)
             }
             return true
         }
@@ -175,7 +185,7 @@ struct LoginMoveTests {
         // Locked first, read twice (sent, then checked unchanged), deleted only after the target verified.
         #expect(here.steps == ["lock", "read", "read", "delete", "unlock"])
         #expect(there.calls == ["prepareImport", "commitImport"])
-        #expect(await !here.locked)
+        #expect(!here.locked)
     }
 
     @Test func chatsUsingItStopItBeforeAnythingIsRead() async {
@@ -455,13 +465,13 @@ struct LoginMoveRefreshTests {
     typealias Other = LoginMoveTests.Other
     typealias Server = LoginMoveTests.Server
 
-    static func login(_ token: String, _ at: Int) -> Data { Data(#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"\#(token)","expiresAt":\#(at)}}"#.utf8) }
+    static func login(_ token: String, _ at: Int, _ cli: String) -> Data { Server.login(token, at, cli: cli) }
 
     /// One copy left across both devices (staging included), complete, holding the server's current token.
     func oneValid(_ here: Device, _ there: Other, _ server: Server) -> Bool {
         let copies = [here.held, there.placed].compactMap { $0 } + Array(there.staged.values)
         guard copies.count == 1, let copy = copies.first else { return false }
-        return LoginCredential.complete(copy, cli: "claude") && LoginCredential.refreshToken(copy, cli: "claude") == server.current
+        return LoginCredential.complete(copy, cli: server.cli) && LoginCredential.refreshToken(copy, cli: server.cli) == server.current
     }
 
     func pair(here: Data?, there: Data?, server: Server) -> (Device, Other) {
@@ -470,57 +480,57 @@ struct LoginMoveRefreshTests {
         return (d, o)
     }
 
-    @Test func aMoveOutIsReadThereOnlyAfterItsTheOnlyCopy() async {
-        let server = Server("r1")
-        let (here, there) = pair(here: Self.login("r1", 1), there: nil, server: server)
-        #expect(await LoginMove.out(here, to: there, cli: "claude", moveId: "m") == .moved(signedIn: true))
+    @Test(arguments: ["claude", "codex"]) func aMoveOutIsReadThereOnlyAfterItsTheOnlyCopy(_ cli: String) async {
+        let server = Server("r1", cli: cli)
+        let (here, there) = pair(here: Self.login("r1", 1, cli), there: nil, server: server)
+        #expect(await LoginMove.out(here, to: there, cli: cli, moveId: "m") == .moved(signedIn: true))
         // The target's read refreshed it: the copy there holds the new token, the only one.
         #expect(oneValid(here, there, server) && there.placed != nil)
         #expect(!here.readWhileTwo && !there.readWhileTwo)
     }
 
-    @Test func aMoveBackIsReadHereOnlyAfterItsTheOnlyCopy() async {
-        let server = Server("r1")
-        let (here, there) = pair(here: nil, there: Self.login("r1", 1), server: server)
-        #expect(await LoginMove.back(here, from: there, cli: "claude", moveId: "b") == .moved(signedIn: true))
+    @Test(arguments: ["claude", "codex"]) func aMoveBackIsReadHereOnlyAfterItsTheOnlyCopy(_ cli: String) async {
+        let server = Server("r1", cli: cli)
+        let (here, there) = pair(here: nil, there: Self.login("r1", 1, cli), server: server)
+        #expect(await LoginMove.back(here, from: there, cli: cli, moveId: "b") == .moved(signedIn: true))
         #expect(oneValid(here, there, server) && here.held != nil)
         #expect(!here.readWhileTwo && !there.readWhileTwo)
     }
 
-    @Test func aRefreshOnTheSourceMidMoveKeepsTheLiveCopyAndNeverReadsTheStaleOne() async {
-        let server = Server("r1")
-        let (here, there) = pair(here: Self.login("r1", 1), there: nil, server: server)
+    @Test(arguments: ["claude", "codex"]) func aRefreshOnTheSourceMidMoveKeepsTheLiveCopyAndNeverReadsTheStaleOne(_ cli: String) async {
+        let server = Server("r1", cli: cli)
+        let (here, there) = pair(here: Self.login("r1", 1, cli), there: nil, server: server)
         // Something outside Kore refreshes the source while it moves: r2 is current now.
-        here.set(refreshTo: Self.login("r2", 2))
+        here.set(refreshTo: Self.login("r2", 2, cli))
         server.current = "r2"
-        #expect(await LoginMove.out(here, to: there, cli: "claude", moveId: "m") == .failed(.changedMeanwhile))
+        #expect(await LoginMove.out(here, to: there, cli: cli, moveId: "m") == .failed(.changedMeanwhile))
         // The stale copy sent was dropped unread; the source's is the one valid login.
         #expect(oneValid(here, there, server) && here.held != nil)
         #expect(!there.readWhileTwo)
     }
 
-    @Test func eachKeepEndsWithOneValidCopy() async {
+    @Test(arguments: ["claude", "codex"]) func eachKeepEndsWithOneValidCopy(_ cli: String) async {
         // Keep here, theirs live.
-        var server = Server("r2")
-        var (here, there) = pair(here: Self.login("r1", 1), there: Self.login("r2", 2), server: server)
-        #expect(await LoginMove.keepHere(here, there, cli: "claude").moved)
+        var server = Server("r2", cli: cli)
+        var (here, there) = pair(here: Self.login("r1", 1, cli), there: Self.login("r2", 2, cli), server: server)
+        #expect(await LoginMove.keepHere(here, there, cli: cli).moved)
         #expect(oneValid(here, there, server) && here.held != nil && !here.readWhileTwo)
         // Keep there, mine live.
-        server = Server("r2")
-        (here, there) = pair(here: Self.login("r2", 2), there: Self.login("r1", 1), server: server)
-        #expect(await LoginMove.keepThere(here, there, cli: "claude", moveId: "k").moved)
+        server = Server("r2", cli: cli)
+        (here, there) = pair(here: Self.login("r2", 2, cli), there: Self.login("r1", 1, cli), server: server)
+        #expect(await LoginMove.keepThere(here, there, cli: cli, moveId: "k").moved)
         #expect(oneValid(here, there, server) && there.placed != nil && !there.readWhileTwo)
     }
 
     /// The order this replaced, played on purpose: a CLI read on the staged copy before the
     /// source is deleted. It leaves the source's copy stale, and its next read wipes it.
-    @Test func readingTheStagedCopyEarlyIsWhatBreaksIt() {
-        let server = Server("r1")
-        var staged: Data? = Self.login("r1", 1)
-        var source: Data? = Self.login("r1", 1)
+    @Test(arguments: ["claude", "codex"]) func readingTheStagedCopyEarlyIsWhatBreaksIt(_ cli: String) {
+        let server = Server("r1", cli: cli)
+        var staged: Data? = Self.login("r1", 1, cli)
+        var source: Data? = Self.login("r1", 1, cli)
         _ = server.status(&staged)
-        #expect(LoginCredential.refreshToken(staged!, cli: "claude") == server.current)
+        #expect(LoginCredential.refreshToken(staged!, cli: cli) == server.current)
         _ = server.status(&source)
-        #expect(LoginCredential.refreshToken(source!, cli: "claude") == "")
+        #expect(LoginCredential.refreshToken(source!, cli: cli) == "")
     }
 }

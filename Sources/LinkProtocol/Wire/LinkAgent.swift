@@ -63,16 +63,9 @@ package struct BoxToolAsk: Codable, Sendable, Equatable {
     }
 }
 
+/// How long a call waits for the Mac is `AgentTools.answerWait` and the link's margin, as kore-host
+/// reckons it (`HostToolServer.wait`): the Mac's own callers wait as long, less the link.
 package enum BoxTools {
-    /// The longest a call waits for the Mac: `kore_wait` holds up to 300 s, a fork a minute.
-    package static func timeout(_ tool: String) -> TimeInterval {
-        switch tool {
-        case "kore_wait": 330
-        case "kore_fork": 75
-        default: 30
-        }
-    }
-
     package static func encode(_ value: some Encodable) -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.withoutEscapingSlashes]

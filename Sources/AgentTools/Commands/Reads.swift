@@ -1,15 +1,21 @@
-import AgentTools
-import Darwin
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#elseif canImport(Musl)
+import Musl
+#endif
 
 /// `kore ls`, `show`, `log`, `pending`, `history`, `whoami`, `caps`: one command to Kore each,
 /// printed short for a person, or as Kore sent it with `--json`.
-enum Reads {
-    typealias Object = AgentClient.Object
+package enum Reads {
+    typealias Object = AgentTools.Object
 
     /// Exit codes: 0 done, 1 not found or failed, 2 usage, 5 refused (agent control off, no access).
-    static func run(_ name: String, _ rest: [String]) -> Int32 {
-        if name == "mcp" { return MCPServer.run() }
+    /// `connect`: a caller of Kore's (the Mac's agent socket, or a box's); `unreachable`: what it
+    /// says when there's none.
+    package static func run(_ name: String, _ rest: [String], unreachable: String, connect: () throws(AgentFailure) -> any AgentCalls) -> Int32 {
         var options = Options(rest)
         guard options.problem == nil else { return fail(options.problem ?? "", code: 2) }
         if ["show", "log"].contains(name), options.positional.isEmpty {
@@ -18,7 +24,7 @@ enum Reads {
         if let wanted = Own.usage[name], !Own.fits(name, options.positional) { return fail("kore \(name) \(wanted)", code: 2) }
         if let wanted = Drive.usage[name], !Drive.fits(name, options) { return fail("kore \(name) \(wanted)", code: 2) }
         do {
-            let client = try AgentClient()
+            let client = try connect()
             switch name {
             case "whoami": try whoami(client, options)
             case "caps": try caps(client, options)
@@ -30,21 +36,77 @@ enum Reads {
             case "options": try Own.options(client, options)
             case "fast", "compact", "rename", "model", "effort", "mode": try Own.set(name, client, options)
             case "new", "fork", "send", "stop", "tab", "answer", "wait", "open", "close", "ask", "reply", "fetch": try Drive.run(name, client, options)
-            default: return fail(usage, code: 2)
+            default: return fail("no such command: \(name)", code: 2)
             }
             return 0
         } catch .unreachable {
-            return fail(MCPServer.unreachableLine, code: 5)
+            return fail(unreachable, code: 5)
         } catch .notKore {
             return fail("What's at Kore's socket isn't the Kore this came with.", code: 5)
         } catch .refused(let code, let message) {
             return fail(message, code: ["denied", "mismatch", "tier", "stopped", "version", "rate_limited", "not_own"].contains(code) ? 5 : 1)
+        } catch .timedOut {
+            return fail(AgentTools.noAnswerLine, code: 1)
         } catch {
             return fail("Kore closed the connection.", code: 1)
         }
     }
 
-    static func fail(_ message: String, code: Int32) -> Int32 {
+    /// Their usage lines, for `kore help` on the Mac and on a box.
+    package static let usage = """
+        kore ls               the open chats
+               kore show <chat>      one chat: state, model, context, waiting cards
+               kore log <chat> [-n N] [-f]
+                                     its last rows; -f follows it
+               kore pending [<chat>] cards waiting on you
+               kore history [--folder F] [--search Q] [--archived]
+                                     a window's past chats
+               kore options          what Act limited may set on this chat now
+               kore rename <name>    rename this chat
+               kore model <model>    switch this chat's model
+               kore effort <level>   set its effort
+               kore fast on|off      its fast mode
+               kore mode <mode>      lower its mode (only you raise one)
+               kore compact          compact it, once this turn ends
+               kore new [--claude|--codex] [--model M] [--mode X] ["message"]
+                                     a new chat in this window, in front (Act unlimited)
+               kore fork <chat> [--at -N|<message>] [--claude|--codex] [--model M] ["message"]
+                                     fork a chat (. for this one) into a tab in front (Act unlimited)
+               kore wait <chat> [--timeout s]
+                                     until its turn ends or a card asks: its answer
+               kore ask <short id> "question"
+                                     ask another Act unlimited chat; kore wait --ask <id> for the answer
+               kore reply <ask id> "answer" [file]
+                                     answer an ask this chat was asked, a file of its folder with it
+               kore fetch <device:path | path>
+                                     copy a file from an open folder into .kore/inbox/ (50 MB, no secrets)
+               kore send <chat> "message"
+                                     send to another chat, queued while it works
+               kore stop <chat>      stop its turn
+               kore tab <chat>       bring its tab to the front
+               kore open <session> [--folder F]
+                                     open a past chat (kore history lists them) in front
+               kore close <short id> close a chat as its tab's close does; History keeps it
+               kore answer <chat> <card> <answer>... | --deny | --allow
+                                     answer a question card, one answer per question
+               kore whoami           who Kore sees calling, and its access
+               kore caps             what that access allows
+        """
+
+    package static let notes = """
+        Act limited's commands change the chat they run in, or with Act unlimited a chat named first:
+        kore model <chat> <model>. Act unlimited reaches the chats it can read at or below this chat's mode.
+        A chat is its title (any part only it has), its short id, or . for the chat this runs in.
+        Every read takes --json.
+        """
+
+    /// The commands that go to Kore (`run`), by name.
+    package static let names: Set = [
+        "ls", "show", "log", "pending", "history", "whoami", "caps", "options", "rename", "model", "effort", "fast", "mode", "compact", "new", "fork",
+        "send", "stop", "tab", "answer", "wait", "open", "close", "ask", "reply", "fetch",
+    ]
+
+    package static func fail(_ message: String, code: Int32) -> Int32 {
         FileHandle.standardError.write(Data(safe("kore: \(message)\n").utf8))
         return code
     }
@@ -60,6 +122,8 @@ enum Reads {
         var provider: String?
         var model: String?
         var mode: String?
+        /// `new --place`: a box chat's new chat on its box (the default) or the Mac.
+        var place: String?
         var deny = false
         /// `answer --allow`: a permission card allowed once.
         var allow = false
@@ -94,6 +158,9 @@ enum Reads {
                 case "--mode":
                     guard let m = rest.popFirst() else { problem = "--mode takes a mode"; return }
                     mode = m
+                case "--place":
+                    guard let m = rest.popFirst() else { problem = "--place takes box or mac"; return }
+                    place = m
                 case "--deny": deny = true
                 case "--allow": allow = true
                 case "--at":
@@ -115,7 +182,7 @@ enum Reads {
 
     // MARK: Commands
 
-    static func whoami(_ client: AgentClient, _ o: Options) throws(AgentClient.Failure) {
+    static func whoami(_ client: any AgentCalls, _ o: Options) throws(AgentFailure) {
         let data = try client.run("agent.whoami")
         if o.json { return printJSON(data) }
         let caller = data["caller"] as? Object ?? [:]
@@ -129,14 +196,14 @@ enum Reads {
 
     static func tierName(_ id: String) -> String { AgentTools.tierName(id) }
 
-    static func caps(_ client: AgentClient, _ o: Options) throws(AgentClient.Failure) {
+    static func caps(_ client: any AgentCalls, _ o: Options) throws(AgentFailure) {
         let data = try client.run("agent.caps")
         if o.json { return printJSON(data) }
         say("Kore access: \(tierName(str(data["tier"])))")
         for command in data["commands"] as? [String] ?? [] { say("  \(command)") }
     }
 
-    static func ls(_ client: AgentClient, _ o: Options) throws(AgentClient.Failure) {
+    static func ls(_ client: any AgentCalls, _ o: Options) throws(AgentFailure) {
         let data = try client.run("chats.list")
         if o.json { return printJSON(data) }
         let chats = data["chats"] as? [Object] ?? []
@@ -151,7 +218,7 @@ enum Reads {
         }
     }
 
-    static func show(_ client: AgentClient, _ ref: String, _ o: Options) throws(AgentClient.Failure) {
+    static func show(_ client: any AgentCalls, _ ref: String, _ o: Options) throws(AgentFailure) {
         let data = try client.run("chat.show", ["chat": ref])
         if o.json { return printJSON(data) }
         let chat = data["chat"] as? Object ?? [:]
@@ -177,7 +244,7 @@ enum Reads {
         for card in data["pending"] as? [Object] ?? [] { say("  waiting   \(str(card["kind"])): \(str(card["title"]))") }
     }
 
-    static func log(_ client: AgentClient, _ ref: String, _ o: inout Options) throws(AgentClient.Failure) {
+    static func log(_ client: any AgentCalls, _ ref: String, _ o: inout Options) throws(AgentFailure) {
         var args: Object = ["chat": ref]
         if let last = o.last { args["last"] = last }
         guard o.follow else {
@@ -212,7 +279,7 @@ enum Reads {
         }
     }
 
-    static func pending(_ client: AgentClient, _ o: Options) throws(AgentClient.Failure) {
+    static func pending(_ client: any AgentCalls, _ o: Options) throws(AgentFailure) {
         var args: Object = [:]
         if let chat = o.positional.first { args["chat"] = chat }
         let data = try client.run("cards.list", args)
@@ -229,7 +296,7 @@ enum Reads {
         }
     }
 
-    static func history(_ client: AgentClient, _ o: Options) throws(AgentClient.Failure) {
+    static func history(_ client: any AgentCalls, _ o: Options) throws(AgentFailure) {
         var args: Object = [:]
         if let folder = o.folder { args["folder"] = folder }
         if let search = o.search { args["query"] = search }
@@ -280,7 +347,7 @@ enum Reads {
     static func say(_ line: String) { print(safe(line)) }
 
     /// Text without C0 or C1 controls (or DEL), but for newlines and tabs.
-    static func safe(_ text: String) -> String {
+    package static func safe(_ text: String) -> String {
         var out = String.UnicodeScalarView()
         for scalar in text.unicodeScalars where scalar == "\n" || scalar == "\t" || !(scalar.value < 0x20 || (0x7F...0x9F).contains(scalar.value)) {
             out.append(scalar)
@@ -312,7 +379,7 @@ enum Reads {
 /// A transcript's rows as text: a row shows once it's settled (done, stopped, or one that never
 /// streams), and once only.
 struct Rows {
-    typealias Object = AgentClient.Object
+    typealias Object = AgentTools.Object
     private var shown = Set<String>()
     private var waiting: [String: Object] = [:]
     private var order: [String] = []

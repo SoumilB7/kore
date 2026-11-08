@@ -48,6 +48,8 @@ enum HostMeta {
         let draft = hc.record.draft ?? ""
         made.draft = draft.utf8.count <= LinkPolicy.maxText ? draft : nil
         if hc.chat == nil, let point = hc.record.autoCompact { made.autoCompactAt = point == 0 ? nil : point }
+        // 1.14: a Claude chat's account, so a client shows that login's usage.
+        made.login = hc.record.provider == "claude" ? hc.record.account ?? LinkAccount.main : nil
         return made
     }
 
@@ -103,7 +105,8 @@ enum HostMeta {
             mode: .init(id: modeID(hc), level: facts.level, planOn: hc.provider.planToggle != nil ? (chat?.controls.planMode ?? false) : nil),
             modeIds: (chat?.controls.availableModes ?? hc.provider.modes).map(\.id), allowedModeIds: allowed.sorted(),
             model: chat?.controls.currentModel?.name ?? hc.record.modelId, queued: chat?.queuedCount ?? 0, running: chat?.isBusy ?? false,
-            cards: cards(hc, raise: raise), can: .init(send: !(chat?.accountRestartPending ?? false), stop: chat?.isWorking ?? false), commands: Array(commands))
+            cards: cards(hc, raise: raise), can: .init(send: !(chat?.accountRestartPending ?? false), stop: chat?.isWorking ?? false, close: true),
+            commands: Array(commands))
         // 1.10: a replica says where it lives; a chat that has moved before (gen > 0) says its gen,
         // so a client can release it at the right one; a chat being moved, that it is.
         if var owner = hc.record.owner, hc.isReplica || owner.gen > 0 {

@@ -58,7 +58,8 @@ package enum ControlKind: String, Sendable, CaseIterable {
     case accountRefresh = "account.refresh"
     case accountPrivacy = "account.privacy"
     /// A box's Claude accounts (`LinkAccount`), read when asked, never polled; and one account's
-    /// usage (`login`). Claude only.
+    /// usage (`login`; Codex's one login is "main"). Without a login (1.14, a phone may): the
+    /// node reads its logins of that CLI again for `clis[].usage`, at most once a minute each.
     case accountList = "account.list"
     case accountUsage = "account.usage"
     // 1.3: Arsenal, a chat's agent-control tier, and Stop agent control.
@@ -338,6 +339,9 @@ package struct ChatControls: Codable, Sendable, Equatable {
     /// The kept draft itself, for a client that can't `call` for it (a phone): sent with
     /// `draftRev` ("" when there is none); absent when longer than `LinkPolicy.maxText`.
     package var draft: String?
+    /// 1.14 (a box's Claude chat): the account it runs on ("main" for the default), so a client
+    /// shows that login's usage (`clis[].usage`); absent where every chat runs on the active one.
+    package var login: String?
 
     package init(
         modelId: String?, effort: String?, fast: Bool?, fastOffered: Bool, planAllow: Bool, contextPct: Int?, autoCompactAt: Int?,
@@ -550,11 +554,15 @@ package struct CLIState: Codable, Sendable, Equatable {
     package var models: [Model]
     package var effortScale: [String]
     package var account: LinkAccountState?
-    package init(provider: String, models: [Model], effortScale: [String], account: LinkAccountState? = nil) {
+    /// 1.14: each login's plan windows as the node knows them (`AccountUsage`); a phone gets
+    /// these without `account`. Absent from a node that sends none.
+    package var usage: [AccountUsage]?
+    package init(provider: String, models: [Model], effortScale: [String], account: LinkAccountState? = nil, usage: [AccountUsage]? = nil) {
         self.provider = provider
         self.models = models
         self.effortScale = effortScale
         self.account = account
+        self.usage = usage
     }
 }
 

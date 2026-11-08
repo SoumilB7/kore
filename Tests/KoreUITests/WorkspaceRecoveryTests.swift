@@ -8,6 +8,29 @@ import Testing
 struct WorkspaceRecoveryTests {
     private let folder = URL(fileURLWithPath: "/tmp/workspace-draft-recovery")
 
+    /// The leading pane comes back with the window: Devices open at its width, the explorer
+    /// closed. A temporary folder writes nothing: it's kept for the run only.
+    @Test func aWindowOpenedAgainHasItsPaneAsItWasClosed() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("panes-\(UUID().uuidString.prefix(8))", isDirectory: true)
+        #expect(!Workspace.persists(folder))
+        let first = Workspace(folder: folder, restore: true)
+        first.explorerOpen = true
+        first.devicesOpen = true
+        first.devicesWidth = 340
+        first.closeAll()
+        let again = Workspace(folder: folder, restore: true)
+        defer { again.closeAll() }
+        #expect(again.devicesOpen && !again.explorerOpen && abs(again.devicesWidth - 340) < 1)
+        // The explorer open instead: that comes back.
+        again.explorerOpen = true
+        again.closeAll()
+        let third = Workspace(folder: folder, restore: true)
+        defer { third.closeAll() }
+        #expect(third.explorerOpen && !third.devicesOpen)
+        // Nothing of it in the shared settings.
+        #expect(UserDefaults.standard.data(forKey: "explorer." + folder.standardizedFileURL.path) == nil)
+    }
+
     @Test func closedTabsKeepExactDraftFilesAndOriginalPositionInLifoOrder() throws {
         let workspace = Workspace(folder: folder, restore: false)
         defer { workspace.closeAll() }

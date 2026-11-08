@@ -35,6 +35,9 @@ public enum ClaudeEvent: Sendable {
     /// `system/bridge_state`: the CLI's Remote Control link to claude.ai/code ("ready",
     /// "connected", "failed", "policy_disabled"), and why, when it failed.
     case bridgeState(state: String, detail: String?)
+    /// `system/peer_message_hold`: a cross-session message the CLI's receive-side policy held
+    /// rather than queued, and how that hold ended (`z-docs/design/cli-wiring.md`).
+    case peerHold(PeerHold)
     /// End of a turn. The process stays alive for the next `send`.
     case turnCompleted(TurnResult)
     /// The API refused the login (an assistant message with `error: "authentication_failed"`):
@@ -113,6 +116,15 @@ public struct PermissionRequest: Sendable, Identifiable {
     /// Rule updates the CLI proposes for "always allow"; echoed back by `.allowAlways`.
     public let suggestions: [JSONValue]
     public let raw: JSONValue
+    /// Why the ask escalated (`decision_reason`), and what kind (`decision_reason_type`:
+    /// `safetyCheck`, `classifier`, `rule`, …); `classifier_approvable` false: only a person may
+    /// approve it; `requires_user_interaction`: no stored grant or automatic answer may.
+    public var decisionReason: String? { raw["decision_reason"]?.string }
+    public var decisionReasonType: String? { raw["decision_reason_type"]?.string }
+    public var personOnly: Bool {
+        ["hook", "safetyCheck", "classifier"].contains(decisionReasonType ?? "") || raw["requires_user_interaction"]?.bool == true
+            || raw["classifier_approvable"]?.bool == false
+    }
 
     /// AskUserQuestion is routed through the permission channel; answer it with `.answers`.
     public var isQuestion: Bool { toolName == "AskUserQuestion" }
@@ -137,6 +149,9 @@ public enum PermissionDecision: Sendable {
     case allowSettingMode(String)
     /// Answers for AskUserQuestion, keyed by question text.
     case answers([String: String])
+    /// Allow, and keep allowing this exact Bash command: one rule in the project's local
+    /// settings (`.claude/settings.local.json`), the CLI's own writer, never its broader suggestion.
+    case allowExactly(command: String)
     case deny(message: String, interrupt: Bool = false)
 
     func payload(for request: PermissionRequest) -> JSONValue {
@@ -147,6 +162,16 @@ public enum PermissionDecision: Sendable {
             ["behavior": "allow", "updatedInput": request.input, "updatedPermissions": .array(request.suggestions)]
         case .allowWithInput(let input):
             ["behavior": "allow", "updatedInput": input]
+        case .allowExactly(let command):
+            [
+                "behavior": "allow", "updatedInput": request.input,
+                "updatedPermissions": [
+                    [
+                        "type": "addRules", "rules": [["toolName": "Bash", "ruleContent": .string(command)]], "behavior": "allow",
+                        "destination": "localSettings",
+                    ]
+                ],
+            ]
         case .allowSettingMode(let mode):
             [
                 "behavior": "allow", "updatedInput": request.input,
@@ -234,6 +259,12 @@ extension ClaudeEvent {
         switch json["type"]?.string {
         case "system" where json["subtype"]?.string == "init":
             self = .sessionStarted(SessionInfo(json))
+        case "system" where json["subtype"]?.string == "peer_message_hold":
+            guard let hold = PeerHold(json) else {
+                self = .raw(json)
+                return
+            }
+            self = .peerHold(hold)
         case "system" where json["subtype"]?.string == "bridge_state":
             self = .bridgeState(state: json["state"]?.string ?? "", detail: json["detail"]?.string)
         case "system" where json["subtype"]?.string == "status" && json["permissionMode"]?.string != nil:
@@ -303,5 +334,39 @@ public struct PeerMessage: Sendable {
             else { return nil }
             text = prompt[prompt.index(after: start)..<close.lowerBound].trimmingCharacters(in: .whitespacesAndNewlines)
         }
+    }
+}
+
+
+/// One `system/peer_message_hold` frame: `held` (who sent it and why, never its text), then
+/// `released` (it goes to the model, under `uuid`) or `dropped` (with `outcome`).
+public struct PeerHold: Sendable, Equatable {
+    public enum State: String, Sendable { case held, released, dropped }
+    public let state: State
+    /// The held message's uuid, chosen by its sender on the socket lane.
+    public let uuid: String
+    /// The sender's address (`uds:/tmp/cc-socks/<pid>.sock`) and name: both its own claims.
+    public let from: String
+    public let name: String?
+    /// `held`: why (`mode-mismatch`, `no-mode-asserted`, `mode-unknown`, `explicit-setting`,
+    /// `managed-setting`, `repo-setting`, `invalid-setting`, `bypass-default`).
+    public let cause: String?
+    /// `dropped`: `expired`, `refused`, `dropped`, `discarded`.
+    public let outcome: String?
+
+    public init(state: State, uuid: String, from: String, name: String? = nil, cause: String? = nil, outcome: String? = nil) {
+        self.state = state
+        self.uuid = uuid
+        self.from = from
+        self.name = name
+        self.cause = cause
+        self.outcome = outcome
+    }
+
+    init?(_ json: JSONValue) {
+        guard let state = json["state"]?.string.flatMap(State.init), let uuid = json["message_uuid"]?.string else { return nil }
+        self.init(
+            state: state, uuid: uuid, from: json["from"]?.string ?? "", name: json["from_name"]?.string, cause: json["cause"]?.string,
+            outcome: json["outcome"]?.string)
     }
 }

@@ -325,8 +325,12 @@ package final class ClaudeTranslator {
             pending[request.id] = request
             out.append(.approvalRequested(approval(request)))
         case .permissionCancelled(let id):
-            pending[id] = nil
+            let ask = pending.removeValue(forKey: id)
             out.append(.approvalWithdrawn(id))
+            // An Auto ask the CLI gave up on (its deadline), not one Stop ended: it wasn't run.
+            if let ask, ask.personOnly, !commands.interrupting {
+                out.append(.notice("Timed out: \(ClaudeAutoStops.oneLine(ask.input["command"]?.string ?? ask.toolName, max: 120)) wasn't run"))
+            }
         case .commandStarted(let id, let session):
             // In a chat with nothing sent yet, this comes before system/init.
             if sessionId == nil, let session { identify(session) }
@@ -860,12 +864,32 @@ package final class ClaudeTranslator {
             id: r.id, title: "Allow \(r.toolName)?", detail: r.description,
             body: Self.summary(of: r.input, in: folder), canAlwaysAllow: !r.suggestions.isEmpty,
             questions: [], changes: Self.proposedChange(r.toolName, r.input).map { [$0] } ?? [], agent: agent)
+        // Auto asks a person (Kore's ask list, a safety check, the classifier): Run once or Deny,
+        // and for a Bash command the CLI lets keep, Always allow this exact command.
+        if r.personOnly {
+            let command = r.toolName == "Bash" ? r.input["command"]?.string : nil
+            let keepable = command != nil && r.raw["suppress_always_allow_rule"]?.bool != true
+            ask = Approval(
+                id: r.id, title: Self.autoStopTitle(r), detail: r.description, body: Self.summary(of: r.input, in: folder), canAlwaysAllow: keepable,
+                questions: [], changes: Self.proposedChange(r.toolName, r.input).map { [$0] } ?? [], agent: agent)
+            ask.autoStop = true
+            if keepable { ask.exactRule = command }
+        }
         // An MCP server's sign-in (`mcp__<server>__authenticate`).
         ask.signIn = r.toolName.hasPrefix("mcp__") && r.toolName.hasSuffix("__authenticate")
         ask.tool = r.toolName
         let written = [r.input["file_path"]?.string, r.input["notebook_path"]?.string].compactMap { $0 }
         if !written.isEmpty { ask.targets = written }
         return ask
+    }
+
+    /// "Auto asks: <command> (<reason>)", a line: the reason's first line, without the escapes
+    /// it may carry.
+    static func autoStopTitle(_ r: PermissionRequest) -> String {
+        let what = r.input["command"]?.string ?? r.input["file_path"]?.string ?? r.toolName
+        let reason = (r.decisionReason ?? "").replacingOccurrences(of: "\u{1B}\\[[0-9;]*[A-Za-z]", with: "", options: .regularExpression)
+        let line = ClaudeAutoStops.oneLine(reason.split(whereSeparator: \.isNewline).first.map(String.init) ?? "", max: 80)
+        return "Auto asks: \(ClaudeAutoStops.oneLine(what, max: 120))" + (line.isEmpty ? "" : " (\(line))")
     }
 
     /// The edit an Edit / Write approval asks about, shaped as the tool's own result would be.

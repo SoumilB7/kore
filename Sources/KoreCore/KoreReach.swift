@@ -127,8 +127,8 @@ public enum KoreReach {
             "-c", "mcp_servers.\(Self.server).command=\(path)",
             "-c", "mcp_servers.\(Self.server).args=\(String(decoding: args, as: UTF8.self))",
             "-c", "mcp_servers.\(Self.server).env_vars=[\(names)]",
-            // kore_wait holds a call up to 300 s.
-            "-c", "mcp_servers.\(Self.server).tool_timeout_sec=330",
+            // kore_wait holds a call up to 300 s; a box's kore-host waits 335 s for the Mac.
+            "-c", "mcp_servers.\(Self.server).tool_timeout_sec=345",
         ] + (server.approved ? ["-c", #"mcp_servers.\#(Self.server).default_tools_approval_mode="approve""#] : [])
     }
 

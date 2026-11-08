@@ -45,6 +45,13 @@ package struct DeviceCardInfo: Equatable, Sendable {
             login: login, firstSeen: firstSeen, kind: .phone, name: name)
     }
 
+    /// Another of the owner's Macs joining from its Add device window.
+    package static func mac(name: String, node: String, address: String, login: String, firstSeen: Date) -> DeviceCardInfo {
+        DeviceCardInfo(
+            title: "\(name) wants to join", note: "It could move CLI logins to and from this Mac, and nothing else.", node: node, address: address,
+            login: login, firstSeen: firstSeen, kind: .mac, name: name)
+    }
+
     /// A box's claim (New box…, or a peer in the Welcome "+" list), and a box waiting at a box.
     package static func box(name: String, node: String, address: String, login: String, firstSeen: Date, device: UUID?) -> DeviceCardInfo {
         DeviceCardInfo(

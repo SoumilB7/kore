@@ -59,6 +59,8 @@ enum DevScroller {
         let clip = scroll.contentView
         guard let document = scroll.documentView else { return }
         let y = document.isFlipped ? value : document.frame.height - clip.bounds.height - value
+        // The bench's move stands in for the reader's (the scroll bar dragged): counted as theirs.
+        ScrollShift.readerMoved(scroll)
         clip.scroll(to: NSPoint(x: clip.bounds.origin.x, y: y))
         scroll.reflectScrolledClipView(clip)
     }

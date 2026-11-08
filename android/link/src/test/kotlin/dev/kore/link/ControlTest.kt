@@ -12,6 +12,8 @@ class ControlTest {
             Control.answer("c", "k", "allow", "d", mapOf("q" to listOf("a"))).toString())
         assertEquals("""{"type":"chat.new","folder":"/srv/app","provider":"codex"}""", Control.newChatInFolder("/srv/app", "codex").toString())
         assertEquals("""{"type":"chat.new","windowId":"w","provider":"claude"}""", Control.newChat("w", "claude").toString())
+        assertEquals("""{"type":"window.open","windowId":"w_box"}""", Control.windowShow("w_box").toString())
+        assertEquals("""{"type":"window.close","windowId":"w_box"}""", Control.windowClose("w_box").toString())
         assertEquals("""{"t":"presence","onScreen":true,"chatId":"c"}""", Control.presence(true, "c").toString())
         assertEquals("""{"t":"presence","onScreen":false}""", Control.presence(false, null).toString())
         assertEquals("""{"t":"cmd","id":"1","cmd":{"type":"chat.stop","chatId":"c"}}""", Control.envelope("1", Control.stop("c")).toString())

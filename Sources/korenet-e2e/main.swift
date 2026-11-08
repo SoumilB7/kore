@@ -467,7 +467,9 @@ check("fs.list \(folder) lists kore-host", listing?["ok"] as? Bool == true && na
 // MARK: 4b. A login moved (1.14), with a fake credential only: refused when its bytes are wrong,
 // staged 0600 where nothing runs it and no account lists it, placed on commit, fingerprinted
 // without the token, then sent back and deleted. Everything is under the test daemon's own HOME
-// in the scratch folder: never the box's real accounts. Opt in: KORE_E2E_LOGINS=1.
+// in the scratch folder: never the box's real accounts. Then the same for Codex, the box's one
+// login in the test daemon's own `.codex`, and a second refused while it holds one. Opt in:
+// KORE_E2E_LOGINS=1.
 
 if ProcessInfo.processInfo.environment["KORE_E2E_LOGINS"] == "1" {
     let accounts = folder + "/home/.config/claude-accounts"
@@ -508,6 +510,42 @@ if ProcessInfo.processInfo.environment["KORE_E2E_LOGINS"] == "1" {
     let gone = move("lm5", ["type": "account.export", "provider": "claude", "phase": "commit", "moveId": "e2emove-0002"])
     let goneOut = ssh("test -e \(accounts)/e2e && echo left || echo deleted; cat \(folder)/state/kore-host/login-moves.json 2>/dev/null").out
     check("login: deleted on the box after the move back, nothing paused", gone?["ok"] as? Bool == true && goneOut.contains("deleted") && !goneOut.contains("e2emove-0002"), goneOut)
+
+    // Codex: the box's one login, auth.json in the test daemon's own CODEX_HOME (its HOME's .codex).
+    let codexHome = folder + "/home/.codex"
+    let codexFake = Data(#"{"tokens":{"access_token":"e2e-codex-access","refresh_token":"e2e-codex-refresh","account_id":"e2e"},"last_refresh":"2026-11-18T10:00:00Z"}"#.utf8)
+    let codexSha = hex(SHA256.hash(data: codexFake))
+    let codex: [String: Any] = ["type": "account.import", "provider": "codex", "login": "main", "host": "e2e-mac"]
+    let codexWrong = move("cm0", codex.merging(["phase": "prepare", "moveId": "e2ecodex-0000", "data": codexFake.base64EncodedString(), "sha": String(repeating: "0", count: 64)]) { $1 })
+    check("codex: bytes that don't match their sha are refused", codexWrong?["ok"] as? Bool == false && codexWrong?["message"] as? String == "sentWrong", "\(codexWrong.map { "\($0)" } ?? "no answer")")
+    start = now()
+    let codexStaged = move("cm1", codex.merging(["phase": "prepare", "moveId": "e2ecodex-0001", "data": codexFake.base64EncodedString(), "sha": codexSha]) { $1 })
+    note("codex prepare rtt", ms(now() - start))
+    check("codex: a fake login is staged", codexStaged?["ok"] as? Bool == true, "\(codexStaged.map { "\($0)" } ?? "no answer")")
+    let codexStagedFile = codexHome + "/.incoming-e2ecodex-0001/auth.json"
+    let codexOnBox = ssh("stat -c %a \(codexStagedFile); sha256sum \(codexStagedFile) | cut -c1-64; test -e \(codexHome)/auth.json && echo auth-there || echo auth-none").out
+    check("codex: …0600, the bytes sent, no auth.json yet", codexOnBox.contains("600") && codexOnBox.contains(codexSha) && codexOnBox.contains("auth-none"), codexOnBox)
+    start = now()
+    let codexPlaced = move("cm2", codex.merging(["phase": "commit", "moveId": "e2ecodex-0001"]) { $1 }, 30)
+    note("codex commit rtt", ms(now() - start))
+    check("codex: committed as the box's one login", codexPlaced?["ok"] as? Bool == true && codexPlaced?["login"] as? String == "main", "\(codexPlaced.map { "\($0)" } ?? "no answer")")
+    let codexPlacedOut = ssh("stat -c %a \(codexHome)/auth.json; sha256sum \(codexHome)/auth.json | cut -c1-64; test -e \(codexHome)/.incoming-e2ecodex-0001 && echo staged-left || echo staged-gone").out
+    check("codex: auth.json in place 0600, the bytes sent, staging gone", codexPlacedOut.contains("600") && codexPlacedOut.contains(codexSha) && codexPlacedOut.contains("staged-gone"), codexPlacedOut)
+    let other = Data(#"{"tokens":{"access_token":"x","refresh_token":"e2e-codex-other","account_id":"e2e-2"}}"#.utf8)
+    let occupied = move("cm3", codex.merging(["phase": "prepare", "moveId": "e2ecodex-0002", "data": other.base64EncodedString(), "sha": hex(SHA256.hash(data: other))]) { $1 })
+    check("codex: a second login is refused while it holds one", occupied?["ok"] as? Bool == false && occupied?["message"] as? String == "occupied", "\(occupied.map { "\($0)" } ?? "no answer")")
+    let codexKey = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
+    let codexPrints = move("cm4", ["type": "account.fingerprints", "provider": "codex", "key": codexKey.base64EncodedString()])
+    let codexWant = String(hex(HMAC<SHA256>.authenticationCode(for: Data("e2e-codex-refresh".utf8), using: SymmetricKey(data: codexKey))).prefix(16))
+    let codexGot = (codexPrints?["prints"] as? [[String: Any]] ?? []).first { $0["login"] as? String == "main" }?["fingerprint"] as? String
+    check("codex: its fingerprint is this Mac's HMAC of the fake, without the token", codexGot == codexWant && !"\(codexPrints ?? [:])".contains("e2e-codex-refresh"), "\(codexPrints.map { "\($0)" } ?? "no answer")")
+    let codexBack = move("cm5", ["type": "account.export", "provider": "codex", "phase": "prepare", "moveId": "e2ecodex-0003", "login": "main"])
+    check("codex: sent back, the bytes placed", codexBack?["ok"] as? Bool == true && codexBack?["sha"] as? String == codexSha, "\(codexBack?["ok"] ?? "no answer")")
+    let codexPaused = ssh("cat \(folder)/state/kore-host/login-moves.json 2>/dev/null").out
+    check("codex: paused while it goes", codexPaused.contains("e2ecodex-0003"), codexPaused)
+    let codexGone = move("cm6", ["type": "account.export", "provider": "codex", "phase": "commit", "moveId": "e2ecodex-0003"])
+    let codexGoneOut = ssh("test -e \(codexHome)/auth.json && echo left || echo deleted; cat \(folder)/state/kore-host/login-moves.json 2>/dev/null").out
+    check("codex: deleted on the box after the move back, nothing paused", codexGone?["ok"] as? Bool == true && codexGoneOut.contains("deleted") && !codexGoneOut.contains("e2ecodex-0003"), codexGoneOut)
 }
 
 start = now()

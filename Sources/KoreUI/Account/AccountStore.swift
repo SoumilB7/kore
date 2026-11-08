@@ -66,7 +66,7 @@ package final class AccountStore {
     /// Why a sign-out isn't run: on a box, never; on this Mac, not for a login moved to a box.
     static func signOutRefusal(onBox: Bool, movedTo box: String?) -> String? {
         if onBox { return "Kore doesn't sign anyone out on a box: that would end the login on every machine." }
-        if let box { return "This login is signed in on \(box) now: signing out here would end it there too." }
+        if let box { return "This login is signed in on \(LoginMoves.shared.placeName(box)) now: signing out here would end it there too." }
         return nil
     }
 
@@ -191,13 +191,23 @@ package final class AccountStore {
     func isMoving(_ provider: String, _ id: String?) -> Bool { moving.contains(provider + "/" + Self.loginKey(id)) }
 
     /// Locks a login for a move; false when it's moving already.
-    func lockMove(_ provider: String, _ id: String?) -> Bool { moving.insert(provider + "/" + Self.loginKey(id)).inserted }
+    package func lockMove(_ provider: String, _ id: String?) -> Bool {
+        guard moving.insert(provider + "/" + Self.loginKey(id)).inserted else { return false }
+        CLIProfiles.moving.value.insert(provider + "/" + Self.loginKey(id))
+        return true
+    }
 
-    func unlockMove(_ provider: String, _ id: String?) { moving.remove(provider + "/" + Self.loginKey(id)) }
+    package func unlockMove(_ provider: String, _ id: String?) {
+        moving.remove(provider + "/" + Self.loginKey(id))
+        CLIProfiles.moving.value.remove(provider + "/" + Self.loginKey(id))
+    }
 
-    /// Whether the CLI reads a login signed in, in its own folder (a move's check here).
-    func readsSignedIn(_ provider: String, _ id: String?) async -> Bool {
+    /// Whether the CLI reads a login signed in, in its own folder (a move's check here, after
+    /// its commit only).
+    package func readsSignedIn(_ provider: String, _ id: String?) async -> Bool {
         guard let ops = ops(provider) else { return false }
+        // Asked once a move committed (one copy left): its CLI may start on it again.
+        CLIProfiles.moving.value.remove(provider + "/" + Self.loginKey(id))
         let reply = await CLIProfiles.$pinned.withValue(CLIProfiles.Pin(cli: provider, id: id)) { try? await ops.calls.status() }
         guard let reply, case .signedIn = ops.parse(reply) else { return false }
         return true
@@ -907,7 +917,7 @@ package final class AccountStore {
 
     /// How many of the CLI's chats, in any window, have a turn, a background agent or a command
     /// running: what a sign-out or a switch stops.
-    func workingChats(_ provider: String) -> Int { liveChats(provider).filter(\.hasWork).count }
+    package func workingChats(_ provider: String) -> Int { liveChats(provider).filter(\.hasWork).count }
 
     // MARK: Chats
 

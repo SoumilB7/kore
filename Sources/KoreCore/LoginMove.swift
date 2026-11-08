@@ -49,6 +49,8 @@ public enum LoginMove {
         case notSignedIn
         /// The file isn't a complete login (no refresh token or expiry): nothing to move.
         case notALogin
+        /// The target keeps one login of this CLI and holds another (a box's Codex).
+        case occupied
         /// It refreshed on the source while it moved: the copy sent is already stale.
         case changedMeanwhile
         /// Reading, writing or deleting it failed, in the system's words.

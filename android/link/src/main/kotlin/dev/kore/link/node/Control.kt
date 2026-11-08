@@ -152,6 +152,8 @@ object Control {
         }
     }
     fun windowOpen(recentId: String) = cmd("window.open") { put("recentId", recentId) }
+    /** A box's closed folder window back, by its id (kore-host 1.13; a Mac opens from its recents). */
+    fun windowShow(windowId: String) = cmd("window.open") { put("windowId", windowId) }
     fun windowReopen() = cmd("window.reopen")
     fun windowClose(windowId: String, force: Boolean = false) = cmd("window.close") { put("windowId", windowId); if (force) put("force", true) }
     fun historyOpen(windowId: String, sessionId: String) = cmd("history.open") { put("windowId", windowId); put("sessionId", sessionId) }
@@ -210,6 +212,13 @@ object Control {
     fun logsChunk(id: String, offset: Int, total: Int, text: String): JsonObject = buildJsonObject {
         put("t", "logs.chunk"); put("id", id); put("offset", offset); put("total", total); put("text", text)
     }
+    /**
+     * Its logins' usage read again where due (link 1.14, read-only: no login named, nothing
+     * switched); the windows come back in `clis[].usage`. Posted as it is ([envelope]) when a
+     * screen that shows them opens, never on a timer.
+     */
+    fun accountUsage(provider: String) = cmd("account.usage") { put("provider", provider) }
+
     /** A command in its envelope. */
     fun envelope(id: String, cmd: JsonObject): JsonObject = buildJsonObject { put("t", "cmd"); put("id", id); put("cmd", cmd) }
 

@@ -36,6 +36,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case next, previous, reload, keep, compare, field, toggle, replace, indent, lineendings, language, add, done
         case autoaccept, replaceall, ticks, reset, use, method, `switch`, credentials, choose, save, share, track, outside, extended
         case signIn = "signin", signOut = "signout"
+        /// An Auto ask's "Always ask for these in my settings".
+        case settings
         /// The install card's Install, Try again and Locate….
         case install, retry, locate
         case `continue`, background, submit, other
@@ -43,6 +45,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case working
         /// A tab whose turn is offline or stalled: ⚠ in its spinner's place.
         case stuck
+        /// A chat tab's ">_" mark with an approval waiting: its amber point.
+        case needsYou = "needsyou"
         /// A chat tab whose work an account switch or sign-out stopped: ⚠ until its next send.
         case stoppedForAccount
         /// A list row's stand-in for the pointer entering it; there while it's lit; a popup
@@ -52,6 +56,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case input
         /// A hover card, while it shows.
         case card
+        /// A tab's title: the room its name gets in the strip.
+        case title
     }
 }
 
@@ -218,12 +224,16 @@ extension StoryID {
         package static func answer(_ entry: UUID) -> StoryID { StoryID(.transcript, "answer", key: entry.uuidString) }
         package static func fold(_ turn: String) -> StoryID { StoryID(.transcript, "fold", key: turn) }
         package static func tool(_ id: String) -> StoryID { StoryID(.transcript, "tool", key: id) }
+        /// A tool header's file name, by the name: a click opens the file.
+        package static func fileName(_ name: String) -> StoryID { StoryID(.transcript, "file-name", key: name) }
         package static func explored(_ id: String) -> StoryID { StoryID(.transcript, "explored", key: id) }
         /// `.part(.stop)` and `.part(.open)`.
         package static func agent(_ id: String) -> StoryID { StoryID(.transcript, "agent", key: id) }
         package static func changes(_ turn: String) -> StoryID { StoryID(.transcript, "changes", key: turn) }
         /// A fenced code block, by its place in its markdown; `.part(.copy)` is its Copy.
         package static func code(_ path: [Int]) -> StoryID { StoryID(.transcript, "code", key: path.map(String.init).joined(separator: ".")) }
+        /// A table, by its place in its markdown; `.part(.copy)` is its Copy, as under a code block.
+        package static func table(_ path: [Int]) -> StoryID { StoryID(.transcript, "table", key: path.map(String.init).joined(separator: ".")) }
         package static let earlier = StoryID(.transcript, "earlier")
         /// The message scroller.
         package static let rail = StoryID(.transcript, "rail")
@@ -449,6 +459,9 @@ extension StoryID {
             StoryID(.transcript, "user", key: k), StoryID(.transcript, "attachment", key: k), StoryID(.transcript, "user", key: k).part(.copy),
             StoryID(.transcript, "user", key: k).part(.fork), StoryID(.transcript, "answer", key: k),
             StoryID(.transcript, "answer", key: k).part(.copy), StoryID(.transcript, "answer", key: k).part(.fork),
+            StoryID(.transcript, "user", key: k).part(.rollback), StoryID(.transcript, "user", key: k).part(.rollback).part(.done),
+            StoryID(.transcript, "user", key: k).part(.hover), StoryID(.transcript, "answer", key: k).part(.rollback),
+            StoryID(.transcript, "answer", key: k).part(.rollback).part(.done), StoryID(.transcript, "answer", key: k).part(.hover),
             StoryID(.transcript, "fold", key: k), StoryID(.transcript, "tool", key: k),
             StoryID(.transcript, "explored", key: k), StoryID(.transcript, "agent", key: k),
             StoryID(.transcript, "agent", key: k).part(.stop), StoryID(.transcript, "agent", key: k).part(.open),

@@ -36,7 +36,8 @@ struct MessageRail: View {
             .overlay(alignment: .trailing) {
                 let marks = store.messageMarks
                 if marks.count > 1, height.value > 0 {
-                    rail(marks, Layout(count: marks.count, room: height.value - 2 * Size.railMargin, around: around(marks)))
+                    let layout = Layout(count: marks.count, room: height.value - 2 * Size.railMargin, around: around(marks))
+                    rail(marks, layout).offset(y: Self.drop(growth: store.composerGrowth, room: height.value, rail: layout.height))
                 }
             }
             .onChange(of: SectionsKey(store), initial: true) {
@@ -47,6 +48,13 @@ struct MessageRail: View {
             .task(id: store.earlierAvailable && !store.loadingEarlier) {
                 if !store.loadingEarlier { await actions.readEarlierMessages() }
             }
+    }
+
+    /// How far the rail sits below the middle of what shows: half the composer's growth, so its
+    /// middle stays where it was before the composer grew, and never past its room's margin.
+    static func drop(growth: CGFloat, room: CGFloat, rail: CGFloat) -> CGFloat {
+        guard growth > 0 else { return 0 }
+        return min(growth / 2, max(0, (room - rail) / 2 - Size.railMargin))
     }
 
     /// Which ticks show and where: all of them up to `Size.railMost`. Past that, the chat's first

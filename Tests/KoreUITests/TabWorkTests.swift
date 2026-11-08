@@ -20,6 +20,45 @@ struct TabWorkTests {
         ActiveCommand(id: id, kind: kind, title: id, startedAt: .now, owner: owner)
     }
 
+    /// bg-command-cue.html C: ">_" only while background commands run and the model is idle or
+    /// waits on an approval; the model at work (or offline mid-turn) keeps the spinner.
+    @Test func kindMapsTheModelAndItsBackgroundCommands() {
+        typealias K = TabWork.Kind
+        func kind(_ working: Bool, _ network: Bool, _ approval: Bool, _ commands: Bool) -> K {
+            TabWork.kind(working: working, waitingForNetwork: network, approvalWaiting: approval, commands: commands)
+        }
+        #expect(kind(false, false, false, false) == .idle)
+        #expect(kind(true, false, false, false) == .working)
+        #expect(kind(false, true, false, false) == .working)
+        #expect(kind(true, false, false, true) == .working)
+        #expect(kind(false, true, false, true) == .working)
+        #expect(kind(false, false, false, true) == .background)
+        #expect(kind(true, false, true, true) == .background)
+        #expect(kind(true, false, true, false) == .working)
+        #expect(kind(false, false, true, false) == .idle)
+    }
+
+    @Test(arguments: ["claude", "codex"])
+    func aShellOutlivingItsTurnTurnsTheSpinnerIntoThePrompt(_ provider: String) throws {
+        let chat = try makeChat(provider)
+        defer { chat.close() }
+        chat.status.setRunning(true)
+        chat.commands.apply(.commandStarted(command("build")))
+        #expect(TabWork.kind(chat) == .working)
+        chat.status.setRunning(false)
+        #expect(TabWork.kind(chat) == .background)
+        #expect(TabWork.running(chat))
+        spawn("scout", in: chat)
+        #expect(TabWork.kind(chat) == .working)
+        chat.transcript.agentFinished(id: "scout", status: .finished, result: nil)
+        chat.transcript.drawNow()
+        #expect(TabWork.kind(chat) == .background)
+        chat.commands.apply(.commandEnded(id: "build", .completed, at: .now))
+        #expect(TabWork.kind(chat) == .idle)
+        chat.commands.apply(.commandStarted(command("later", kind: .scheduled)))
+        #expect(TabWork.kind(chat) == .idle)
+    }
+
     @Test(arguments: ["claude", "codex"])
     func backgroundWorkKeepsItsChatMarkedUntilItsLastOwnerEnds(_ provider: String) throws {
         let chat = try makeChat(provider)

@@ -1,18 +1,11 @@
+import AgentTools
 import Darwin
 import Foundation
 
 /// One connection to Kore's agent channel (`z-docs/agent-protocol.md`): a hello, then commands,
 /// one JSON object a line each way. Blocking; `kore` does one thing and exits.
-final class AgentClient {
-    enum Failure: Error {
-        /// No socket: Kore isn't running, or agent control is off.
-        case unreachable
-        /// Something else is at the socket. Nothing was said to it.
-        case notKore
-        /// Kore said `bye`, or a command failed: its code and words.
-        case refused(code: String, message: String)
-        case closed
-    }
+final class AgentClient: AgentCalls {
+    typealias Failure = AgentFailure
 
     typealias Object = [String: Any]
 
@@ -155,6 +148,8 @@ final class AgentClient {
             }
             var chunk = [UInt8](repeating: 0, count: 64 * 1024)
             let n = read(fd, &chunk, chunk.count)
+            if n < 0, errno == EINTR { continue }
+            if n < 0, errno == EAGAIN || errno == EWOULDBLOCK { throw .timedOut }
             guard n > 0 else { return nil }
             buffer.append(contentsOf: chunk[0..<n])
         }

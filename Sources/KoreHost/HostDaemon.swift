@@ -113,12 +113,52 @@ package final class HostDaemon {
         made.paused = { HostLoginMoves.isPaused($0, state: state) }
         return made
     }()
+    /// Codex's one login's folder here: `CODEX_HOME` as kore-host has it, else `~/.codex`.
+    package var codexHome: URL {
+        if let dir = sessionEnv["CODEX_HOME"], !dir.isEmpty { return URL(fileURLWithPath: dir, isDirectory: true) }
+        return HostPaths.home(sessionEnv).appendingPathComponent(".codex", isDirectory: true)
+    }
+
+    /// 1.14: each login's plan windows for the link (`clis[].usage`), kept from what the box
+    /// hears and read when a client asks.
+    package private(set) lazy var planUsage: HostPlanUsage = makePlanUsage()
+
+    private func makePlanUsage() -> HostPlanUsage {
+        let state = paths.state
+        let made = HostPlanUsage(read: { [weak self] cli, login in
+            guard let self else { throw UsageUnavailable() }
+            switch cli {
+            case "claude": return try await self.accounts.usage(login)
+            case "codex":
+                guard login == LinkAccount.main else { throw HostAccounts.Failure.gone(login) }
+                if HostLoginMoves.isPaused(HostLoginMoves.codexKey, state: state) { throw HostAccounts.Failure.codexMoving }
+                return try await self.codexUsage()
+            default: throw UsageUnavailable()
+            }
+        })
+        made.logins = { [weak self] cli in
+            guard let self, self.installed[cli] == true || self.clis.contains(where: { $0.provider == cli }) else { return [] }
+            return cli == "claude" ? self.accounts.ids() : [LinkAccount.main]
+        }
+        made.changed = { [weak self] in self?.pushClis() }
+        made.now = { [weak self] in self?.now() ?? Date() }
+        return made
+    }
+
+    /// Codex's one login's plan and limits: a short-lived `codex app-server` (tests answer for it).
+    package var codexUsage: @Sendable () async throws -> PlanReading = HostDaemon.codexReading
+    nonisolated static func codexReading() async throws -> PlanReading { try await PlanUsage.codex() }
+
+    /// The CLIs as the link carries them: their models and their logins' usage.
+    package var linkClis: [CLIState] { planUsage.carried(clis) }
+
     /// 1.14: logins moved in and out by the owner's Mac.
     package lazy var loginMoves: HostLoginMoves = {
-        let moves = HostLoginMoves(accounts: accounts, state: paths.state)
+        let moves = HostLoginMoves(accounts: accounts, state: paths.state, codexHome: codexHome)
         moves.chatsOn = { [weak self] login in
             self?.chats.filter { $0.cliRunning && $0.record.provider == "claude" && ($0.record.account ?? LinkAccount.main) == login }.count ?? 0
         }
+        moves.codexChats = { [weak self] in self?.chats.filter { $0.cliRunning && $0.record.provider == "codex" }.count ?? 0 }
         return moves
     }()
 
@@ -128,9 +168,16 @@ package final class HostDaemon {
         config = HostConfig.load(paths.config)
         services.onEvent = { [weak self] chat, event in self?.noted(chat, event) }
         services.onModels = { [weak self] cli, models in self?.listed(cli, models) }
+        services.onPlanWindows = { [weak self] cli, snapshot in self?.planUsage.take(cli, snapshot: snapshot) }
         services.server = { [weak self] chat in self?.server(for: chat) }
         services.onTranscript = { [weak self] chat in self?.chats.first { $0.chat === chat }?.attach(chat, replaced: true) }
         services.accountEnvironment = { [weak self] id in try self?.accounts.environment(id) ?? [:] }
+        // A Codex chat doesn't start while the box's Codex login is moving (1.14).
+        let state = paths.state
+        services.codexEnvironment = {
+            if HostLoginMoves.isPaused(HostLoginMoves.codexKey, state: state) { throw HostAccounts.Failure.codexMoving }
+            return [:]
+        }
         if let data = try? Data(contentsOf: paths.models), let kept = try? JSONDecoder().decode([CLIState].self, from: data) { clis = kept }
         let note = paths.state.appendingPathComponent("instructions.md")
         try? HostPaths.privateFile(Data(HostServices.instructions(host: ProcessInfo.processInfo.hostName).utf8), to: note)
@@ -228,6 +275,8 @@ package final class HostDaemon {
                 provider: provider, folder: folder, modelId: modelId, in: paths.chats, fork: fork, title: title, mode: mode, effort: effort,
                 session: session, account: provider == "claude" ? accounts.folderDefault(folder) : nil)
         else { return nil }
+        // A chat in a closed window's folder opens its window again.
+        setClosed(folder, false, broadcast: false)
         chats.append(chat)
         watch(chat)
         broadcast(windows: true, chats: [chat])
@@ -286,6 +335,7 @@ package final class HostDaemon {
         guard let at = closedChats.firstIndex(where: { $0.id == id }) else { return nil }
         let hc = closedChats.remove(at: at)
         hc.markOpen()
+        setClosed(hc.record.folder, false, broadcast: false)
         chats.append(hc)
         watch(hc)
         broadcast(windows: true, chats: [hc])
@@ -384,8 +434,15 @@ package final class HostDaemon {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         if let data = try? encoder.encode(clis) { try? HostPaths.privateFile(data, to: paths.models) }
+        pushClis()
+    }
+
+    /// The CLIs (models and usage) to the act and full grants on screen; one off screen gets
+    /// them in its snapshot when it's back.
+    private func pushClis() {
+        let carried = linkClis
         for connection in connections where connection.proven && (connection.control ?? .watch) >= .act && connection.takesPushes() {
-            connection.send(.delta(rev: connection.nextRev(), windows: nil, chats: nil, removed: nil, extras: LinkExtras(clis: clis)))
+            connection.send(.delta(rev: connection.nextRev(), windows: nil, chats: nil, removed: nil, extras: LinkExtras(clis: carried)))
         }
     }
 
@@ -454,7 +511,7 @@ package final class HostDaemon {
         net.port = netPort
         switch pick {
         case .installed(let tailnet, let choice):
-            net.join(tailnet)
+            net.join(tailnet, choice: choice)
             HostJournal.note("korenet on", ["tailnet": "tailscale", "choice": "\(choice)"])
             Self.tailnetChosen?("installed")
         case .kore(let tailnet, let alive, let stop):
@@ -588,8 +645,22 @@ package final class HostDaemon {
                 + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap] : []))
     }
 
+    /// Whether a served folder's window is closed (`window.close`); one with a chat shows anyway.
+    func isClosed(_ folder: String) -> Bool { config.closed?.contains(folder) == true }
+
+    /// A folder's window closed or open again: kept in `config.json` so a restart keeps it.
+    func setClosed(_ folder: String, _ on: Bool, broadcast: Bool = true) {
+        guard config.folders.contains(folder), isClosed(folder) != on else { return }
+        var closed = (config.closed ?? []).filter { $0 != folder }
+        if on { closed.append(folder) }
+        config.closed = closed.isEmpty ? nil : closed
+        do { try config.save(paths.config) } catch { HostJournal.note("closed window not saved", ["path": folder, "reason": "\(error)"]) }
+        if broadcast { broadcastWindows() }
+    }
+
+    /// The box's windows: one per served folder, but a closed one only while a chat is in it.
     var windows: [LinkWindow] {
-        config.folders.map { folder in
+        config.folders.filter { folder in !isClosed(folder) || chats.contains { $0.record.folder == folder } }.map { folder in
             let tabs = chats.filter { $0.record.folder == folder }.map { LinkTab(id: "t_" + $0.id, kind: .chat, title: $0.title, chatId: $0.id) }
             return LinkWindow(
                 id: Self.windowID(folder), name: URL(fileURLWithPath: folder).lastPathComponent, path: LinkProjection.homeRelative(folder),
@@ -757,10 +828,13 @@ package final class HostDaemon {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
         switch kind {
         case .chatNew:
-            let folder = args.folder.map { URL(fileURLWithPath: $0).standardizedFileURL.path } ?? args.windowId.flatMap(self.folder(windowId:))
+            // A folder as the box's windows say it (`~/…`, this box's home) or absolute.
+            let folder = args.folder.flatMap { HostConfig.normalised($0) } ?? args.windowId.flatMap(self.folder(windowId:))
             return newChat(id: id, folder: folder, provider: args.provider ?? "", modelId: args.modelId, args: args)
         case .chatClose:
             guard let hc = args.chatId.flatMap(chat) else { return fail(.goneChat, "No such chat on this box.") }
+            // As a Mac's: a working chat isn't closed without `force` (its turn would stop).
+            if args.force != true, hc.running { return fail(.confirmClose, "It's working; closing stops it. Send again with force to close.") }
             close(hc)
             return .init(id: id, ok: true)
         case .windowClose:
@@ -771,7 +845,15 @@ package final class HostDaemon {
                 return fail(.confirmClose, "A chat in it is working; closing stops it. Send again with force.")
             }
             closing.forEach(close)
+            // Its window goes too, even with no chat in it (the folder stays served: History,
+            // its files, and a new chat or `window.open` show it again).
+            setClosed(folder, true)
             return .init(id: id, ok: true)
+        case .windowOpen:
+            // 1.13 (a box): a closed folder's window back, by its `windowId`.
+            guard let folder = args.windowId.flatMap(self.folder(windowId:)) else { return fail(.goneWindow, "That folder isn't on this box any more.") }
+            setClosed(folder, false)
+            return .init(id: id, ok: true, windowId: Self.windowID(folder))
         case .tabReopen:
             guard let hc = args.sourceId.flatMap(reopen) else { return fail(.goneChat, "That chat isn't kept any more.") }
             return .init(id: id, ok: true, chatId: hc.id, windowId: Self.windowID(hc.record.folder))
@@ -817,6 +899,12 @@ package final class HostDaemon {
         case .authGh:
             guard control == .full else { return fail(.deniedControl, "GitHub's sign-in needs a grant with full control.") }
             return gitHub(id: id, reply: reply)
+        case .accountUsage where args.login == nil:
+            // 1.14: a client that acts (a phone) asks for its logins' usage: read again where due,
+            // pushed in `clis[].usage`. Read-only, and nothing about a login is named.
+            guard control >= .act else { return fail(.deniedControl, "This grant only watches.") }
+            planUsage.refresh(args.provider ?? "")
+            return .init(id: id, ok: true)
         case .accountSignIn, .accountSubmit, .accountCancel, .accountSignOut, .accountRefresh, .accountList, .accountUsage, .accountSwitch:
             guard control == .full else { return fail(.deniedControl, "Accounts need a grant with full control.") }
             return account(kind, args, id: id, reply: reply)
@@ -840,6 +928,7 @@ package final class HostDaemon {
                 return found
             }.value
             self?.installed = found
+            self?.planUsage.update()
         }
     }
 
@@ -913,6 +1002,10 @@ package final class HostDaemon {
         let cli = provider.id
         switch kind {
         case .accountRefresh:
+            // Codex's login moving (1.14): no CLI reads it until the move ends.
+            if cli == "codex", HostLoginMoves.isPaused(HostLoginMoves.codexKey, state: paths.state) {
+                return .init(id: id, ok: false, code: .invalid, message: HostAccounts.Failure.codexMoving.localizedDescription)
+            }
             // A Claude chat's own account (or one named), read in its folder.
             let login = cli == "claude" ? args.login ?? args.chatId.flatMap(chat).map { $0.record.account ?? LinkAccount.main } : nil
             let accounts = accounts
@@ -920,6 +1013,20 @@ package final class HostDaemon {
                 let reply1: KoreCore.JSONValue?
                 if let login { reply1 = try? await accounts.status(login) } else { reply1 = try? await ops.calls.status() }
                 reply(Self.told(id: id, provider: cli, reading: reply1.map(ops.parse)))
+            }
+            return nil
+        case .accountUsage where cli == "codex":
+            // Codex's one login (1.14): its reading, kept for what the link pushes too.
+            guard args.login == LinkAccount.main else { return .init(id: id, ok: false, code: .goneLogin, message: "Codex keeps one login on a box.") }
+            let usage = planUsage
+            Task {
+                do {
+                    let reading = try await usage.read(cli, LinkAccount.main)
+                    usage.take(cli, login: LinkAccount.main, reading: reading)
+                    reply(.init(id: id, ok: true, reading: reading))
+                } catch {
+                    reply(.init(id: id, ok: false, code: .invalid, message: AccountReason.of(error) ?? "Couldn't read Codex's usage."))
+                }
             }
             return nil
         case .accountList, .accountUsage, .accountSwitch:
@@ -980,8 +1087,10 @@ package final class HostDaemon {
         let folder = hc?.record.folder ?? args.folder.map(Self.standard)
         switch kind {
         case .accountList:
+            let usage = planUsage
             Task {
                 let list = await accounts.list()
+                usage.listed(list)
                 reply(
                     .init(
                         id: id, ok: true, accounts: list, login: hc.map { $0.record.account ?? LinkAccount.main },
@@ -990,9 +1099,12 @@ package final class HostDaemon {
             return nil
         case .accountUsage:
             guard let login = args.login, accounts.exists(login) else { return fail(.goneLogin, "That account isn't on the box any more.") }
+            let usage = planUsage
             Task {
                 do {
-                    reply(.init(id: id, ok: true, reading: try await accounts.usage(login)))
+                    let reading = try await accounts.usage(login)
+                    usage.take("claude", login: login, reading: reading)
+                    reply(.init(id: id, ok: true, reading: reading))
                 } catch {
                     reply(.init(id: id, ok: false, code: .invalid, message: AccountReason.of(error) ?? "Couldn't read that account's usage."))
                 }

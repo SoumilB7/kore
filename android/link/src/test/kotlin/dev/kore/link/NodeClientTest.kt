@@ -121,6 +121,30 @@ class NodeClientTest {
         assertEquals(2, (snap["chats"] as kotlinx.serialization.json.JsonArray).size)
     }
 
+    @Test fun usageIsAskedOnceAMinutePerCliOnlyWhileUp() = runTest {
+        val away = Rig(this, listOf({ PeerOffline() }))
+        away.client.start()
+        runCurrent()
+        // Away: nothing asked, nothing queued (the next screen opening asks again).
+        assertEquals(emptyList<String>(), away.client.askUsage(listOf("claude")))
+        assertEquals(emptySet<String>(), away.client.queued.value)
+        val link = link()
+        val rig = Rig(this, listOf({ link }))
+        rig.client.start()
+        runCurrent()
+        assertEquals(listOf("claude", "codex"), rig.client.askUsage(listOf("claude", "codex", "claude")))
+        val asked = link.sent.filter { it.s("t") == "cmd" }.map { it.cmd() }
+        assertEquals(listOf("claude", "codex"), asked.map { it.s("provider") })
+        assertEquals(setOf("account.usage"), asked.map { it.s("type") }.toSet())
+        // No login named: read-only, the node's own logins.
+        assertTrue(asked.none { it.containsKey("login") })
+        advanceTimeBy(59_000)
+        assertEquals(emptyList<String>(), rig.client.askUsage(listOf("claude", "codex")))
+        advanceTimeBy(1_000)
+        assertEquals(listOf("codex"), rig.client.askUsage(listOf("codex")))
+        assertEquals(3, link.sent.count { it.s("t") == "cmd" })
+    }
+
     @Test fun commandsMadeWhileAwayExpireThirtySecondsEachWithOneTimer() = runTest {
         val rig = Rig(this, listOf({ PeerOffline() }))
         val results = mutableListOf<JsonObject>()
