@@ -280,6 +280,23 @@ package final class HostConnection {
         return connection
     }
 
+    /// The box was forgotten on this Mac: its link ends for good and leaves, so the next ask
+    /// makes a new one (a re-add starts as a first add). Whatever still holds this one holds a
+    /// link that never dials again.
+    package static func forget(_ key: String) {
+        var seen = Set<ObjectIdentifier>()
+        for connection in [open[key], made[key]].compactMap({ $0 }) where seen.insert(ObjectIdentifier(connection)).inserted {
+            connection.forgotten = true
+            connection.stop()
+            connection.pendingDevices = []
+        }
+        open[key] = nil
+        made[key] = nil
+    }
+
+    /// Forgotten on this Mac (`forget`): it never dials, and writes nothing back.
+    @ObservationIgnored package private(set) var forgotten = false
+
     /// The key a box is kept under now: an alias rekeyed to its KoreNet id gives the id.
     package static func current(_ key: String) -> String {
         guard !NodeDirectory.isNodeKey(key), made[key] == nil else { return key }
@@ -308,7 +325,7 @@ package final class HostConnection {
 
     /// A window on the box opened: the link starts with the first.
     package func retain() {
-        if Self.open[alias] == nil { Self.open[alias] = self }
+        if !forgotten, Self.open[alias] == nil { Self.open[alias] = self }
         users += 1
         if users == 1 {
             activeRouter?.using(self, true)
@@ -593,7 +610,7 @@ package final class HostConnection {
     // MARK: The link
 
     private func dial() {
-        guard users > 0, transport == nil else { return }
+        guard users > 0, transport == nil, !forgotten else { return }
         redial = nil
         if isPaused(alias) { return refuse(.paused) }
         if phase != .offline { phase = .connecting }
@@ -1008,6 +1025,7 @@ package final class HostConnection {
 
     /// The box's state to disk now (held while a rekey moves the folder).
     private func saveNow() {
+        guard !forgotten else { return }
         guard !cacheHeld else { return heldWrites = true }
         do {
             var state = HostCache.State()

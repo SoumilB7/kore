@@ -37,7 +37,11 @@ enum NetLiveness {
             let migration = NodeMigration()
             _ = try? migration.resume()
             _ = try? migration.repair(directory: .shared)
-            await MainActor.run { BoxList.shared.reload() }
+            await MainActor.run {
+                BoxList.shared.reload()
+                // A Remove that left KoreNet's entry or this Mac's book record behind: dropped.
+                BoxList.shared.dropOrphans()
+            }
         }
         // Woken: links probed, the phones' listener looks again, a failed upgrade tries again.
         wake = LinkWake(center: NSWorkspace.shared.notificationCenter, name: NSWorkspace.didWakeNotification)

@@ -290,6 +290,25 @@ package final class BoxUpgrades {
         }
     }
 
+    /// A box forgotten on this Mac, by every key it went by: its upgrade stops and nothing of it
+    /// is kept (no mark, no retry), so a re-add upgrades as a first add does.
+    package func forget(_ keys: Set<String>) {
+        var stopping: [(any BoxNetJoinRunner, BoxNetJoin)] = []
+        for key in keys {
+            if let runner = runners[key], let join = joins[key], !join.ending.over { stopping.append((runner, join)) }
+            runners[key] = nil
+            joins[key] = nil
+            joinedAt[key] = nil
+            tried[key] = nil
+            retries[key]?.wait?.cancel()
+            retries[key] = nil
+            automatic.remove(key)
+        }
+        // Gone from the maps first: its end, told now, finds nothing to note.
+        for (runner, join) in stopping { runner.cancel(join) }
+        revision += 1
+    }
+
     // MARK: The row
 
     /// What a box's row says of its upgrade, if anything.

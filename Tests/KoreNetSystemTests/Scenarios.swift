@@ -150,6 +150,33 @@ struct KoreNetSystemTests {
         }
     }
 
+    /// The owner's 2026-11-15: mybox, enrolled and rekeyed, removed in Devices, then added again
+    /// over SSH with KoreNet on. Nothing of the old box is left to trip on: it ends on KoreNet
+    /// as one row, the phone reaches it, and no step is silent.
+    @Test func forgetABoxThenAddItAgainOverSSH() async throws {
+        try await play("forget mybox, add it again over SSH, KoreNet on · I1 I3 I4 I24") { w in
+            await w.koreNetOn()
+            let box = try await w.sshBox("mybox")
+            await w.onKoreNet(box)
+            await w.plus()
+            let pixel = w.phone("Pixel 9")
+            await w.joinPhone(pixel)
+            await w.expectSettled(boxes: [box], phones: [pixel], "before remove")
+            await w.forget(box, phones: [pixel])
+            #expect(w.mac.directory.all.isEmpty && !w.mac.book.contains { $0.kind == .box })
+            #expect(BoxList.shared.boxes.isEmpty && NetPauses.shared.keys.isEmpty)
+            await w.addAgain(box)
+            await w.onKoreNet(box)
+            await w.expectSettled(boxes: [box], phones: [pixel])
+            // Its first tailnet welcome moved its stores to its id again, as on a first add.
+            let id = try #require(box.device).uuidString.lowercased()
+            #expect(Array(w.mac.directory.all.keys) == [id] && w.mac.directory.all[id]?.rekeyed == true)
+            // (The world's rekeys post on a center of their own: the list reads what was kept.)
+            BoxList.shared.reload()
+            #expect(UserDefaults.standard.stringArray(forKey: "boxHosts") == [id] && BoxList.shared.boxes.map(\.alias) == [id])
+        }
+    }
+
     @Test func renamePhone() async throws {
         try await play("S13 rename the phone · I6") { w in
             await w.koreNetOn()

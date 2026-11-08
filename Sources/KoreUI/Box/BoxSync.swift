@@ -102,10 +102,11 @@ struct BoxSyncButton: View {
 
     private func pairingCard(_ pairing: BoxPairing) -> some View {
         VStack(alignment: .leading, spacing: Space.sm) {
+            // Whole: a refusal names the folder and the box in the way.
             Text(pairing.line)
                 .font(Chrome.label)
                 .foregroundStyle(pairing.failed ? Theme.danger : Theme.secondary)
-                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: Space.sm) {
                 Spacer(minLength: 0)
                 switch pairing.state {
@@ -117,6 +118,14 @@ struct BoxSyncButton: View {
                 case .failed:
                     Button("Close") { close() }.smallButton()
                     Button("Pick another…") { startPairing() }.smallButton(prominent: true)
+                case .blocked(_, let other, let mac):
+                    Button("Pick another…") { startPairing() }.smallButton()
+                    Button("Unpair that first") {
+                        SyncPairList.shared.unpair(alias: other.alias, box: other.box)
+                        BoxBinding.pairsChanged()
+                        check(mac)
+                    }
+                    .smallButton(prominent: true)
                 }
             }
         }
@@ -134,14 +143,21 @@ struct BoxSyncButton: View {
     /// Sync with a Mac folder…: the open-folder panel, then the pair checked, asked once when
     /// both have files or it's big, and kept.
     private func startPairing() {
-        let place = BoxPlace(alias: box.alias, folder: box.folder)
         checking.value?.cancel()
         guard let mac = AppModel.shared?.chooseFolder(
             prompt: "Sync", message: "Sync \(BoxFolder.lastPart(box.folder)) on \(NodeNames.name(box.alias)) with a folder on this Mac")
         else { return close() }
+        check(mac)
+    }
+
+    /// The Mac folder against the box folder: refused (another pair in the way offers Unpair
+    /// that first), asked, or paired.
+    private func check(_ mac: URL) {
+        let place = BoxPlace(alias: box.alias, folder: box.folder)
         let pairs = SyncPairList.shared
         if let why = pairs.refusal(mac: mac, alias: box.alias, box: box.folder) {
-            pairing.value = BoxPairing(place: place, state: .failed(why))
+            let other = pairs.blocker(mac: mac, alias: box.alias, box: box.folder)
+            pairing.value = BoxPairing(place: place, state: other.map { .blocked(why, $0, mac) } ?? .failed(why))
             return
         }
         guard let ssh = SyncBox.ssh(box.alias) else {

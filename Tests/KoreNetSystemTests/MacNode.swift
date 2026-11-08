@@ -105,7 +105,12 @@ final class MacNode {
         HostConnection.sshNet = switcher
         let pulse = pulse
         switcher.settled = { _ in pulse.beat() }
+        // The box list's copies, rekey journals and book are this world's, never Kore's real
+        // Application Support (a Remove deletes them).
+        BoxList.shared.cacheRoot = support.appendingPathComponent("hosts", isDirectory: true)
         BoxList.shared.reload()
+        // As `NetLiveness.start`: KoreNet's leftovers of boxes no longer listed go.
+        BoxList.shared.dropOrphans()
         // Every box this Mac lists gets its link object (asleep: no window holds it).
         for box in BoxList.shared.boxes { makeLink(box.alias) }
         // SSH boxes move to KoreNet by themselves (§2g): `kore-host upgrade` runs on the box in
@@ -284,6 +289,9 @@ final class MacNode {
         BoxList.shared.add(box.alias)
         makeLink(box.alias)
     }
+
+    /// Removed in Devices: this Mac no longer sets it up (the box itself stays, and SSH reaches it).
+    func forgot(_ box: BoxNode) { sshBoxes[box.alias] = nil }
 
     /// The box's link object now (its alias, or its id once rekeyed).
     func link(_ box: BoxNode) -> HostConnection? {

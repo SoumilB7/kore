@@ -83,7 +83,12 @@ package struct NodeMigration {
             }
             journal = nil
         }
-        if journal?.finished == true { return .done }
+        if journal?.finished == true {
+            // Done before; the old key holds something again (the box forgotten and added back
+            // under its alias, or a stale copy wrote it back): it moves again.
+            guard holds(old) else { return .done }
+            journal = nil
+        }
         if journal == nil {
             guard holds(old) else { return .nothing }
             journal = Journal(from: old, to: new, started: Date())

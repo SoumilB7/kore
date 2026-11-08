@@ -42,18 +42,31 @@ package enum SyncPairs {
     package static func pair(mac: String, _ defaults: UserDefaults = .standard) -> SyncPair? { all(defaults).first { $0.mac == mac } }
 
     package static func pair(alias: String, box: String, _ defaults: UserDefaults = .standard) -> SyncPair? {
-        all(defaults).first { $0.alias == alias && $0.box == box }
+        all(defaults).first { sameBox($0.alias, alias) && $0.box == box }
     }
 
     /// Kept, in place of any pair for the same Mac folder or the same box folder.
     package static func save(_ pair: SyncPair, _ defaults: UserDefaults = .standard) {
-        let pairs = all(defaults).filter { $0.mac != pair.mac && !($0.alias == pair.alias && $0.box == pair.box) } + [pair]
+        let pairs = all(defaults).filter { $0.mac != pair.mac && !(sameBox($0.alias, pair.alias) && $0.box == pair.box) } + [pair]
         defaults.set(try? JSONEncoder().encode(pairs), forKey: key)
     }
 
     package static func remove(alias: String, box: String, _ defaults: UserDefaults = .standard) {
-        let pairs = all(defaults).filter { !($0.alias == alias && $0.box == box) }
+        let pairs = all(defaults).filter { !(sameBox($0.alias, alias) && $0.box == box) }
         defaults.set(try? JSONEncoder().encode(pairs), forKey: key)
+    }
+
+    /// Whether two keys name one box: the same key, or its SSH alias and the KoreNet id its
+    /// stores moved to (a pair kept by id, a window still on the alias).
+    package static func sameBox(_ a: String, _ b: String, directory: NodeDirectory = .shared) -> Bool {
+        if a == b { return true }
+        let entries = directory.all
+        guard !entries.isEmpty else { return false }
+        func key(_ k: String) -> String {
+            if NodeDirectory.isNodeKey(k) { return k.lowercased() }
+            return entries.values.first { $0.ssh == k }?.id.raw ?? k
+        }
+        return key(a) == key(b)
     }
 
     /// `path` is `folder` or under it.
@@ -68,24 +81,35 @@ package enum SyncPairs {
 
     /// The synced box folder `box` is inside (not itself), on the same box.
     package static func around(alias: String, box: String, in pairs: [SyncPair]) -> SyncPair? {
-        pairs.first { $0.alias == alias && $0.box != box && within(box, $0.box) }
+        pairs.first { sameBox($0.alias, alias) && $0.box != box && within(box, $0.box) }
     }
 
     /// Why `mac` can't sync with the box folder, before anything is asked of either side: one
     /// line naming the pair in the way. A Mac folder syncs with one box folder, never one inside or
     /// around another's, and a box folder inside or around a synced one doesn't sync again.
     package static func refusal(mac: URL, alias: String, box: String, in pairs: [SyncPair]) -> String? {
+        refused(mac: mac, alias: alias, box: box, in: pairs)?.line
+    }
+
+    /// The pair in the way of syncing `mac` with the box folder, when another pair is (Unpair
+    /// that first), not this very pair nor a folder that never syncs whole.
+    package static func blocker(mac: URL, alias: String, box: String, in pairs: [SyncPair]) -> SyncPair? {
+        refused(mac: mac, alias: alias, box: box, in: pairs)?.pair
+    }
+
+    private static func refused(mac: URL, alias: String, box: String, in pairs: [SyncPair]) -> (line: String, pair: SyncPair?)? {
         let path = mac.standardizedFileURL.path, real = realPath(path)
         let home = realPath(FileManager.default.homeDirectoryForCurrentUser.path)
-        if real == "/" || real == home { return "Pick a project folder, not \(shown(mac: path))" }
+        if real == "/" || real == home { return ("Pick a project folder, not \(shown(mac: path))", nil) }
         for pair in pairs {
-            let other = realPath(pair.mac), with = "\(NodeNames.name(pair.alias)) · \(shown(box: pair.box))"
-            if pair.alias == alias, pair.box == box { return "Already synced locally to \(shown(mac: pair.mac))" }
-            if real == other { return "\(shown(mac: pair.mac)) already syncs with \(with)" }
-            if within(real, other) { return "Inside \(shown(mac: pair.mac)), which syncs with \(with)" }
-            if within(other, real) { return "Holds \(shown(mac: pair.mac)), which syncs with \(with)" }
-            if pair.alias == alias, within(box, pair.box) || within(pair.box, box) {
-                return "\(shown(box: pair.box)) on \(NodeNames.name(alias)) syncs with \(shown(mac: pair.mac))"
+            let other = realPath(pair.mac), with = "\(shown(box: pair.box)) on \(NodeNames.name(pair.alias))"
+            let same = sameBox(pair.alias, alias)
+            if same, pair.box == box { return ("Already synced locally to \(shown(mac: pair.mac))", nil) }
+            if real == other { return ("\(shown(mac: pair.mac)) already syncs with \(with)", pair) }
+            if within(real, other) { return ("Inside \(shown(mac: pair.mac)), which syncs with \(with)", pair) }
+            if within(other, real) { return ("Holds \(shown(mac: pair.mac)), which syncs with \(with)", pair) }
+            if same, within(box, pair.box) || within(pair.box, box) {
+                return ("\(shown(box: pair.box)) on \(NodeNames.name(alias)) syncs with \(shown(mac: pair.mac))", pair)
             }
         }
         return nil
@@ -1260,6 +1284,21 @@ extension HostSync {
         forget(pair, root: root)
     }
 
+    /// A forgotten box's pairs (`BoxForget`, by every key it went by): each sync stops, the
+    /// pairs and what they agreed on go; no file on either side is touched. Pairing the same two
+    /// folders again starts as a first pair (both have files: the merge question).
+    package static func drop(boxes keys: Set<String>, root: URL = HostCache.root(), defaults: UserDefaults = .standard) {
+        let gone = SyncPairs.all(defaults).filter { keys.contains($0.alias) }
+        guard !gone.isEmpty else { return }
+        for pair in gone {
+            live[pair.mac]?.stop()
+            live[pair.mac] = nil
+            forget(pair, root: root)
+        }
+        defaults.set(try? JSONEncoder().encode(SyncPairs.all(defaults).filter { !keys.contains($0.alias) }), forKey: SyncPairs.key)
+        SyncPairList.shared.reload()
+    }
+
     private static func forget(_ pair: SyncPair, root: URL) {
         let files = files(pair, root: root)
         try? FileManager.default.removeItem(at: files.manifest)
@@ -1292,12 +1331,15 @@ package final class SyncPairList {
         if now != pairs { pairs = now }
     }
 
-    package func pair(alias: String, box: String) -> SyncPair? { pairs.first { $0.alias == alias && $0.box == box } }
+    package func pair(alias: String, box: String) -> SyncPair? { pairs.first { SyncPairs.sameBox($0.alias, alias) && $0.box == box } }
 
     /// The synced box folder this one is inside.
     package func around(alias: String, box: String) -> SyncPair? { SyncPairs.around(alias: alias, box: box, in: pairs) }
 
     package func refusal(mac: URL, alias: String, box: String) -> String? { SyncPairs.refusal(mac: mac, alias: alias, box: box, in: pairs) }
+
+    /// The pair in the way of that one, for "Unpair that first".
+    package func blocker(mac: URL, alias: String, box: String) -> SyncPair? { SyncPairs.blocker(mac: mac, alias: alias, box: box, in: pairs) }
 
     package func check(mac: URL, alias: String, box: String, via sync: SyncBox, link: (any BoxFileSource)? = nil) async -> HostSync.Check {
         await HostSync.check(mac: mac, alias: alias, box: box, via: sync, link: link, pairs: pairs)

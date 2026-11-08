@@ -119,6 +119,9 @@ struct BoxPairing: Equatable {
         case checking(String)
         case ask(String, HostSync.Start, URL)
         case failed(String)
+        /// Another pair is in the way (the line names it): Unpair that first, then this Mac
+        /// folder is checked again.
+        case blocked(String, SyncPair, URL)
     }
 
     let place: BoxPlace
@@ -128,11 +131,16 @@ struct BoxPairing: Equatable {
         switch state {
         case .checking(let mac): "Checking \(mac)…"
         case .ask(let question, _, _): question
-        case .failed(let why): why
+        case .failed(let why), .blocked(let why, _, _): why
         }
     }
 
-    var failed: Bool { if case .failed = state { true } else { false } }
+    var failed: Bool {
+        switch state {
+        case .failed, .blocked: true
+        default: false
+        }
+    }
 }
 
 extension BoxList.Box {

@@ -133,7 +133,9 @@ struct WelcomeSwitcher: View {
         }
         items.append(OptionItem("Check again") { Task { await BoxList.shared.act(.tryAgain, on: box.alias) } })
         items.append(.rule)
-        items.append(OptionItem("Remove", destructive: true, children: [OptionItem("Forget \(NodeNames.name(box.alias)) on this Mac", destructive: true) {
+        let enrolled = NodeDirectory.shared.entry(forKey: HostConnection.current(box.alias))?.enrolled ?? false
+        let forget = DevicesWords.remove(NodeNames.name(box.alias), kind: .box, enrolled: enrolled)
+        items.append(OptionItem("Remove", destructive: true, children: [OptionItem(forget, destructive: true) {
             BoxList.shared.remove(box.alias)
             state.removed(box.alias)
         }]))

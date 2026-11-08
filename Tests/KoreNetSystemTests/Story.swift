@@ -61,6 +61,31 @@ extension World {
         }
     }
 
+    /// Devices ⋯ Remove on a box's row: every trace of it on this Mac goes, and phones drop it.
+    func forget(_ box: BoxNode, phones: [PhoneEmu]) async {
+        precondition(BoxList.shared.cacheRoot.path.hasPrefix(root.path), "the box list's copies must be this world's")
+        let id = box.device?.uuidString.lowercased()
+        await step("remove \(box.alias)", .subject("remove \(box.alias)"), until: {
+            !self.macRows().contains { $0.kind == .box && ($0.id == box.alias || $0.id == id) }
+                && phones.allSatisfy { phone in !phone.rows.contains { $0.id == box.device } }
+                && self.mac.book.allSatisfy { $0.id != box.device } && self.mac.directory.all.isEmpty
+        }) {
+            guard let row = Devices.shared.picture().devices.first(where: { $0.kind == .box && World.resolves($0.id, to: box, self.mac.directory) }) else { return }
+            Devices.shared.remove(row)
+            mac.forgot(box)
+        }
+    }
+
+    /// "+" → Use SSH… with a box's alias (its kore-host answers): listed, and reached once as
+    /// the Welcome's probe reaches it.
+    func addAgain(_ box: BoxNode) async {
+        await step("add \(box.alias) again over SSH", .subject("add \(box.alias) over SSH"), until: { self.mac.link(box)?.isOnline == true }) {
+            mac.addSSHBox(box)
+            mac.openWindow(box)
+        }
+        await step("\(box.alias)'s window closes") { mac.closeWindow(box) }
+    }
+
     func rename(_ phone: PhoneEmu, to name: String) async {
         await step("rename \(phone.name) to \(name)", .subject("rename"), until: { self.macRows().contains { $0.name == name } }) {
             guard let row = Devices.shared.picture().devices.first(where: { $0.id == phone.device.uuidString.lowercased() }) else { return }

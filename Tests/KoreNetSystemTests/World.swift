@@ -141,9 +141,10 @@ final class World {
         mac.quit()
         for box in boxes { box.stop() }
         net.closeAll()
-        // Never `BoxList.shared.remove`: it deletes the box's copy under Kore's real Application
-        // Support. The list is only a defaults key here.
+        // `BoxList.shared.remove` deletes copies under its `cacheRoot`: the world's while it ran
+        // (`MacNode.launch`), Kore's real one again after.
         Self.cleanDefaults()
+        BoxList.shared.cacheRoot = HostCache.root()
         BoxList.shared.reload()
         Devices.shared.upgrades = .shared
         Devices.shared.joinRunner = { BoxUpgrades.shared.runner(for: $0) }

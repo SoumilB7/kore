@@ -100,6 +100,8 @@ package struct DeviceRow: Identifiable, Equatable, Sendable {
     package var paused = false
     /// A box set up over SSH that isn't on KoreNet: Join KoreNet.
     package var canJoin = false
+    /// A box this Mac enrolled on KoreNet (else it's only reached over SSH).
+    package var enrolled = false
     /// A phone while Tailscale is off on this Mac: it can't reach the Mac.
     package var needsTailscale = false
     /// A box on KoreNet whose Tailscale is off: SSH only until it's back.
@@ -270,6 +272,7 @@ extension DevicesPicture {
             row.canJoin = net.on && picture.net == .running && box.entry?.on != true && box.listed != nil
             row.tailscaleOff = box.entry.map { $0.on && !$0.listening } ?? false
             row.identityChanged = box.entry?.identityChanged ?? false
+            row.enrolled = box.entry?.enrolled ?? false
             if net.on, let upgrade = box.upgrade {
                 row.upgrading = upgrade.working
                 row.upgradeNote = upgrade.note
@@ -391,6 +394,12 @@ extension DevicesPicture {
 
 /// The popup's and the icon's words, and the offline one-liners.
 package enum DevicesWords {
+    /// ⋯ Remove's one item: a box only reached over SSH is forgotten on this Mac; a box this Mac
+    /// enrolled, and a phone, leave KoreNet here. Either way nothing of it stays on this Mac.
+    package static func remove(_ name: String, kind: DeviceRow.Kind, enrolled: Bool) -> String {
+        kind == .box && !enrolled ? "Forget \(name) on this Mac" : "Remove \(name) from KoreNet"
+    }
+
     /// "just now", "4 min ago", "2 h ago" (within 3 hours), "14:02" (today), "12 Nov" (before).
     package static func ago(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
         let seconds = max(0, now.timeIntervalSince(date))
@@ -564,6 +573,14 @@ package final class NetPauses {
     package func contains(_ key: String) -> Bool {
         guard !keys.isEmpty else { return false }
         return !keys.isDisjoint(with: names(key))
+    }
+
+    /// A forgotten box's keys: none of them is paused any more.
+    package func drop(_ names: Set<String>) {
+        let next = keys.subtracting(names)
+        guard next != keys else { return }
+        keys = next
+        defaults.set(next.sorted(), forKey: Self.defaultsKey)
     }
 
     package func set(_ key: String, paused: Bool) {

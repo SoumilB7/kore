@@ -119,12 +119,20 @@ package final class BoxList {
     @ObservationIgnored private let hosts: () -> [String]
     @ObservationIgnored private let connection: @MainActor (String) -> HostConnection
     @ObservationIgnored private let makeSetup: @MainActor (String, String) -> BoxSetup
-    @ObservationIgnored private let cacheRoot: URL
+    /// Kore's copies of the boxes (`Kore/hosts`): KoreNet's folders are beside it (`nodes/`,
+    /// `net/`). Tests point it at their own.
+    @ObservationIgnored package var cacheRoot: URL
     @ObservationIgnored private var probes: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var rekeys: (any NSObjectProtocol)?
     @ObservationIgnored private var busy: Set<String> = []
-    /// Boxes whose set-up, update or start is running its steps: nothing else writes their line.
-    @ObservationIgnored private var settingUp: Set<String> = []
+    /// Set up, Update or Start under way, by box: the step it's on (a second press says so, and
+    /// no probe meanwhile puts the box's old line back).
+    @ObservationIgnored private var working: [String: String] = [:]
+    /// KoreNet's switch (Kore: the shared one; tests: theirs or none): a forgotten box's pin in
+    /// this Mac's book goes, and phones hear the directory.
+    @ObservationIgnored package var net: @MainActor () -> KoreNetSwitch? = { KoreNetSwitch.shared }
+    /// KoreNet's boxes (Kore: the shared directory; tests: theirs).
+    @ObservationIgnored package var directory: @MainActor () -> NodeDirectory = { .shared }
     /// The user said yes to Swift's Linux kit this run (asked once, on the box's line).
     @ObservationIgnored private var kitConsent = false
     /// How long a probe waits for kore-host's state.
@@ -164,7 +172,12 @@ package final class BoxList {
     /// load, and one kept twice is listed once.
     private var listed: [String] {
         var seen = Set<String>()
-        return (defaults?.stringArray(forKey: Self.listedKey) ?? []).filter { BoxAddress.valid($0) && seen.insert($0).inserted }
+        let directory = directory()
+        return (defaults?.stringArray(forKey: Self.listedKey) ?? []).filter { key in
+            // A KoreNet id is one when its box's alias is (in this list's directory).
+            let valid = NodeDirectory.isNodeKey(key) ? directory.all[key.lowercased()]?.ssh.map(BoxAddress.valid) == true : BoxAddress.valid(key)
+            return valid && seen.insert(key).inserted
+        }
     }
 
     /// The list again from what's kept; what's known of each box stays.
@@ -228,16 +241,49 @@ package final class BoxList {
         if box(alias) == nil { boxes.append(Box(alias: alias)) }
     }
 
-    /// Forgets a box on this Mac: its row, its copy of the box's state and its settings. Nothing
-    /// changes on the box.
-    package func remove(_ alias: String) {
-        defaults?.set(listed.filter { $0 != alias }, forKey: Self.listedKey)
-        BoxSetup.forget(alias, defaults: defaults)
-        try? FileManager.default.removeItem(at: HostCache(alias: alias, root: cacheRoot).folder)
-        boxes.removeAll { $0.alias == alias }
+    /// Forgets a box on this Mac, by any key it goes by (its alias or its KoreNet id): every
+    /// trace of it here goes (`BoxForget`), so adding it again is a first add. Nothing changes on
+    /// the box.
+    package func remove(_ key: String) {
+        let names = forgetter.forget(key, listed: listed)
+        for name in names {
+            probes[name]?.cancel()
+            probes[name] = nil
+            busy.remove(name)
+            working[name] = nil
+        }
+        boxes.removeAll { names.contains($0.alias) }
     }
 
-    package func box(_ alias: String) -> Box? { boxes.first { $0.alias == alias } }
+    /// At launch, after the rekeys are finished: KoreNet's entries and this Mac's book records of
+    /// boxes no longer listed go (a Remove that left them, or a crash mid-Remove). Twice is once.
+    @discardableResult
+    package func dropOrphans() -> [String] {
+        forgetter.dropOrphans(listed: listed)
+    }
+
+    private var forgetter: BoxForget {
+        BoxForget(defaults: defaults, directory: directory(), hosts: cacheRoot, net: net())
+    }
+
+    /// The listed box `key` names: its alias as listed, or the box listed under its other key
+    /// (listed by alias while KoreNet keys it by id, or the other way round).
+    package func box(_ key: String) -> Box? {
+        if let box = boxes.first(where: { $0.alias == key }) { return box }
+        return listedAlias(key).flatMap { alias in boxes.first { $0.alias == alias } }
+    }
+
+    /// The alias a box is listed under, for a key that isn't one: the KoreNet id an alias
+    /// moved to, or the alias behind an id. Nil when no listed box goes by it.
+    package func listedAlias(_ key: String) -> String? {
+        if boxes.contains(where: { $0.alias == key }) { return key }
+        let entries = directory().all
+        guard !entries.isEmpty else { return nil }
+        // Its KoreNet entry, by id or by the alias it was set up by: the box goes by both.
+        guard let entry = entries[key.lowercased()] ?? entries.values.first(where: { $0.ssh == key }) else { return nil }
+        let names = Set([entry.id.raw, entry.ssh].compactMap { $0 })
+        return boxes.first { names.contains($0.alias) }?.alias
+    }
 
     /// The box's link, for what holds it a while (its agents popup): retain, then release.
     package func link(_ alias: String) -> HostConnection { connection(alias) }
@@ -246,7 +292,7 @@ package final class BoxList {
     /// holds it. A probe already under way is the one waited on.
     package func probe(_ alias: String) async {
         // A set-up's steps own the line until they end (the probe after them is its own).
-        if settingUp.contains(alias) { return }
+        if working[listedAlias(alias) ?? alias] != nil { return }
         if let running = probes[alias] { return await running.value }
         let task = Task { await run(alias) }
         probes[alias] = task
@@ -263,7 +309,11 @@ package final class BoxList {
         } ?? .failure(HostRefusal(message: "Can't reach \(NodeNames.name(alias))"))
     }
 
-    private func run(_ alias: String) async {
+    private func run(_ key: String) async {
+        let alias = listedAlias(key) ?? key
+        // Set up is copying or granting: its own probe comes after, this one would only put the
+        // box's old line ("doesn't know this Mac") back over its steps.
+        guard working[alias] == nil else { return }
         update(alias) {
             $0.status = .probing
             $0.fresh = false
@@ -352,7 +402,9 @@ package final class BoxList {
     /// The line's action: set up (or grant this Mac again), start the service, update, try again,
     /// install a tool, or install Swift's Linux kit and set up again. Set up agents, Fix, Copy and
     /// Show log are the view's.
-    package func act(_ action: Action, on alias: String) async {
+    package func act(_ action: Action, on key: String) async {
+        // Devices names a box by its KoreNet id, the Welcome by its alias: the listed one.
+        let alias = listedAlias(key) ?? key
         switch action {
         case .setUp, .update:
             // Restarting it ends the turns running there: asked once first.
@@ -393,16 +445,32 @@ package final class BoxList {
         _ alias: String, grant: String?, retry: Action,
         _ work: @escaping @MainActor (BoxSetup, @escaping @MainActor @Sendable (String) -> Void) async throws -> BoxSetup.Done?
     ) async {
-        guard box(alias) != nil, !busy.contains(alias) else { return }
+        guard box(alias) != nil else {
+            // Nothing listed by that key: nothing to show a line on, so it's in the log.
+            return HostLog.note(alias, "setup", "not listed here")
+        }
+        guard !busy.contains(alias) else {
+            // Pressed again while it runs: the line says so, with the step it's on.
+            let step = working[alias].map { " · " + $0 } ?? ""
+            let what = retry == .start ? "Start" : retry == .update ? "Update" : "Set up"
+            return update(alias) { $0.status = .working("\(what) is already running" + step) }
+        }
         busy.insert(alias)
-        defer { busy.remove(alias) }
+        defer {
+            busy.remove(alias)
+            working[alias] = nil
+        }
         var setup = makeSetup(alias, grant ?? BoxSetup.grant(for: alias, defaults: defaults))
         setup.mayInstallKit = kitConsent
-        update(alias) { $0.status = .working(retry == .start ? "Starting…" : "Checking \(NodeNames.name(alias))…") }
-        settingUp.insert(alias)
+        let first = retry == .start ? "Starting…" : "Checking \(NodeNames.name(alias))…"
+        working[alias] = first
+        update(alias) { $0.status = .working(first) }
         do {
-            defer { settingUp.remove(alias) }
-            let done = try await work(setup) { [weak self] line in self?.update(alias) { $0.status = .working(line) } }
+            let done = try await work(setup) { [weak self] line in
+                guard let self, self.working[alias] != nil else { return }
+                self.working[alias] = line
+                self.update(alias) { $0.status = .working(line) }
+            }
             if let done {
                 done.machine.keep(alias, root: cacheRoot)
                 update(alias) {
@@ -417,6 +485,8 @@ package final class BoxList {
             return
         }
         if let grant { BoxSetup.setGrant(grant, for: alias, defaults: defaults) }
+        // The box's part is done: probes may say how it is from here.
+        working[alias] = nil
         update(alias) { $0.status = .working("Connecting…") }
         // A window already on the box dials again now.
         HostConnection.live(alias)?.retry()
@@ -483,8 +553,8 @@ package final class BoxList {
         }
     }
 
-    private func update(_ alias: String, _ change: (inout Box) -> Void) {
-        guard let i = boxes.firstIndex(where: { $0.alias == alias }) else { return }
+    private func update(_ key: String, _ change: (inout Box) -> Void) {
+        guard let alias = listedAlias(key), let i = boxes.firstIndex(where: { $0.alias == alias }) else { return }
         change(&boxes[i])
     }
 }

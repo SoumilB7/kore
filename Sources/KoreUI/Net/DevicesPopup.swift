@@ -240,7 +240,7 @@ struct DevicesPopup: View {
             break
         }
         items.append(.rule)
-        let forget = row.kind == .box && !row.canJoin && row.route == .ssh ? "Forget \(row.name) on this Mac" : "Remove \(row.name) from KoreNet"
+        let forget = DevicesWords.remove(row.name, kind: row.kind, enrolled: row.enrolled)
         items.append(OptionItem("Remove", destructive: true, children: [OptionItem(forget, destructive: true) { devices.remove(row) }]))
         menuFor.value = row.id
         OptionsMenu.shared.show(items, at: point, in: window, source: "devices")

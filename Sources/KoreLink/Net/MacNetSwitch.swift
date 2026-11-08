@@ -40,6 +40,7 @@ package enum MacNetSwitch {
     ) -> MacNet {
         let mac = MacNet(host: net, feed: feed, asks: asks, clock: clock)
         net.directoryChanged = { [weak mac] in mac?.pushDirectory() }
+        net.issuedChanged = { [weak mac] in mac?.phonesChanged() }
         net.phonesLook = { [weak mac] in mac?.refresh() }
         watch(net, mac)
         apply(net.state, to: mac)

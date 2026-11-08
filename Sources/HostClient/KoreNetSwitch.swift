@@ -169,6 +169,9 @@ package final class KoreNetSwitch: NetRouter {
     /// What phones are told of the boxes changed (a box enrolled, gained a tailnet node key, was
     /// renamed, taken offline or removed): the phones' listener sends them the directory.
     @ObservationIgnored package var directoryChanged: (@MainActor () -> Void)?
+    /// This Mac's book lost a record it issued to the boxes (a box it allowed from a pending
+    /// row, forgotten): the boxes hear the change (`devices.set{merge}`).
+    @ObservationIgnored package var issuedChanged: (@MainActor () -> Void)?
     /// The Mac woke or its network changed: the phones' listener looks again.
     @ObservationIgnored package var phonesLook: (@MainActor () -> Void)?
     /// The boxes' SSH → KoreNet upgrades (Kore: `BoxUpgrades.shared`; tests: their own or none):
@@ -457,6 +460,23 @@ package final class KoreNetSwitch: NetRouter {
         if changed { directoryChanged?() }
     }
 
+    /// A box forgotten on this Mac, by every key it went by: an enroll under way for it is
+    /// dropped when it ends, and no join sheet hears it.
+    package func forgetBox(_ keys: Set<String>) {
+        for key in keys {
+            upgrading.remove(key)
+            nodeWatchers[key] = nil
+            enrollWatchers[key] = nil
+        }
+    }
+
+    /// A forgotten box's records left this Mac's book: phones hear the directory without it, and
+    /// boxes the record was issued to hear it went.
+    package func boxForgotten(issued: Bool) {
+        directoryChanged?()
+        if issued { issuedChanged?() }
+    }
+
     package func transport(for connection: HostConnection) -> (any HostTransport)? {
         guard state.reaches, let tailnet, let env, let entry = directory.entry(forKey: connection.alias), entry.enrolled, let nodeKey = entry.nodeKey
         else { return nil }
@@ -594,7 +614,12 @@ package final class KoreNetSwitch: NetRouter {
     }
 
     private func upgraded(_ key: String, connection: HostConnection, device: UUID, outcome: Enrolled) {
-        upgrading.remove(key)
+        // Forgotten while it enrolled: the pin it made goes again, and nothing more is kept.
+        guard upgrading.remove(key) != nil, directory.all[device.uuidString.lowercased()] != nil else {
+            if let env, connection.forgotten { _ = try? book(env).update { $0.removeAll { $0.id == device && $0.kind == .box } } }
+            settled?("enroll forgotten")
+            return
+        }
         HostLog.note(key, "korenet enroll", "\(outcome)")
         if outcome == .enrolled || outcome == .already {
             directory.update { $0[device.uuidString.lowercased()]?.enrolled = true }

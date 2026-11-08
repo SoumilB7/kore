@@ -319,10 +319,11 @@ package final class Devices {
         switch row.kind {
         case .phone: if let id = UUID(uuidString: row.id) { phones?.remove(id) }
         case .box:
-            NetPauses.shared.set(row.id, paused: false)
-            KoreNetSwitch.shared?.boxChanged(row.id, removed: true)
-            NodeDirectory.shared.forget(row.id)
+            // Every trace of it on this Mac, by its id and its alias (`BoxForget`): a re-add is
+            // a first add.
             BoxList.shared.remove(row.id)
+            // The popup's hold on its link went with it.
+            popupLinks.removeAll(where: \.forgotten)
         case .mac: break
         }
         changed()

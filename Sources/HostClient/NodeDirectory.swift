@@ -220,6 +220,16 @@ package final class NodeDirectory: Sendable {
         }
     }
 
+    /// A forgotten box's given names, by every key it went by.
+    package func forgetNames(_ keys: Set<String>) {
+        names.withLock { held in
+            let given = held ?? (defaults.dictionary(forKey: Self.namesKey) as? [String: String] ?? [:])
+            let kept = given.filter { !keys.contains($0.key) }
+            held = kept
+            if kept.count != given.count { defaults.set(kept, forKey: Self.namesKey) }
+        }
+    }
+
     /// Keeps the box's pending list on its entry (a box without one keeps nothing).
     package func keepPending(_ list: [PendingDevice], forKey key: String) {
         guard let entry = entry(forKey: key), (entry.pending ?? []) != list else { return }

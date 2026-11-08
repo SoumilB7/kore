@@ -122,7 +122,10 @@ struct HostSyncTests {
         // The Mac side: inside, around, the same.
         #expect(refusal(app.appendingPathComponent("sub"), "/home/me/Code/x")?.hasPrefix("Inside ") == true)
         #expect(refusal(root, "/home/me/Code/x")?.hasPrefix("Holds ") == true)
-        #expect(refusal(app, "/home/me/Code/x")?.contains("already syncs with testbox · ~/Code/app") == true)
+        #expect(refusal(app, "/home/me/Code/x")?.contains("already syncs with ~/Code/app on testbox") == true)
+        // The pair in the way, for Unpair that first; none for this very pair.
+        #expect(SyncPairs.blocker(mac: app, alias: "testbox", box: "/home/me/Code/x", in: pairs) == pairs[0])
+        #expect(SyncPairs.blocker(mac: other, alias: "testbox", box: "/home/me/Code/app", in: pairs) == nil)
         // The box side: the folder itself, one inside it, one around it.
         #expect(refusal(other, "/home/me/Code/app")?.hasPrefix("Already synced locally to") == true)
         #expect(refusal(other, "/home/me/Code/app/web")?.contains("~/Code/app on testbox") == true)
@@ -194,6 +197,32 @@ struct HostSyncTests {
         #expect(await until(10) { read(mac, "same (testbox).txt") == "box version, longer" && read(box, "same (testbox).txt") == "box version, longer" })
         #expect(read(mac, "same.txt") == "mac version")
         #expect(await until(5) { read(box, "same.txt") == "mac version" })
+        sync.stop()
+    }
+
+    /// The box forgotten on this Mac drops its pairs and what they agreed on; pairing the same
+    /// two folders again asks to merge and deletes nothing, even a file removed on one side
+    /// meanwhile (no agreed list says it was there).
+    @Test(.enabled(if: binary != nil))
+    func rePairingAfterTheBoxIsForgottenMergesAndDeletesNothing() async throws {
+        let rig = try await Rig(Self.binary!)
+        defer { rig.end() }
+        let box = try await rig.boxFolder("again")
+        try write(box, "box.txt", "made on the box")
+        let mac = rig.root.appendingPathComponent("desk/again")
+        try write(mac, "mac.txt", "made here")
+        #expect(await rig.check(mac, box) == .ask(HostSync.mergeQuestion, .merge))
+        var sync = try rig.sync(rig.pair(mac, box))
+        #expect(await until(15) { read(mac, "box.txt") != nil && read(box, "mac.txt") != nil })
+        sync.stop()
+        HostSync.drop(boxes: ["testbox"], root: rig.cache, defaults: rig.defaults)
+        #expect(SyncPairs.all(rig.defaults).isEmpty)
+        // Gone from the Mac while unpaired: a first pair brings it back rather than deleting it there.
+        try FileManager.default.removeItem(at: mac.appendingPathComponent("box.txt"))
+        #expect(await rig.check(mac, box) == .ask(HostSync.mergeQuestion, .merge))
+        sync = try rig.sync(rig.pair(mac, box))
+        #expect(await until(15) { read(mac, "box.txt") == "made on the box" })
+        #expect(read(box, "box.txt") == "made on the box" && read(box, "mac.txt") == "made here" && read(mac, "mac.txt") == "made here")
         sync.stop()
     }
 
