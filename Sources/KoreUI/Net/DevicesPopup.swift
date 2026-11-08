@@ -210,6 +210,10 @@ struct DevicesPopup: View {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(line, forType: .string)
             })
+        case .signIn(let page)?:
+            if let url = URL(string: page) { items.append(OptionItem("Sign in ↗") { devices.openURL(url) }) }
+        case .tryAgain? where !row.canJoin:
+            items.append(OptionItem("Try again") { join(row) })
         case .update?, .setUp?:
             let fix = row.upgradeFix!
             items.append(OptionItem(fix.title) { Task { await BoxList.shared.act(fix, on: row.id) } })

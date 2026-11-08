@@ -28,10 +28,14 @@ package protocol NetRouter: AnyObject {
     /// The SSH route for a box this Mac enrolled at: `attach --proto 2` with this Mac's identity
     /// proof (no grant needed once it expired); nil: today's `attach` with the grant.
     func sshTransport(for connection: HostConnection) -> (any HostTransport)?
+    /// The box said `bye unknown` to this Mac's proof over SSH: it forgot this Mac. True when
+    /// this Mac counted itself enrolled there (it isn't any more, and its upgrade looks again).
+    func forgotten(_ connection: HostConnection) -> Bool
 }
 
 extension NetRouter {
     package func sshTransport(for connection: HostConnection) -> (any HostTransport)? { nil }
+    package func forgotten(_ connection: HostConnection) -> Bool { false }
 }
 
 extension HostConnection {

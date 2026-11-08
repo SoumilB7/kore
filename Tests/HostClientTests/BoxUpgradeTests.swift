@@ -156,19 +156,81 @@ struct BoxUpgradeTests {
         }
     }
 
-    /// The box's own Tailscale is signed out with its page open: the page opens here once, and
-    /// the row says so quietly.
-    @Test func aSignedOutBoxOpensItsPageHere() async {
+    /// The box's own Tailscale is signed out with its page open. By itself the upgrade never
+    /// opens it (not at the first reach, not at the next): the row says "Sign in for box-1 ·
+    /// Sign in ↗" and lets go. From Join, the page opens here once.
+    @Test func aSignedOutBoxOpensItsPageOnlyWhenAsked() async {
         let page = "https://login.tailscale.com/a/abc"
         let shell = FakeUpgradeShell(FakeUpgradeShell.report(["error": "tailscale signed out", "login": page, "state": "needs you"], exit: 2))
         let (switcher, upgrades, _, root) = await rig(shell: shell)
         defer { try? FileManager.default.removeItem(at: root) }
+        var now = Date(timeIntervalSince1970: 1_000_000)
+        upgrades.now = { now }
         var opened: [URL] = []
         upgrades.openURL = { opened.append($0) }
         upgrades.reached("box-1", fresh: true)
-        #expect(await holds { upgrades.joins["box-1"]?.ending == .signIn })
-        #expect(opened == [URL(string: page)!] && upgrades.facts("box-1")?.note == "Sign in for box-1 in your browser")
-        upgrades.running("box-1")?.runner.cancel(upgrades.joins["box-1"]!)
+        #expect(await holds { upgrades.running("box-1") == nil && upgrades.joins["box-1"]?.ending == .signIn })
+        #expect(upgrades.facts("box-1") == BoxUpgradeFacts(note: "Sign in for box-1", fix: .signIn(page)))
+        #expect(!upgrades.link("box-1").inUse)
+        now += BoxUpgrades.retryAfter
+        upgrades.reached("box-1", fresh: true)
+        #expect(await holds { upgrades.running("box-1") == nil && shell.runs == 2 })
+        #expect(opened.isEmpty, "the upgrade opened a page by itself")
+
+        let join = BoxNetJoin(key: "box-1", name: "box-1")
+        let runner = upgrades.runner(for: "box-1")!
+        upgrades.adopt(join, runner)
+        runner.start(join)
+        #expect(await holds { join.ending == .signIn })
+        #expect(opened == [URL(string: page)!])
+        runner.cancel(join)
+        switcher.set(false)
+    }
+
+    /// "Can't reach Tailscale · stays on SSH" offers Try again.
+    @Test func unreachableOffersTryAgain() {
+        let join = BoxNetJoin(key: "box-1", name: "box-1")
+        join.started(version: "0.2.3")
+        join.node(on: true, nodeKey: "nodekey:box")
+        join.unreachableNow()
+        #expect(join.line == "Can't reach Tailscale · stays on SSH" && join.fix == .tryAgain)
+    }
+
+    /// G31: the box forgot this Mac (its record gone): this Mac's proof over SSH gets `bye
+    /// unknown`. It isn't enrolled there any more, the link stops (the row: hasn't allowed this
+    /// Mac) instead of backing off forever, and the upgrade runs again.
+    @Test func aBoxThatForgotThisMacUpgradesAgain() async throws {
+        let shell = FakeUpgradeShell(FakeUpgradeShell.report(["error": "tailscale stopped", "state": "needs you"], exit: 2))
+        let root = netScratch()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let defaults = suite()
+        let directory = NodeDirectory(defaults: defaults)
+        let box = FakeNetBox(root: root)
+        box.takesEnroll = false
+        let (switcher, settled) = netSwitch(defaults, root: root, directory: directory) {
+            fakeEnv(.state(.running), local: FakeTailnet(), box: box, root: root, defaults: defaults, calls: EnvCalls())
+        }
+        switcher.set(true)
+        #expect(await arrives(settled) { $0 == "chose" })
+        let alias = "fg-\(UUID().uuidString.prefix(6).lowercased())"
+        directory.upsert(NodeDirectory.Entry(device: box.device, name: "box-1", ssh: alias, nodeKey: nil, identityKey: box.identity.publicKey, enrolled: true, on: false))
+        try switcher.book(switcher.env!).update { $0.append(box.pinned) }
+        let connection = HostConnection(alias: alias, grant: "MacBook", cache: HostCache(alias: alias, root: root))
+        connection.router = switcher
+        let upgrades = BoxUpgrades()
+        upgrades.net = { switcher }
+        upgrades.directory = directory
+        upgrades.shell = shell.shell
+        upgrades.sleep = VirtualClock().sleep
+        upgrades.link = { _ in connection }
+        switcher.upgrades = upgrades
+        let clock = VirtualClock()
+        connection.sleep = clock.sleep
+        connection.retain()
+        #expect(await holds { connection.phase == .refused(.auth) }, "\(connection.phase) · \(connection.lastReason ?? "")")
+        #expect(directory.entry(forKey: alias)?.enrolled == false)
+        #expect(upgrades.started == 1)
+        connection.release()
         switcher.set(false)
     }
 
@@ -260,10 +322,13 @@ struct BoxUpgradeTests {
         upgrades.switchedOn()
         #expect(await holds { upgrades.running("box-a") == nil && upgrades.running("box-b") == nil && shell.runs == 2 })
         #expect(upgrades.joins["box-on"] == nil && !upgrades.needs("box-on"))
-        // On with its Tailscale off: the row says so, nothing to upgrade.
+        // On with its Tailscale off (no node key now): the row says so, nothing to upgrade, on
+        // any reach.
         on.nodeKey = nil
         directory.upsert(on)
         #expect(!upgrades.needs("box-on"))
+        for _ in 0..<3 { upgrades.reached("box-on", fresh: true) }
+        #expect(upgrades.started == 2 && upgrades.joins["box-on"] == nil)
         // Enrolled, but its KoreNet off: it isn't on KoreNet.
         on.on = false
         directory.upsert(on)

@@ -104,6 +104,8 @@ package enum BoxFix: Equatable, Sendable {
     case installLinuxKit(update: Bool)
     /// Open the log a build on this Mac left.
     case showLog(String)
+    /// Open a box's Tailscale sign-in page here (only when asked: never by itself).
+    case signIn(String)
 
     package var title: String {
         switch self {
@@ -118,6 +120,7 @@ package enum BoxFix: Equatable, Sendable {
         case .copy: "Copy"
         case .install, .installLinuxKit: "Install"
         case .showLog: "Show log"
+        case .signIn: "Sign in ↗"
         }
     }
 }

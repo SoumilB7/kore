@@ -1,4 +1,5 @@
 import Foundation
+import KoreTrust
 import Synchronization
 import Tailnet
 import Testing
@@ -218,9 +219,34 @@ struct BoxUpgradeCommandTests {
         var held = try store.allow("MacBook", control: .act, socket: paths.socket)
         held.device = UUID()
         try store.save(held)
+        try remember(held.device!)
         let report = FakeBox(paths).upgrade().run(want: nil, grant: "MacBook")
         #expect(report.value("mac") == "enrolled")
         #expect(store.load("MacBook") == held, "an existing grant was changed")
+    }
+
+    /// The box this Mac's grant is in the book for: its record.
+    private func remember(_ device: UUID) throws {
+        try DeviceStore(paths: paths).book.update {
+            $0.append(DeviceRecord(
+                id: device, name: "MacBook", kind: .mac, abilities: [.read, .ask, .run], owner: true, identityKey: Data([1]), nodeKeys: ["ssh"],
+                userId: nil, fqdn: "", added: Date()))
+        }
+    }
+
+    /// G31: a box that forgot this Mac (its record gone) keeps the used grant; the upgrade makes
+    /// it afresh, so this Mac can enroll again. Run again, it's left alone.
+    @Test func aForgottenMacsGrantIsMadeAfresh() throws {
+        defer { cleanup() }
+        let store = GrantStore(paths.grants)
+        var used = try store.allow("MacBook", control: .full, socket: paths.socket)
+        used.device = UUID()
+        try store.save(used)
+        let report = FakeBox(paths).upgrade().run(want: nil, grant: "MacBook")
+        let fresh = try #require(store.load("MacBook"))
+        #expect(report.value("mac") == "allowed" && fresh.device == nil && fresh.secret != used.secret && fresh.control == .full)
+        _ = FakeBox(paths).upgrade().run(want: nil, grant: "MacBook")
+        #expect(store.load("MacBook")?.secret == fresh.secret)
     }
 
     /// An unclaimed box opens its claim window (as `join`); a claimed one doesn't.

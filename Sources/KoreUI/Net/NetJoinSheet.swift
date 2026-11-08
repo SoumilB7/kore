@@ -125,7 +125,8 @@ struct NetJoinSheet: View {
             case .done:
                 EmptyView()
             case .unreachable:
-                button("Close", go: true) { NetJoinSheet.close() }
+                button("Close") { NetJoinSheet.close() }
+                button("Try again", go: true) { NetJoinSheet.retry(join) }
             case .failed:
                 // The failure's one action beside Close (G3: never a silent end).
                 switch join.fix {

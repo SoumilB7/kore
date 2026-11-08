@@ -688,6 +688,11 @@ package final class HostConnection {
 
     private func dropped(_ reason: String?) {
         guard transport != nil || pump != nil else { return }
+        // The box forgot this Mac (removed it, or set up again): this Mac's proof over SSH is
+        // turned away with `bye unknown`. Not a blip to back off from forever: it isn't enrolled
+        // there now, the row says "hasn't allowed this Mac", and its upgrade runs again (G31).
+        let forgot: Bool
+        if reason == "bye unknown", case .ssh? = route, let router = sshRouter { forgot = router.forgotten(self) } else { forgot = false }
         // KoreNet that never came up: SSH at once (`NetPaths`: tailnet, then SSH). A switch of
         // route, or a stale route's `replaced`, dials again at once too. A tailnet dial this Mac
         // ended itself (a relink, a switch) didn't fail: it isn't held off.
@@ -720,6 +725,13 @@ package final class HostConnection {
         // A sign-in's end won't come over a link that's gone.
         for id in waiting.keys where id.hasSuffix(HostWire.doneSuffix) { finish(id, ok: false, message: "Lost \(NodeNames.name(alias)) before it answered") }
         if case .refused = phase { return }
+        if forgot {
+            phase = .refused(.auth)
+            lastReason = reason
+            HostLog.note(alias, "refused", Refused.auth.line(alias))
+            for watcher in Array(linkWatchers.values) { watcher(false) }
+            return
+        }
         if quiet {
             phase = .connecting
         } else {

@@ -364,7 +364,7 @@ package final class BoxList {
         case .installLinuxKit(let update):
             kitConsent = true
             await act(update ? .update : .setUp, on: alias)
-        case .setUpAgents, .differences, .copy, .showLog: break
+        case .setUpAgents, .differences, .copy, .showLog, .signIn: break
         }
     }
 

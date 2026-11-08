@@ -475,6 +475,17 @@ package final class KoreNetSwitch: NetRouter {
         settled?("rekey \(outcome)")
     }
 
+    /// The box forgot this Mac: not enrolled there any more, and its upgrade runs again (the box
+    /// makes this Mac's grant afresh, and this Mac enrolls over it).
+    package func forgotten(_ connection: HostConnection) -> Bool {
+        guard let entry = directory.entry(forKey: connection.alias), entry.enrolled else { return false }
+        directory.update { $0[entry.id.raw]?.enrolled = false }
+        HostLog.note(connection.alias, "korenet", "the box forgot this Mac")
+        directoryChanged?()
+        upgrades?.reached(connection.alias, fresh: true)
+        return true
+    }
+
     package func watchNode(_ key: String, _ watcher: (@MainActor (NetNodeWire.Node) -> Void)?) { nodeWatchers[key] = watcher }
     package func watchEnroll(_ key: String, _ watcher: (@MainActor (Bool) -> Void)?) { enrollWatchers[key] = watcher }
 

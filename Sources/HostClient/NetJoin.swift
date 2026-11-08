@@ -191,6 +191,7 @@ package final class BoxNetJoin {
     /// (`url`) opened on this Mac.
     package func needsSignIn(url: String? = nil) {
         loginURL = url
+        fix = url.map { .signIn($0) }
         sidecar = url == nil
         let tailnet = url == nil ? Row("Kore's tailnet on \(name)", detail: "no root", mark: .done) : Row("Tailscale on \(name)", detail: "signed out", mark: .done)
         rows = Array(rows.prefix(1)) + [tailnet, Row("Sign in for \(name)", mark: .attention)]
@@ -235,6 +236,7 @@ package final class BoxNetJoin {
         if let i = rows.firstIndex(where: { $0.title.hasPrefix("Reaching ") }) { rows[i] = Row("Can't reach Tailscale", detail: "stays on SSH", mark: .attention) }
         rows.removeAll { $0.title == "Allowed by SSH" && $0.mark != .done }
         note = "\(name) stays on SSH."
+        fix = .tryAgain
         ending = .unreachable
         Self.unreachable.insert(key)
     }
@@ -253,7 +255,7 @@ package final class BoxNetJoin {
         case .working: return nil
         case .done, .relayed: return warning
         case .needsSudo: return "Tailscale is off on \(name)"
-        case .signIn, .authKey: return "Sign in for \(name) in your browser"
+        case .signIn, .authKey: return "Sign in for \(name)"
         case .signInCancelled: return "Sign-in for \(name) was cancelled"
         case .unreachable: return "Can't reach Tailscale · stays on SSH"
         case .failed(let why): return why.hasSuffix(".") ? String(why.dropLast()) : why
@@ -384,6 +386,9 @@ package final class BoxNetJoinRun: BoxNetJoinRunner {
                 if error == "tailscale signed out", let page = report.login {
                     // The box's own sign-in, opened here: the link waits for its node key.
                     join.needsSignIn(url: page)
+                    // By itself it never opens a page: the row offers "Sign in ↗", and the next
+                    // reach looks again. From Join, the page opens here once and the link waits.
+                    if auto { return finish(join) }
                     if opened.insert(page).inserted, let url = URL(string: page) { openURL(url) }
                     return link(join, mine, limit: Self.signInLimit)
                 }
@@ -440,6 +445,8 @@ package final class BoxNetJoinRun: BoxNetJoinRunner {
             holdingLink = true
             connection.retain()
         }
+        // Turned away before (the box had forgotten this Mac; the upgrade made its grant again).
+        if case .refused(.auth) = connection.phase { connection.retry() }
         watch(join)
         // Up already (a window holds it): dialled again, so the box's `net.node` is heard anew.
         if connection.isOnline, connection.route != .net { connection.relink("korenet on") }

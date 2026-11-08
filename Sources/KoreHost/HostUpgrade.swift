@@ -164,12 +164,16 @@ package struct HostUpgrade {
         report.add("code", identity.code)
         if let grant {
             let grants = GrantStore(paths.grants)
-            if let held = grants.load(grant) {
+            // A grant whose Mac the box has forgotten (removed, or the book set up again) is used:
+            // its Mac's proof is turned away. It counts as missing, and is made afresh.
+            let held = grants.load(grant)
+            let forgotten = held?.device.map { device in !DeviceStore(paths: paths).all().contains { $0.id == device } } ?? false
+            if let held, !forgotten {
                 report.add("mac", held.device == nil ? "allowed" : "enrolled")
             } else {
                 do {
                     try grants.allow(grant, control: .full, socket: paths.socket)
-                    HostJournal.audit("allow", ["grant": grant, "how": "upgrade"])
+                    HostJournal.audit("allow", ["grant": grant, "how": forgotten ? "upgrade, its Mac forgotten" : "upgrade"])
                     report.add("mac", "allowed")
                 } catch {
                     report.add("mac", "failed \(error)")

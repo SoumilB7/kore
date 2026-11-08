@@ -259,7 +259,9 @@ package final class BoxUpgrades {
         if let line = join.working { return BoxUpgradeFacts(working: line) }
         let on = join.ending == .done || join.ending == .relayed
         // Stopped, but on KoreNet since (its Tailscale came up, a window's link moved it): quiet.
-        guard let line = join.line, on || needs(key) else { return nil }
+        // "Can't reach Tailscale" is about a box that is on and listening: it stays.
+        let listening = book.entry(forKey: current(key)).map { $0.enrolled && $0.listening } ?? false
+        guard let line = join.line, on || join.ending == .unreachable || !listening else { return nil }
         return BoxUpgradeFacts(note: line, fix: on ? .copy(BoxNetJoin.lingerLine) : join.fix)
     }
 }
