@@ -60,6 +60,7 @@ fun android.app.Activity.bindChatCard(v: LinearLayout, row: DeviceList.Row, open
     prompt.visibility = if (row.prompt) View.VISIBLE else View.GONE
     prompt.needsYou = row.prompt && row.cue == DeviceList.Cue.NEEDS
     spinner.tint = if (row.provider == "codex") Tone.spinCodex else Tone.spinClaude
+    prompt.tint = spinner.tint
     title.text = row.title
     val strong = row.unread || working || row.cue == DeviceList.Cue.NEEDS
     title.type(if (strong) Type.BodyMedium else Type.Body)

@@ -48,8 +48,8 @@ final class TabBackgroundWork: ChatStoryline {
     }
 }
 
-/// bg-command-cue.html C: a build outlives its turn. The tab's spinner becomes ">_" while only
-/// the build runs, takes the amber point while an approval waits beside it, and the logo comes
+/// bg-command-cue.html C: a build outlives its turn. The tab's spinner becomes ">_", in the CLI's
+/// colour as the spinner was, while only the build runs, takes the amber point while an approval waits beside it, and the logo comes
 /// back once the build ends. One scripted run per CLI (`--provider claude|codex`).
 final class TabBackgroundPromptStates: ChatStoryline {
     override class var tags: Set<Tag> { [.chat, .gate] }
@@ -76,6 +76,10 @@ final class TabBackgroundPromptStates: ChatStoryline {
             ExpectElement(.tab(1).action(.background)),
             ExpectElement(.tab(1).action(.working), .absent),
             ExpectElement(.tab(1).action(.needsYou), .absent),
+            Expect("the >_ in the CLI's colour") { story in
+                let tint = (try? story.activeChat().provider.id) == "claude" ? "#F59A55" : "#FFFFFF"
+                return StoryBackgroundPrompt.tints().contains(tint)
+            },
             Snapshot("2-background-only"),
             Send("List the folder"),
             ExpectElement(.id(StoryID.Approval.card("ls1").part(.allow))),

@@ -140,6 +140,8 @@ enum Size {
     static let spinner: CGFloat = 14
     /// The amber point on a background-only chat's ">_" mark while an approval waits.
     static let backgroundPromptPoint: CGFloat = 6
+    /// The ground's ring round that point, so it reads apart from an orange ">_".
+    static let backgroundPromptRing: CGFloat = 1.5
     /// The empty chat's "Import a chat" line, the picker's search line, and its rows (as high as
     /// a usage reset's), seven of them before the list scrolls; a row's running spinner.
     static let importLine: CGFloat = 22

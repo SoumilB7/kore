@@ -48,8 +48,9 @@ data class Waiting(val agents: Int, val commands: Int) {
 }
 
 /**
- * ">_" in the lead's place (bg-command-cue.html C): `dim`, the cursor blinking (1.1 s, shown 55%),
- * the amber point on its corner while the chat needs you. Ticks only while attached and while
+ * ">_" in the lead's place (bg-command-cue.html C): in its CLI's spinner colour ([tint]), the
+ * cursor blinking (1.1 s, shown 55%), the amber point on its corner while the chat needs you,
+ * ringed in the ground behind it ([ring]) so it reads apart from the orange. Ticks only while attached and while
  * animations are on; held still otherwise.
  */
 class PromptMark(context: Context) : View(context) {
@@ -62,6 +63,11 @@ class PromptMark(context: Context) : View(context) {
     private var shown = true
     var needsYou = false
         set(v) { if (field != v) { field = v; invalidate() } }
+    var tint = Tone.dim
+        set(v) { if (field != v) { field = v; invalidate() } }
+    var ring = Tone.l1
+        set(v) { if (field != v) { field = v; invalidate() } }
+    private val ringPaint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG)
     private val tick = object : Runnable {
         override fun run() {
             shown = !shown
@@ -90,14 +96,19 @@ class PromptMark(context: Context) : View(context) {
         val u = minOf(width, height) / 14f
         val ox = (width - 14f * u) / 2f
         val oy = (height - 14f * u) / 2f
-        paint.color = Tone.dim
+        paint.color = tint
         paint.strokeWidth = 1.5f * u
         val chevron = android.graphics.Path().apply {
             moveTo(ox + 1.8f * u, oy + 3.6f * u); lineTo(ox + 6f * u, oy + 7f * u); lineTo(ox + 1.8f * u, oy + 10.4f * u)
         }
         canvas.drawPath(chevron, paint)
         if (shown) canvas.drawLine(ox + 7.4f * u, oy + 10.9f * u, ox + 12.4f * u, oy + 10.9f * u, paint)
-        if (needsYou) canvas.drawCircle(ox + 13f * u, oy + 1.6f * u, 3f * u, point)
+        if (needsYou) {
+            ringPaint.color = ring
+            // Top right, clear of the strokes and inside the view's own bounds.
+            canvas.drawCircle(ox + 10.5f * u, oy + 3.5f * u, 3.5f * u, ringPaint)
+            canvas.drawCircle(ox + 10.5f * u, oy + 3.5f * u, 2.4f * u, point)
+        }
     }
 
     companion object {

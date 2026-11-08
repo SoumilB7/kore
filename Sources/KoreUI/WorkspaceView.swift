@@ -1537,7 +1537,7 @@ private struct TabMark: View {
             } else if running, tab.agent == nil, TabWork.kind(chat) == .background {
                 // Only background commands run: ">_", the amber point on it while an approval waits.
                 let needsYou = !chat.approvals.pending.isEmpty
-                BackgroundPrompt(needsYou: needsYou)
+                BackgroundPrompt(provider: chat.provider, needsYou: needsYou)
                     .storyMark(story.part(.background))
                     .overlay { if needsYou { Color.clear.storyMark(story.part(.needsYou)) } }
             } else if running {
@@ -1574,7 +1574,7 @@ private struct BoardMark: View {
             let running = board.orderedChats.filter { TabWork.running($0) }
             if running.allSatisfy({ TabWork.kind($0) == .background }) {
                 // Every running chat only waits on background commands.
-                BackgroundPrompt().storyMark(story.part(.background))
+                BackgroundPrompt(provider: running.first?.provider ?? .claude).storyMark(story.part(.background))
             } else {
                 let provider = running.first { TabWork.kind($0) == .working }?.provider ?? .claude
                 ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)

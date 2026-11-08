@@ -113,7 +113,7 @@ struct TileMark: View {
         switch state {
         case .working:
             if TabWork.kind(chat) == .background {
-                BackgroundPrompt()
+                BackgroundPrompt(provider: chat.provider)
             } else {
                 ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
                     .colorMultiply(WorkingSpinner.tint(chat.provider))

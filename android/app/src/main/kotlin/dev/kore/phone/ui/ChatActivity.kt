@@ -223,6 +223,8 @@ class ChatActivity : NodeActivity() {
         leadPrompt.needsYou = prompt && chat?.str("state") == "needsYou"
         provider?.let { leadLogo.setImageResource(providerLogo(it)) }
         leadSpin.tint = if (provider == "codex") Tone.spinCodex else Tone.spinClaude
+        leadPrompt.tint = leadSpin.tint
+        leadPrompt.ring = Tone.bg
         leadLogo.visibility = if (working || prompt) View.INVISIBLE else View.VISIBLE
         leadSpin.visibility = if (working && !prompt) View.VISIBLE else View.GONE
         barLead.visibility = if (provider != null) View.VISIBLE else View.GONE

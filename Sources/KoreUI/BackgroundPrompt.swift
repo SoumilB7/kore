@@ -2,22 +2,25 @@ import AppKit
 import SwiftUI
 
 /// A chat's mark while only its background commands run and the model is idle (bg-command-cue.html,
-/// option C): ">_" in the secondary grey, its cursor blinking, in the logo's place. With an
-/// approval waiting, the amber point sits on its corner. The blink is one Core Animation opacity
+/// option C): ">_" in its CLI's colour (the working spinner's: Claude's orange, Codex's white), its
+/// cursor blinking, in the logo's place. With an approval waiting, the amber point sits on its
+/// corner, ringed in the ground so it reads apart from the orange. The blink is one Core Animation opacity
 /// animation on the cursor's layer, run by the render server and only while the mark is in a
 /// window; under Reduce Motion the cursor holds still.
 struct BackgroundPrompt: View {
+    let provider: Provider
     var needsYou = false
     var size: CGFloat = Size.spinner
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        PromptMarkView.Representable(reduceMotion: reduceMotion)
+        PromptMarkView.Representable(reduceMotion: reduceMotion, tint: NSColor(WorkingSpinner.tint(provider)))
             .frame(width: size, height: size)
             .overlay(alignment: .topTrailing) {
                 if needsYou {
                     Circle().fill(Theme.warning)
                         .frame(width: Size.backgroundPromptPoint, height: Size.backgroundPromptPoint)
+                        .background(Circle().fill(Theme.background).padding(-Size.backgroundPromptRing))
                         .offset(x: Size.backgroundPromptPoint / 2, y: -Size.backgroundPromptPoint / 3)
                 }
             }
@@ -31,6 +34,15 @@ final class PromptMarkView: NSView {
     private let chevron = CAShapeLayer()
     private let cursor = CAShapeLayer()
     var still = false { didSet { if still != oldValue { updateBlink() } } }
+    var tint = NSColor(Theme.secondary) {
+        didSet {
+            guard tint != oldValue else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            for shape in [chevron, cursor] { shape.strokeColor = tint.cgColor }
+            CATransaction.commit()
+        }
+    }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -88,7 +100,25 @@ final class PromptMarkView: NSView {
 
     struct Representable: NSViewRepresentable {
         let reduceMotion: Bool
+        let tint: NSColor
         func makeNSView(context: Context) -> PromptMarkView { PromptMarkView() }
-        func updateNSView(_ view: PromptMarkView, context: Context) { view.still = reduceMotion }
+        func updateNSView(_ view: PromptMarkView, context: Context) {
+            view.still = reduceMotion
+            view.tint = tint
+        }
+    }
+}
+
+/// For storylines: the colour of each ">_" mark on screen, as "#RRGGBB".
+@MainActor
+package enum StoryBackgroundPrompt {
+    package static func tints() -> [String] {
+        func marks(_ view: NSView) -> [PromptMarkView] {
+            (view as? PromptMarkView).map { [$0] } ?? view.subviews.flatMap(marks)
+        }
+        return NSApp.windows.compactMap(\.contentView).flatMap(marks).compactMap { mark in
+            guard let c = mark.tint.usingColorSpace(.sRGB) else { return nil }
+            return String(format: "#%02X%02X%02X", Int((c.redComponent * 255).rounded()), Int((c.greenComponent * 255).rounded()), Int((c.blueComponent * 255).rounded()))
+        }
     }
 }
