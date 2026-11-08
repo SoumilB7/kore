@@ -20,7 +20,16 @@ package final class ContextStore {
     package func apply(_ event: ChatEvent) {
         switch event {
         case .contextUsage(let next):
-            usage = next
+            // A history's reading says how much is in use but not the window (a replay's
+            // translator hasn't heard the CLI): the window already known stays, so a rollback's
+            // history, applied after the relaunched CLI's own reading, never empties the wheel.
+            if next.window == nil, let known = usage, known.window != nil {
+                var kept = ContextUsage(used: next.used, window: known.window, autoCompacts: next.autoCompacts ?? known.autoCompacts, at: next.at)
+                kept.approximate = next.approximate
+                usage = kept
+            } else {
+                usage = next
+            }
         case .compactionStarted:
             compacting = true
         case .compacted, .compactionFailed, .compactionStopped, .exited:

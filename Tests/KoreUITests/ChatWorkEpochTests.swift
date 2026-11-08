@@ -99,6 +99,20 @@ struct ChatWorkEpochTests {
     }
     private func send(_ text: String, _ chat: Chat) { chat.draft = text; chat.send() }
 
+    /// A rollback's history (here a box's, as `adoptRollback` takes it; Claude's and Codex's own
+    /// go through the same `replaceHistory`) reports its fill without a window, after the CLI's
+    /// reading: the wheel shows what's left at once, never empty.
+    @Test func aRollbacksHistoryKeepsTheWheelFull() async throws {
+        let backend = Backend()
+        let chat = try make(backend)
+        defer { done(chat) }
+        await chat.startOnce()
+        backend.sink.yield(.contextUsage(ContextUsage(used: 120_000, window: 200_000, autoCompacts: true, at: Date())))
+        try await until { chat.context.fraction == 0.6 }
+        chat.adoptRollback([.contextUsage(ContextUsage(used: 30_000, window: nil, autoCompacts: nil, at: Date()))], more: false)
+        #expect(chat.context.fraction == 0.15)
+    }
+
     @Test(arguments: [false, true])
     func queuedChainCannotWakeUpOnAnotherAccount(_ oldFails: Bool) async throws {
         let backend = Backend()

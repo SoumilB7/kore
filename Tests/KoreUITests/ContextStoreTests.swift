@@ -23,6 +23,19 @@ struct ContextStoreTests {
         #expect(store.fraction == 1)
     }
 
+    /// A rollback: the relaunched CLI's reading lands first, then the history left, whose
+    /// replay knows the fill but not the window. The wheel keeps the window and shows the fill.
+    @Test func aHistorysFillKeepsTheWindowAlreadyKnown() {
+        let store = ContextStore()
+        store.apply(usage(120_000, 200_000))
+        store.apply(.replayed([.contextUsage(ContextUsage(used: 30_000, window: nil, autoCompacts: nil, at: Date()))]))
+        #expect(store.fraction == 0.15)
+        #expect(store.usage?.autoCompacts == true)
+        // A reading with its window still replaces the whole of it.
+        store.apply(usage(40_000, 100_000))
+        #expect(store.fraction == 0.4)
+    }
+
     @Test func aCompactionRunsFromStartToEnd() {
         for end: ChatEvent in [.compacted(at: Date()), .compactionFailed("no"), .exited(status: 1)] {
             let store = ContextStore()

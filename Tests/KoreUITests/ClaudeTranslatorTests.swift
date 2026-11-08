@@ -57,6 +57,20 @@ struct ClaudeTranslatorTests {
         #expect(users.map(\.inTurn) == [false, true])
     }
 
+    /// Why a rollback emptied the wheel: a history's replay reports its fill with no window (its
+    /// translator never heard the CLI), and it's applied after the relaunched CLI's reading.
+    @Test func aReplayReportsItsFillWithoutAWindow() async throws {
+        let lines = [
+            #"{"type":"user","uuid":"u1","timestamp":"2026-10-21T10:00:00Z","message":{"role":"user","content":"Hi"}}"#,
+            #"{"type":"assistant","uuid":"a1","timestamp":"2026-10-21T10:00:02Z","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"Hello"}],"usage":{"input_tokens":10,"cache_read_input_tokens":20000,"cache_creation_input_tokens":0,"output_tokens":90}}}"#,
+        ]
+        let messages = try lines.map { try JSONValue.parse(Data($0.utf8)) }
+        let replayed = await ClaudeTranslator.replayed(messages, folder: URL(fileURLWithPath: "/tmp"), sessionId: "s")
+        let readings = replayed.events.compactMap { if case .contextUsage(let usage) = $0 { usage } else { nil } }
+        #expect(readings.map(\.used) == [20_100])
+        #expect(readings.allSatisfy { $0.window == nil })
+    }
+
     /// A CLI that ends as it starts says why in words: a JSON error's message, never the JSON.
     @Test func anExitAtStartSaysWhyInWords() {
         let json = CLIExecutable.ExitedAtStart(name: "claude", status: 1, output: #"{"type":"error","message":"Being updated"}"# + "\n")
