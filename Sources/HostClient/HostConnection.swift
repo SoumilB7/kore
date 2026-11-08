@@ -77,6 +77,8 @@ package final class HostConnection {
     /// The welcome's: what the box offers this grant (1.5's "stream" with full control), and the
     /// grant's control.
     @ObservationIgnored package private(set) var caps: [String] = []
+    /// 1.10: the last move command's bytes on the link, both ways (a move's cost).
+    @ObservationIgnored package var lastMoveBytes = 0
     @ObservationIgnored package private(set) var control: LinkControlLevel?
     @ObservationIgnored package let cache: HostCache
     /// The CLIs whose login its chats' usage asked for (`LinkChatBackend`): once each.
