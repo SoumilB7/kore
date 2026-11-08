@@ -58,6 +58,10 @@ class NetClientSession(
     var server: UUID? = expected
         private set
     private val decoder = NetFrameDecoder(preAuth = true)
+    /** The `n` of the last ping this side sent, and of the last pong heard. */
+    private var lastPing = 0L
+    var lastPong = 0L
+        private set
     private val scheduler = NetScheduler(0)
 
     val isClosed: Boolean get() = state is State.Closed
@@ -95,6 +99,14 @@ class NetClientSession(
         scheduler.enqueue(payload, queue, stream)
     }
 
+    /** An on-demand probe (`{"t":"ping","n":…}` on stream 0): its `n`, answered by the peer's pong. */
+    fun ping(): Long? {
+        if (state !is State.Established) return null
+        lastPing += 1
+        queueControl(NetControl.Ping(lastPing))
+        return lastPing
+    }
+
     /** The next frame's bytes for the socket, or null. */
     fun nextFrame(): ByteArray? = scheduler.next()?.encoded()
 
@@ -127,6 +139,8 @@ class NetClientSession(
             state == State.Handshaking && message is NetControl.Challenge -> challenge(message)
             state == State.HelloSent && message is NetControl.Welcome -> welcome(message)
             state is State.Established && message is NetControl.Credit -> scheduler.grant(message.n)
+            state is State.Established && message is NetControl.Ping -> queueControl(NetControl.Pong(message.n))
+            state is State.Established && message is NetControl.Pong -> lastPong = maxOf(lastPong, message.n)
             else -> fail(NetControl.Companion.Reason.PROTOCOL)
         }
     }

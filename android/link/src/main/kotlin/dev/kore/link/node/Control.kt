@@ -181,6 +181,9 @@ object Control {
         put("chatId", chatId); put("modeId", modeId); put("nonce", nonce); put("sig", sig)
     }
 
+    /** A new `kore_raise` public key (SPKI DER, base64) for a Mac to take once its owner Allows it. */
+    fun raiseKey(id: String, pub: String): JsonObject = buildJsonObject { put("t", "raise.key"); put("id", id); put("pub", pub) }
+
     // Link messages that aren't commands.
 
     fun txOpen(chatId: String, last: Int = 60): JsonObject = buildJsonObject { put("t", "tx.open"); put("chatId", chatId); put("last", last) }

@@ -109,25 +109,46 @@ class JoinFlowTest {
         assertEquals(0, rig.knocks.size)
     }
 
-    @Test fun aMacOutsideItsAddWindowKeepsTheKnockingAndANoIsDenied() = runTest {
+    /** A Mac whose enroll answers are [byes], one per knock. */
+    private fun TestScope.answering(vararg byes: String): Pair<Rig, () -> Int> {
         val tailnet = FakeTailnet(Tailnet.RUNNING).apply { me = this@JoinFlowTest.me; others = listOf(node("mbp")) }
         var tries = 0
         val rig = Rig(this, tailnet) { _, enrolling ->
-            tries++
-            enrolling()
-            throw NetFailure(if (tries == 1) "bye unknown" else "bye refused")
+            val bye = byes[minOf(tries++, byes.size - 1)]
+            // The closed Add window says so before any card; a held hello waits for the owner.
+            if (bye != "unknown") enrolling()
+            throw NetFailure("bye $bye")
         }
         rig.flow.visible(true)
         rig.flow.begin()
+        return rig to { tries }
+    }
+
+    @Test fun aClosedAddWindowKeepsTheKnockingAndSaysOpenIt() = runTest {
+        val (rig, tries) = answering("unknown", "unknown", "refused")
         runCurrent()
-        assertEquals(Step.Finding(listOf("mbp")), rig.flow.step.value)
+        assertEquals(Step.Finding(listOf("mbp"), addClosed = true), rig.flow.step.value)
         advanceTimeBy(2_001)
+        assertEquals(Step.Finding(listOf("mbp"), addClosed = true), rig.flow.step.value)
+        advanceTimeBy(2_000)
         assertEquals(Step.Denied("mbp"), rig.flow.step.value)
         advanceTimeBy(60_000)
-        assertEquals(2, tries)
+        assertEquals(3, tries())
+    }
+
+    @Test fun refusedIsNotAllowedAndAskAgainKnocksOnceMore() = runTest {
+        val (rig, tries) = answering("refused")
+        runCurrent()
+        assertEquals(Step.Denied("mbp", timedOut = false), rig.flow.step.value)
         rig.flow.again()
         runCurrent()
-        assertEquals(3, tries)
+        assertEquals(2, tries())
+    }
+
+    @Test fun anUnansweredCardIsATimeout() = runTest {
+        val (rig, _) = answering("timeout")
+        runCurrent()
+        assertEquals(Step.Denied("mbp", timedOut = true), rig.flow.step.value)
     }
 
     @Test fun anApprovalWaitShowsTheNodeKey() = runTest {

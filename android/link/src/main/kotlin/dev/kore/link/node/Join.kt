@@ -55,10 +55,12 @@ class JoinFlow(
         /** [url] opens in a Custom Tab; never logged. */
         data class SigningIn(val url: String) : Step()
         /** Signed in; [macs] are the Macs seen (none answers yet). [stopped]: the 2 minutes are up. */
-        data class Finding(val macs: List<String>, val stopped: Boolean = false) : Step()
+        /** [addClosed]: a Mac answered, but its Add device window isn't open (`bye unknown`). */
+        data class Finding(val macs: List<String>, val stopped: Boolean = false, val addClosed: Boolean = false) : Step()
         /** The hello went to [mac]; its owner reads the card. [self] is what that card shows of this phone. */
         data class Allowing(val mac: String, val self: TailnetNode) : Step()
-        data class Denied(val mac: String) : Step()
+        /** The Mac's owner said no (`bye refused`), or its card went unanswered ([timedOut], `bye timeout`). */
+        data class Denied(val mac: String, val timedOut: Boolean = false) : Step()
         /** No Mac of this account on the tailnet: probably the wrong account. */
         data class NoMac(val login: String?) : Step()
         /** The tailnet wants this node approved or signed (Tailnet Lock) before it's on. */
@@ -128,17 +130,18 @@ class JoinFlow(
         while (visible && clock() - started < MacProbe.FOR_MS) {
             val self = withContext(io) { tailnet.self() } ?: return run { stepFlow.value = Step.Join }
             val macs = MacProbe.candidates(self, withContext(io) { tailnet.peers() })
-            if (stepFlow.value is Step.Finding) stepFlow.value = Step.Finding(macs.map { it.shortName })
+            (stepFlow.value as? Step.Finding)?.let { stepFlow.value = it.copy(macs = macs.map { m -> m.shortName }) }
             for (mac in macs) {
                 val link = try {
                     enroll(mac) { stepFlow.value = Step.Allowing(mac.shortName, self) }
                 } catch (e: NetFailure) {
-                    if (e.reason == "bye ${dev.kore.link.net.NetControl.Companion.Reason.UNKNOWN}") {
+                    val reason = dev.kore.link.net.NetControl.Companion.Reason
+                    if (e.reason == "bye ${reason.UNKNOWN}") {
                         // Listening for its allowed phones, but its Add device window isn't open.
-                        stepFlow.value = Step.Finding(macs.map { it.shortName })
+                        stepFlow.value = Step.Finding(macs.map { it.shortName }, addClosed = true)
                     } else if (stepFlow.value is Step.Allowing || e.reason.startsWith("bye ")) {
-                        // Heard, and said no (or the card timed out): Denied ends the knocking.
-                        stepFlow.value = Step.Denied(mac.shortName)
+                        // Heard, and said no, or its card went unanswered: either ends the knocking.
+                        stepFlow.value = Step.Denied(mac.shortName, timedOut = e.reason == "bye ${reason.TIMEOUT}")
                         return
                     }
                     null
@@ -159,7 +162,7 @@ class JoinFlow(
         if (!visible) return
         val self = withContext(io) { tailnet.self() }
         val any = self != null && MacProbe.candidates(self, withContext(io) { tailnet.peers() }).isNotEmpty()
-        stepFlow.value = if (any) Step.Finding((stepFlow.value as? Step.Finding)?.macs.orEmpty(), stopped = true) else Step.NoMac(self?.login)
+        stepFlow.value = if (any) ((stepFlow.value as? Step.Finding) ?: Step.Finding(emptyList())).copy(stopped = true) else Step.NoMac(self?.login)
     }
 
     companion object {

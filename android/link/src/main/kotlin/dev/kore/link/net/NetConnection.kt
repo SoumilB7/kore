@@ -36,6 +36,11 @@ interface LinkSession {
     /** Wall-clock ms of the last bytes from the server: a quiet link gets a probe. */
     val lastInbound: Long
     fun send(payload: ByteArray): Boolean
+    /**
+     * A KoreNet ping on stream 0 (the Mac and kore-host both answer it): completes when its pong
+     * comes back; null when the link isn't up.
+     */
+    fun ping(): Deferred<Unit>?
     fun close(reason: String = "quit")
 }
 
@@ -93,6 +98,26 @@ class NetConnection(
         return true
     }
 
+    /** Probes waiting for their pong, by `n`. */
+    private val pings = HashMap<Long, CompletableDeferred<Unit>>()
+
+    override fun ping(): Deferred<Unit>? {
+        val waiting = CompletableDeferred<Unit>()
+        synchronized(lock) {
+            val n = session.ping() ?: return null
+            pings[n] = waiting
+        }
+        wake.trySend(Unit)
+        return waiting
+    }
+
+    /** Every probe up to the last pong heard is answered. Called under [lock]. */
+    private fun ponged() {
+        val heard = session.lastPong
+        val done = pings.keys.filter { it <= heard }
+        done.forEach { pings.remove(it)?.complete(Unit) }
+    }
+
     override fun close(reason: String) {
         synchronized(lock) { session.close(reason) }
         wake.trySend(Unit)
@@ -107,7 +132,7 @@ class NetConnection(
                 val n = conn.input.read(buf)
                 if (n < 0) break
                 lastInbound = clock()
-                val (inbox, state) = synchronized(lock) { session.receive(buf, n) to session.state }
+                val (inbox, state) = synchronized(lock) { (session.receive(buf, n) to session.state).also { ponged() } }
                 if (!announced && state != NetClientSession.State.Handshaking) {
                     announced = true
                     helloSent()

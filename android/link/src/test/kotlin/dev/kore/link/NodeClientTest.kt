@@ -137,8 +137,8 @@ class NodeClientTest {
         assertEquals(1, rig.dials.size)
     }
 
-    @Test fun aQuietLinkGetsOneProbeAndIsAbandonedWhenNothingComesBack() = runTest {
-        val dead = link()
+    @Test fun aQuietLinkGetsOneKoreNetPingAndIsAbandonedWithoutItsPong() = runTest {
+        val dead = link().apply { pongs = false }
         val fresh = link()
         val rig = Rig(this, listOf({ dead }, { fresh }))
         rig.client.start()
@@ -146,31 +146,133 @@ class NodeClientTest {
         advanceTimeBy(14_000)
         rig.client.reconnectNow()
         runCurrent()
-        assertEquals(listOf("presence"), dead.types())
+        assertEquals(0, dead.pings.size)
         advanceTimeBy(2_000)
         rig.client.reconnectNow()
         rig.client.reconnectNow()
         runCurrent()
-        assertEquals(1, dead.sent.count { it.s("t") == "cmd" && it.cmd().s("type") == "link.ping" })
-        advanceTimeBy(5_100)
+        // One ping on stream 0, never a link command.
+        assertEquals(1, dead.pings.size)
+        assertEquals(listOf("presence"), dead.types())
+        advanceTimeBy(4_999)
+        assertTrue(!dead.ended.isCompleted)
+        advanceTimeBy(2)
         runCurrent()
         assertEquals("abandoned", dead.ended.getCompleted())
         assertEquals(2, rig.dials.size)
         assertEquals(State.Up, rig.client.state.value)
     }
 
-    @Test fun anAnsweredProbeKeepsTheLink() = runTest {
+    @Test fun aPongKeepsTheLink() = runTest {
         val link = link()
-        link.respond = { m -> if (m.s("t") == "cmd") buildJsonObject { put("t", "result"); put("id", m.s("id")); put("ok", false); put("code", "invalid") } else null }
         val rig = Rig(this, listOf({ link }))
         rig.client.start()
         runCurrent()
         advanceTimeBy(20_000)
         rig.client.reconnectNow()
-        advanceTimeBy(6_000)
-        runCurrent()
+        advanceTimeBy(60_000)
+        assertEquals(1, link.pings.size)
         assertTrue(!link.ended.isCompleted)
         assertEquals(1, rig.dials.size)
+    }
+
+    private fun TestScope.cardChat(risk: String?) = buildJsonObject {
+        put("t", "snapshot"); put("rev", 1); put("windows", kotlinx.serialization.json.JsonArray(emptyList()))
+        put("chats", kotlinx.serialization.json.JsonArray(listOf(buildJsonObject {
+            put("id", "c1")
+            put("cards", kotlinx.serialization.json.JsonArray(listOf(buildJsonObject {
+                put("id", "k1"); put("digest", "d1g"); if (risk != null) put("risk", risk)
+            })))
+        })))
+    }
+
+    /** A node that hands out [nonce] for `raise.chal` and records what it was asked. */
+    private fun TestScope.raiseNode(nonce: ByteArray) = link().apply {
+        respond = { m -> if (m.s("t") == "raise.chal") buildJsonObject { put("t", "raise.chal"); put("id", m.s("id")); put("nonce", Base64.getEncoder().encodeToString(nonce)) } else null }
+    }
+
+    @Test fun allowOnARiskyCardCarriesTheFingerprintOverItsDigest() = runTest {
+        val key = dev.kore.link.trust.SoftwareIdentity.fresh()
+        val nonce = ByteArray(32) { (it * 3).toByte() }
+        val link = raiseNode(nonce)
+        val rig = Rig(this, listOf({ link }), signer = { d -> key.sign(d) })
+        rig.client.start()
+        runCurrent()
+        link.push(cardChat("shell"))
+        runCurrent()
+        val id = rig.client.answer("c1", "k1", "allow")
+        runCurrent()
+        val chal = link.sent.single { it.s("t") == "raise.chal" }
+        assertEquals("approve.d1g", chal.s("modeId"))
+        val cmd = link.sent.single { it.s("t") == "cmd" }
+        assertEquals(id, cmd.s("id"))
+        val answer = cmd.cmd()
+        assertEquals("chat.answer", answer.s("type"))
+        assertEquals("d1g", answer.s("digest"))
+        assertArrayEquals(nonce, Base64.getDecoder().decode(answer.s("nonce")))
+        val digest = Raise.digest(link.binding, nonce, "c1", "approve.d1g")
+        assertTrue(dev.kore.link.trust.IdentityProof.verify(Base64.getDecoder().decode(answer.s("sig")), digest, key.publicKey))
+    }
+
+    @Test fun denyAndPlainCardsAreATap() = runTest {
+        var asked = 0
+        val link = raiseNode(ByteArray(32))
+        val rig = Rig(this, listOf({ link }), signer = { asked++; ByteArray(8) })
+        rig.client.start()
+        runCurrent()
+        link.push(cardChat("network"))
+        runCurrent()
+        rig.client.answer("c1", "k1", "deny")
+        runCurrent()
+        link.push(cardChat(null))
+        runCurrent()
+        rig.client.answer("c1", "k1", "allow")
+        runCurrent()
+        assertEquals(0, asked)
+        assertEquals(0, link.sent.count { it.s("t") == "raise.chal" })
+        assertEquals(listOf(null, null), link.sent.filter { it.s("t") == "cmd" }.map { it.cmd().s("sig") })
+    }
+
+    @Test fun aRiskyAllowWithoutTheFingerprintIsCancelledAndNotSent() = runTest {
+        val link = raiseNode(ByteArray(32))
+        val rig = Rig(this, listOf({ link }), signer = { null })
+        val results = mutableListOf<JsonObject>()
+        backgroundScope.launch { rig.client.results.collect { results += it } }
+        rig.client.start()
+        runCurrent()
+        link.push(cardChat("write"))
+        runCurrent()
+        val id = rig.client.answer("c1", "k1", "allow")
+        runCurrent()
+        assertEquals(0, link.sent.count { it.s("t") == "cmd" })
+        assertEquals(listOf(id to "cancelled"), results.map { it.s("id") to it.s("code") })
+    }
+
+    @Test fun aNewFingerprintKeyWaitsForTheMacsOneResult() = runTest {
+        val link = link()
+        val rig = Rig(this, listOf({ link }))
+        rig.client.start()
+        runCurrent()
+        val pub = byteArrayOf(1, 2, 3)
+        val answer = async { rig.client.raiseKey(pub) }
+        runCurrent()
+        val sent = link.sent.single { it.s("t") == "raise.key" }
+        assertEquals(Base64.getEncoder().encodeToString(pub), sent.s("pub"))
+        // The owner takes a while; the answer is keyed raise.key:<id>.
+        advanceTimeBy(90_000)
+        assertTrue(!answer.isCompleted)
+        link.push(buildJsonObject { put("t", "result"); put("id", "raise.key:" + sent.s("id")); put("ok", true) })
+        assertEquals("true", answer.await().s("ok"))
+    }
+
+    @Test fun anUnansweredFingerprintKeyTimesOut() = runTest {
+        val link = link()
+        val rig = Rig(this, listOf({ link }))
+        rig.client.start()
+        runCurrent()
+        val answer = async { rig.client.raiseKey(byteArrayOf(9)) }
+        advanceTimeBy(NodeClient.RAISE_KEY_MS + 1)
+        assertEquals("timeout", answer.await().s("code"))
     }
 
     @Test fun raiseSignsTheDigestOverThisLinksBindingAndTheNodesNonce() = runTest {

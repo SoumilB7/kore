@@ -48,6 +48,12 @@ sealed class NetControl {
 
     data class Credit(val n: Long) : NetControl()
 
+    /** Either side, after the welcome: "are you there?", sent only on demand (never on a timer). */
+    data class Ping(val n: Long) : NetControl()
+
+    /** The answer to [Ping], with its `n`. */
+    data class Pong(val n: Long) : NetControl()
+
     /** The client's first message after the welcome when it has cursors. */
     data class Resume(val cursors: JsonObject) : NetControl()
 
@@ -76,6 +82,8 @@ sealed class NetControl {
                 directory?.let { put("directory", JsonArray(it)) }
             }
             is Credit -> mapOf("t" to p("credit"), "n" to p(n))
+            is Ping -> mapOf("t" to p("ping"), "n" to p(n))
+            is Pong -> mapOf("t" to p("pong"), "n" to p(n))
             is Resume -> mapOf("t" to p("resume"), "cursors" to cursors)
             is Bye -> mapOf("t" to p("bye"), "reason" to p(reason))
         }
@@ -129,6 +137,8 @@ sealed class NetControl {
                     v = i("v"),
                 )
                 "credit" -> Credit(l("n").also { require(it > 0) { "credit $it" } })
+                "ping" -> Ping(l("n"))
+                "pong" -> Pong(l("n"))
                 "resume" -> Resume(o["cursors"] as? JsonObject ?: error("no cursors"))
                 "bye" -> Bye(s("reason"))
                 else -> error("unknown control $t")

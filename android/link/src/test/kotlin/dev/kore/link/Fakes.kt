@@ -38,6 +38,15 @@ class FakeLink(
         return true
     }
 
+    /** Pings sent, in order; [pongs] says whether the node answers them. */
+    val pings = mutableListOf<CompletableDeferred<Unit>>()
+    var pongs = true
+
+    override fun ping(): kotlinx.coroutines.Deferred<Unit>? {
+        if (end.isCompleted) return null
+        return CompletableDeferred<Unit>().also { pings += it; if (pongs) it.complete(Unit) }
+    }
+
     override fun close(reason: String) {
         if (end.complete(reason)) channel.close()
     }

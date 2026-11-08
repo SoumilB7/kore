@@ -56,4 +56,11 @@ class ControlFixtureTest {
             assertEquals(bad, true, runCatching { NetControl.decode(bad.toByteArray()) }.isFailure)
         }
     }
+
+    @Test fun pingAndPongAreKoreNetControlMessages() {
+        // As the Mac's sorted-keys encoder writes them (NetControl.ping / .pong).
+        assertEquals("""{"n":3,"t":"ping"}""", NetControl.Ping(3).encoded().decodeToString())
+        assertEquals("""{"n":3,"t":"pong"}""", NetControl.Pong(3).encoded().decodeToString())
+        assertEquals(NetControl.Pong(7), NetControl.decode("""{"t":"pong","n":7}""".toByteArray()))
+    }
 }

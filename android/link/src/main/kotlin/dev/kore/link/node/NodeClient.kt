@@ -276,9 +276,9 @@ class NodeClient(
         if (clock() - link.lastInbound < QUIET_MS || !probing.compareAndSet(false, true)) return
         scope.launch {
             try {
-                val sent = clock()
-                link.send(Control.envelope("probe-" + UUID.randomUUID(), buildJsonObject { put("type", "link.ping") }).bytes())
-                val alive = withTimeoutOrNull(PROBE_MS) { while (link.lastInbound < sent) delay(100) } != null
+                // KoreNet's own ping on stream 0: its pong overtakes any stream traffic.
+                val pong = link.ping() ?: return@launch
+                val alive = withTimeoutOrNull(PROBE_MS) { pong.await() } != null
                 if (!alive && session === link) link.close("abandoned")
             } finally {
                 probing.set(false)
@@ -314,10 +314,54 @@ class NodeClient(
     fun setMode(chatId: String, modeId: String): String = command(Control.setMode(chatId, modeId))
     fun stop(chatId: String): String = command(Control.stop(chatId))
 
-    /** A plain card answer, over the card as last seen; null when the card is gone. */
+    /**
+     * A card answer, over the card as last seen; null when the card is gone. A plain tap, except
+     * Allow on a risky card (`risk`: shell, write outside the folder, network): that one carries
+     * the fingerprint's signature over `approve.<digest>` and the node's nonce (`cancelled` without
+     * it). Deny is always free.
+     */
     fun answer(chatId: String, cardId: String, action: String, answers: Map<String, List<String>>? = null): String? {
-        cardDigest(chatId, cardId) ?: return null
-        return issue { _ -> cardDigest(chatId, cardId)?.let { Control.answer(chatId, cardId, action, it, answers).toString() } }
+        card(chatId, cardId) ?: return null
+        return issue { link ->
+            val card = card(chatId, cardId) ?: return@issue null
+            val digest = card.str("digest") ?: return@issue null
+            val body = Control.answer(chatId, cardId, action, digest, answers)
+            if (card.str("risk") == null || action != "allow") return@issue body.toString()
+            val modeId = APPROVE + digest
+            val (nonce, sig) = signRaise(link, chatId, modeId) ?: throw NotSigned()
+            JsonObject(body + mapOf("nonce" to JsonPrimitive(nonce), "sig" to JsonPrimitive(sig))).toString()
+        }
+    }
+
+    /** The fingerprint wasn't given (or the nonce didn't come): the command is answered `cancelled`. */
+    class NotSigned : Exception("not signed")
+
+    /**
+     * The node's nonce for [modeId] on [link], and the `kore_raise` signature over
+     * `SHA256("kore-raise/1" | B | nonce | chatId | modeId)` (base64 both); null when refused,
+     * unanswered, or not signed.
+     */
+    private suspend fun signRaise(link: LinkSession, chatId: String, modeId: String): Pair<String, String>? {
+        val signer = raiseSigner ?: return null
+        val chal = readOn(link, Control.raiseChallenge(chatId, modeId)) ?: return null
+        if (chal.str("t") != "raise.chal") return null
+        val nonceText = chal.str("nonce") ?: return null
+        val nonce = runCatching { Base64.getDecoder().decode(nonceText) }.getOrNull()?.takeIf { it.size == Raise.NONCE_SIZE } ?: return null
+        val sig = signer.sign(Raise.digest(link.binding, nonce, chatId, modeId)) ?: return null
+        return nonceText to Base64.getEncoder().encodeToString(sig)
+    }
+
+    /**
+     * A new `kore_raise` public key (a fingerprint enrolled on the phone made the old one void), for
+     * a Mac: taken only once its owner Allows it. Its one `result` (`raise.key:<id>`) comes after
+     * Allow, Deny or the Mac's 100 s; `offline` without a link, `timeout` if none comes.
+     */
+    suspend fun raiseKey(pub: ByteArray): JsonObject {
+        val link = session ?: return failure("raise.key", "offline")
+        val id = UUID.randomUUID().toString()
+        val answer = scope.async(start = CoroutineStart.UNDISPATCHED) { resultFlow.first { it.str("id") == "raise.key:$id" } }
+        link.send(Control.raiseKey(id, Base64.getEncoder().encodeToString(pub)).bytes())
+        return withTimeoutOrNull(RAISE_KEY_MS) { answer.await() } ?: run { answer.cancel(); failure("raise.key:$id", "timeout") }
     }
 
     /** Sends a [Control] command; returns the id its `result` carries. */
@@ -338,8 +382,9 @@ class NodeClient(
     }
 
     /** An on-demand read ([Control.historyList], [Control.diffGet], `raise.chal`): its reply, or the refusing `result`. */
-    suspend fun read(request: JsonObject, timeoutMs: Long = 15_000): JsonObject? {
-        val link = session ?: return null
+    suspend fun read(request: JsonObject, timeoutMs: Long = 15_000): JsonObject? = readOn(session ?: return null, request, timeoutMs)
+
+    private suspend fun readOn(link: LinkSession, request: JsonObject, timeoutMs: Long = 15_000): JsonObject? {
         val type = request.str("t") ?: return null
         val reply = Control.replyTo(type)
         val id = UUID.randomUUID().toString()
@@ -365,7 +410,7 @@ class NodeClient(
     suspend fun raise(chatId: String, modeId: String): JsonObject {
         val signer = raiseSigner ?: return failure("raise", "denied.raiseMode")
         val link = session ?: return failure("raise", "offline")
-        val chal = read(Control.raiseChallenge(chatId, modeId)) ?: return failure("raise", "timeout")
+        val chal = readOn(link, Control.raiseChallenge(chatId, modeId)) ?: return failure("raise", "timeout")
         if (chal.str("t") == "result") return chal
         val nonceText = chal.str("nonce") ?: return failure("raise", "invalid")
         val nonce = runCatching { Base64.getDecoder().decode(nonceText) }.getOrNull()?.takeIf { it.size == Raise.NONCE_SIZE }
@@ -426,7 +471,9 @@ class NodeClient(
     }
 
     private suspend fun sendNow(link: LinkSession, id: String, make: suspend (LinkSession) -> String?) {
-        val body = runCatching { make(link) }.getOrNull() ?: return fail(id, "gone.card")
+        val made = runCatching { make(link) }
+        if (made.exceptionOrNull() is NotSigned) return fail(id, "cancelled")
+        val body = made.getOrNull() ?: return fail(id, "gone.card")
         if (!link.send("{\"t\":\"cmd\",\"id\":${quote(id)},\"cmd\":$body}".toByteArray())) fail(id, "busy")
     }
 
@@ -456,11 +503,12 @@ class NodeClient(
         put("t", "result"); put("id", id); put("ok", false); put("code", code)
     }
 
-    private fun cardDigest(chatId: String, cardId: String): String? {
+    /** The card as last seen (its `digest`, its `risk`). */
+    private fun card(chatId: String, cardId: String): JsonObject? {
         val chats = snapshotFlow.value?.get("chats") as? JsonArray ?: return null
         val chat = chats.map { it.jsonObject }.firstOrNull { it.str("id") == chatId } ?: return null
         val cards = chat["cards"] as? JsonArray ?: return null
-        return cards.map { it.jsonObject }.firstOrNull { it.str("id") == cardId }?.str("digest")
+        return cards.map { it.jsonObject }.firstOrNull { it.str("id") == cardId }?.takeIf { it.str("digest") != null }
     }
 
     private fun route(message: JsonObject) {
@@ -489,6 +537,10 @@ class NodeClient(
     companion object {
         const val QUIET_MS = 15_000L
         const val PROBE_MS = 5_000L
+        /** A risky card's Allow signs this mode id, with the card's digest after it. */
+        const val APPROVE = "approve."
+        /** The Mac waits up to 100 s for its owner on a new fingerprint key. */
+        const val RAISE_KEY_MS = 110_000L
         /** Bytes per upload chunk, before base64. */
         const val UPLOAD_CHUNK = 48 * 1024
 

@@ -72,6 +72,7 @@ class NetConnectionTest {
                                 pipe.toClient.write(frame(NetControl.Welcome(serverKey.sign(b.digest), 1 shl 20, byteArrayOf(1), false, listOf("read", "ask"))))
                                 pipe.toClient.write(NetFrame(NetFrame.Queue.INTERACTIVE, false, 1, "{\"t\":\"welcome\"}".toByteArray()).encoded())
                             }
+                            is NetControl.Ping -> pipe.toClient.write(frame(NetControl.Pong(c.n)))
                             is NetControl.Bye -> { pipe.toClient.close(); return@thread }
                             else -> Unit
                         }
@@ -95,6 +96,8 @@ class NetConnectionTest {
         assertEquals("{\"t\":\"welcome\"}", withTimeout(5_000) { link.incoming.receive() }.decodeToString())
         assertTrue(link.send("{\"t\":\"presence\",\"onScreen\":true}".toByteArray()))
         assertEquals("{\"t\":\"presence\",\"onScreen\":true}", withTimeout(5_000) { link.incoming.receive() }.decodeToString())
+        // A probe: KoreNet's ping, answered on stream 0 by the server's pong.
+        withTimeout(5_000) { link.ping()!!.await() }
         link.close("quit")
         assertEquals("quit", withTimeout(5_000) { link.ended.await() })
         scope.cancel()

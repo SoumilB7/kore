@@ -159,4 +159,53 @@ class NetSessionTest {
         assertEquals(1L, m.stream)
         assertEquals(JsonPrimitive("presence").content, "presence")
     }
+
+    private fun established(): NetClientSession = session().apply { receive(challenge()); receive(welcome()); sent(this) }
+
+    @Test fun thePeersPingIsAnsweredWithItsPong() {
+        val s = established()
+        assertEquals(0, s.receive(frame(NetControl.Ping(41))).size)
+        assertEquals(NetControl.Pong(41), sent(s).single())
+    }
+
+    @Test fun aProbeIsAPingAndItsPongIsNoted() {
+        val s = established()
+        assertEquals(1L, s.ping())
+        assertEquals(NetControl.Ping(1), sent(s).single())
+        s.receive(frame(NetControl.Pong(1)))
+        assertEquals(1L, s.lastPong)
+        assertEquals(State.Established::class, s.state::class)
+    }
+
+    @Test fun noPingBeforeTheWelcome() {
+        val s = session()
+        assertEquals(null, s.ping())
+        s.receive(challenge())
+        sent(s)
+        s.receive(frame(NetControl.Ping(1)))
+        assertEquals(State.Closed("protocol"), s.state)
+    }
+
+    /** A welcome's directory as the Mac's encoder writes `DeviceRecord`s: sorted keys, ISO dates, the Mac first. */
+    @Test fun aSwiftDirectoryPinsTheMacAndListsItsBoxes() {
+        val pub = java.util.Base64.getEncoder().encodeToString(serverKey.publicKey)
+        val boxKey = java.util.Base64.getEncoder().encodeToString(SoftwareIdentity.fresh().publicKey)
+        val dir = kotlinx.serialization.json.Json.parseToJsonElement("""[
+            {"abilities":["read","ask","run"],"added":"1970-01-01T00:00:00Z","fqdn":"macbook.tail.ts.net.","id":"$serverId","identityKey":"$pub",
+             "kind":"mac","name":"MacBook","nodeKeys":["${tn.s("nodeKeyS")}"],"owner":true,"tags":[],"userId":7},
+            {"abilities":["read","ask","run"],"added":"2026-11-08T10:00:00Z","fqdn":"mybox.tail.ts.net.","id":"0C1D2E3F-4A5B-4C6D-8E7F-901A2B3C4D5E","identityKey":"$boxKey",
+             "issuedBy":"$serverId","kind":"box","lastSeen":"2026-11-08T11:00:00Z","name":"mybox","nodeKeys":["nodekey:box"],"tags":[],"userId":7}
+        ]""") as kotlinx.serialization.json.JsonArray
+        val s = session(record = null, enroll = NetControl.Enroll("Pixel 9", clientKey.publicKey))
+        s.receive(challenge())
+        sent(s)
+        s.receive(welcome(directory = dir.map { it as JsonObject }))
+        val peer = (s.state as State.Established).peer
+        assertEquals("MacBook", peer.record.name)
+        assertEquals(true, peer.record.owner)
+        val book = dev.kore.link.trust.DeviceBook()
+        book.put(peer.record)
+        book.applyDirectory(serverId, clientId, peer.directory!!.mapNotNull(Device::fromJson))
+        assertEquals(listOf("MacBook" to NodeKind.MAC, "mybox" to NodeKind.BOX), book.all().map { it.name to it.kind })
+    }
 }
