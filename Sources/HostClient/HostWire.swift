@@ -16,7 +16,7 @@ import LinkProtocol
 //   open and any device code in `message`, space-separated ("https://… code ABCD-1234"); how it
 //   ended comes later as a result whose id is the command's plus `:done`. `account.submit` takes
 //   the code from Claude's page; `account.refresh` says who's signed in, in `message`.
-// - GitHub on the box: `auth.gh` answers `{url, code}` (a device code to enter on the page); the
+// - GitHub on the box: `auth.gh` answers `{url, authCode}` (a device code to enter on the page); the
 //   box says `ghSignedIn` on its welcome's `host` (or a snapshot's or delta's).
 // - Liveness: the box has no ping. One is sent as a command of a type the box doesn't know, which
 //   any 1.x host answers with a `result` (`invalid`); every frame counts as a sign of life.
@@ -122,7 +122,7 @@ package enum HostWire {
     /// `auth.gh`'s result.
     package static func gitHubPage(_ raw: Data?) -> Page? {
         guard let raw, let peek = try? JSONDecoder().decode(PagePeek.self, from: raw), let url = peek.url.flatMap(URL.init(string:)) else { return nil }
-        return Page(url: url, code: peek.code)
+        return Page(url: url, code: peek.authCode)
     }
 
     /// `ghSignedIn` where the box says it: the welcome's or a snapshot's or delta's `host`, or the
@@ -140,6 +140,7 @@ package enum HostWire {
     private struct PagePeek: Decodable {
         var url: String?
         var code: String?
+        var authCode: String?
     }
     private struct GitHubPeek: Decodable {
         struct Host: Decodable { var ghSignedIn: Bool? }
