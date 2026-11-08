@@ -542,7 +542,11 @@ fun Activity.barButton(bar: View, glyph: String, description: String, go: (View)
         setOnClickListener { go(it) }
         pressable(22)
     }
-    (bar.parent as LinearLayout).addView(b, LinearLayout.LayoutParams(dp(48), dp(48)))
+    // The bar's row: the title sits in a column (its state line goes under it), so the button
+    // goes on the first horizontal row above it, at the end, never under the title.
+    var row = bar.parent
+    while (row is LinearLayout && row.orientation != LinearLayout.HORIZONTAL) row = row.parent
+    (row as LinearLayout).addView(b, LinearLayout.LayoutParams(dp(48), dp(48)))
     return b
 }
 
