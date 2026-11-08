@@ -341,7 +341,8 @@ struct OpsTests {
             try? FileManager.default.removeItem(at: root)
         }
         #expect(try Self.run(["install-service"], env: env).0 == 0)
-        #expect(HostService.waitForDaemon(paths))
+        // Started detached: a busy Mac starts it later than the 5 s an attach waits.
+        #expect(HostService.waitForDaemon(paths, seconds: 30))
         // Stopped by hand: the next attach starts it again.
         let pid = try #require(Int32(String(contentsOf: paths.pid, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)))
         kill(pid, SIGTERM)

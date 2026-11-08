@@ -124,13 +124,15 @@ package final class HostDaemon {
     package func start() throws {
         try paths.needRuntime()
         lock = try HostLock(paths.lock)
+        // Its pid is there before its socket is: whoever finds it running (the lock held, the
+        // socket there) reads it at once, however long what follows takes on a busy box.
+        try? HostPaths.privateFile(Data("\(getpid())\n".utf8), to: paths.pid)
         try HostPaths.privateFolder(paths.state)
         listener = try HostListener(path: paths.socket) { [weak self] socket in self?.accepted(socket) }
         openAgentSocket()
         startNet()
         sweepUploads()
         findCLIs()
-        try? HostPaths.privateFile(Data("\(getpid())\n".utf8), to: paths.pid)
         HostJournal.note("start", ["version": Self.version, "link": HostVersion.link, "pid": "\(getpid())", "chats": "\(chats.count)"])
     }
 
