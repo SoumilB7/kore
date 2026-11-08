@@ -93,6 +93,40 @@ An update restarts the daemon, which ends any turn that is running on the box; K
 when a chat there is working. Nothing dials until the new window stands on a box (or a box
 window opens), and nothing polls.
 
+## Updates
+
+A box runs the latest release without anyone logging in to it:
+- **Keep boxes updated** is on by default on the Mac. When a box is on an older kore-host than
+  the latest release the Mac found, and no chat is working there, the Mac asks it to update.
+- The box downloads its own binary from the release and checks it as `kore-host update` does. It
+  swaps it in and restarts; the Mac and phones reconnect by themselves.
+- The box writes a journal line, and `kore-host status` says what happened:
+  `updated  to 0.3.0 by Soumil's MacBook Air, 5 min ago`.
+
+On the box itself:
+
+```
+$ kore-host update
+kore-host 0.2.3 → 0.3.0
+  ✓ found 0.3.0 (github.com/SoumilB7/kore, released 2 days ago)
+  ✓ downloaded kore-host-linux-x86_64 (23 MB)
+  ✓ signature checks out (SoumilB7 release key)
+  ✓ 2 chats idle, safe to restart
+  ✓ swapped, restarting… phones and Macs reconnect by themselves
+kore-host 0.3.0 is running
+```
+
+- While a chat is working it stops before downloading: `1 chat is working · run again when they
+  finish, or --now`.
+- Offline, it says so and names the three files to copy over for `kore-host update --file`.
+- A signature or hash that doesn't check out is refused in one line, and nothing changes.
+- `kore-host update --check` prints one line (`0.3.0 is out (you have 0.2.3) · kore-host
+  update`) and downloads no binary.
+- Piped, `update` prints `key: value` lines.
+
+`kore-host status` shows its `update` line from what it already knows (the last check, or the Mac
+that keeps the box current) and never goes online.
+
 To remove a box, right-click it in the switcher and choose **Remove**. Kore forgets the box on this Mac and
 changes nothing on the box.
 
@@ -297,7 +331,7 @@ What both sides last agreed on (each file's size and mtime) is kept in
 
 | Command | |
 |---|---|
-| `kore-host status` | Shows the version, whether the daemon runs, the service and linger, grants, folders (missing ones marked), and where claude and codex were found. |
+| `kore-host status` | Shows the version, whether the daemon runs, the service and linger, updates (`update`, and `updated` after a Mac's), grants, folders (missing ones marked), and where claude and codex were found. Offline: it reads only what's kept. |
 | `kore-host allow <name> [--control watch\|act\|full]` | Grants a client. `allow` again issues a new secret. |
 | `kore-host revoke <name>` | Removes a grant. Its connection ends at its next command. |
 | `kore-host grants` | Lists the grants and their control. |
@@ -306,7 +340,7 @@ What both sides last agreed on (each file's size and mtime) is kept in
 | `kore-host start` | Starts the daemon as it was installed. |
 | `kore-host facts` | Prints the CLIs' MCP servers, skills, plugins, agents and default models, by name only, as JSON. |
 | `kore-host uninstall [--purge]` | Stops and removes the service, the LaunchAgent or the on-demand daemon. `--purge` also removes the state, grants and config. |
-| `kore-host update [--file <kore-host-linux-ARCH.xz>] [--force]` | Takes the latest release (or that file, with `SHA256SUMS` and `SHA256SUMS.sig` beside it): checks the signature, the hash and the new binary's version, refuses an older one without `--force`, swaps it in with one rename and restarts the daemon. A failure leaves the old binary. |
+| `kore-host update [--check \| --file <kore-host-linux-ARCH.xz>] [--now] [--force]` | Takes the latest release (or that file, with `SHA256SUMS` and `SHA256SUMS.sig` beside it): checks the signature, the hash and the new binary's version, refuses an older one without `--force`, waits for working chats unless `--now`, swaps it in with one rename and restarts the daemon. A failure leaves the old binary. `--check` only says whether a newer one is out. See [Updates](#updates). |
 | `kore-host verify <file>` | Checks `SHA256SUMS` beside the file against its signature, then the file (or, for `SHA256SUMS`, every listed file beside it). |
 | `kore-host upgrade [--want <version>] [--grant <name>]` | Puts the box on KoreNet, each step only when it isn't done: updates to the latest release when older than `--want`, installs or starts the service, turns `net on` and makes `<name>`'s grant (full) when it's missing. Prints `key: value` lines (`version`, `link`, `update`, `service`, `linger`, `device`, `code`, `mac`, `net`, `tailscale`, `node`, `login`, `listen`, `error`, `action`, `state`). Exits 0 when done, 2 when a person is needed (`error: tailscale stopped\|tailscale signed out\|tailscale absent\|no sudo\|port held`, with the line to run in `action`), 1 on a failure. Running it again changes nothing. Kore runs it over SSH by itself while KoreNet is on. |
 | `kore-host --version` | Prints the version and the link version. |

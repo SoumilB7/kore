@@ -307,6 +307,8 @@ final class LinkClient {
         if type == DevicesWire.set { return host.devicesSet(data, from: self) }
         if type == NetSwitchWire.set { return host.netSet(data, from: self) }
         if type == UsageWire.since { return host.usageSince(data, from: self) }
+        if type == UpdateWire.keep { return host.updateKeep(data, from: self) }
+        if type == UpdateWire.update { return host.updateNow(data, from: self) }
         guard let control = current() else { return }
         guard control == .full else {
             denied(type)

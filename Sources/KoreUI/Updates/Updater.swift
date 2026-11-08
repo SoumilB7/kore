@@ -1,4 +1,5 @@
 import Foundation
+import HostClient
 import KoreCore
 import Observation
 
@@ -46,6 +47,8 @@ package final class Updater {
               (response as? HTTPURLResponse)?.statusCode == 200,
               let latest = Self.tag(data)
         else { return }
+        // Boxes are kept on the latest release (BoxUpdates), whatever this Mac does with it.
+        BoxUpdates.shared.latest = latest
         if case .installing = state { return }
         state = Self.newer(latest, than: version) ? .available(latest) : .current
     }

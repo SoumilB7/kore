@@ -55,6 +55,11 @@ package final class HostDaemon {
     /// `kore-host mcp`'s binary: this one (a test runs the built one).
     package var mcpCommand = URL(fileURLWithPath: HostService.executable())
     package static let version = HostVersion.string
+    /// `chats.state` as last written (`HostUpdates`), and the update a Mac asked for while it runs.
+    var chatsNoted: [Int]?
+    var updating: (id: String, client: LinkClient)?
+    /// Starts `kore-host update --by <Mac>` apart from this process (tests run a stand-in).
+    package var updateSpawn: (_ arguments: [String], _ out: URL) -> pid_t? = { HostDaemon.spawnDetached(HostService.executable(), $0, out: $1) }
     /// Link 1.8: the grants' terminals, and git for the explorer, editor and diffs.
     let terminals = HostTerminals()
     let git = HostGit()
@@ -437,7 +442,7 @@ package final class HostDaemon {
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
             caps: ["tx", "attn", "commands", "control", "box"] + (control != .watch ? ["history"] : [])
-                + (control == .full ? ["stream", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, DevicesWire.mergeCap] : []))
+                + (control == .full ? ["stream", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, DevicesWire.mergeCap, UpdateWire.cap] : []))
     }
 
     var windows: [LinkWindow] {
@@ -453,6 +458,7 @@ package final class HostDaemon {
 
     func broadcast(windows: Bool = false, chats changed: [HostChat]) {
         noteAttention(changed)
+        noteChats()
         guard !connections.isEmpty else { return }
         let windows = windows ? self.windows : nil
         guard !changed.isEmpty || windows != nil else { return }
