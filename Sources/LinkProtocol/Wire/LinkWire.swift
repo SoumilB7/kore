@@ -13,8 +13,8 @@ import src
 package enum LinkProto {
     package static let major = 1
     package static let minor = 3
-    /// A box (`kore-host`) speaks 1.4: the Mac's 1.3 and the box's additions.
-    package static let boxMinor = 4
+    /// A box (`kore-host`) speaks 1.5: the Mac's 1.3, the box's additions (1.4) and box parity (1.5).
+    package static let boxMinor = 5
     package static var version: LinkVersion { LinkVersion(major: major, minor: minor) }
 }
 

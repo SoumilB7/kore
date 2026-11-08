@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 #endif
 
 /// What a file attached to a message is, for how it's sent and shown.
-package enum AttachmentKind: Sendable { case image, text, pdf, other }
+package enum AttachmentKind: Sendable, Codable { case image, text, pdf, other }
 
 /// How attachments become message content, mirroring each CLI's own client:
 /// - Claude (as its VS Code extension): images as base64 image blocks, text files as text

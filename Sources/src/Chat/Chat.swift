@@ -51,6 +51,14 @@ package final class Chat: Identifiable {
 
     /// The backend, its events' pump and the send chain.
     @ObservationIgnored private let engine: ChatEngine
+    /// Each of the backend's events as it came, before the chat takes it (`ChatEngine.rawTap`).
+    package var backendTap: (@MainActor (ChatEvent) -> Void)? {
+        get { engine.rawTap }
+        set { engine.rawTap = newValue }
+    }
+    /// It sends Kore's own "Continue" and compacts at its point by itself. Off for a box's chat
+    /// while a Mac drives it: that Mac's chat does both, once.
+    @ObservationIgnored package var automatic = true
     private var backend: (any ChatBackend)? { engine.backend }
     @ObservationIgnored private let resume: SessionSummary?
     /// A fork the CLI makes when it starts (Codex) or on its first message (Claude).
@@ -837,17 +845,36 @@ package final class Chat: Identifiable {
         return true
     }
 
+    /// A message another Kore's chat sent through this one (a Mac driving a box's chat): it goes
+    /// as that chat sent it, under its id and queued as it was, and `done` says whether a turn is
+    /// under way once the CLI has it, or why it didn't go.
+    package func sendFromRelay(
+        _ text: String, files: [URL], queued: String?, id: String?, done: @escaping @MainActor (Result<Bool, Error>) -> Void
+    ) {
+        guard !closed, !accountRestartPending else { return done(.failure(RelayRefusal("The chat can't take a message right now."))) }
+        cancelContinue()
+        deliver(text, services.attachments(files), id: id, queued: .some(queued), done: done)
+    }
+
     /// Messages waiting while a turn runs.
     package var queuedCount: Int { waitingOrder.count }
 
     /// Sends a message the composer has given up (or Kore's own "Continue").
-    private func deliver(_ text: String, _ sent: [Attachment]) {
-        guard !closed, !accountRestartPending else { return }
+    private func deliver(
+        _ text: String, _ sent: [Attachment], id given: String? = nil, queued forced: String?? = nil,
+        done: (@MainActor (Result<Bool, Error>) -> Void)? = nil
+    ) {
+        let done = done.map(RelayOnce.init)
+        guard !closed, !accountRestartPending else {
+            done?(.failure(RelayRefusal("The chat can't take a message right now.")))
+            return
+        }
         // A rollback under way: the CLI it would reach is ending, and the rows are about to be
         // replaced. It goes once the rollback is done (`endRollback`).
         if rollingBack {
             heldForRollback.append((text, sent))
             transcriptView.sending(true)
+            done?(.success(true))
             return
         }
         interruptedByAccount = false
@@ -857,14 +884,15 @@ package final class Chat: Identifiable {
         // The Codex extension's /plan flips the plan toggle; it isn't a message.
         if text == "/plan" && sent.isEmpty && provider.planToggle != nil {
             setPlanMode(!controls.planMode)
+            done?(.success(false))
             return
         }
         approvals.offerImplementPlan = false
         // Sent while a turn runs, it waits (look.md §10) until the CLI says where it went. Its id
         // is its row's too: the CLI keeps it (or its backend maps it), so a fork or a rollback
         // finds this very message, not another with the same text.
-        let id = UUID().uuidString.lowercased()
-        let queued = status.isRunning ? id : nil
+        let id = given ?? UUID().uuidString.lowercased()
+        let queued = forced ?? (status.isRunning ? id : nil)
         let shown = sent.map(SentAttachment.init)
         let message: ChatEvent =
             queued.map { .messageQueued(id: $0, text: text, attachments: shown) }
@@ -881,6 +909,7 @@ package final class Chat: Identifiable {
         engine.chain(after: engine.sending, epoch) { [self] in
             do {
                 if let error = await launchCLI() {
+                    done?(.failure(error))
                     guard currentWork(epoch), !Task.isCancelled else { return }
                     // Never sent: the message goes back to the composer, for a send that tries again.
                     if let queued {
@@ -913,6 +942,7 @@ package final class Chat: Identifiable {
                     backend.noteNextTurn(KoreReach.note(tier: arsenal?.title, chat: String(self.id.uuidString.prefix(8)).lowercased()))
                 }
                 let turn = try await backend.send(text, files: Attachments.files(sent), queued: queued, id: id)
+                done?(.success(turn))
                 // A fork's CLI has its session once a message went out, not when it was shown.
                 if let key = fork?.id { KoreForks.shared.sent(cli: provider.id, key: key) }
                 guard currentWork(epoch), !Task.isCancelled else { return }
@@ -921,6 +951,7 @@ package final class Chat: Identifiable {
                     status.setRunning(false)
                 }
             } catch {
+                done?(.failure(error))
                 guard currentWork(epoch), !Task.isCancelled else { return }
                 // A queued message that couldn't go goes back to the composer.
                 if let queued {
@@ -1223,6 +1254,7 @@ package final class Chat: Identifiable {
                 compactAfterTurn = false
                 if canCompact { return compact() }
             }
+            guard automatic else { return }
             if autoCompactDue, context.pastPoint, canCompact, waiting.isEmpty, let point = context.autoCompactAt {
                 compact(at: point)
             } else if stoppedByCompaction, waiting.isEmpty {
@@ -1230,7 +1262,7 @@ package final class Chat: Identifiable {
                 deliver("Continue", [])
             }
         case .contextUsage:
-            guard autoCompactDue, context.pastPoint, canCompact, waiting.isEmpty, let point = context.autoCompactAt
+            guard automatic, autoCompactDue, context.pastPoint, canCompact, waiting.isEmpty, let point = context.autoCompactAt
             else { return }
             compact(at: point)
         default:
@@ -1240,7 +1272,7 @@ package final class Chat: Identifiable {
 
     private func sendContinueAfterCompaction() {
         continueAfterCompaction = false
-        guard waiting.isEmpty else { return }
+        guard waiting.isEmpty, automatic else { return }
         continueSent = true
         deliver("Continue", [])
     }
@@ -1338,6 +1370,14 @@ package final class Chat: Identifiable {
             }
             endRollback()
         }
+    }
+
+    /// A rollback another Kore's chat made through this one's backend (a Mac driving a box's
+    /// chat): the history left replaces this one's too.
+    package func adoptRollback(_ events: [ChatEvent], more: Bool) {
+        sinceReplay = []
+        replaceHistory(events)
+        dispatch(.earlierHistory(more))
     }
 
     /// The rollback is over, done or not: what was sent meanwhile goes now, after its rows.
@@ -1689,4 +1729,31 @@ extension Chat: ModelListHolder {
     /// The CLI's id, with the box's for a chat on one: lists from different machines never mix.
     package var modelCLI: String { services.modelScope.map { provider.id + "@" + $0 } ?? provider.id }
     package func listModels(_ models: [ModelOption]) { controls.listModels(models) }
+}
+
+/// Why a relayed message didn't go, in a line.
+package struct RelayRefusal: LocalizedError, CustomStringConvertible {
+    package let message: String
+    package init(_ message: String) { self.message = message }
+    package var errorDescription: String? { message }
+    package var description: String { message }
+}
+
+/// A relayed send's answer, given once: a send whose work ended without one (its chat started
+/// again, or closed) answers that it didn't go.
+private final class RelayOnce: @unchecked Sendable {
+    private var done: (@MainActor (Result<Bool, Error>) -> Void)?
+
+    init(_ done: @escaping @MainActor (Result<Bool, Error>) -> Void) { self.done = done }
+
+    @MainActor func callAsFunction(_ result: Result<Bool, Error>) {
+        let done = self.done
+        self.done = nil
+        done?(result)
+    }
+
+    deinit {
+        guard let done else { return }
+        Task { @MainActor in done(.failure(RelayRefusal("The message didn't go: the chat started again."))) }
+    }
 }

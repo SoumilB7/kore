@@ -3,7 +3,7 @@ import KoreCore
 
 /// Kore's own vocabulary for what happens in a chat. Each provider's backend translates its
 /// CLI into these, so nothing past `Providers/` knows which CLI is talking.
-package enum ChatEvent: Sendable {
+package enum ChatEvent: Sendable, Codable {
     // MARK: Session
 
     /// Claude session id / Codex thread id: what `--resume` / `thread/resume` takes.
@@ -140,7 +140,7 @@ package enum ChatEvent: Sendable {
 }
 
 /// Who changed a mode.
-package enum ModeSource: Sendable, Equatable {
+package enum ModeSource: Sendable, Equatable, Codable {
     /// The mode a session started or resumed in: not a change anyone made.
     case session
     /// From Kore (the mode menu, Shift+Tab, `/plan`), or between turns in another client.
@@ -151,7 +151,7 @@ package enum ModeSource: Sendable, Equatable {
     case refused
 }
 
-package enum ModeCause: Sendable, Equatable {
+package enum ModeCause: Sendable, Equatable, Codable {
     /// It started planning (Claude's EnterPlanMode).
     case enteredPlanMode
     /// Its plan was approved (Claude's ExitPlanMode accepted): plan mode left for the chosen mode.
@@ -160,7 +160,7 @@ package enum ModeCause: Sendable, Equatable {
     case other
 }
 
-package struct ModeChange: Sendable, Equatable {
+package struct ModeChange: Sendable, Equatable, Codable {
     /// The provider's mode id ("plan", "acceptEdits", "fullAccess", …).
     package let mode: String
     /// nil for the first mode a chat learns.
@@ -177,7 +177,7 @@ package struct ModeChange: Sendable, Equatable {
     }
 }
 
-package struct PlanModeChange: Sendable, Equatable {
+package struct PlanModeChange: Sendable, Equatable, Codable {
     package let on: Bool
     package let source: ModeSource
     package let at: Date
@@ -189,7 +189,7 @@ package struct PlanModeChange: Sendable, Equatable {
     }
 }
 
-package struct ContextUsage: Sendable, Equatable {
+package struct ContextUsage: Sendable, Equatable, Codable {
     /// Tokens in context now.
     package let used: Int
     /// What the fill is measured against, as each CLI's own extension does: Claude's effective
@@ -212,7 +212,7 @@ package struct ContextUsage: Sendable, Equatable {
 }
 
 /// Where a message sent while a turn ran went (`ChatBackend.send(_:files:queued:id:)`).
-package enum QueuedDelivery: Sendable, Equatable {
+package enum QueuedDelivery: Sendable, Equatable, Codable {
     /// The CLI took it into the running turn, after `after` (the last main tool call or text
     /// block; nil when the turn had none yet).
     case inTurn(after: String?)
@@ -227,21 +227,21 @@ package typealias BlockID = String
 
 /// Who produced something: the chat's own agent, or a sub-agent it spawned (Claude task id /
 /// Codex child thread id).
-package enum AgentID: Hashable, Sendable {
+package enum AgentID: Hashable, Sendable, Codable {
     case main
     case sub(String)
 }
 
 /// Why a turn started. `.cli` is a turn the CLI started itself whose cause isn't known yet.
-package enum TurnOrigin: Sendable, Equatable {
+package enum TurnOrigin: Sendable, Equatable, Codable {
     case user, cli, schedule, agentFinished, peer
 }
 
-package enum TextKind: Sendable, Equatable {
+package enum TextKind: Sendable, Equatable, Codable {
     case answer, thinking, plan
 }
 
-package enum TurnOutcome: Sendable, Equatable {
+package enum TurnOutcome: Sendable, Equatable, Codable {
     case completed, interrupted
     case failed(String)
     /// The CLI's login was refused (Claude's `authentication_failed`, Codex's 401): the CLI's
@@ -254,7 +254,7 @@ package enum TurnOutcome: Sendable, Equatable {
 }
 
 /// A tool call, already worded for display.
-package struct ToolCall: Sendable {
+package struct ToolCall: Sendable, Codable {
     /// Claude tool_use id / Codex item id.
     package let id: String
     /// "Bash", "Edit", "Run", "Search", "server.tool"…
@@ -282,7 +282,7 @@ package struct ToolCall: Sendable {
 }
 
 /// An attachment as a transcript shows it. Images travel as bytes; views make thumbnails lazily.
-package struct SentAttachment: Sendable {
+package struct SentAttachment: Sendable, Codable {
     package let name: String
     package let kind: AttachmentKind
     package let url: URL?
@@ -296,7 +296,7 @@ package struct SentAttachment: Sendable {
     }
 }
 
-package struct ChatControls: Sendable {
+package struct ChatControls: Sendable, Codable {
     package var models: [ModelOption]
     package var model: String?
     package var effort: String?
@@ -310,7 +310,7 @@ package struct ChatControls: Sendable {
     }
 }
 
-package struct ModelOption: Identifiable, Hashable, Sendable {
+package struct ModelOption: Identifiable, Hashable, Sendable, Codable {
     package let id: String
     package let name: String
     package let resolved: String
@@ -335,8 +335,8 @@ package struct ModelOption: Identifiable, Hashable, Sendable {
 /// The CLI's own remote control of a chat (`/` → Remote control): the claude CLI's link to
 /// claude.ai/code and the Claude app, the codex CLI's to its remote clients. Their accounts carry
 /// it; Kore only turns it on and off, and shows it.
-package struct RemoteControl: Sendable, Equatable {
-    package enum State: Sendable, Equatable {
+package struct RemoteControl: Sendable, Equatable, Codable {
+    package enum State: Sendable, Equatable, Codable {
         case connecting, connected
         /// The CLI's reason.
         case failed(String)
@@ -366,7 +366,7 @@ package struct RemoteControl: Sendable, Equatable {
     }
 }
 
-package struct FastModeReport: Sendable, Equatable {
+package struct FastModeReport: Sendable, Equatable, Codable {
     package var on: Bool
     /// On, at standard speed for now after a rate limit (Claude's cooldown).
     package var paused = false
@@ -385,9 +385,9 @@ package struct FastModeReport: Sendable, Equatable {
 }
 
 /// An entry in the `/` menu. Picking it inserts `insertion` into the draft.
-package struct SlashCommand: Identifiable, Hashable, Sendable {
+package struct SlashCommand: Identifiable, Hashable, Sendable, Codable {
     /// `kore`: Kore's own entries (Usage, Account), which open a popup and send the CLI nothing.
-    package enum Kind: Sendable { case command, skill, kore }
+    package enum Kind: Sendable, Codable { case command, skill, kore }
     package let name: String
     package let description: String
     package let hint: String
@@ -445,7 +445,7 @@ package struct SlashCommand: Identifiable, Hashable, Sendable {
 
 // MARK: - Sub-agents
 
-package struct AgentInfo: Sendable {
+package struct AgentInfo: Sendable, Codable {
     package let id: String
     /// The agent whose tool call spawned it.
     package let parent: AgentID
@@ -473,7 +473,7 @@ package struct AgentInfo: Sendable {
     }
 }
 
-package struct AgentProgress: Sendable {
+package struct AgentProgress: Sendable, Codable {
     package var tokens: Int?
     package var tools: Int?
     package var duration: Duration?
@@ -493,15 +493,15 @@ package struct AgentProgress: Sendable {
     }
 }
 
-package enum AgentStatus: Sendable, Equatable {
+package enum AgentStatus: Sendable, Equatable, Codable {
     case completed, failed, stopped
 }
 
 // MARK: - Approvals
 
 /// Something the CLI waits on the user for: a permission, questions, or a plan.
-package struct Approval: Identifiable, Sendable {
-    package struct Option: Sendable {
+package struct Approval: Identifiable, Sendable, Codable {
+    package struct Option: Sendable, Codable {
         package let label: String
         package let description: String
         /// What picking it would look like (Claude's `preview`): monospace text, nil for none.
@@ -514,7 +514,7 @@ package struct Approval: Identifiable, Sendable {
         }
     }
 
-    package struct Question: Sendable {
+    package struct Question: Sendable, Codable {
         package let id: String
         package let text: String
         /// The CLI's short name for it (`header`), for the card's tabs; empty when it sent none.
@@ -589,7 +589,7 @@ package struct Approval: Identifiable, Sendable {
     package var isPermission: Bool { plan == nil && questions.isEmpty && !signIn }
 }
 
-package enum Decision: Sendable {
+package enum Decision: Sendable, Codable {
     case allow, allowAlways, deny
     /// Claude's "Ready to code?": approve the plan, optionally switching to Accept edits.
     case approvePlan(autoAcceptEdits: Bool)
@@ -599,7 +599,7 @@ package enum Decision: Sendable {
 }
 
 /// How a turn's connection to its model stands (`ChatEvent.connection`).
-package enum Connection: Sendable, Equatable {
+package enum Connection: Sendable, Equatable, Codable {
     case ok
     case offline
     /// The CLI's own retry of a request that failed: which try of how many, when it says.

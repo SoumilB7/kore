@@ -147,6 +147,9 @@ package final class ChatEngine {
     /// returns runs after, if the work is still current. An imported chat reads its carried part
     /// here, so it shows before the chat's own history.
     package var beforeHistory: (@MainActor () async -> @MainActor () -> Void)?
+    /// Sees each of the backend's events as it came, before the chat takes it: a box hands them
+    /// on to the Mac following the chat (link 1.5's `chat.events`).
+    package var rawTap: (@MainActor (ChatEvent) -> Void)?
 
     /// Waits before each start again of a CLI that wouldn't start. A storyline sets them shorter.
     package static let startRetries = HostSetting<[Duration]>([.seconds(2), .seconds(5), .seconds(10)])
@@ -176,6 +179,7 @@ package final class ChatEngine {
         pump = Task {
             for await event in backend.events {
                 guard !Task.isCancelled, !closed else { break }
+                rawTap?(event)
                 let epoch = workEpoch
                 if let before = beforeHistory, Self.isReplay(event) || Self.isCorrection(event) {
                     let after = await before()

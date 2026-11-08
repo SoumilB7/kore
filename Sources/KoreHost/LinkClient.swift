@@ -15,6 +15,9 @@ final class LinkClient {
     /// Followed chats: the window (entries from the end) and the transcript's revision.
     private var following: [String: (last: Int, txRev: Int)] = [:]
     private var helloWait: DispatchWorkItem?
+    /// Chats whose events this full grant follows (link 1.5), and its uploads.
+    private var relaying: Set<String> = []
+    private var uploads = LinkUploads()
 
     init(socket: HostSocket, host: HostDaemon) {
         self.socket = socket
@@ -42,9 +45,49 @@ final class LinkClient {
     private func gone() {
         helloWait?.cancel()
         host.ended(self)
+        for chatId in relaying { host.unfollowed(chatId) }
+        relaying = []
+    }
+
+    private func uploadFailed(_ uploadId: String, _ failure: LinkUploads.Failure) {
+        send(.result(.init(id: "blob.put:" + uploadId, ok: false, code: failure.code, message: failure.message)))
     }
 
     func follows(_ chatId: String) -> Bool { following[chatId] != nil }
+
+    func relays(_ chatId: String) -> Bool { relaying.contains(chatId) }
+
+    func sendRaw(_ data: Data) { socket.send(data) }
+
+    /// A chat's items, in frames; this client's own rows are marked `by` it, which it skips live.
+    func events(_ hc: HostChat, _ items: [RelayItem], reset: Bool) {
+        guard reset || !items.isEmpty else { return }
+        for frame in RelayWire.frames(chatId: hc.id, log: hc.relay.id, reset: reset, items: items) { socket.send(frame) }
+    }
+
+    /// 1.5's messages, read by their type: full grants only.
+    private func relay(_ type: String, _ data: Data) {
+        guard grant?.control == .full else {
+            if type == "chat.call" {
+                sendRaw(RelayWire.encode(ChatCallResult(id: "", ok: false, code: .deniedControl, message: "Driving a chat needs a grant with full control.")))
+            }
+            return
+        }
+        switch type {
+        case "chat.follow":
+            guard let request = try? JSONDecoder().decode(ChatFollow.self, from: data) else { return }
+            relaying.insert(request.chatId)
+            host.follow(self, request)
+        case "chat.unfollow":
+            guard let request = try? JSONDecoder().decode(ChatUnfollow.self, from: data) else { return }
+            relaying.remove(request.chatId)
+            host.unfollowed(request.chatId)
+        case "chat.call":
+            host.call(data, from: self)
+        default:
+            break
+        }
+    }
 
     // MARK: In
 
@@ -73,6 +116,20 @@ final class LinkClient {
             let text = host.chat(chatId)?.chat?.approvals.pending.first { $0.id == cardId }.flatMap(HostMeta.fullContent) ?? ""
             let piece = LinkProjection.piece(text, from: offset)
             send(.cardChunk(id: id, text: piece.text, offset: piece.offset, total: piece.total))
+        case .unknown(let type):
+            relay(type, data)
+        case .blobPutBegin(let uploadId, let name, let mime, let size, let sha256):
+            guard grant?.control == .full else { return uploadFailed(uploadId, .init(.deniedControl, "Uploads need a grant with full control.")) }
+            if let failure = uploads.begin(uploadId, name: name, mime: mime, size: size, sha256: sha256) { uploadFailed(uploadId, failure) }
+        case .blobPutChunk(let uploadId, let index, let data):
+            if let failure = uploads.chunk(uploadId, index: index, base64: data) { uploadFailed(uploadId, failure) }
+        case .blobPutEnd(let uploadId):
+            switch uploads.end(uploadId) {
+            case .failure(let failure): uploadFailed(uploadId, failure)
+            case .success(let file):
+                guard let blob = host.keep(file) else { return uploadFailed(uploadId, .init(.busy, "The box couldn't keep the file.")) }
+                send(.result(.init(id: "blob.put:" + uploadId, ok: true, blobId: blob)))
+            }
         case .cmd(let id, let command):
             let result = host.apply(command, id: id, control: grant?.control ?? .watch) { [weak self] result in self?.send(.result(result)) }
             if let result { send(.result(result)) }

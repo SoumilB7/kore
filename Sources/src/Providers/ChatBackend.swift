@@ -217,7 +217,7 @@ package struct UnloadPoint: Sendable {
     }
 }
 
-package struct EarlierMessage: Equatable, Sendable {
+package struct EarlierMessage: Equatable, Sendable, Codable {
     package let text: String
     /// How many turns `earlier(turns:)` has to go back to bring it in.
     package let turns: Int

@@ -1,4 +1,5 @@
 import Foundation
+import src
 
 /// What the local link may do in Kore, decided again for every command against the chat as it is
 /// when the command is applied. The lists are frozen (`z-docs/link-protocol.md` §6): a change takes
@@ -172,6 +173,44 @@ package enum LinkPolicy {
         default: break
         }
         return .allow
+    }
+
+    /// A relayed backend call (1.5 `chat.call`): full control only, each case decided here, so a
+    /// new one can't compile without its rule. Raises stop at Auto, `!` lines and Always allow are
+    /// refused, and no call carries a key. `card` is the approval's card when it has one.
+    package static func check(_ command: ChatCommand, _ chat: ChatFacts?, control: LinkControlLevel) -> Verdict {
+        guard control == .full else { return .deny(.deniedControl, "Driving a chat needs a grant with full control.") }
+        if case .unknown(let tag) = command { return .deny(.invalid, "The box doesn't know \(tag.isEmpty ? "that call" : tag).") }
+        guard let chat else { return .deny(.goneChat, "That chat isn't on the box any more.") }
+        switch command {
+        case .send(let text, let files, _, _):
+            return check(.send(chatId: "", text: text, blobs: files.map(\.blob)), chat, control: control)
+        case .respond(_, let decision):
+            switch decision {
+            case .allowAlways: return .deny(.alwaysAllow, "Always allow can only be set on the box.")
+            // Approving into Accept edits raises the mode, within Auto: full control may.
+            case .allow, .deny, .approvePlan, .keepPlanning, .answers: return .allow
+            }
+        case .setMode(let mode):
+            return check(.setMode(chatId: "", modeId: mode), chat, control: control)
+        case .setPlanMode(let on):
+            return check(.setPlan(chatId: "", on: on), chat, control: control)
+        case .rename(let title):
+            let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+            return !trimmed.isEmpty && trimmed.count <= maxTitle && !trimmed.contains(where: \.isNewline)
+                ? .allow : .deny(.invalid, "A title is one line, up to 200 characters.")
+        case .compact(let instructions):
+            return instructions.utf8.count <= maxText ? .allow : .deny(.invalid, "Too long.")
+        case .setRemoteControl:
+            // The CLI's own remote hands the chat to another service: only on the box itself.
+            return .deny(.command, "Remote control of a box's chat is turned on on the box.")
+        case .interrupt, .setModel, .setEffort, .setFastMode, .stopAgent, .stopCommand, .backgroundCommand, .commandOutput, .watchCommands,
+            .agentHistory, .fork, .forkAtEnd, .rollback, .earlier, .earlierMessages, .unloadPoint, .unloaded, .usage, .useReset, .relaunch,
+            .listModels:
+            return .allow
+        case .unknown:
+            return .deny(.invalid, "The box doesn't know that call.")
+        }
     }
 
     /// The answers each kind of card takes over the link. `approvePlan` starts the work in Manual.

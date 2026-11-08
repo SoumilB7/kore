@@ -251,7 +251,7 @@ public struct ChatShare: Sendable, Equatable, Identifiable {
 }
 
 /// One of the plan's own surfaces on Claude's week (its CLI, its chats, …), in plan points.
-public struct PlanSurface: Sendable, Equatable {
+public struct PlanSurface: Sendable, Equatable, Codable {
     public var name: String
     public var points: Double
     /// It has Kore's share taken out: "~".

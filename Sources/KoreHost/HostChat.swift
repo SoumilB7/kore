@@ -19,6 +19,10 @@ package struct ChatRecord: Codable, Sendable, Equatable {
     /// The composer's controls as the live chat last had them (model, effort, context), shown
     /// while its CLI is stopped.
     package var controls: LinkProtocol.ChatControls?
+    /// A fork its CLI makes as it starts (Codex) or with its first message (Claude): the session
+    /// and the message it forks at. Kept until the fork has a session of its own.
+    package var forkFrom: String?
+    package var forkAt: String?
 }
 
 /// One line of a chat's log (`log.jsonl`): an entry as it went on the wire, a turn, or the start
@@ -46,6 +50,16 @@ package final class HostChat {
     /// The log's file handle, open while the host runs.
     private var log: FileHandle?
 
+    /// The chat's events as its backend gave them, numbered, for full grants (link 1.5).
+    package let relay: RelayLog
+    /// Messages a full grant sent through `chat.call`, by id: the grant, so its own client isn't
+    /// sent its row back live.
+    var relayBy: [String: String] = [:]
+    /// Recent `chat.call` answers by the client's id, oldest first, and those still running with
+    /// the clients waiting on them: a repeat gets the first answer and runs nothing.
+    var answered: [(id: String, data: Data)] = []
+    var calling: [String: [LinkClient]] = [:]
+
     /// `changed`: new or changed entries and turns to send, or a reset.
     package var changed: ((HostChat, _ upserts: [LinkEntry], _ removed: [String], _ order: [String]?, _ turns: [LinkTurn], _ reset: Bool) -> Void)?
 
@@ -53,6 +67,7 @@ package final class HostChat {
         self.record = record
         self.dir = dir
         folderURL = URL(fileURLWithPath: record.folder)
+        relay = RelayLog(url: dir.appendingPathComponent("events.jsonl"))
     }
 
     package var id: String { record.id }
@@ -64,11 +79,16 @@ package final class HostChat {
 
     // MARK: Disk
 
-    static func create(provider: String, folder: String, modelId: String?, in chats: URL) throws -> HostChat {
+    static func create(
+        provider: String, folder: String, modelId: String?, in chats: URL, fork: (from: String, at: String)? = nil, title: String? = nil,
+        mode: String? = nil, effort: String? = nil
+    ) throws -> HostChat {
         let id = UUID().uuidString.lowercased()
-        let record = ChatRecord(
-            id: id, provider: provider, folder: folder, title: nil, session: nil, mode: nil, modelId: modelId,
-            created: Int(Date().timeIntervalSince1970))
+        var record = ChatRecord(
+            id: id, provider: provider, folder: folder, title: title, session: nil, mode: mode, modelId: modelId,
+            created: Int(Date().timeIntervalSince1970), effort: effort)
+        record.forkFrom = fork?.from
+        record.forkAt = fork?.at
         let chat = HostChat(record: record, dir: chats.appendingPathComponent(id))
         try chat.saveRecord()
         return chat
@@ -144,13 +164,15 @@ package final class HostChat {
     func live(services: HostServices) -> Chat {
         lastUsed = Date()
         if let chat { return chat }
-        let session = record.session.map {
+        let fork = record.session == nil ? record.forkFrom.flatMap { from in record.forkAt.map { ForkPoint(from: from, at: $0) } } : nil
+        let session = (record.session ?? fork?.from).map {
             SessionSummary(id: $0, agent: provider.historyAgent, title: record.title ?? "", updated: Date())
         }
         let chat = Chat(
-            provider: provider, folder: folderURL, resume: session, modeMemory: ModeMemory(defaults: nil),
+            provider: provider, folder: folderURL, resume: session, fork: fork, modeMemory: ModeMemory(defaults: nil),
             compactMemory: AutoCompactMemory(defaults: nil), services: services)
         if let mode = record.mode { chat.controls.mode = mode }
+        chat.backendTap = { [weak self] event in self?.relay.raw(event) }
         chat.launchModel = record.modelId
         chat.launchEffort = record.effort
         if let transcript = chat.transcriptView as? HostTranscript {
@@ -175,6 +197,7 @@ package final class HostChat {
         lastUsed = Date()
         var next = record
         next.session = chat.sessionId ?? next.session
+        if next.session != nil { (next.forkFrom, next.forkAt) = (nil, nil) }
         next.title = chat.status.name ?? next.title
         next.mode = chat.controls.mode
         var kept = HostMeta.controls(of: chat)

@@ -4,7 +4,7 @@ import Foundation
 /// control request, Codex's `account/read` and `account/rateLimits/read`. The CLI makes the
 /// authenticated calls; Kore only reads what it answers. Both APIs are young, so parsing is
 /// lenient: a missing or unknown field leaves a row out and never fails the reading.
-public struct PlanReading: Sendable, Equatable {
+public struct PlanReading: Sendable, Equatable, Codable {
     public var account: PlanAccount
     /// Nil when the limits couldn't be read.
     public var limits: PlanLimits?
@@ -18,8 +18,8 @@ public struct PlanReading: Sendable, Equatable {
     }
 }
 
-public struct PlanAccount: Sendable, Equatable {
-    public enum Access: Sendable, Equatable {
+public struct PlanAccount: Sendable, Equatable, Codable {
+    public enum Access: Sendable, Equatable, Codable {
         /// A subscription with plan limits.
         case plan
         /// Billed per token (Console, API key, a cloud provider): no plan limits; how, in a line.
@@ -46,7 +46,7 @@ public struct PlanAccount: Sendable, Equatable {
     public static let signedOut = PlanAccount(access: .signedOut)
 }
 
-public struct PlanLimits: Sendable, Equatable {
+public struct PlanLimits: Sendable, Equatable, Codable {
     public var bars: [PlanLimit]
     /// Information only, in order: extra usage, credits, resets.
     public var extras: [PlanExtra]
@@ -61,7 +61,7 @@ public struct PlanLimits: Sendable, Equatable {
 }
 
 /// The account's full resets (Codex's rate-limit reset credits): how many, and each one listed.
-public struct PlanResets: Sendable, Equatable {
+public struct PlanResets: Sendable, Equatable, Codable {
     public var available: Int
     /// Those listed as available or being used, the soonest to expire first and those that never
     /// expire last; nil when Codex counted them without listing them, and then picks. The list
@@ -83,7 +83,7 @@ public struct PlanResets: Sendable, Equatable {
     }
 }
 
-public struct PlanReset: Sendable, Equatable {
+public struct PlanReset: Sendable, Equatable, Codable {
     /// Codex's opaque id for the credit.
     public let id: String
     /// Its name ("Full reset"); nil when it has none.
@@ -107,7 +107,7 @@ public struct PlanReset: Sendable, Equatable {
 }
 
 /// What using a full reset did, as Codex answers `account/rateLimitResetCredit/consume`.
-public enum PlanResetOutcome: Sendable, Equatable {
+public enum PlanResetOutcome: Sendable, Equatable, Codable {
     case reset
     /// Nothing was near a limit: the credit stays.
     case nothingToReset
@@ -128,7 +128,7 @@ public enum PlanResetOutcome: Sendable, Equatable {
     }
 }
 
-public struct PlanLimit: Sendable, Equatable {
+public struct PlanLimit: Sendable, Equatable, Codable {
     public let title: String
     /// Percent of the limit used, 0–100 (past 100 once over).
     public let used: Double
@@ -152,7 +152,7 @@ public struct PlanLimit: Sendable, Equatable {
 }
 
 /// "Credits 47,162"; a nil key for a value that reads alone ("2 full resets available").
-public struct PlanExtra: Sendable, Equatable {
+public struct PlanExtra: Sendable, Equatable, Codable {
     public let key: String?
     public let value: String
     /// The count of full resets, which the popup offers to use.

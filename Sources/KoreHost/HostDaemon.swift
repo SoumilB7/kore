@@ -25,6 +25,8 @@ package final class HostDaemon {
     private var ghLogin: Process?
     /// Each CLI's models as its CLI last listed them (kept in `models.json`): sent to full grants.
     package private(set) var clis: [CLIState] = []
+    /// Files full grants uploaded, by blob id (link 1.5's attachments).
+    var blobs: [String: URL] = [:]
     package static let version = "0.1"
 
     package init(paths: HostPaths) {
@@ -85,9 +87,13 @@ package final class HostDaemon {
         return standard
     }
 
-    package func newChat(folder: String, provider: String, modelId: String?) -> HostChat? {
+    package func newChat(
+        folder: String, provider: String, modelId: String?, fork: (from: String, at: String)? = nil, title: String? = nil, mode: String? = nil,
+        effort: String? = nil
+    ) -> HostChat? {
         guard config.folders.contains(folder), Registry.provider(provider) != nil,
-            let chat = try? HostChat.create(provider: provider, folder: folder, modelId: modelId, in: paths.chats)
+            let chat = try? HostChat.create(
+                provider: provider, folder: folder, modelId: modelId, in: paths.chats, fork: fork, title: title, mode: mode, effort: effort)
         else { return nil }
         chats.append(chat)
         watch(chat)
@@ -95,26 +101,32 @@ package final class HostDaemon {
         return chat
     }
 
-    func chat(_ id: String) -> HostChat? { chats.first { $0.id == id } }
+    package func chat(_ id: String) -> HostChat? { chats.first { $0.id == id } }
 
     private func watch(_ chat: HostChat) {
         chat.changed = { [weak self] hc, upserts, removed, order, turns, reset in
             self?.transcriptChanged(hc, upserts: upserts, removed: removed, order: order, turns: turns, reset: reset)
         }
+        chat.relay.flushed = { [weak self, weak chat] items, reset in
+            guard let self, let chat else { return }
+            self.relayed(chat, items, reset: reset)
+        }
     }
 
     /// The chat's live `Chat`, its CLI let in under the cap: an idle one stops to make room.
-    func live(_ hc: HostChat) -> Chat? {
+    package func live(_ hc: HostChat) -> Chat? {
         if let chat = hc.chat { return chat }
         let running = chats.filter(\.cliRunning)
         if running.count >= maxRunning {
             guard let quiet = running.filter(\.idle).min(by: { $0.lastUsed < $1.lastUsed }) else { return nil }
             sleep(quiet)
         }
-        return hc.live(services: services)
+        let chat = hc.live(services: services)
+        chat.automatic = !drivenByFull(hc)
+        return chat
     }
 
-    private func sleep(_ hc: HostChat) {
+    func sleep(_ hc: HostChat) {
         idleStops.removeValue(forKey: hc.id)?.cancel()
         hc.sleep()
         broadcast(chats: [hc])
@@ -124,7 +136,7 @@ package final class HostDaemon {
 
     /// After an event or a command: a chat with nothing to do stops its CLI after `idleAfter`; one
     /// at work keeps it.
-    private func armIdle(_ hc: HostChat) {
+    func armIdle(_ hc: HostChat) {
         idleStops.removeValue(forKey: hc.id)?.cancel()
         guard hc.cliRunning, hc.idle else { return }
         let stop = DispatchWorkItem { [weak self, weak hc] in
@@ -139,6 +151,7 @@ package final class HostDaemon {
 
     private func noted(_ chat: Chat, _ event: ChatEvent) {
         guard let hc = chats.first(where: { $0.chat === chat }) else { return }
+        relayRow(hc, event)
         hc.noted(chat)
         armIdle(hc)
         broadcast(chats: [hc])
@@ -163,6 +176,8 @@ package final class HostDaemon {
 
     // MARK: Connections
 
+    var fullClients: [LinkClient] { connections.filter { $0.proven && $0.grant?.control == .full } }
+
     private func accepted(_ socket: HostSocket) {
         let connection = LinkClient(socket: socket, host: self)
         connections.append(connection)
@@ -185,7 +200,7 @@ package final class HostDaemon {
             proto: LinkVersion(major: LinkProto.major, minor: LinkProto.boxMinor), epoch: epoch,
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
-            caps: ["tx", "attn", "commands", "control", "box"])
+            caps: ["tx", "attn", "commands", "control", "box"] + (control == .full ? ["relay"] : []))
     }
 
     var windows: [LinkWindow] {
@@ -199,7 +214,7 @@ package final class HostDaemon {
 
     private func broadcastWindows() { broadcast(windows: true, chats: []) }
 
-    private func broadcast(windows: Bool = false, chats changed: [HostChat]) {
+    func broadcast(windows: Bool = false, chats changed: [HostChat]) {
         guard !connections.isEmpty else { return }
         let windows = windows ? self.windows : nil
         guard !changed.isEmpty || windows != nil else { return }
@@ -244,6 +259,7 @@ package final class HostDaemon {
             hc?.chat?.stop()
             return .init(id: id, ok: true)
         case .answer(_, let cardId, let action, _, let answers):
+            defer { if hc?.chat?.approvals.pending.contains(where: { $0.id == cardId }) == false { hc?.relay.add(.approvalWithdrawn(cardId), by: nil) } }
             guard let hc else { return fail(.goneChat, "") }
             if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
             guard let chat = hc.chat else { return fail(.goneCard, "That was answered or withdrawn.") }
@@ -290,9 +306,11 @@ package final class HostDaemon {
         }
     }
 
-    private func newChat(id: String, folder: String?, provider: String, modelId: String?) -> LinkMessage.Result {
+    private func newChat(id: String, folder: String?, provider: String, modelId: String?, args: ControlArgs? = nil) -> LinkMessage.Result {
         guard let folder else { return .init(id: id, ok: false, code: .goneFolder, message: "That folder isn't on this box.") }
-        guard let hc = newChat(folder: folder, provider: provider, modelId: modelId) else {
+        // 1.5: a fork's start (`sessionId`, `entryId`), and its title, mode and effort.
+        let fork = args?.sessionId.flatMap { from in args?.entryId.map { (from: from, at: $0) } }
+        guard let hc = newChat(folder: folder, provider: provider, modelId: modelId, fork: fork, title: args?.title, mode: args?.mode, effort: args?.level) else {
             return .init(id: id, ok: false, code: .invalid, message: "No such CLI, or the folder isn't served.")
         }
         return .init(id: id, ok: true, chatId: hc.id, windowId: Self.windowID(folder))
@@ -317,7 +335,7 @@ package final class HostDaemon {
         switch kind {
         case .chatNew:
             let folder = args.folder.map { URL(fileURLWithPath: $0).standardizedFileURL.path } ?? args.windowId.flatMap(self.folder(windowId:))
-            return newChat(id: id, folder: folder, provider: args.provider ?? "", modelId: args.modelId)
+            return newChat(id: id, folder: folder, provider: args.provider ?? "", modelId: args.modelId, args: args)
         case .chatSetModel:
             guard let hc = args.chatId.flatMap(chat), let model = args.modelId, !model.isEmpty else { return fail(.invalid, "Name the chat and the model.") }
             if let chat = hc.chat, let option = chat.controls.models.first(where: { $0.id == model }) {

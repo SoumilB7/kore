@@ -4,8 +4,8 @@ import Foundation
 /// foreground command, a monitor, a scheduled job. Each CLI's backend says what it learns of one
 /// in the same words (`ChatEvent.commandStarted` and the rest); `CommandsStore` keeps them.
 /// Codex's in-turn commands, Claude's short foreground calls and workflows are never ones.
-package struct ActiveCommand: Identifiable, Sendable, Equatable {
-    package enum Kind: Sendable, Equatable {
+package struct ActiveCommand: Identifiable, Sendable, Equatable, Codable {
+    package enum Kind: Sendable, Equatable, Codable {
         /// Run in the background (Claude's `run_in_background`, a Codex terminal that outlived its
         /// turn), or a foreground one moved there.
         case shell
@@ -18,7 +18,7 @@ package struct ActiveCommand: Identifiable, Sendable, Equatable {
     }
 
     /// Who stopped or deleted it.
-    package enum Actor: Sendable, Equatable {
+    package enum Actor: Sendable, Equatable, Codable {
         /// From Kore.
         case user
         /// The agent's own call (Claude's TaskStop or KillShell, CronDelete).
@@ -27,7 +27,7 @@ package struct ActiveCommand: Identifiable, Sendable, Equatable {
         case unknown
     }
 
-    package enum State: Sendable, Equatable {
+    package enum State: Sendable, Equatable, Codable {
         /// Running; a scheduled job is armed.
         case running
         /// Exited 0, or ended well with no exit code given.
@@ -50,7 +50,7 @@ package struct ActiveCommand: Identifiable, Sendable, Equatable {
     }
 
     /// Where its output can be read.
-    package enum Output: Sendable, Equatable {
+    package enum Output: Sendable, Equatable, Codable {
         case none
         /// A file the CLI writes it to (Claude's task output).
         case file(String)
@@ -59,7 +59,7 @@ package struct ActiveCommand: Identifiable, Sendable, Equatable {
     }
 
     /// Codex's own process for it.
-    package struct Process: Sendable, Equatable {
+    package struct Process: Sendable, Equatable, Codable {
         /// What `backgroundTerminals/terminate` takes.
         package var id: String
         package var osPid: Int?
@@ -75,7 +75,7 @@ package struct ActiveCommand: Identifiable, Sendable, Equatable {
     }
 
     /// A scheduled job's timing.
-    package struct Schedule: Sendable, Equatable {
+    package struct Schedule: Sendable, Equatable, Codable {
         /// The 5-field expression, and the CLI's own wording of it ("Every minute").
         package var cron: String
         package var human: String?
@@ -166,7 +166,7 @@ package struct ActiveCommand: Identifiable, Sendable, Equatable {
 }
 
 /// What a backend learns about a command after its start.
-package enum CommandChange: Sendable, Equatable {
+package enum CommandChange: Sendable, Equatable, Codable {
     /// A foreground command now runs in the background.
     case backgrounded(at: Date)
     /// Codex's process for it: its id, and pid, CPU and memory as `backgroundTerminals/list` gives them.

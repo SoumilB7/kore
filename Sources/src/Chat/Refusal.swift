@@ -4,7 +4,7 @@ import Observation
 /// A Claude turn the model's safeguards refused, with no fallback run (`model_refusal_no_fallback`).
 /// They flag routine work too: the turn's notice offers it again on an earlier model of the same
 /// family, or the message again with a line of context first.
-package struct Refusal: Equatable, Sendable {
+package struct Refusal: Equatable, Sendable, Codable {
     /// The CLI's category: "cyber", "bio", "frontier_llm", "reasoning_extraction"; nil when unsaid.
     package let category: String?
     /// The model that refused, by its full id.
