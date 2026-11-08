@@ -92,7 +92,9 @@ struct ChildShutdownTests {
         let (second, secondTool) = try await start(deaf)
         // Each in its group by the time Kore quits (a busy Mac's perl gets to its setpgrp later
         // than a fixed wait); quitting before that ends them anyway, as Kore's own children.
-        #expect(await ownGroup(firstTool) && ownGroup(secondTool))
+        let firstGrouped = await ownGroup(firstTool)
+        let secondGrouped = await ownGroup(secondTool)
+        #expect(firstGrouped && secondGrouped)
         StdioProcess.close([first, second], waiting: .milliseconds(500))
         #expect(await gone(firstTool))
         #expect(await gone(secondTool))
