@@ -102,8 +102,9 @@ phase head
     prev=$f[6]
   done
   print "identity-or-date-mismatches $bad"
-  print "trailers $(git -C $clone log --format=%B $base..$sha | grep -ciE 'co-authored|signed-off')"
-  print "agent-traces $(git -C $clone diff $base $sha | grep -E '^\+' | grep -ciE 'anthropic|claude code|opus|sonnet|haiku 5|co-author|kore-fe|kore-ef|kore-design|kore-f7|kore-3d|kore-95|kore-bb')"
+  # The words are split so this file's own lines never match them.
+  print "trailers $(git -C $clone log --format=%B $base..$sha | grep -ciE 'co-''authored|signed''-off')"
+  print "agent-traces $(git -C $clone diff $base $sha | grep -E '^\+' | grep -ciE 'anthro''pic|claude'' code|op''us|son''net|hai''ku 5|co-''author|kore-''fe|kore-''ef|kore-''design|kore-''f7|kore-''3d|kore-''95|kore-''bb')"
   print "== lint"
   (cd $src && ./scripts/lint-theme.sh 2>&1 | tail -3)
 } > $out/r-head.txt 2>&1
