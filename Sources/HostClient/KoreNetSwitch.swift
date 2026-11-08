@@ -141,7 +141,9 @@ package final class KoreNetSwitch: NetRouter {
     @ObservationIgnored private var stopSidecar: (@Sendable () -> Void)?
     @ObservationIgnored private var bus: Task<Void, Never>?
     @ObservationIgnored private var holders: Set<String> = []
-    @ObservationIgnored private var identities = NetIdentityBox()
+    /// This Mac's identity while on (read from the Keychain once, off the main actor). The
+    /// phones' listener (`MacNet`, KoreLink) reads it too.
+    @ObservationIgnored package private(set) var identities = NetIdentityBox()
     @ObservationIgnored private var upgrading: Set<String> = []
     @ObservationIgnored private var generation = 0
     /// Every bus subscription held now (tests).
@@ -301,7 +303,7 @@ package final class KoreNetSwitch: NetRouter {
     // MARK: Routes
 
     /// The Mac's own book of the devices it dials (box records pinned over SSH).
-    private func book(_ env: NetEnvironment) -> DeviceBook { DeviceBook(url: env.support.appendingPathComponent("net/devices.json")) }
+    package func book(_ env: NetEnvironment) -> DeviceBook { DeviceBook(url: env.support.appendingPathComponent("net/devices.json")) }
 
     package func transport(for connection: HostConnection) -> (any HostTransport)? {
         guard state.reaches, let tailnet, let env, let entry = directory.entry(forKey: connection.alias), entry.enrolled, let nodeKey = entry.nodeKey

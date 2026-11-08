@@ -58,7 +58,10 @@ final class StubMacHost: MacNetHost {
         self.tailnet = tailnet
     }
 
-    nonisolated func identity() throws -> (device: UUID, signer: any IdentitySigner) { (device, key) }
+    func identityReader() -> (@Sendable () throws -> (device: UUID, signer: any IdentitySigner))? {
+        let (device, key) = (device, key)
+        return { (device, key) }
+    }
 }
 
 /// A phone's keys.
@@ -78,7 +81,8 @@ final class HandTimers {
     private(set) var now: TimeInterval = 0
 
     var schedule: @MainActor (TimeInterval, @escaping @MainActor () -> Void) -> () -> Void {
-        { [unowned self] seconds, work in
+        { [weak self] seconds, work in
+            guard let self else { return {} }
             let index = self.due.count
             self.due.append((self.now + seconds, work, true))
             return { [weak self] in self?.due[index].live = false }
@@ -110,20 +114,32 @@ final class MacRig {
     var shown: [DeviceCardInfo] = []
     var pushed: [[DeviceRecord]] = []
     var audits: [String] = []
+    /// Cards as they're shown, cards taken away, audit lines, and the net's changes.
+    let cards = Feed<String>()
+    let dismissed = Feed<Int>()
+    let audited = Feed<String>()
+    let changes = Feed<String>()
 
     init() throws {
         folder = FileManager.default.temporaryDirectory.appendingPathComponent("macnet-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         host = StubMacHost(folder: folder, tailnet: tailnet)
         asks.schedule = timers.schedule
-        asks.dismiss = {}
         net = MacNet(host: host, feed: feed, asks: asks, clock: clock.function)
-        asks.present = { [unowned self] info, _ in self.shown.append(info) }
+        asks.present = { [weak self] info, _ in
+            self?.shown.append(info)
+            self?.cards.send(info.title)
+        }
+        asks.dismiss = { [weak self] in self?.dismissed.send(1) }
+        net.changed = { [weak self] in self?.changes.send($0) }
         net.schedule = timers.schedule
         net.background = { $0() }
         net.foreground = { work in MainActor.assumeIsolated { work() } }
-        net.pushDevices = { [unowned self] in self.pushed.append($0) }
-        NetAudit.watch = { [unowned self] in self.audits.append($0) }
+        net.pushDevices = { [weak self] in self?.pushed.append($0) }
+        NetAudit.watch = { [weak self] line in
+            self?.audits.append(line)
+            self?.audited.send(line)
+        }
         net.learn(status: StubTailnet.status(), identity: (host.device, host.key))
     }
 
@@ -133,7 +149,14 @@ final class MacRig {
         try? FileManager.default.removeItem(at: folder)
     }
 
-    func audited(_ event: String) -> [String] { audits.filter { $0.hasPrefix(event + " ") || $0 == event } }
+    func audits(_ event: String) -> [String] { audits.filter { $0.hasPrefix(event + " ") || $0 == event } }
+
+    /// The next audit line of `event`.
+    @discardableResult
+    func audit(_ event: String) async -> String { await audited.next { $0.hasPrefix(event + " ") || $0 == event } }
+
+    /// The next change of the net named `what`.
+    func change(_ what: String) async { await changes.next { $0 == what } }
 
     /// The Mac as a phone pins it.
     var macRecord: DeviceRecord {
@@ -156,53 +179,20 @@ final class MacRig {
         try host.book.update { $0.append(made) }
     }
 
-    /// The phone dials: the Mac's half goes to `MacNet.greet` as an accepted connection would.
-    func dial(_ phone: Phone, whois: TailnetWhoIs? = nil, enroll: Bool = false, resume: NetControl.Resume? = nil) throws -> PhoneEnd {
+    /// The phone dials: the Mac's half goes to `MacNet.greet` as an accepted connection would;
+    /// the phone's half runs on its own queue, fed by its socket.
+    func dial(_ phone: Phone, whois: TailnetWhoIs? = nil, enroll: Bool = false, resume: NetControl.Resume? = nil) throws -> LiveEnd {
         let (a, b) = try Sockets.pair()
-        let book = DeviceBook(url: folder.appendingPathComponent("phone-\(phone.id.uuidString)/devices.json"))
+        let book = DeviceBook(url: folder.appendingPathComponent("phone-\(phone.id.uuidString)-\(UUID().uuidString)/devices.json"))
         try book.update { $0 = [macRecord] }
         let local = NetLocal(device: phone.id, kind: .phone, nodeKey: phone.nodeKey, signer: phone.key)
         var setup = NetSession.Client(
             local: local, route: .tailnet, peer: NetPeerFacts(nodeKey: "nodekey:mac", userId: 7), book: book, server: host.device, service: "link",
             resume: resume)
         if enroll { setup.enroll = .init(name: phone.name, kind: .phone, identityKey: phone.key.publicKey, raiseKey: phone.raise.publicKey) }
-        let end = PhoneEnd(NetSession(fd: a, role: .client(setup), clock: clock.function))
+        let end = LiveEnd(NetSession(fd: a, role: .client(setup), clock: clock.function))
         net.greet(b, remote: phone.address, whois: whois ?? StubTailnet.who(key: phone.nodeKey))
         return end
-    }
-}
-
-/// The phone's end of a session: link bodies as they came.
-@MainActor
-final class PhoneEnd {
-    let session: NetSession
-    var got: [Data] = []
-
-    init(_ session: NetSession) { self.session = session }
-
-    var up: Bool { if case .established = session.state { true } else { false } }
-    var closed: String? { if case .closed(let why) = session.state { why } else { nil } }
-    var objects: [[String: Any]] { got.compactMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] } }
-    var types: [String] { objects.compactMap { $0["t"] as? String } }
-
-    func send(_ json: String) throws { try session.send(Data(json.utf8), queue: .interactive, stream: 1) }
-
-    func pump() { got += session.pump().map(\.payload) }
-
-    /// Waits (yielding, never sleeping) until `check` holds.
-    func until(_ check: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation) async throws {
-        for _ in 0..<20000 {
-            pump()
-            if check() { return }
-            await Task.yield()
-        }
-        Issue.record("waited: \(types) \(closed ?? "up")", sourceLocation: sourceLocation)
-        throw CancellationError()
-    }
-
-    /// The first message of type `t` (and id, when given).
-    func first(_ t: String, id: String? = nil) -> [String: Any]? {
-        objects.first { $0["t"] as? String == t && (id == nil || $0["id"] as? String == id) }
     }
 }
 

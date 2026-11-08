@@ -12,6 +12,8 @@ Disclaim.trampoline = Bundle.main.executablePath
 UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 900])
 // The local link's doorbell: a ring wakes it; nothing of it runs before.
 LinkTaps.doorbell = { LinkDoorbell.ring($0, $1) }
+// Phones over KoreNet: the listener follows KoreNet's switch once it's made (nothing while off).
+MacNetSwitch.install()
 // Arsenal's way to the agent channel; no chat has it at launch, so nothing opens.
 AgentGrants.install()
 KoreApp.main()

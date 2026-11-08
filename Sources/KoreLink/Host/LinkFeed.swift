@@ -385,6 +385,7 @@ package final class LinkFeed {
             // A client's own ask (it came, followed a chat, came back on screen): next on the queue.
             guard !immediate else { return }
             immediate = true
+            onScheduled?()
             DispatchQueue.main.async { MainActor.assumeIsolated { [weak self] in
                 guard let self, self.immediate else { return }
                 self.tick()
@@ -396,6 +397,7 @@ package final class LinkFeed {
         // The default mode only: it waits while a window resizes, a menu is open or a scroller is dragged.
         RunLoop.main.add(timer, forMode: .default)
         scheduled = timer
+        onScheduled?()
     }
 
     /// A tick is due at once.
@@ -403,6 +405,8 @@ package final class LinkFeed {
 
     /// A tick is due (tests).
     package var due: Bool { scheduled != nil || immediate }
+    /// Tests: a tick was scheduled.
+    package var onScheduled: (() -> Void)?
 
     // MARK: The tick
 

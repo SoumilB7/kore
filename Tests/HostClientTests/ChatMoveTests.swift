@@ -141,13 +141,13 @@ struct ChatMoveTests {
         #expect(mirror.frames == 0 && mirror.count > 0)
         // The box window follows it: what waited goes, then each turn as it comes.
         s.connection.post(StreamWire.encode(ChatFollow(chatId: hc.id, after: nil, log: nil)))
-        try await until { mirror.acked == mirror.count }
+        #expect(await until { mirror.acked == mirror.count })
         for t in 30..<60 {
             turn(t)
             try await Task.sleep(for: .milliseconds(30))
         }
         mirror.write()
-        try await until { mirror.acked == mirror.count }
+        #expect(await until { mirror.acked == mirror.count })
         #expect(hc.record.owner?.mirrored == mirror.count)
         let held = await hc.stream.since(nil, log: nil).items.compactMap(\.e)
         let text = held.compactMap { if case .text(_, _, let t, _) = $0 { t } else { nil } }.joined()

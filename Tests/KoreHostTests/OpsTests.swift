@@ -452,7 +452,7 @@ struct OpsTests {
 
     private static func run(_ arguments: [String], env: [String: String]) throws -> (Int32, String) {
         let process = Process()
-        process.executableURL = try #require(binary)
+        process.executableURL = binary
         process.arguments = arguments
         process.environment = env
         let err = Pipe()

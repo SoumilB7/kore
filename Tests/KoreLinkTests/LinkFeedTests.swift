@@ -66,18 +66,19 @@ final class KeptClient: Sendable {
     }
 }
 
-/// Waits (yielding to the main queue, never sleeping) until `check` holds.
+/// A feed whose scheduled ticks are fed to `scheduled`, from now on.
 @MainActor
-func eventually(_ check: () -> Bool, sourceLocation: SourceLocation = #_sourceLocation) async {
-    for _ in 0..<2000 where !check() { await Task.yield() }
-    if !check() { Issue.record("never happened", sourceLocation: sourceLocation) }
+func watched(_ feed: LinkFeed) -> Feed<Int> {
+    let scheduled = Feed<Int>()
+    feed.onScheduled = { scheduled.send(1) }
+    return scheduled
 }
 
 /// Step 5b: one feed for every client. Kore's state is read once per tick on the main actor for
 /// all of them; each client's projector diffs, encodes and sends on its own queue; snapshots go
 /// only to clients on screen; nothing ticks while nothing changes.
 @MainActor
-@Suite("link feed", .serialized)
+@Suite("link feed", .serialized, .timeLimit(.minutes(1)))
 struct LinkFeedTests {
     @Test func oneReadFansOutToEveryClient() throws {
         let source = CountingSource()
@@ -112,9 +113,10 @@ struct LinkFeedTests {
         feed.attach(client)
         feed.tick()
         let reads = source.metaReads
+        let scheduled = watched(feed)
         chat.controls.mode = "plan"
         // Observation marks it dirty and a tick is due.
-        await eventually { feed.due }
+        await scheduled.next()
         feed.tick()
         #expect(source.metaReads == reads + 1)
         #expect(a.types == ["snapshot", "delta"])
@@ -132,8 +134,9 @@ struct LinkFeedTests {
         feed.attach(cb)
         feed.tick()
         feed.presence(cb, onScreen: false)
+        let scheduled = watched(feed)
         chat.controls.mode = "plan"
-        await eventually { feed.due }
+        await scheduled.next()
         feed.tick()
         #expect(a.types == ["snapshot", "delta"] && b.types == ["snapshot"])
         // A turn's end is attention: both hear it.
@@ -157,7 +160,8 @@ struct LinkFeedTests {
         feed.tick()
         feed.presence(client, onScreen: false)
         chat.controls.mode = "plan"
-        for _ in 0..<50 { await Task.yield() }
+        // Observation's hop has run by the time this one does.
+        await drainMain()
         #expect(!feed.due)
         // A transcript's mark doesn't wake it either; a chat event does (attention).
         feed.transcriptMarked()
@@ -222,11 +226,12 @@ struct LinkFeedTests {
             let clients = kept.map { $0.make() }
             for client in clients { feed.attach(client) }
             feed.tick()
+            let scheduled = watched(feed)
             let before = source.metaReads
             for round in 0..<30 {
                 // A value it didn't have (Observation skips an equal one).
                 chats[round % chats.count].controls.mode = "mode-\(count)-\(round)"
-                await eventually { feed.due }
+                await scheduled.next()
                 feed.tick()
             }
             let times = feed.tickTimes.suffix(30).map { Double($0.components.attoseconds) / 1e12 + Double($0.components.seconds) * 1e6 }.sorted()

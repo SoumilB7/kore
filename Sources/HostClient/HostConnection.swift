@@ -280,9 +280,6 @@ package final class HostConnection {
     /// The alias's connection while a window holds it; nil otherwise (nothing is made).
     package static func live(_ alias: String) -> HostConnection? { open[alias] }
 
-    /// Every link held now.
-    package static var held: [HostConnection] { Array(open.values) }
-
     /// Makes `connection` its alias's, as `named` would have made it: a test's, over a transport
     /// and a copy of its own.
     package static func adopt(_ connection: HostConnection) {

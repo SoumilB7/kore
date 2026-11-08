@@ -41,7 +41,7 @@ struct BoxChatOpsUITests {
         #expect(open.map(\.title) == ["Open", "Rename…", "Archive", "", "Copy", "Cut"] && open.allSatisfy(\.enabled))
         // A box not linked yet (or older than 1.9) says why, and Open still works.
         let (_, _, box) = boxTab()
-        let why = try? #require(box.historyLocked)
+        let why = box.historyLocked
         #expect(why == "Update kore-host on mybox to rename or archive here")
         let locked = HistoryMenu.items(session, locked: why, open: {}, rename: {}, archive: {})
         #expect(item(locked, "Open")?.enabled == true)

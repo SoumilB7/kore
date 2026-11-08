@@ -1,4 +1,5 @@
 import AppKit
+import HostClient
 import Observation
 import src
 
@@ -17,6 +18,8 @@ package enum LinkTaps {
     /// The doorbell: the app sets it at launch; `AppDelegate`'s Apple Event handler calls it on
     /// a ring. Nothing runs until then.
     package static var doorbell: ((_ event: NSAppleEventDescriptor, _ reply: NSAppleEventDescriptor) -> Void)?
+    /// KoreNet's switch is made (at launch): the phones' listener follows it (`MacNetSwitch`).
+    package static var netStarted: ((KoreNetSwitch) -> Void)?
     /// Ends the link as Kore quits, while a companion is allowed.
     package static var quit: (() -> Void)?
     /// The companion's entries in "/" while it's allowed this run; nil before the first Allow.

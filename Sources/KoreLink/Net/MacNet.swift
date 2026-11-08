@@ -19,9 +19,9 @@ package protocol MacNetHost: AnyObject, Sendable {
     var book: DeviceBook { get }
     /// This Mac's name, for a phone's directory.
     var macName: String { get }
-    /// This Mac's identity (made on first use). May block on the Keychain: never called on the
-    /// main actor.
-    nonisolated func identity() throws -> (device: UUID, signer: any IdentitySigner)
+    /// How to read this Mac's identity (made on first use) while KoreNet is on. The reader may
+    /// block on the Keychain: it's called off the main actor.
+    func identityReader() -> (@Sendable () throws -> (device: UUID, signer: any IdentitySigner))?
 }
 
 /// Audit lines (phase 18 §1 "Audit"): `audit <event>` in hosts.log, ids and kinds only, never content.
@@ -102,6 +102,8 @@ package final class MacNet {
     private var generation = 0
     private let acceptQueue = DispatchQueue(label: "dev.kore.net.accept")
     package private(set) var phones: [UUID: PhoneLink] = [:]
+    /// What changed, for tests awaiting it: `listening`, `closed`, `up <id>`, `gone <id>`, `kept <id>`.
+    package var changed: (@MainActor (String) -> Void)?
     /// Handshakes held for an Allow, by connection.
     private var held: [ObjectIdentifier: (connection: PhoneConnection, ask: DeviceAsks.Ask)] = [:]
     /// Connections whose handshake is under way.
@@ -191,9 +193,11 @@ package final class MacNet {
         guard let tailnet = host.tailnet, Self.listens(on: true, running: true, phones: allowedPhones().count, addOpen: addOpen) else {
             return close()
         }
+        let name = host.macName
+        shared.withLock { $0.macName = name }
         let had = bound
         let listening = self.listening
-        let host = host
+        let reader = host.identityReader()
         let foreground = foreground
         background { [weak self] in
             let status = try? tailnet.status()
@@ -209,8 +213,8 @@ package final class MacNet {
                     problem = "\(error)"
                 }
             }
-            let identity = try? host.identity()
-            let found = (status, want, made, problem, identity.map { ($0.device, $0.signer.publicKey) })
+            let identity = try? reader?()
+            let found = (status, want, made, problem, identity)
             _ = self
             foreground { [weak self] in
                 guard let self else {
@@ -222,7 +226,10 @@ package final class MacNet {
         }
     }
 
-    private func settle(_ mine: Int, status: TailnetStatus?, want: [String], made: [TailnetListenSocket]?, problem: String?, identity: (UUID, Data)?) {
+    private func settle(
+        _ mine: Int, status: TailnetStatus?, want: [String], made: [TailnetListenSocket]?, problem: String?,
+        identity: (device: UUID, signer: any IdentitySigner)?
+    ) {
         guard mine == generation else {
             for socket in made ?? [] { Sockets.closeFD(socket.fd) }
             return
@@ -230,8 +237,9 @@ package final class MacNet {
         shared.withLock {
             $0.selfNode = status?.selfNode
             $0.ownUser = status?.selfNode?.owner
-            if let identity { $0.identity = identity }
+            if let identity { $0.identity = (identity.device, identity.signer.publicKey) }
         }
+        if let identity { signer = identity.signer }
         guard !want.isEmpty else { return close() }
         if let problem { HostLog.note("korenet", "listen failed", problem) }
         guard let made else {
@@ -245,6 +253,7 @@ package final class MacNet {
         binds += 1
         for socket in made { watch(socket, listener) }
         HostLog.note("korenet", "listening", want.joined(separator: ","))
+        changed?("listening")
     }
 
     /// Every TCP socket the tailnet bound is on one of this node's tailnet addresses.
@@ -274,12 +283,14 @@ package final class MacNet {
 
     /// No port: the sockets and their sources go (links already up stay until KoreNet goes off).
     private func close() {
+        let was = listener != nil || !bound.isEmpty
         for source in sources { source.cancel() }
         sources = []
-        listener = nil
         sockets = []
         if !bound.isEmpty { HostLog.note("korenet", "closed", nil) }
         bound = []
+        listener = nil
+        if was { changed?("closed") }
     }
 
     /// KoreNet went off: the port, every phone and every handshake go.
@@ -344,7 +355,7 @@ package final class MacNet {
     /// connection would come).
     package func greet(_ fd: Int32, remote: String, whois: TailnetWhoIs) {
         let state = shared.withLock { $0 }
-        guard let identity = state.identity, let me = state.selfNode, let signer = try? signerNow() else {
+        guard let identity = state.identity, let me = state.selfNode, let signer else {
             return Sockets.closeFD(fd)
         }
         let local = NetLocal(device: identity.device, kind: .mac, nodeKey: me.publicKey, signer: signer)
@@ -375,15 +386,8 @@ package final class MacNet {
         connection.start()
     }
 
-    /// The identity's signer: read once (the Keychain), off the main actor, at the first
-    /// `refresh`; here it's held already.
+    /// The identity's signer: read (the Keychain) off the main actor at a `refresh`.
     private var signer: (any IdentitySigner)?
-    private func signerNow() throws -> any IdentitySigner {
-        if let signer { return signer }
-        let made = try host.identity().signer
-        signer = made
-        return made
-    }
 
     /// A stranger's hello: inside the Add device window, a phone of this Mac's own user (or a
     /// tagged node with Kore's app capability, read+ask at most) waits for the owner's card.
@@ -503,6 +507,7 @@ package final class MacNet {
         phones[peer.record.id] = phone
         NetAudit.line("connect", ["device": peer.record.id.uuidString.lowercased(), "resumed": peer.resumed ? "1" : nil])
         StayAwakePhones.connected(phones.count)
+        changed?("up \(peer.record.id.uuidString)")
         if phone.waitsForCursors {
             // Its cursors come first; a phone with none sends something else, or a second goes by.
             _ = schedule(1) { [weak phone] in phone?.beginIfWaiting() }
@@ -514,6 +519,7 @@ package final class MacNet {
     func phoneGone(_ phone: PhoneLink) {
         if phones[phone.id] === phone { phones[phone.id] = nil }
         StayAwakePhones.connected(phones.count)
+        changed?("gone \(phone.id.uuidString)")
     }
 
     // MARK: Resume
@@ -521,6 +527,7 @@ package final class MacNet {
     func retain(_ id: UUID, _ projector: LinkProjector) {
         guard projector.started else { return }
         kept[id] = (projector, clock())
+        changed?("kept \(id.uuidString)")
     }
 
     /// What `id` was last sent, when it's still kept and at `rev`.

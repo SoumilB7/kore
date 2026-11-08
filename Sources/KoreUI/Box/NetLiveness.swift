@@ -24,6 +24,8 @@ enum NetLiveness {
         // An enrolled box's SSH route carries this Mac's identity, KoreNet on or off.
         HostConnection.sshNet = net
         net.start()
+        // The phones' listener (`MacNet`) follows the switch, off as it is.
+        LinkTaps.netStarted?(net)
         // A rekey a crash left half done finishes before anything reads the stores.
         Task.detached(priority: .utility) { _ = try? NodeMigration().resume() }
         wake = LinkWake(center: NSWorkspace.shared.notificationCenter, name: NSWorkspace.didWakeNotification)
