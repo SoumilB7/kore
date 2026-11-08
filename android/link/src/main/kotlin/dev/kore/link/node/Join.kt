@@ -21,8 +21,13 @@ import kotlinx.coroutines.withContext
  * user that are online, untagged, and not this node. Only those get a dial to :47470.
  */
 object MacProbe {
-    fun candidates(self: TailnetNode, peers: List<TailnetNode>): List<TailnetNode> = peers.filter {
-        it.online && it.os.equals("macOS", ignoreCase = true) && it.tags.isEmpty() &&
+    fun candidates(self: TailnetNode, peers: List<TailnetNode>): List<TailnetNode> = macs(self, peers).filter { it.online }
+
+    /** This user's Macs the tailnet lists offline (asleep, Tailscale off): not knocked, but named (A6). */
+    fun asleep(self: TailnetNode, peers: List<TailnetNode>): List<TailnetNode> = macs(self, peers).filter { !it.online }
+
+    private fun macs(self: TailnetNode, peers: List<TailnetNode>): List<TailnetNode> = peers.filter {
+        it.os.equals("macOS", ignoreCase = true) && it.tags.isEmpty() &&
             it.userId != null && it.userId == self.userId && it.nodeKey != self.nodeKey
     }
 
@@ -55,6 +60,8 @@ class JoinFlow(
     private val io: CoroutineDispatcher = Dispatchers.IO,
     /** Brings the tailnet up for Join (the app's [TailnetSwitch]); throws when it can't. */
     private val start: suspend () -> Unit = { withContext(io) { tailnet.start() } },
+    /** Stops and starts the tailnet: a node signed out mid-run (key expiry) offers its sign-in URL only from a fresh start. */
+    private val restart: suspend () -> Unit = { withContext(io) { tailnet.stop(); tailnet.start() } },
 ) {
     sealed class Step {
         /** Signed out: one button. [failed]: the last Join couldn't start the tailnet; the button tries again. */
@@ -64,8 +71,15 @@ class JoinFlow(
         /** [url] opens in a Custom Tab; never logged. */
         data class SigningIn(val url: String) : Step()
         /** Signed in; [macs] are the Macs seen (none answers yet). [stopped]: the 10 minutes are up. */
-        /** [addClosed]: a Mac answered, but its Add device window isn't open (`bye unknown`). */
-        data class Finding(val macs: List<String>, val stopped: Boolean = false, val addClosed: Boolean = false) : Step()
+        /** [addClosed]: a Mac answered, but its Add device window isn't open (`bye unknown`); [closedOn] names it. */
+        /** [asleep]: this user's Macs the tailnet lists offline (not knocked; the owner wakes one). */
+        data class Finding(
+            val macs: List<String>,
+            val stopped: Boolean = false,
+            val addClosed: Boolean = false,
+            val closedOn: String? = null,
+            val asleep: List<String> = emptyList(),
+        ) : Step()
         /** The hello went to [mac]; its owner reads the card. [self] is what that card shows of this phone. */
         data class Allowing(val mac: String, val self: TailnetNode) : Step()
         /** The Mac's owner said no (`bye refused`), or its card went unanswered ([timedOut], `bye timeout`). */
@@ -86,6 +100,8 @@ class JoinFlow(
     val tab = SignInTab()
     @Volatile private var visible = false
     private var job: Job? = null
+    /** Signing in again on a joined phone (key expiry, signed out): no knocking once signed in. */
+    @Volatile private var reauth = false
 
     /** The Join screen is (or isn't) showing: the knocking runs only while it is; a sign-in goes on. */
     @Synchronized fun visible(on: Boolean) {
@@ -95,6 +111,21 @@ class JoinFlow(
 
     /** "Join KoreNet": starts the tailnet and follows it to signed in, then knocks. */
     @Synchronized fun begin() {
+        reauth = false
+        launchSignIn()
+    }
+
+    /**
+     * "Sign in" on a joined phone that is signed out of Tailscale (A1): the sign-in again, whatever
+     * step an earlier Join in this process left; once signed in it's [Step.Finding] with no knock,
+     * and the screen goes Home.
+     */
+    @Synchronized fun signInAgain() {
+        reauth = true
+        launchSignIn()
+    }
+
+    private fun launchSignIn() {
         halt()
         tab.reset()
         offlineFlow.value = false
@@ -114,6 +145,7 @@ class JoinFlow(
 
     /** "Try again" (Denied, or Finding stopped): knock for another 10 minutes. */
     @Synchronized fun again() {
+        reauth = false
         halt()
         stepFlow.value = Step.Finding(emptyList())
         if (visible) follow()
@@ -140,6 +172,10 @@ class JoinFlow(
     private suspend fun run() {
         while (true) {
             if (!signedIn()) return
+            if (reauth) {
+                stepFlow.value = Step.Finding(emptyList())
+                return
+            }
             if (!visible) {
                 // Signed in from the browser while away: say so; the knocking waits for the screen.
                 if (signingIn(stepFlow.value)) stepFlow.value = Step.Finding(emptyList())
@@ -156,6 +192,7 @@ class JoinFlow(
      */
     private suspend fun signedIn(): Boolean {
         var away: Long? = null
+        var noUrl = 0
         while (true) {
             if (!visible) {
                 if (!signingIn(stepFlow.value)) return false
@@ -175,8 +212,15 @@ class JoinFlow(
                     offlineFlow.value = false
                     return true
                 }
-                Tailnet.NEEDS_LOGIN -> withContext(io) { tailnet.authUrl() }?.takeIf { it.isNotEmpty() }?.let { url ->
-                    if ((stepFlow.value as? Step.SigningIn)?.url != url) stepFlow.value = Step.SigningIn(url)
+                Tailnet.NEEDS_LOGIN -> {
+                    val url = withContext(io) { tailnet.authUrl() }?.takeIf { it.isNotEmpty() }
+                    if (url != null) {
+                        noUrl = 0
+                        if ((stepFlow.value as? Step.SigningIn)?.url != url) stepFlow.value = Step.SigningIn(url)
+                    } else if (++noUrl == NO_URL_RESTART) {
+                        // Signed out while running (a key that expired): only a fresh start asks control for a URL.
+                        runCatching { restart() }
+                    }
                 }
                 Tailnet.NEEDS_MACHINE_AUTH -> stepFlow.value = Step.NeedsApproval(withContext(io) { tailnet.self() }?.nodeKey)
             }
@@ -185,53 +229,112 @@ class JoinFlow(
         }
     }
 
-    /** Knocks for [MacProbe.FOR_MS]; false when the tailnet went away under it. */
+    /** One Mac's answer to a knock. */
+    private sealed class Answer(val mac: TailnetNode) {
+        class Welcome(mac: TailnetNode, val link: LinkSession) : Answer(mac)
+        /** Listening for its phones, but its Add device window isn't open (`bye unknown`). */
+        class Closed(mac: TailnetNode) : Answer(mac)
+        /** Heard, and said no, or its card went unanswered. */
+        class No(mac: TailnetNode, val timedOut: Boolean) : Answer(mac)
+        /** Not listening (KoreNet off there, or not reached). */
+        class Missed(mac: TailnetNode) : Answer(mac)
+    }
+
+    /**
+     * Knocks for [MacProbe.FOR_MS]; false when the tailnet went away under it. Every Mac is knocked
+     * at once (T-A7): the first welcome wins and the rest are cancelled; one Mac's no is final only
+     * when no other Mac is still deciding. A Mac whose Add window is closed is asked every 20 s,
+     * the others every 2 s.
+     */
     private suspend fun knock(): Boolean {
         val started = clock()
         stepFlow.value = Step.Finding(emptyList())
+        val next = HashMap<String, Long>()
+        var closedOn: String? = null
         while (visible && clock() - started < MacProbe.FOR_MS) {
             val self = withContext(io) { tailnet.self() } ?: return false
-            val macs = MacProbe.candidates(self, withContext(io) { tailnet.peers() })
-            (stepFlow.value as? Step.Finding)?.let { stepFlow.value = it.copy(macs = macs.map { m -> m.shortName }) }
-            for (mac in macs) {
-                val link = try {
-                    enroll(mac) { stepFlow.value = Step.Allowing(mac.shortName, self) }
-                } catch (e: NetFailure) {
-                    val reason = dev.kore.link.net.NetControl.Companion.Reason
-                    if (e.reason == "bye ${reason.UNKNOWN}") {
-                        // Listening for its allowed phones, but its Add device window isn't open.
-                        stepFlow.value = Step.Finding(macs.map { it.shortName }, addClosed = true)
-                    } else if (stepFlow.value is Step.Allowing || e.reason.startsWith("bye ")) {
-                        // Heard, and said no, or its card went unanswered: either ends the knocking.
-                        stepFlow.value = Step.Denied(mac.shortName, timedOut = e.reason == "bye ${reason.TIMEOUT}")
-                        return true
-                    }
-                    null
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    // Not listening (its Add device window is closed): the next Mac, then again.
-                    null
-                }
-                if (link != null) {
-                    // Read before [joined]: it ends the link, and a closed link has no peer.
-                    val record = link.peer.record
-                    joined(link)
-                    stepFlow.value = Step.Joined(record)
-                    return true
-                }
+            val peers = withContext(io) { tailnet.peers() }
+            val macs = MacProbe.candidates(self, peers)
+            val asleep = MacProbe.asleep(self, peers).map { it.shortName }
+            (stepFlow.value as? Step.Finding)?.let { stepFlow.value = it.copy(macs = macs.map { m -> m.shortName }, asleep = asleep) }
+            val now = clock()
+            val due = macs.filter { (next[it.nodeKey] ?: 0L) <= now }
+            val answers = askAll(due, self)
+            answers.filterIsInstance<Answer.Welcome>().firstOrNull()?.let { w ->
+                // Read before [joined]: it ends the link, and a closed link has no peer.
+                val record = w.link.peer.record
+                joined(w.link)
+                stepFlow.value = Step.Joined(record)
+                return true
             }
-            // A Mac that said its Add window is closed is asked again only every 20 s: its pre-auth
-            // allowance is 3 a minute per device, and a faster knock would lock this phone out for a
-            // minute just as the owner opens the window.
-            val closed = (stepFlow.value as? Step.Finding)?.addClosed == true
-            delay(if (closed) MacProbe.CLOSED_EVERY_MS else MacProbe.EVERY_MS)
+            answers.filterIsInstance<Answer.No>().firstOrNull()?.let { no ->
+                stepFlow.value = Step.Denied(no.mac.shortName, timedOut = no.timedOut)
+                return true
+            }
+            for (a in answers) next[a.mac.nodeKey] = clock() + if (a is Answer.Closed) MacProbe.CLOSED_EVERY_MS else MacProbe.EVERY_MS
+            answers.filterIsInstance<Answer.Closed>().firstOrNull()?.let { closedOn = it.mac.shortName }
+            if (closedOn != null) (stepFlow.value as? Step.Finding)?.let { stepFlow.value = it.copy(addClosed = true, closedOn = closedOn) }
+            val wake = (macs.mapNotNull { next[it.nodeKey] }.minOrNull() ?: (clock() + MacProbe.EVERY_MS)) - clock()
+            delay(wake.coerceIn(MacProbe.EVERY_MS / 4, MacProbe.CLOSED_EVERY_MS))
         }
         if (!visible) return true
         val self = withContext(io) { tailnet.self() }
-        val any = self != null && MacProbe.candidates(self, withContext(io) { tailnet.peers() }).isNotEmpty()
+        val peers = if (self != null) withContext(io) { tailnet.peers() } else emptyList()
+        // No Mac with Kore here only when this user has no Mac on the tailnet at all; one asleep keeps Finding (A6).
+        val any = self != null && (MacProbe.candidates(self, peers).isNotEmpty() || MacProbe.asleep(self, peers).isNotEmpty())
         stepFlow.value = if (any) ((stepFlow.value as? Step.Finding) ?: Step.Finding(emptyList())).copy(stopped = true) else Step.NoMac(self?.login)
         return true
+    }
+
+    /**
+     * Knocks on [macs] at once. Returns as soon as one welcomes this phone (the others are
+     * cancelled, a welcome that lands after it is closed), else once every knock has answered.
+     * A Mac's no waits for the Macs still deciding: their Allow wins over it.
+     */
+    private suspend fun askAll(macs: List<TailnetNode>, self: TailnetNode): List<Answer> {
+        if (macs.isEmpty()) return emptyList()
+        val winner = java.util.concurrent.atomic.AtomicReference<LinkSession?>(null)
+        val out = java.util.Collections.synchronizedList(ArrayList<Answer>())
+        kotlinx.coroutines.coroutineScope {
+            val done = kotlinx.coroutines.channels.Channel<Answer>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+            val jobs = macs.map { mac ->
+                launch {
+                    var heard = false
+                    val answer = try {
+                        val link = enroll(mac) {
+                            heard = true
+                            stepFlow.value = Step.Allowing(mac.shortName, self)
+                        }
+                        if (winner.compareAndSet(null, link)) Answer.Welcome(mac, link) else { link.close(); Answer.Missed(mac) }
+                    } catch (e: NetFailure) {
+                        val reason = dev.kore.link.net.NetControl.Companion.Reason
+                        when {
+                            e.reason == "bye ${reason.UNKNOWN}" -> Answer.Closed(mac)
+                            heard || e.reason.startsWith("bye ") -> Answer.No(mac, timedOut = e.reason == "bye ${reason.TIMEOUT}")
+                            else -> Answer.Missed(mac)
+                        }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Answer.Missed(mac)
+                    }
+                    done.send(answer)
+                }
+            }
+            repeat(macs.size) {
+                val a = done.receive()
+                out += a
+                if (a is Answer.Welcome) {
+                    jobs.forEach { it.cancel() }
+                    return@coroutineScope
+                }
+            }
+        }
+        // A Mac left asking (Allowing) while another one's no came first: back to Finding.
+        if (out.none { it is Answer.Welcome } && stepFlow.value is Step.Allowing && out.none { it is Answer.No }) {
+            stepFlow.value = Step.Finding(macs.map { it.shortName })
+        }
+        return out.toList()
     }
 
     companion object {
@@ -239,6 +342,8 @@ class JoinFlow(
         const val STATE_EVERY_MS = 1_000L
         /** Away from the Join screen this long mid sign-in: given up, back to Join. */
         const val AWAY_MS = 10 * 60_000L
+        /** Signed out with no sign-in URL for this many reads: the tailnet is started afresh once. */
+        const val NO_URL_RESTART = 3
 
         /** Mid sign-in: the tailnet holds a node key only in memory; stopping it now loses that sign-in. */
         fun signingIn(s: Step): Boolean = s is Step.Starting || s is Step.SigningIn || s is Step.NeedsApproval

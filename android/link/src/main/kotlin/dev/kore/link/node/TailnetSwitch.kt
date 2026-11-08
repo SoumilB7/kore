@@ -45,8 +45,8 @@ class TailnetSwitch(private val tailnet: Tailnet, private val io: CoroutineDispa
     }
 
     /**
-     * Leave KoreNet: the node key dropped, everything local gone. Down afterwards, then as wanted
-     * by then (a Join pressed straight after starts a fresh node).
+     * Leave KoreNet: the node logged out on the control plane ([Tailnet.logout]). Down afterwards,
+     * then as wanted by then (a Join pressed straight after signs the same node in again).
      */
     suspend fun logout() = lock.withLock {
         withContext(NonCancellable + io) {

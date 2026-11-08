@@ -67,7 +67,7 @@ class Mesh(private val app: KoreApp) {
             // Join pressed with KoreNet off (turned off, then Leave): Join turns it on.
             if (!networkOn) prefs.edit().putBoolean("network", true).apply()
             keeper.up()
-        })
+        }, restart = { switch.set(false); switch.set(true) })
     }
     private val keeper: TailnetKeeper by lazy {
         // Mid Leave the tailnet stays up until the Macs heard.
@@ -141,6 +141,10 @@ class Mesh(private val app: KoreApp) {
         onScreen = on
         keeper.onScreen(on)
         if (on) apply()
+        // Signed out while the tailnet kept running (a key that expired): every device says Sign in (A3).
+        if (on && keeper.running) app.scope.launch {
+            if (runCatching { tailnet.state() }.getOrNull() == Tailnet.NEEDS_LOGIN) nodesFlow.value.forEach { it.post(NodeMachine.Event.SignedOut) }
+        }
         nodesFlow.value.forEach {
             if (on) {
                 it.post(NodeMachine.Event.Screen(true))
@@ -183,7 +187,7 @@ class Mesh(private val app: KoreApp) {
         val devices = book.all().sortedBy { if (it.kind == NodeKind.MAC) 0 else 1 }
         val have = nodesFlow.value.associateBy { it.id }
         val next = devices.map { d ->
-            have[d.id] ?: NodeClient(
+            have[d.id]?.also { if (it.device.value != d) it.recordChanged(d) } ?: NodeClient(
                 d, app.scope, dialer, raiseSigner = raiseSigner,
                 onRecord = { book.put(it) },
                 onDirectory = { records ->
@@ -260,8 +264,24 @@ class Mesh(private val app: KoreApp) {
         prefs.edit().remove("device").apply()
     }
 
-    private fun hostname(): String =
-        "kore-" + (Build.MODEL ?: "phone").lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').take(40)
+    /** This install's own id: made once, kept through Leave and re-joins (gone only with the app's data). */
+    private val installId: String
+        get() = prefs.getString("install", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("install", it).apply() }
+
+    private fun hostname(): String = hostnameFor(Build.MODEL, installId)
+
+    companion object {
+        /**
+         * The phone's tailnet name, unique and stable per install: "kore-cph2381-7f3a". Two phones
+         * of one model never share it, so Tailscale never adds "-1", and a "-1" never means "the
+         * same phone again" (T-A8).
+         */
+        fun hostnameFor(model: String?, install: String): String {
+            val m = (model ?: "phone").lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-').take(24).ifEmpty { "phone" }
+            val tag = install.lowercase().filter { it in "0123456789abcdef" }.take(4).padEnd(4, '0')
+            return "kore-$m-$tag"
+        }
+    }
 
     private fun load(): List<Device> = runCatching {
         (Json.parseToJsonElement(bookFile.readText()) as JsonArray).mapNotNull { (it as? JsonObject)?.let(Device::fromJson) }

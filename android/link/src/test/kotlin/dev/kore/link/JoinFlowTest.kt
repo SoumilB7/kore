@@ -151,13 +151,13 @@ class JoinFlowTest {
     @Test fun aClosedAddWindowKeepsTheKnockingAndSaysOpenIt() = runTest {
         val (rig, tries) = answering("unknown", "unknown", "refused")
         runCurrent()
-        assertEquals(Step.Finding(listOf("mbp"), addClosed = true), rig.flow.step.value)
+        assertEquals(Step.Finding(listOf("mbp"), addClosed = true, closedOn = "mbp"), rig.flow.step.value)
         // A closed window is asked again only every 20 s (the Mac allows 3 a minute per device).
         advanceTimeBy(19_000)
         assertEquals(1, tries())
         advanceTimeBy(1_001)
         assertEquals(2, tries())
-        assertEquals(Step.Finding(listOf("mbp"), addClosed = true), rig.flow.step.value)
+        assertEquals(Step.Finding(listOf("mbp"), addClosed = true, closedOn = "mbp"), rig.flow.step.value)
         advanceTimeBy(20_000)
         assertEquals(Step.Denied("mbp"), rig.flow.step.value)
         advanceTimeBy(60_000)
@@ -197,5 +197,76 @@ class JoinFlowTest {
         rig.flow.begin()
         runCurrent()
         assertEquals(Step.NeedsApproval(null), rig.flow.step.value)
+    }
+
+    /** T-A7: two Macs with their windows open are knocked at once; A's card waiting doesn't keep B from welcoming. */
+    @Test fun twoMacsAreKnockedAtOnceAndTheFirstWelcomeWins() = runTest {
+        val tailnet = FakeTailnet(Tailnet.RUNNING).apply { me = this@JoinFlowTest.me; others = listOf(node("mbp"), node("mini")) }
+        val never = CompletableDeferred<Unit>()
+        val link = FakeLink(mac(), { testScheduler.currentTime })
+        val rig = Rig(this, tailnet) { m, enrolling ->
+            enrolling()
+            if (m.shortName == "mbp") { never.await(); error("cancelled before") }
+            link
+        }
+        rig.flow.visible(true)
+        rig.flow.begin()
+        runCurrent()
+        assertEquals(Step.Joined(mac()), rig.flow.step.value)
+        assertEquals(setOf("mbp", "mini"), rig.knocks.map { it.first }.toSet())
+        assertEquals(0L, rig.knocks.maxOf { it.second })
+    }
+
+    /** T-A7: one Mac's no while the other is still deciding isn't final: the other's Allow wins. */
+    @Test fun aNoFromOneMacWaitsForTheOtherStillDeciding() = runTest {
+        val tailnet = FakeTailnet(Tailnet.RUNNING).apply { me = this@JoinFlowTest.me; others = listOf(node("mbp"), node("mini")) }
+        val allowed = CompletableDeferred<Unit>()
+        val link = FakeLink(mac(), { testScheduler.currentTime })
+        val rig = Rig(this, tailnet) { m, enrolling ->
+            enrolling()
+            if (m.shortName == "mbp") throw NetFailure("bye refused")
+            allowed.await()
+            link
+        }
+        rig.flow.visible(true)
+        rig.flow.begin()
+        runCurrent()
+        assertTrue(rig.flow.step.value !is Step.Denied)
+        allowed.complete(Unit)
+        runCurrent()
+        assertEquals(Step.Joined(mac()), rig.flow.step.value)
+    }
+
+    /** A6: the only Mac asleep is named, never "No Mac with Kore here · Switch account". */
+    @Test fun anAsleepMacIsNamedAndNeverNoMac() = runTest {
+        val tailnet = FakeTailnet(Tailnet.RUNNING).apply { me = this@JoinFlowTest.me; others = listOf(node("mbp", online = false)) }
+        val rig = Rig(this, tailnet) { _, _ -> error("an offline Mac isn't knocked") }
+        rig.flow.visible(true)
+        rig.flow.begin()
+        runCurrent()
+        assertEquals(Step.Finding(emptyList(), asleep = listOf("mbp")), rig.flow.step.value)
+        advanceTimeBy(601_000)
+        assertEquals(Step.Finding(emptyList(), stopped = true, asleep = listOf("mbp")), rig.flow.step.value)
+        assertEquals(0, rig.knocks.size)
+    }
+
+    /** A1: Sign in on a joined phone signs in again, whatever an earlier Join left, and never knocks. */
+    @Test fun signInAgainAfterAJoinSignsInAndDoesntKnock() = runTest {
+        val tailnet = FakeTailnet(Tailnet.RUNNING).apply { me = this@JoinFlowTest.me; others = listOf(node("mbp")) }
+        val link = FakeLink(mac(), { testScheduler.currentTime })
+        val rig = Rig(this, tailnet) { _, _ -> link }
+        rig.flow.visible(true)
+        rig.flow.begin()
+        runCurrent()
+        assertEquals(Step.Joined(mac()), rig.flow.step.value)
+        // The key expired: signed out, then Sign in.
+        tailnet.state = Tailnet.NEEDS_LOGIN
+        rig.flow.signInAgain()
+        runCurrent()
+        assertEquals(Step.SigningIn("https://login.tailscale.com/a/x"), rig.flow.step.value)
+        tailnet.state = Tailnet.RUNNING
+        advanceTimeBy(JoinFlow.STATE_EVERY_MS + 1)
+        assertEquals(Step.Finding(emptyList()), rig.flow.step.value)
+        assertEquals(1, rig.knocks.size)
     }
 }

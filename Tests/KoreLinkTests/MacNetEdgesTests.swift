@@ -54,14 +54,13 @@ extension MacNetTests {
         #expect(Set(try rig.host.book.read().devices.map(\.id)) == [old.id, pixel.id] && rig.audits("retire").isEmpty)
     }
 
-    @Test func aPhoneRegisteredAgainUnderTheSuffixRetiresItsOldRecord() async throws {
+    /// T-A8: a "-1" name is no signal. The old phone's node is still on the tailnet (off screen), so it's kept.
+    @Test func aSuffixedNameAloneRetiresNothing() async throws {
         let old = Self.before()
         let (rig, pixel, card) = try await enrollBeside(old, status: Self.edgeStatus(peer: "nodekey:old"), node: "kore-pixel-9-1.tail.ts.net.")
         defer { rig.finish() }
-        #expect(card.replaces?.hasPrefix("Replaces Pixel 9 · last seen ") == true)
-        #expect(try rig.host.book.read().devices.map(\.id) == [pixel.id])
-        #expect(rig.audits("retire") == ["retire device=\(old.id.uuidString.lowercased()) by=\(pixel.id.uuidString.lowercased())"])
-        #expect(try rig.host.book.record(pixel.id)?.model == "Pixel 9" && rig.pushed.last?.map(\.id) == [pixel.id])
+        #expect(card.replaces == nil)
+        #expect(Set(try rig.host.book.read().devices.map(\.id)) == [old.id, pixel.id] && rig.audits("retire").isEmpty)
     }
 
     @Test func aPhoneWhoseNodeIsGoneRetiresItsOldRecord() async throws {
@@ -96,12 +95,21 @@ extension MacNetTests {
         let elsewhere = Self.before(user: 9)
         let found = MacNet.replaced(by: new, model: "Pixel 9", in: [asleep, legacy, renamed, other, elsewhere, new], peers: gone)
         #expect(found.map(\.id) == [legacy.id])
-        // The suffix names the same phone whatever its model.
+        // A "-N" name is no signal: the asleep phone's node is still there, so nothing goes.
         var again = new
         again.fqdn = "kore-pixel-9-2.tail.ts.net."
-        #expect(MacNet.replaced(by: again, model: "Other", in: [asleep], peers: gone).map(\.id) == [asleep.id])
-        #expect(MacNet.collision("kore-pixel-9-1", of: "kore-pixel-9") && !MacNet.collision("kore-pixel-9-pro", of: "kore-pixel-9"))
-        #expect(!MacNet.collision("kore-pixel-9", of: "kore-pixel-9") && !MacNet.collision("kore-pixel-90", of: "kore-pixel-9"))
+        #expect(MacNet.replaced(by: again, model: "Pixel 9", in: [asleep], peers: gone).isEmpty)
+    }
+
+    /// T-A8: two phones of one model, one off screen (its node offline, still listed): allowing either never retires the other.
+    @Test func twoSameModelPhonesNeverRetireEachOther() {
+        let rig = try! MacRig()
+        defer { rig.finish() }
+        let peers = Self.edgeStatus(peer: "nodekey:asleep").peers
+        let first = Self.before(node: "nodekey:asleep")
+        var second = rig.record(Phone())
+        second.fqdn = "kore-pixel-9-1.tail.ts.net."
+        #expect(MacNet.replaced(by: second, model: "Pixel 9", in: [first, second], peers: peers).isEmpty)
     }
 
     @Test func aParkedPhoneDoesntKeepTheMacAwake() async throws {

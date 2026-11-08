@@ -132,6 +132,8 @@ class NodeClient(
         data object Enrolling : Internal()
         /** The Mac took this phone offline and parked its link: it says when it's back. */
         data object Parked : Internal()
+        /** The book's record for this node changed (a Mac's directory): paused, renamed, new keys. */
+        class Record(val record: Device) : Internal()
         class Allowed(val record: Device) : Internal()
     }
 
@@ -149,9 +151,16 @@ class NodeClient(
     /** The link is parked (taken offline on the Mac): nothing dials until the Mac ends it. */
     private var parked = false
 
-    /** The node's name: its welcome's, else its record's. */
+    /**
+     * The node's name. A box: the name its Mac gives it (the owner's rename, T-B2), up or not;
+     * a Mac, or a box with no name from its Mac: its welcome's, else its record's.
+     */
     val name: String
-        get() = (welcomeFlow.value?.get("host") as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull ?: deviceFlow.value.shortName
+        get() {
+            val d = deviceFlow.value
+            if (d.kind == dev.kore.link.trust.NodeKind.BOX && d.name.isNotBlank()) return d.name
+            return (welcomeFlow.value?.get("host") as? JsonObject)?.get("name")?.jsonPrimitive?.contentOrNull ?: d.shortName
+        }
 
     /** Starts following the node (the app came on screen, or KoreNet turned on). */
     fun start() {
@@ -182,6 +191,14 @@ class NodeClient(
         val retry = s is NodeMachine.State.Denied ||
             (s is NodeMachine.State.Away && (s.why == NodeMachine.AwayWhy.WAITING || s.why == NodeMachine.AwayWhy.UNREACHABLE))
         if (retry) post(NodeMachine.Event.Trigger)
+    }
+
+    /**
+     * The book's record changed (A7): a box a Mac took offline stays listed, "taken offline", and
+     * isn't dialed; brought back online, it's tried at once. A rename shows at once (T-B2).
+     */
+    fun recordChanged(record: Device) {
+        events.trySend(Internal.Record(record))
     }
 
     /** Stops dialing and ends the link with a bye (the app went off screen). */
@@ -233,6 +250,8 @@ class NodeClient(
                 machine.on(
                     when {
                         e is PeerOffline -> NodeMachine.Event.PeerOffline
+                        // This phone's tailnet wants a sign-in (a key that expired): Sign in, not "retrying" (A3).
+                        e is NetFailure && e.reason == "signedOut" -> NodeMachine.Event.SignedOut
                         e is NetFailure && e.reason.startsWith("bye ") -> NodeMachine.Event.Ended(e.reason.removePrefix("bye "))
                         else -> NodeMachine.Event.Failed
                     },
@@ -240,6 +259,19 @@ class NodeClient(
                 )
             }
             Internal.Enrolling -> machine.on(NodeMachine.Event.Enrolling, clock())
+            is Internal.Record -> {
+                val was = deviceFlow.value.paused
+                if (event.record != deviceFlow.value) deviceFlow.value = event.record
+                if (event.record.paused && !was) {
+                    session?.close()
+                    session = null
+                    dialing?.cancel()
+                    dialing = null
+                    machine.on(NodeMachine.Event.Ended("paused"), clock())
+                } else if (!event.record.paused && was) {
+                    machine.on(NodeMachine.Event.Trigger, clock())
+                }
+            }
             Internal.Parked -> if (session != null) {
                 parked = true
                 machine.on(NodeMachine.Event.Ended("paused"), clock())
@@ -261,7 +293,10 @@ class NodeClient(
             }
             is NodeMachine.Event -> machine.on(event, clock())
         }
-        if (machine.state == NodeMachine.State.Connecting && dialing == null && session == null) dial()
+        if (machine.state == NodeMachine.State.Connecting && dialing == null && session == null) {
+            // A box its Mac took offline: listed, never dialed.
+            if (deviceFlow.value.paused && deviceFlow.value.kind == dev.kore.link.trust.NodeKind.BOX) machine.on(NodeMachine.Event.Ended("paused"), clock()) else dial()
+        }
         stateFlow.value = machine.state
     }
 

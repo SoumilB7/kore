@@ -133,7 +133,9 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
     private fun endedFor(reason: String?, now: Long): State = when (reason) {
         "revoked" -> State.Removed
         // A box that doesn't hold this phone yet: its Mac's push (or the directory naming it) is on its way.
-        "unknown" -> if (box) waiting(now) else State.Denied(reason)
+        // A Mac in the book that no longer knows this phone removed it while the app was closed (A4):
+        // the same story as a live `revoked`, never "not allowed" (the Join flow keeps its own words).
+        "unknown" -> if (box) waiting(now) else State.Removed
         "refused", "proof" -> State.Denied(reason)
         // The Mac's KoreNet switched off: back by itself once it's on again.
         "off" -> slowly(now, AwayWhy.NET_OFF)

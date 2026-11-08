@@ -749,7 +749,9 @@ package final class MacNet {
             id: identity.device, name: state.macName, kind: .mac, abilities: [.read, .ask, .run], owner: true, identityKey: identity.key,
             nodeKeys: [me.publicKey], userId: tagged ? nil : me.userID, tags: me.tags ?? [], fqdn: me.dnsName, added: Date(timeIntervalSince1970: 0))
         var out = [mac]
-        for record in (try? book.read().devices) ?? [] where record.kind == .box && !record.isPaused {
+        // A paused box stays in the directory with `paused` (A7): phones list it "taken offline" and
+        // don't dial it, rather than the row vanishing with no word.
+        for record in (try? book.read().devices) ?? [] where record.kind == .box {
             var box = record
             box.nodeKeys = record.nodeKeys.filter { $0 != Binding.Route.sshNodeKey }
             box.raiseKey = nil
@@ -1054,34 +1056,22 @@ package final class MacNet {
     // MARK: A phone reinstalled or left (ID3 b)
 
     /// The phone records a newly allowed phone replaces, on a strong signal only (a phone asleep,
-    /// or a second phone of the same model, is never one): another id, the same Tailscale user,
-    /// none of its node keys online now, and either
-    /// - the new node's name is the old one's plus Tailscale's collision suffix
-    ///   (`kore-cph2381` → `kore-cph2381-1`: the same phone registered again while its old node
-    ///   is still there), or
-    /// - its node is gone from the tailnet altogether and it's the same model (an older record
-    ///   without one: its name, which was the model unless renamed).
-    /// Most recently seen first.
+    /// or a second phone of the same model, is never one): another id, the same Tailscale user, the
+    /// same model (an older record without one: its name, which was the model unless renamed), and
+    /// its node gone from the tailnet altogether, none of its node keys among the peers at all.
+    /// A name with Tailscale's "-N" suffix is no signal: phones name their node per install
+    /// (`kore-pixel-9-7f3a`), and a same-model phone that is merely off screen still has its node,
+    /// so allowing a second one never retires the first (T-A8). Most recently seen first.
     nonisolated static func replaced(by record: DeviceRecord, model: String?, in devices: [DeviceRecord], peers: [TailnetStatus.Peer]) -> [DeviceRecord] {
         guard record.kind == .phone, let user = record.userId else { return [] }
         let present = Set(peers.map(\.publicKey))
-        let online = Set(peers.filter(\.online).map(\.publicKey))
-        let newName = shortName(record.fqdn)
         return devices.filter { old in
-            guard old.kind == .phone, old.id != record.id, old.userId == user, old.nodeKeys.allSatisfy({ !online.contains($0) }) else { return false }
-            let suffixed = collision(newName, of: shortName(old.fqdn))
+            guard old.kind == .phone, old.id != record.id, old.userId == user else { return false }
             let gone = old.nodeKeys.allSatisfy { !present.contains($0) }
             let sameModel = model.map { !$0.isEmpty && (old.model ?? old.name) == $0 } ?? false
-            return suffixed || (gone && sameModel)
+            return gone && sameModel
         }
         .sorted { lastSeen($0, peers) ?? .distantPast > lastSeen($1, peers) ?? .distantPast }
-    }
-
-    /// `name` is `base` with Tailscale's `-N` suffix for a hostname taken already.
-    nonisolated static func collision(_ name: String, of base: String) -> Bool {
-        guard !base.isEmpty, name.hasPrefix(base + "-") else { return false }
-        let suffix = name.dropFirst(base.count + 1)
-        return !suffix.isEmpty && suffix.allSatisfy(\.isASCII) && suffix.allSatisfy(\.isNumber)
     }
 
     /// When a record's phone was last on: the tailnet's word for its node, else the record's.

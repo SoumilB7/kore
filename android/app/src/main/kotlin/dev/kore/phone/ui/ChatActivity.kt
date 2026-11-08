@@ -502,9 +502,21 @@ class ChatActivity : NodeActivity() {
                     v.textSize = 14f
                 }
                 "thinking" -> {
-                    v.text = e.str("text")?.takeIf { it.isNotBlank() } ?: "Thinking…"
+                    // Collapsed by default (Claude and Codex alike): one line, a tap opens the whole of it.
+                    val id = e.str("id") ?: ""
+                    val text = e.str("text")?.takeIf { it.isNotBlank() }
+                    val expanded = text != null && id in openTools
+                    v.text = when {
+                        text == null -> "Thinking…"
+                        expanded -> text
+                        else -> "Thought · " + text.lineSequence().first { it.isNotBlank() }.trim()
+                    }
                     v.setTextColor(K.faint); v.textSize = 13f
                     v.setTypeface(v.typeface, android.graphics.Typeface.ITALIC)
+                    v.maxLines = if (expanded) Int.MAX_VALUE else 1
+                    v.ellipsize = if (expanded) null else android.text.TextUtils.TruncateAt.END
+                    v.contentDescription = if (text == null) null else if (expanded) "Thinking, open" else "Thinking, closed"
+                    if (text != null) v.setOnClickListener { if (!openTools.add(id)) openTools.remove(id); notifyDataSetChanged() }
                     (v.layoutParams as android.widget.FrameLayout.LayoutParams).leftMargin = dp(10)
                 }
                 "agent" -> {
@@ -532,7 +544,7 @@ class ChatActivity : NodeActivity() {
                 else -> { v.text = e.str("text").orEmpty(); v.setTextColor(K.dim); v.textSize = 13f }
             }
             if (e.str("kind") != "divider") v.gravity = android.view.Gravity.START
-            if (e.str("kind") != "tool") { v.maxLines = Int.MAX_VALUE; v.ellipsize = null }
+            if (e.str("kind") != "tool" && e.str("kind") != "thinking") { v.maxLines = Int.MAX_VALUE; v.ellipsize = null }
         }
     }
 

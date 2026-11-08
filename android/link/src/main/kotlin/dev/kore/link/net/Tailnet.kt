@@ -73,7 +73,11 @@ interface Tailnet {
     fun stop()
     /** The phone has a network to reach control on (not airplane mode, not out of signal). */
     fun online(): Boolean = true
-    /** Leave KoreNet: drop the node key on the control plane and locally. */
+    /**
+     * Leave KoreNet: the node key expired on the control plane (started for it if it's stopped)
+     * and the login dropped here. The machine key stays, so joining again signs the same node back
+     * in: one node per install, never a "kore-…-1" beside an old one.
+     */
     fun logout()
 
     companion object {

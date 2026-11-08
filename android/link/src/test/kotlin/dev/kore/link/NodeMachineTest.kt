@@ -118,10 +118,10 @@ class NodeMachineTest {
         assertEquals(1_005L, (m.on(Event.Ended("unknown"), 5) as State.Away).at)
     }
 
-    @Test fun aBoxStillDeniesRefusedAndAMacStillDeniesUnknown() {
+    @Test fun aBoxStillDeniesRefusedAndAMacThatForgotThisPhoneRemovedIt() {
         fun after(box: Boolean, reason: String): State = machine(box).apply { on(Event.Start, 0) }.on(Event.Ended(reason), 0)
         assertEquals(State.Denied("refused"), after(true, "refused"))
-        assertEquals(State.Denied("unknown"), after(false, "unknown"))
+        assertEquals(State.Removed, after(false, "unknown"))
     }
 
     @Test fun startDialsAndConnectedIsUp() {
@@ -183,7 +183,7 @@ class NodeMachineTest {
     @Test fun byesMapToStates() {
         fun after(reason: String?): State = machine().apply { on(Event.Start, 0); on(Event.Connected, 0) }.on(Event.Ended(reason), 0)
         assertEquals(State.Removed, after("revoked"))
-        assertEquals(State.Denied("unknown"), after("unknown"))
+        assertEquals(State.Removed, after("unknown"))
         assertEquals(State.Denied("refused"), after("refused"))
         assertEquals(AwayWhy.OFF, (after("paused") as State.Away).why)
         assertEquals(300_000L, (after("quit") as State.Away).at)

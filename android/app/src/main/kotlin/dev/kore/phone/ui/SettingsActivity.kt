@@ -91,7 +91,9 @@ class SettingsActivity : Activity() {
         val kind = if (n.device.value.kind == NodeKind.MAC) "Mac" else "box"
         addView(label(" ${n.name}", 15f).apply { maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         addView(label(kind, 12f, K.faint).apply { setPadding(dp(8), 0, dp(4), 0) })
-        addView(label("⋯", 18f, K.dim).apply {
+        // Forget is for a Mac only: a box comes back with the next Mac welcome's directory (T-A5),
+        // so it's removed on the Mac, which tells this phone.
+        if (n.device.value.kind == dev.kore.link.trust.NodeKind.MAC) addView(label("⋯", 18f, K.dim).apply {
             gravity = Gravity.CENTER
             minHeight = dp(44)
             setPadding(dp(10), 0, dp(10), 0)

@@ -100,10 +100,14 @@ class EmbeddedTailnet(private val context: Context, private val hostname: String
 
     @Synchronized
     override fun logout() {
+        // tsnet's Logout tells control to expire this node's key (it stays listed as logged out)
+        // and drops the login here; a stopped node is started for it, or control never hears.
+        // The state dir and its Keystore key stay: its machine key is what makes the next sign-in
+        // the same node again rather than a new one with a "-1" name.
+        val was = running
+        if (!was) runCatching { start() }
         if (running) runCatching { Go.logout() }
         stop()
-        File(context.noBackupFilesDir, "tailnet").deleteRecursively()
-        KeystoreSealer.forget()
     }
 
     /** The default network's every change goes to Go: interfaces, default route, then an event. */

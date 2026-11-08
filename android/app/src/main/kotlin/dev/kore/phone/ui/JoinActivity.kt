@@ -57,6 +57,11 @@ class JoinActivity : Activity() {
             knocked = true
             flow.again()
         }
+        // "Sign in" from a signed-out device (A1): the sign-in again, whatever an earlier Join left.
+        if (intent?.getBooleanExtra("signIn", false) == true && !knocked) {
+            knocked = true
+            flow.signInAgain()
+        }
         watch = kore.scope.launch { flow.step.combine(flow.offline) { s, off -> s to off }.collect { (s, off) -> runOnUiThread { render(s, off) } } }
     }
 
@@ -95,12 +100,20 @@ class JoinActivity : Activity() {
                     kore.mesh.nodes.value.forEach { it.post(dev.kore.link.node.NodeMachine.Event.SignedIn) }
                     return home()
                 }
-                val mac = s.macs.firstOrNull()
+                val mac = when (s.macs.size) {
+                    0 -> null
+                    1 -> s.macs[0]
+                    2 -> "${s.macs[0]} and ${s.macs[1]}"
+                    else -> s.macs.dropLast(1).joinToString(", ") + " and " + s.macs.last()
+                }
+                val one = s.macs.size <= 1
                 val line = when {
+                    mac == null && s.asleep.isNotEmpty() -> "${s.asleep.first()} is on your tailnet but offline.\nWake it and open Kore there."
                     mac == null -> "Signed in. No Mac is on your tailnet yet."
-                    s.addClosed -> "Open Add device on your Mac.\nIn Kore there: Devices, then +."
+                    s.addClosed -> "Open Add device on ${s.closedOn ?: mac}.\nIn Kore there: Devices, then +."
                     s.stopped -> "$mac didn't answer. In Kore there, open Devices and press +, then try again."
-                    else -> "$mac is on your tailnet.\nIn Kore there, open Devices and press +."
+                    one -> "$mac is on your tailnet.\nIn Kore there, open Devices and press +."
+                    else -> "$mac are on your tailnet.\nIn Kore on one of them, open Devices and press +."
                 }
                 screen(halo(R.drawable.ic_mac, pulse = !s.stopped), if (s.stopped) "No answer yet" else "Finding your Mac…", line) {
                     if (s.stopped) primary("Try again") { flow.again() }
