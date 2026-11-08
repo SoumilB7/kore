@@ -59,20 +59,27 @@ struct DevicesPopup: View {
     @StateObject private var draft = Local("")
     @StateObject private var menuFor = Local<String?>(nil)
     @StateObject private var anchors = Held<[String: NSView]>([:])
+    /// "Add a box", one step at a time: its choices, the alias field, New box…, or the box just
+    /// added (its set-up line). Nil: just the row.
+    @StateObject private var addingBox = Local<AddBoxStep?>(nil)
     @FocusState private var renameFocused: Bool
 
     private var devices: Devices { .shared }
 
+    enum AddBoxStep: Equatable {
+        case choices
+        case ssh(String)
+        case newBox
+        case added(String)
+    }
+
     var body: some View {
         let now = Date()
         let picture = devices.picture(now: now)
-        VStack(alignment: .leading, spacing: 0) {
-            header(picture, now: now)
-            macRow(picture)
-            ForEach(picture.devices) { row in deviceRow(row, now: now) }
-            lines(picture, now: now)
-        }
-        .padding(.vertical, Space.xs + 1)
+        // As tall as its rows; taller than the room under the icon, they scroll.
+        ScrollView(.vertical) { content(picture, now: now) }
+            .scrollBounceBehavior(.basedOnSize)
+            .frame(maxHeight: NetPopupRoom.shared.height)
         .frame(width: Size.Net.popupWidth, alignment: .leading)
         .fixedSize(horizontal: false, vertical: true)
         .panel(.panel)
@@ -88,6 +95,17 @@ struct DevicesPopup: View {
             devices.nudgeSeen()
         }
         .storyID(StoryID.Net.popup)
+    }
+
+    private func content(_ picture: DevicesPicture, now: Date) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header(picture, now: now)
+            macRow(picture)
+            ForEach(picture.devices) { row in deviceRow(row, now: now) }
+            lines(picture, now: now)
+            addBox(picture)
+        }
+        .padding(.vertical, Space.xs + 1)
     }
 
     // MARK: Header
@@ -343,6 +361,61 @@ struct DevicesPopup: View {
                 NetLine { Text("No other devices yet") }.storyID(StoryID.Net.line)
             }
         }
+    }
+
+    // MARK: Add a box
+
+    /// "Add a box", whatever KoreNet's state (an SSH box needs none of it): one click opens its
+    /// choices under it (`BoxAddChoicesList`, the Welcome "+"'s too), a second closes them.
+    @ViewBuilder private func addBox(_ picture: DevicesPicture) -> some View {
+        NetAction(title: "Add a box", glyph: .plus, trailing: false) { toggleAddBox() }
+            .storyID(StoryID.Net.addBox, press: { toggleAddBox() })
+        switch addingBox.value {
+        case nil:
+            EmptyView()
+        case .choices:
+            BoxAddChoicesList(net: picture.net, useSSH: { addingBox.value = .ssh("") }, newBox: { addingBox.value = .newBox }, ready: boxReady) {
+                addingBox.value = nil
+            }
+        case .ssh(let text):
+            BoxAliasEntry(
+                text: Binding(get: { text }, set: { typed in if case .ssh = addingBox.value { addingBox.value = .ssh(typed) } }),
+                story: StoryID.Net.boxField, suggestions: devices.adder.suggestions(text), add: addAlias
+            ) { addingBox.value = .choices }
+            .padding(.horizontal, Space.xl - Space.xs)
+            .padding(.vertical, Space.xxs)
+        case .newBox:
+            NewBoxBody(ready: boxReady) { addingBox.value = nil }
+        case .added(let alias):
+            // The box's own line while it's asked about and set up: Set up, each step, Ready.
+            if let note = devices.adder.note(alias) {
+                BoxNoteLine(note: note, alias: alias, opened: { NetPopupHost.shared.close() }, act: { await Devices.shared.adder.act($0, on: $1) }, story: StoryID.Net.boxLineAction)
+                    .padding(.horizontal, Space.xl)
+                    .padding(.top, Space.xs)
+                    .padding(.bottom, Space.xs + 1)
+                    .storyID(StoryID.Net.boxLine)
+            }
+        }
+    }
+
+    private func toggleAddBox() {
+        addingBox.value = addingBox.value == nil ? .choices : nil
+    }
+
+    /// Use SSH…'s alias: listed now (its row above, its Welcome chip), asked once; its line
+    /// shows here in the field's place.
+    private func addAlias(_ typed: String) {
+        guard let alias = BoxList.alias(typed) else { return }
+        addingBox.value = .added(alias)
+        devices.adder.addBox(alias)
+        devices.changed()
+    }
+
+    /// A box claimed (a tailnet box, or New box…'s): listed like any other.
+    private func boxReady(_ key: String) {
+        devices.adder.addBox(key)
+        devices.changed()
+        addingBox.value = nil
     }
 
     private func pendingRow(_ row: PendingRow, now: Date) -> some View {

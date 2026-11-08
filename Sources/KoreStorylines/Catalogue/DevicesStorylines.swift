@@ -255,6 +255,99 @@ final class DevicesFromWelcome: ChatStoryline {
     }
 }
 
+/// "Add a box" in Devices on a This Mac window, KoreNet off (an SSH box needs none of it): one
+/// click opens its choices (Use SSH… and, the release carrying kore-host.sh, New box…; no tailnet
+/// boxes), Use SSH… the alias field with the SSH config's hosts, Return lists the box (its row
+/// appears) and shows its line; Set up runs its steps there (the first build's quiet "about 3
+/// min" held still) until it's Ready and connected.
+final class DevicesAddBox: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            DevicesSetUp(scriptedBoxes: true, release: true),
+            Press(.id(StoryID.Net.icon)),
+            WaitForElement(.id(StoryID.Net.popup)),
+            Expect("KoreNet off, no rows yet") { _ in Devices.shared.picture().net == .off && Devices.shared.picture().devices.isEmpty },
+            ExpectElement(.id(StoryID.Net.addBox)),
+            ExpectElement(.id(StoryID.Net.useSSH), .absent),
+            Snapshot("devices-add-box-1-row"),
+            Press(.id(StoryID.Net.addBox)),
+            WaitForElement(.id(StoryID.Net.useSSH)),
+            WaitForElement(.id(StoryID.Net.newBox)),
+            Expect("asked the release once, no tailnet boxes") { _ in
+                DevicesStory.releaseAsks == 1 && !StoryRegistry.ids.contains { $0.contains("net.add.peer") }
+            },
+            Snapshot("devices-add-box-2-choices"),
+            Press(.id(StoryID.Net.useSSH)),
+            WaitForElement(.id(StoryID.Net.boxField)),
+            ExpectElement(.id(StoryID.Net.boxHost("gpu-box"))),
+            Expect("the field has the keys") { story in story.window?.firstResponder is NSTextView },
+            TypeText("myb"),
+            ExpectElement(.id(StoryID.Net.boxHost("gpu-box")), .absent),
+            ExpectElement(.id(StoryID.Net.boxHost("mybox"))),
+            Snapshot("devices-add-box-3-alias"),
+            TypeText("ox\n"),
+            WaitForElement(.id(StoryID.Net.boxLine)),
+            ExpectElement(.id(StoryID.Net.boxField), .absent),
+            Expect("mybox listed: its row in Devices") { _ in
+                DevicesStory.boxes?.log == ["add mybox"] && Devices.shared.picture().devices.contains { $0.id == "mybox" && $0.kind == .box }
+            },
+            Do("mybox answers over SSH: no kore-host there") { _ in DevicesStory.boxes?.answer("mybox") },
+            WaitForElement(.id(StoryID.Net.boxLineAction)),
+            Expect("its line: not set up · Set up") { _ in Self.line() == "Not set up on mybox · Set up" },
+            Snapshot("devices-add-box-4-not-set-up"),
+            Press(.id(StoryID.Net.boxLineAction)),
+            Expect("set up under way") { _ in DevicesStory.boxes?.log.last == "Set up mybox" && Self.line() == "Checking mybox…" },
+            Do("two steps on") { _ in
+                DevicesStory.boxes?.advance("mybox")
+                DevicesStory.boxes?.advance("mybox")
+            },
+            Expect("the first build, with its quiet hint") { _ in Self.line() == BoxHostBuild.stepLine("Building kore-host for Linux x86_64", hint: BoxHostBuild.firstBuildHint) },
+            Snapshot("devices-add-box-5-building"),
+            Do("to the end") { _ in
+                DevicesStory.boxes?.advance("mybox")
+                DevicesStory.boxes?.advance("mybox")
+            },
+            Expect("Ready, and connected in Devices") { _ in
+                Self.line() == "Ready" && Devices.shared.picture().devices.first { $0.id == "mybox" }?.status == .connected
+            },
+            Snapshot("devices-add-box-6-ready"),
+        ]
+    }
+
+    static func line() -> String? {
+        DevicesStory.boxes?.note("mybox").map { note in note.line + (note.action.map { " · " + $0.title } ?? "") }
+    }
+}
+
+/// "Add a box" with KoreNet on and no kore-host.sh in the release: the tailnet's kore-host box
+/// first, Use SSH…, and no New box… (never a dead install line); picking the box brings up its
+/// claim card, and Allow lists it in Devices.
+final class DevicesAddBoxOnTailnet: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            DevicesSetUp(on: true, scriptedBoxes: true, release: false, peers: ["box-2"]),
+            Press(.id(StoryID.Net.icon)),
+            WaitForElement(.id(StoryID.Net.popup)),
+            Press(.id(StoryID.Net.addBox)),
+            WaitForElement(.id(StoryID.Net.welcomePeer("box-2"))),
+            ExpectElement(.id(StoryID.Net.useSSH)),
+            ExpectElement(.id(StoryID.Net.newBox), .absent),
+            Snapshot("devices-add-box-tailnet"),
+            Press(.id(StoryID.Net.welcomePeer("box-2"))),
+            WaitForElement(.id(StoryID.Net.card)),
+            Expect("Allow armed", timeout: .seconds(3)) { _ in DeviceCardPanel.armed },
+            Press(.id(StoryID.Net.allow)),
+            Expect("box-2 claimed and listed") { _ in
+                DevicesStory.claims?.allowed == ["box-2"] && DevicesStory.boxes?.log == ["add box-2"]
+            },
+        ]
+    }
+}
+
 /// The scripted sides, put in for one storyline and taken out after it, pass or fail.
 @MainActor
 enum DevicesStory {
@@ -267,6 +360,11 @@ enum DevicesStory {
     static var openURL: (@MainActor (URL) -> Void)?
     static var openApp: (@MainActor () -> Void)?
     static var joinRunner: (@MainActor (String) -> (any BoxNetJoinRunner)?)?
+    static var boxes: ScriptedBoxes?
+    static var claims: ScriptedClaims?
+    static var releaseAsks = 0
+    /// Kore's own claims, put back after.
+    static var claimsBefore: (any BoxClaims)?
 }
 
 private struct DevicesSetUp: Step {
@@ -274,7 +372,13 @@ private struct DevicesSetUp: Step {
     var phone: String?
     var box: String?
     var ssh = false
-    var label: String { "KoreNet scripted: " + (on ? "on" : "off") + (phone.map { ", " + $0 } ?? "") + (box.map { ", " + $0 } ?? "") }
+    /// "Add a box" writes a scripted box list (and its rows are Devices' boxes).
+    var scriptedBoxes = false
+    /// What the latest release says of kore-host.sh (nil: not asked here).
+    var release: Bool?
+    /// kore-host boxes found on the tailnet.
+    var peers: [String] = []
+    var label: String { "KoreNet scripted: " + (on ? "on" : "off") + (phone.map { ", " + $0 } ?? "") + (box.map { ", " + $0 } ?? "") + (scriptedBoxes ? ", box list" : "") }
 
     func run(_ story: StoryContext) async throws {
         let net = ScriptedNet()
@@ -290,6 +394,7 @@ private struct DevicesSetUp: Step {
             DevicesStory.openURL = devices.openURL
             DevicesStory.openApp = devices.openTailscaleApp
             DevicesStory.joinRunner = devices.joinRunner
+            DevicesStory.claimsBefore = devices.claims
         }
         devices.net = net
         devices.phones = phones
@@ -312,6 +417,26 @@ private struct DevicesSetUp: Step {
         } else {
             devices.boxes = { [] }
         }
+        DevicesStory.boxes = nil
+        if scriptedBoxes {
+            let boxes = ScriptedBoxes()
+            DevicesStory.boxes = boxes
+            devices.adder = boxes
+            devices.boxes = { boxes.facts() }
+        }
+        let claims = ScriptedClaims()
+        claims.listed = peers.map { ClaimPeer(name: $0, address: "100.64.0.9", nodeKey: "nodekey:" + $0, login: "you@example.com") }
+        DevicesStory.claims = claims
+        devices.claims = claims
+        DevicesStory.releaseAsks = 0
+        HostRelease.shared.forget()
+        let answer = release
+        HostRelease.shared.fetch = {
+            await MainActor.run { DevicesStory.releaseAsks += 1 }
+            guard let answer else { return nil }
+            let assets = answer ? #"[{"name":"kore-host.sh"}]"# : "[]"
+            return (200, Data(#"{"tag_name":"v0.2.3","assets":\#(assets)}"#.utf8))
+        }
         devices.changed()
         _ = story.stash(DevicesReset.self) { DevicesReset() }
     }
@@ -326,6 +451,12 @@ private final class DevicesReset: StoryFinishing {
         devices.phones = nil
         devices.boxes = nil
         devices.macNameOverride = nil
+        devices.adderOverride = nil
+        devices.claims = DevicesStory.claimsBefore
+        HostRelease.shared.forget()
+        HostRelease.shared.fetch = HostRelease().fetch
+        DevicesStory.boxes = nil
+        DevicesStory.claims = nil
         if let openURL = DevicesStory.openURL { devices.openURL = openURL }
         if let openApp = DevicesStory.openApp { devices.openTailscaleApp = openApp }
         if let joinRunner = DevicesStory.joinRunner { devices.joinRunner = joinRunner }

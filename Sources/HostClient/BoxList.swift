@@ -64,6 +64,16 @@ package final class BoxList {
         /// The hover card's line: what kind of machine, and how kore-host runs there.
         package var kind: String? { machine?.kind }
 
+        /// Its folders can be browsed: kore-host answered (or answered before and is being
+        /// asked again); never while it's set up, updated or can't be reached.
+        package var opensFolders: Bool {
+            switch status {
+            case .ready: return true
+            case .unknown, .probing: return !folders.isEmpty
+            default: return false
+            }
+        }
+
         package var note: Note? {
             switch status {
             case .probing where folders.isEmpty: return Note(line: "Connecting…")
@@ -113,6 +123,8 @@ package final class BoxList {
     @ObservationIgnored private var probes: [String: Task<Void, Never>] = [:]
     @ObservationIgnored private var rekeys: (any NSObjectProtocol)?
     @ObservationIgnored private var busy: Set<String> = []
+    /// Boxes whose set-up, update or start is running its steps: nothing else writes their line.
+    @ObservationIgnored private var settingUp: Set<String> = []
     /// The user said yes to Swift's Linux kit this run (asked once, on the box's line).
     @ObservationIgnored private var kitConsent = false
     /// How long a probe waits for kore-host's state.
@@ -233,6 +245,8 @@ package final class BoxList {
     /// Dials the box's kore-host once: its state and folders, then the link closes unless a window
     /// holds it. A probe already under way is the one waited on.
     package func probe(_ alias: String) async {
+        // A set-up's steps own the line until they end (the probe after them is its own).
+        if settingUp.contains(alias) { return }
         if let running = probes[alias] { return await running.value }
         let task = Task { await run(alias) }
         probes[alias] = task
@@ -385,7 +399,9 @@ package final class BoxList {
         var setup = makeSetup(alias, grant ?? BoxSetup.grant(for: alias, defaults: defaults))
         setup.mayInstallKit = kitConsent
         update(alias) { $0.status = .working(retry == .start ? "Starting…" : "Checking \(NodeNames.name(alias))…") }
+        settingUp.insert(alias)
         do {
+            defer { settingUp.remove(alias) }
             let done = try await work(setup) { [weak self] line in self?.update(alias) { $0.status = .working(line) } }
             if let done {
                 done.machine.keep(alias, root: cacheRoot)

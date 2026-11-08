@@ -76,6 +76,12 @@ package final class Devices {
     @ObservationIgnored package var phones: (any PhoneDevices)?
     /// The Welcome's claims of tailnet boxes.
     @ObservationIgnored package var claims: (any BoxClaims)?
+    /// The box list adding a box writes (Kore: `BoxList`; storylines: their own).
+    @ObservationIgnored package var adder: any BoxAdding {
+        get { adderOverride ?? BoxList.shared }
+        set { adderOverride = newValue }
+    }
+    @ObservationIgnored package var adderOverride: (any BoxAdding)?
     /// The boxes as held (Kore: the box list, their links, KoreNet's directory; storylines and
     /// snapshots: their own).
     @ObservationIgnored package var boxes: (@MainActor () -> [BoxFacts])?
@@ -156,16 +162,19 @@ package final class Devices {
 
     package func picture(now: Date = Date()) -> DevicesPicture {
         _ = revision
-        guard let net else { return DevicesPicture(net: .off, macName: macNameOverride ?? macName) }
-        let facts = net.facts
-        guard facts.on else { return DevicesPicture(net: .off, macName: macNameOverride ?? macName) }
+        // Off: only the boxes added by SSH, from what the list holds (nothing is read or dialled).
+        let facts = net?.facts ?? NetFacts(on: false, state: .off, status: nil)
         return DevicesPicture.make(
             net: facts, macName: macNameOverride ?? macName, boxes: boxes?() ?? boxFacts(), phones: phones?.phones ?? [], addUntil: phones?.addUntil, refusals: phones?.refusals ?? [],
             signingIn: signingIn, nudge: nudge, now: now)
     }
 
     /// The icon's look: off costs one read.
-    package func look(now: Date = Date()) -> NetIconLook { NetIconLook.of(picture(now: now), now: now) }
+    package func look(now: Date = Date()) -> NetIconLook {
+        _ = revision
+        guard net?.facts.on == true else { return NetIconLook.of(DevicesPicture(net: .off, macName: macNameOverride ?? macName), now: now) }
+        return NetIconLook.of(picture(now: now), now: now)
+    }
 
     /// One per device: listed aliases keyed as they're kept now, deduped with the directory.
     private func boxFacts() -> [BoxFacts] {
@@ -445,6 +454,13 @@ extension StoryID {
         package static let useSSH = StoryID(.welcome, "net.add.ssh")
         package static let newBoxPopup = StoryID(.welcome, "net.newbox")
         package static let copyInstall = newBoxPopup.part(.copy)
+        /// Devices' "Add a box", its alias field, an SSH host under it, and the added box's line
+        /// and that line's action.
+        package static let addBox = StoryID(.titlebar, "net.addbox")
+        package static let boxField = StoryID(.titlebar, "net.addbox.field")
+        package static func boxHost(_ host: String) -> StoryID { StoryID(.titlebar, "net.addbox.host", key: host) }
+        package static let boxLine = StoryID(.titlebar, "net.addbox.line")
+        package static let boxLineAction = boxLine.part(.use)
         /// A box's Welcome line "Runs over SSH · Join KoreNet".
         package static let joinLine = StoryID(.welcome, "net.joinline")
     }

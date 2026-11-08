@@ -190,6 +190,50 @@ struct BoxOpsTests {
         #expect(BoxList(defaults: defaults, hosts: { [] }, cacheRoot: fake.root.appendingPathComponent("cache")).box("mybox")?.machine?.system == .linux)
     }
 
+    /// A probe while set-up runs its steps (the Welcome showing the box, Devices opening) leaves
+    /// the step's line as it is: no "Connecting…" between steps. Open Folder… waits for Ready.
+    @Test func aProbeDuringSetUpLeavesTheStepsLineAlone() async throws {
+        @MainActor final class Seen {
+            var list: BoxList?
+            var during: [BoxList.Status?] = []
+            func probe() async {
+                during.append(list?.box("mybox")?.status)
+                await list?.probe("mybox")
+                during.append(list?.box("mybox")?.status)
+                during.append(list?.box("mybox")?.opensFolders == true ? .ready : nil)
+            }
+        }
+        let fake = try FakeSSH()
+        defer { fake.finish() }
+        let defaults = try defaults()
+        let seen = Seen()
+        let binary = fake.binary()
+        let list = BoxList(defaults: defaults, hosts: { [] }, cacheRoot: fake.root.appendingPathComponent("cache"), connection: { alias in
+            HostConnection(alias: alias, cache: HostCache(alias: alias, root: fake.root.appendingPathComponent("conn"))) {
+                let (client, host) = FakeHost.pair()
+                Task { @MainActor in
+                    _ = await host.handshake(windows: [], chats: [])
+                    let ask = await host.next("cmd")
+                    host.send(json: ["t": "result", "ok": true, "id": ask?["id"] ?? "", "folders": [["windowId": "w_1", "path": "/home/me/app"]]])
+                }
+                return client
+            }
+        }) { alias, grant in
+            BoxSetup(alias: alias, grant: grant, shell: fake.shell) { request in
+                await seen.probe()
+                return try binary(request)
+            }
+        }
+        seen.list = list
+        list.findMac = { nil }
+        list.add("mybox")
+        #expect(list.box("mybox")?.opensFolders == false)
+        await list.act(.setUp, on: "mybox")
+        let step = BoxList.Status.working("Getting kore-host for Linux · x86_64 · Debian GNU/Linux 13 (trixie)…")
+        #expect(seen.during == [step, step, nil])
+        #expect(list.box("mybox")?.status == .ready && list.box("mybox")?.opensFolders == true)
+    }
+
     @Test func theBinaryComesUnpackedForTheBoxsCPU() async throws {
         #expect(BoxBinary.arch(uname: "Linux x86_64") == "x86_64")
         #expect(BoxBinary.arch(uname: "Linux aarch64") == "aarch64")

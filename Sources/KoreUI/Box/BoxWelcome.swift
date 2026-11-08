@@ -16,6 +16,12 @@ struct WelcomeSwitch: Equatable {
         adding = nil
     }
 
+    /// The field's text as typed. Once an alias is picked the field is gone for good: the text a
+    /// field hands back as it goes (its end of editing) doesn't open it again over the set-up.
+    mutating func typed(_ text: String) {
+        if adding != nil { adding = text }
+    }
+
     /// A box forgotten while it's shown: back to this Mac.
     mutating func removed(_ box: String) {
         if place == box { place = nil }
@@ -74,10 +80,12 @@ struct WelcomeSwitcher: View {
         }
     }
 
-    /// "+": on a tailnet, the list of boxes there, New box… and Use SSH…; otherwise the alias
-    /// field at once, as before KoreNet.
+    /// "+": the add-box choices Devices' "Add a box" offers too (the boxes on the tailnet, Use
+    /// SSH…, New box… while the release has it); the alias field at once when Use SSH… is all
+    /// there is to choose.
     private func plus() {
-        guard Devices.shared.picture().net == .running, let anchor = plusAnchor.value, let window = anchor.window else {
+        let offers = Devices.shared.picture().net == .running || HostRelease.shared.hasScript == true
+        guard offers, let anchor = plusAnchor.value, let window = anchor.window else {
             state.adding = ""
             return
         }
@@ -133,20 +141,10 @@ struct WelcomeSwitcher: View {
     }
 
     private func adding(_ text: String) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            BoxAliasField(text: Binding(get: { text }, set: { state.adding = $0 }), add: add) { state.adding = nil }
-                .storyID(StoryID.Boxes.field)
-            // SSH config hosts: plain aliases, never a node's id.
-            ForEach(list.suggestions(text).prefix(5), id: \.self) { host in
-                Button { add(host) } label: {
-                    Text(host).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(1)
-                        .padding(.horizontal, Space.sm)
-                        .frame(maxWidth: .infinity, minHeight: Layout.Options.row, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-            }
-        }
+        BoxAliasEntry(
+            text: Binding(get: { text }, set: { state.typed($0) }), story: StoryID.Boxes.field,
+            suggestions: list.suggestions(text), add: add
+        ) { state.adding = nil }
         .padding(Space.xs)
         .frame(width: Size.Box.popupWidth)
         .panel(.panel)
@@ -155,9 +153,8 @@ struct WelcomeSwitcher: View {
 
     private func add(_ typed: String) {
         guard let alias = BoxList.alias(typed) else { return }
-        list.add(alias)
         state.show(alias)
-        Task { await list.probe(alias) }
+        Devices.shared.adder.addBox(alias)
     }
 }
 

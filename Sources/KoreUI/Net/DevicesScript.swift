@@ -200,3 +200,78 @@ package final class ScriptedJoin: BoxNetJoinRunner {
     package func stayOnSSH(_ join: BoxNetJoin) { log.append("stay on ssh") }
     package func offersKoreTailnet(_ join: BoxNetJoin) -> Bool { offersSidecar }
 }
+
+/// The box list as a script has it (Devices' "Add a box", Use SSH…): SSH config hosts, boxes
+/// listed, each answering and setting up a step at a time as told. No ssh runs.
+@MainActor @Observable
+package final class ScriptedBoxes: BoxAdding {
+    package var hosts: [String]
+    package private(set) var boxes: [BoxList.Box] = []
+    @ObservationIgnored package private(set) var log: [String] = []
+    /// Set up's steps, as the box list says them.
+    @ObservationIgnored package var steps: [String]
+
+    package init(hosts: [String] = ["mybox", "gpu-box", "pi"], steps: [String]? = nil) {
+        self.hosts = hosts
+        self.steps = steps ?? [
+            "Checking mybox…", "Getting kore-host for Linux · x86_64…",
+            BoxHostBuild.stepLine("Building kore-host for Linux x86_64", hint: BoxHostBuild.firstBuildHint), "Copying kore-host to mybox…",
+        ]
+    }
+
+    package func suggestions(_ typed: String) -> [String] {
+        let shown = Set(boxes.map(\.alias))
+        let typed = typed.trimmingCharacters(in: .whitespaces).lowercased()
+        return hosts.filter { !shown.contains($0) && (typed.isEmpty || $0.lowercased().hasPrefix(typed)) }
+    }
+
+    package func addBox(_ alias: String) {
+        guard let alias = BoxList.alias(alias), !boxes.contains(where: { $0.alias == alias }) else { return }
+        var box = BoxList.Box(alias: alias)
+        box.status = .probing
+        boxes.append(box)
+        log.append(["add", alias].joined(separator: " "))
+        Devices.shared.changed()
+    }
+
+    package func note(_ alias: String) -> BoxList.Note? { boxes.first { $0.alias == alias }?.note }
+
+    package func act(_ action: BoxFix, on alias: String) async {
+        log.append([action.title, alias].joined(separator: " "))
+        guard action == .setUp || action == .setUpAnyway, let first = steps.first else { return }
+        update(alias) { $0.status = .working(first) }
+    }
+
+    /// The box answers its first probe: SSH works, kore-host isn't there.
+    package func answer(_ alias: String) { update(alias) { $0.status = .notSetUp } }
+
+    /// The set-up's next step, and after the last, the box ready.
+    package func advance(_ alias: String) {
+        guard case .working(let now)? = boxes.first(where: { $0.alias == alias })?.status else { return }
+        if let at = steps.firstIndex(of: now), at + 1 < steps.count {
+            update(alias) { $0.status = .working(self.steps[at + 1]) }
+        } else {
+            update(alias) {
+                $0.status = .ready
+                $0.fresh = true
+            }
+        }
+    }
+
+    /// Devices' rows for the boxes listed.
+    package func facts() -> [BoxFacts] {
+        boxes.map { box in
+            var facts = BoxFacts(key: box.alias, name: box.alias)
+            facts.listed = box.status
+            facts.online = box.status == .ready
+            facts.route = facts.online ? .ssh(alias: box.alias, grant: "mac") : nil
+            return facts
+        }
+    }
+
+    private func update(_ alias: String, _ change: (inout BoxList.Box) -> Void) {
+        guard let i = boxes.firstIndex(where: { $0.alias == alias }) else { return }
+        change(&boxes[i])
+        Devices.shared.changed()
+    }
+}

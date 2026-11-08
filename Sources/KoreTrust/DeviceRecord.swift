@@ -78,6 +78,14 @@ package struct DeviceRecord: Codable, Hashable, Sendable, Identifiable {
         return digits
     }
 
+    /// The start of a code as typed: its first 4 hex digits ("0009", as `status` shows them) up to
+    /// all 8 (`0009 a0e9`), or nil.
+    package static func codePrefix(_ typed: String) -> String? {
+        let digits = typed.lowercased().filter { $0 != " " && $0 != "-" }
+        guard (4...8).contains(digits.count), digits.allSatisfy(\.isHexDigit) else { return nil }
+        return digits
+    }
+
     /// The record's own rules: at most three node keys, an owner only among Macs, a user or tags
     /// (never both), a tagged device at most read+ask.
     package func validate() throws {

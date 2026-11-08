@@ -132,7 +132,10 @@ package struct BoxHostBuild: Sendable {
             : ["-c", "release", "--product", "kore-host", "--arch", arch,
                "--scratch-path", folder.appendingPathComponent(".build-macos").path]
         let strip = linux ? ["-Xlinker", "--strip-all"] : ["-Xlinker", "-dead_strip"]
-        let built = await timed("Building kore-host for \(Self.name(platform))", step) {
+        // A first build (no scratch yet) takes minutes: said once, quietly, with the step.
+        let scratch = folder.appendingPathComponent(linux ? ".build-linux" : ".build-macos")
+        let first = !FileManager.default.fileExists(atPath: scratch.path)
+        let built = await timed("Building kore-host for \(Self.name(platform))", hint: first ? Self.firstBuildHint : nil, step) {
             await run(swift, ["build"] + options + strip, source, log)
         }
         guard built.ok else { throw BoxSetup.Failure(message: "Couldn't build kore-host", fix: .showLog(log.path)) }
@@ -151,19 +154,20 @@ package struct BoxHostBuild: Sendable {
         return kept
     }
 
-    /// Says `line…` now and `line… N min` each minute while `work` runs.
-    private func timed<T: Sendable>(_ line: String, _ step: @escaping @Sendable (String) async -> Void, _ work: () async -> T) async -> T {
-        await step(line + "…")
-        let ticker = Task {
-            var minutes = 0
-            while true {
-                try await Task.sleep(for: .seconds(60))
-                minutes += 1
-                await step("\(line)… \(minutes) min")
-            }
-        }
-        defer { ticker.cancel() }
+    /// What a first build is said to take (on the step's line, once).
+    package static let firstBuildHint = "about 3 min"
+
+    /// Says `line…` (and its hint, "about 3 min") once as `work` starts: the line holds still
+    /// until the next step.
+    private func timed<T: Sendable>(_ line: String, hint: String? = nil, _ step: @escaping @Sendable (String) async -> Void, _ work: () async -> T) async -> T {
+        await step(Self.stepLine(line, hint: hint))
         return await work()
+    }
+
+    /// "Building kore-host for Linux x86_64… · about 3 min": the hint kept whole (no-break spaces)
+    /// where a narrow line wraps.
+    package static func stepLine(_ line: String, hint: String?) -> String {
+        line + "…" + (hint.map { " ·\u{00A0}" + $0.replacingOccurrences(of: " ", with: "\u{00A0}") } ?? "")
     }
 
     // MARK: The source

@@ -21,7 +21,7 @@ let usage = """
            kore-host join
            kore-host upgrade [--want <version>] [--grant <name>]
            kore-host net on|off
-           kore-host devices [allow <id|code> | remove <id|code|name>]
+           kore-host devices [allow <id|code> | remove <id|code|name>]   (a code: "0009 a0e9", or "0009")
            kore-host status
            kore-host attach --as <name> [--proto 2]
            kore-host mcp
@@ -194,14 +194,15 @@ case "devices":
     case "allow":
         guard arguments.count >= 3 else { fail(usage) }
         do {
-            let record = try store.allow(arguments[2], at: Date())
+            // The code as `status` shows it, quoted or not ("0009 a0e9"), or its first 4 digits.
+            let record = try store.allow(arguments[2...].joined(separator: " "), at: Date())
             HostJournal.audit("allow", ["device": record.id.uuidString.lowercased(), "kind": record.kind.rawValue, "how": "cli"])
             print("allowed \(record.name) (\(record.kind.rawValue), \(record.abilities.names.joined(separator: "+")))")
         } catch { fail("kore-host: \(error)") }
     case "remove":
         guard arguments.count >= 3 else { fail(usage) }
         do {
-            switch try store.remove(arguments[2]) {
+            switch try store.remove(arguments[2...].joined(separator: " ")) {
             case .device(let record, let dropped):
                 HostJournal.audit("revoke", ["device": record.id.uuidString.lowercased(), "kind": record.kind.rawValue, "how": "cli"])
                 // The daemon reads the book on each command: its links end at their next one.

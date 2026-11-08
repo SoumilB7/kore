@@ -17,7 +17,7 @@ class PhoneIdentity(
     val device: UUID,
     /** The non-biometric Keystore identity key (works while locked, for background links). */
     val signer: IdentitySigner,
-    /** As the Mac's Allow card shows it: the phone's model name. */
+    /** As the Mac's Allow card shows it: the phone's own name (its settings' device name). */
     val name: String,
     val model: String,
     /** The biometric `kore_raise` key's public half (SPKI DER), sent on enroll. */

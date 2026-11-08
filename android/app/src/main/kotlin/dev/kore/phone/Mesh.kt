@@ -51,8 +51,11 @@ class Mesh(private val app: KoreApp) {
     val deviceId: UUID
         get() = prefs.getString("device", null)?.let(UUID::fromString) ?: UUID.randomUUID().also { prefs.edit().putString("device", it.toString()).apply() }
 
+    /** The name the Mac's card and rows show (the phone's own, not its model code); the model stays the model. */
+    val name: String by lazy { PhoneName.of(app) }
+
     private fun identity() =
-        PhoneIdentity(deviceId, IdentityKey, Build.MODEL ?: "Android", Build.MODEL ?: "Android", runCatching { raiseKey.publicKey }.getOrNull())
+        PhoneIdentity(deviceId, IdentityKey, name, Build.MODEL ?: "Android", runCatching { raiseKey.publicKey }.getOrNull())
 
     private val bookFile = File(app.noBackupFilesDir, "devices.json")
     val book = DeviceBook(load(), ::save)

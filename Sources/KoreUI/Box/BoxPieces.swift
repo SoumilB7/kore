@@ -13,6 +13,10 @@ struct BoxNoteLine: View {
     let note: BoxList.Note
     let alias: String
     var opened: (() -> Void)?
+    /// The list's actions (Kore: the box list; Devices: whatever adds its boxes).
+    var act: @MainActor (BoxList.Action, String) async -> Void = { await BoxList.shared.act($0, on: $1) }
+    /// Its action's storyline name, where a storyline presses it.
+    var story: StoryID?
     @StateObject private var anchor = Held<NSView?>(nil)
     @StateObject private var copied = Local(false)
 
@@ -25,6 +29,7 @@ struct BoxNoteLine: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(Theme.accent)
                     .fixedSize()
+                    .storyID(story, press: { take(action) })
             }
         }
         .font(Chrome.caption)
@@ -47,7 +52,8 @@ struct BoxNoteLine: View {
         case .showLog(let path):
             NSWorkspace.shared.open(URL(fileURLWithPath: path))
         default:
-            Task { await BoxList.shared.act(action, on: alias) }
+            let act = act
+            Task { await act(action, alias) }
         }
     }
 }

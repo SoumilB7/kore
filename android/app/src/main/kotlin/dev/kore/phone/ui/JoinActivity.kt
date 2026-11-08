@@ -108,7 +108,7 @@ class JoinActivity : Activity() {
                 }
             }
             is Step.Allowing -> screen(halo(R.drawable.ic_mac, pulse = true), "Allow on ${s.mac}", "Kore there is asking about this phone.") {
-                addView(facts(listOf("This phone" to (android.os.Build.MODEL ?: "Android"), "Tailscale" to s.self.shortName, "Address" to (s.self.ips.firstOrNull() ?: ""))))
+                addView(facts(listOf("This phone" to dev.kore.phone.PhoneName.of(this@JoinActivity), "Tailscale" to s.self.shortName, "Address" to (s.self.ips.firstOrNull() ?: ""))))
                 quiet("Cancel") { flow.cancel() }
             }
             is Step.Denied -> screen(halo(R.drawable.ic_mac), if (s.timedOut) "No answer on ${s.mac}" else "Not allowed on ${s.mac}",

@@ -26,6 +26,8 @@ struct WelcomeView: View {
 
     /// The big title: "Kore" on this Mac, the box's name on a box (its key may be its KoreNet id).
     static func title(_ place: String?) -> String { place.map(NodeNames.name) ?? "Kore" }
+    /// Open Folder… works here: always on this Mac; on a box once kore-host answers there.
+    private var opensFolders: Bool { place.flatMap { BoxList.shared.box($0) }?.opensFolders ?? true }
     private var showsBoxes: Bool { !BoxList.shared.boxes.isEmpty || sshHosts.value }
 
     var body: some View {
@@ -58,6 +60,8 @@ struct WelcomeView: View {
                 Label("Open Folder…", systemImage: "folder")
             }
             .buttonStyle(SubtleButtonStyle(prominent: true))
+            // A box being set up (or one that can't be reached) has no folders to browse yet.
+            .disabled(!opensFolders)
 
             if !items.isEmpty {
                 VStack(alignment: .leading, spacing: Space.xs) {

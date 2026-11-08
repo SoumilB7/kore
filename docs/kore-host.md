@@ -198,7 +198,10 @@ Whatever the source, the box runs the new binary's `--version` before it replace
 
 ## Setting it up by hand
 
-From a release (once releases carry kore-host), on the box:
+From a release, on the box, once a release carries `kore-host.sh` (none does yet: until then
+Kore's Use SSH… puts this Mac's own build of kore-host there instead). Kore offers this line
+(New box…, in Devices' Add a box and the Welcome's "+") only after the latest release's assets
+name `kore-host.sh`, asked once a run when those choices open:
 
 ```sh
 curl -fsSL https://github.com/SoumilB7/kore/releases/latest/download/kore-host.sh | sh

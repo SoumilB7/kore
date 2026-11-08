@@ -176,15 +176,21 @@ package struct DeviceStore: Sendable {
     package enum StoreError: Error, Equatable, CustomStringConvertible {
         case noSuch(String)
         case noKey(String)
-        case ambiguous(String)
+        /// What was typed, and each device it could be ("0009 a0e9 Pixel 9").
+        case ambiguous(String, [String])
 
         package var description: String {
             switch self {
             case .noSuch(let what): "no device or pending device \(what)"
             case .noKey(let what): "\(what) hasn't said who it is yet: it needs to connect once more (from Kore's Add device)"
-            case .ambiguous(let what): "\(what) names more than one device: use its id"
+            case .ambiguous(let what, let matches): "\(what) names more than one device: " + matches.joined(separator: ", ") + " · type more of its code"
             }
         }
+    }
+
+    /// "0009 a0e9 Pixel 9", as an ambiguous code lists it.
+    static func line(_ device: UUID?, _ name: String) -> String {
+        (device.map(DeviceRecord.code).map { $0 + " " } ?? "") + name
     }
 
     /// The pending device `code` or id names, made a record: its abilities by kind, a Mac an
@@ -192,7 +198,7 @@ package struct DeviceStore: Sendable {
     @discardableResult
     package func allow(_ which: String, at now: Date) throws -> DeviceRecord {
         let list = pending()
-        let digits = DeviceRecord.codeDigits(which)
+        let digits = DeviceRecord.codePrefix(which)
         let id = UUID(uuidString: which)
         let matches = list.filter { entry in
             guard let device = entry.device else { return false }
@@ -201,7 +207,7 @@ package struct DeviceStore: Sendable {
             return false
         }
         guard let entry = matches.first else { throw StoreError.noSuch(which) }
-        guard matches.count == 1 else { throw StoreError.ambiguous(which) }
+        guard matches.count == 1 else { throw StoreError.ambiguous(which, matches.map { Self.line($0.device, $0.name) }) }
         let record = try Self.record(from: entry, at: now)
         try book.update { devices in
             devices.removeAll { $0.id == record.id }
@@ -233,14 +239,14 @@ package struct DeviceStore: Sendable {
 
     /// Removes a device by id, code or name (a Mac takes what it issued), or a pending one.
     package func remove(_ which: String) throws -> Removed {
-        let digits = DeviceRecord.codeDigits(which)
+        let digits = DeviceRecord.codePrefix(which)
         let id = UUID(uuidString: which)
         let records = all().filter { r in
             if let id { return r.id == id }
             if let digits, r.id.uuidString.lowercased().hasPrefix(digits) { return true }
             return r.name == which
         }
-        if records.count > 1 { throw StoreError.ambiguous(which) }
+        if records.count > 1 { throw StoreError.ambiguous(which, records.map { Self.line($0.id, $0.name) }) }
         if let record = records.first {
             let before = all()
             let after = try book.remove(record.id).devices
@@ -253,7 +259,7 @@ package struct DeviceStore: Sendable {
             return p.name == which || p.nodeKey == which
         }
         guard let entry = waiting.first else { throw StoreError.noSuch(which) }
-        guard waiting.count == 1 else { throw StoreError.ambiguous(which) }
+        guard waiting.count == 1 else { throw StoreError.ambiguous(which, waiting.map { Self.line($0.device, $0.name) }) }
         dropPending(device: entry.device, nodeKey: entry.nodeKey)
         return .pending(entry)
     }

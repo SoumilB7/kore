@@ -238,8 +238,16 @@ extension DevicesPicture {
         nudge: Bool, now: Date
     ) -> DevicesPicture {
         var picture = DevicesPicture(net: Self.net(net), macName: macName)
-        // Off: nothing is read, nothing is listed.
-        guard net.on else { return picture }
+        // Off: nothing is read; only the boxes added by SSH are listed (they work without it).
+        guard net.on else {
+            for box in boxes where box.listed != nil {
+                var row = DeviceRow(id: box.key, kind: .box, name: box.name, status: boxStatus(box), route: .ssh)
+                row.paused = box.paused
+                row.lastSeen = box.lastHeard
+                picture.devices.append(row)
+            }
+            return picture
+        }
         let status = net.on ? net.status : nil
         picture.tailnetName = status?.selfNode?.hostName.flatMap { $0.isEmpty ? nil : $0 }
         picture.macKeyExpiry = status?.selfNode?.keyExpiry
@@ -428,7 +436,8 @@ package enum DevicesWords {
         case .relayed?: return "relayed"
         case .tailnet?, nil: break
         }
-        return row.presence.map { "on " + $0 }
+        // The chat open on the phone: "in deploy fix" (never "on", which reads as a device).
+        return row.presence.map { "in " + $0 }
     }
 
     /// A row's hover, where its detail has more to say.

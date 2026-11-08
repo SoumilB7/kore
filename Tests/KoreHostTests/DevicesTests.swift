@@ -108,6 +108,44 @@ struct DevicesTests {
         #expect(denied.nodeKey == "nk:keyless" && store.pending().isEmpty)
     }
 
+    /// `devices remove 0009` and `devices allow 0009`: the first 4 digits `status` shows name a
+    /// device when only one has them; two that share them are refused, each listed.
+    @Test func aShortCodeNamesOneDeviceOrListsTheMatches() throws {
+        defer { try? FileManager.default.removeItem(at: root) }
+        func id(_ hex: String) -> UUID { UUID(uuidString: hex + "-0000-4000-8000-000000000000")! }
+        var a = record(.phone)
+        a.id = id("0009a0e9")
+        a.name = "Pixel 9"
+        var b = record(.phone)
+        b.id = id("0009b1c2")
+        b.name = "Pixel 8"
+        var c = record(.phone)
+        c.id = id("7f3a91c2")
+        try store.book.update { $0 += [a, b, c] }
+        #expect(DeviceRecord.codePrefix("0009") == "0009" && DeviceRecord.codePrefix("0009 A0E9") == "0009a0e9")
+        #expect(DeviceRecord.codePrefix("009") == nil && DeviceRecord.codePrefix("0009a0e9f") == nil && DeviceRecord.codePrefix("zzzz") == nil)
+        #expect(throws: DeviceStore.StoreError.ambiguous("0009", ["0009 a0e9 Pixel 9", "0009 b1c2 Pixel 8"])) { try store.remove("0009") }
+        #expect("\(DeviceStore.StoreError.ambiguous("0009", ["0009 a0e9 Pixel 9", "0009 b1c2 Pixel 8"]))".contains("0009 a0e9 Pixel 9, 0009 b1c2 Pixel 8"))
+        #expect(store.all().count == 3)
+        guard case .device(let gone, _) = try store.remove("7f3a") else { Issue.record("not removed"); return }
+        #expect(gone.id == c.id)
+        guard case .device(let first, _) = try store.remove("0009 a0e9") else { Issue.record("not removed"); return }
+        #expect(first.id == a.id)
+        guard case .device(let second, _) = try store.remove("0009") else { Issue.record("not removed"); return }
+        #expect(second.id == b.id && store.all().isEmpty)
+        #expect(throws: DeviceStore.StoreError.noSuch("0009")) { try store.remove("0009") }
+
+        // Allow: the same, among the devices waiting.
+        var one = pending("nk:one", kind: .phone)
+        one.device = id("12ab0001")
+        var two = pending("nk:two", kind: .phone)
+        two.device = id("12ab0002")
+        for entry in [one, two] { store.notePending(entry, at: t0) }
+        #expect(throws: DeviceStore.StoreError.ambiguous("12ab", ["12ab 0001 pixel", "12ab 0002 pixel"])) { try store.allow("12ab", at: t0) }
+        #expect(try store.allow("12AB 0002", at: t0).id == two.device)
+        #expect(try store.allow("12ab", at: t0).id == one.device)
+    }
+
     @Test func devicesSetIsTakenOnlyFromAnOwnerMacAndCascades() throws {
         defer { try? FileManager.default.removeItem(at: root) }
         let macKey = SoftwareIdentity(), otherKey = SoftwareIdentity(), phoneKey = SoftwareIdentity()

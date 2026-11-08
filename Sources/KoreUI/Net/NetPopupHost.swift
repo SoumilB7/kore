@@ -1,4 +1,5 @@
 import AppKit
+import Observation
 import SwiftUI
 
 /// KoreNet's in-window popups (Devices under the network icon, the Welcome's "+" list, New box,
@@ -44,6 +45,7 @@ final class NetPopupHost {
             point = edge == .center ? CGPoint(x: content.bounds.midX, y: top) : CGPoint(x: content.bounds.maxX - Space.xl, y: top)
             if edge == .leading { self.edge = .trailing }
         }
+        NetPopupRoom.shared.measure(below: point, in: content)
         let hosting = NSHostingView(rootView: view.environment(\.colorScheme, .dark).onGeometryChange(for: CGSize.self) { $0.size } action: { [weak self] size in
             self?.place(size)
         })
@@ -78,6 +80,7 @@ final class NetPopupHost {
         let x = edge == .leading ? bounds.minX : edge == .center ? bounds.midX : bounds.maxX
         let below = content.convert(anchor.convert(CGPoint(x: x, y: anchor.isFlipped ? bounds.maxY : bounds.minY), to: nil), from: nil)
         point = CGPoint(x: below.x, y: below.y + (content.isFlipped ? Space.xs : -Space.xs))
+        NetPopupRoom.shared.measure(below: point, in: content)
         place(host.frame.size)
     }
 
@@ -116,6 +119,20 @@ final class NetPopupHost {
     var window: NSWindow? { owner }
     /// Where it shows, in its window's content view.
     var frame: CGRect? { host?.frame }
+}
+
+/// How tall a popup may grow under its anchor before it scrolls (Devices, as "Add a box" opens
+/// in it): the room down to the window's edge, kept as the window resizes.
+@MainActor @Observable
+final class NetPopupRoom {
+    static let shared = NetPopupRoom()
+    private(set) var height: CGFloat = .infinity
+
+    func measure(below point: CGPoint, in content: NSView) {
+        let room = content.isFlipped ? content.bounds.maxY - point.y : point.y - content.bounds.minY
+        let next = max(Size.Net.row * 4, room - Space.sm)
+        if next != height { height = next }
+    }
 }
 
 /// The anchors popups hang from, by window: each title row's network icon registers its own, so

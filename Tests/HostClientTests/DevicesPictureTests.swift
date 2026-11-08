@@ -53,7 +53,13 @@ struct DevicesPictureTests {
 
     @Test func offShowsOffAndReadsNothing() {
         let picture = Self.picture(on: false, boxes: [Self.box()], phones: [Self.phone], addUntil: Self.now + 60)
-        #expect(picture.net == .off && picture.devices.isEmpty && picture.pending.isEmpty && picture.addUntil == nil)
+        // Off: only the boxes added by SSH are listed (they work without KoreNet), via SSH.
+        #expect(picture.net == .off && picture.pending.isEmpty && picture.addUntil == nil)
+        #expect(picture.devices.map(\.id) == ["mybox"] && picture.devices.first?.route == .ssh && picture.devices.first?.canJoin == false)
+        #expect(Self.picture(on: false, boxes: [Self.box(online: false, listed: .notSetUp)]).devices.map { DevicesWords.detail($0, now: Self.now) } == ["not set up"])
+        var directoryOnly = Self.box()
+        directoryOnly.listed = nil
+        #expect(Self.picture(on: false, boxes: [directoryOnly], phones: [Self.phone]).devices.isEmpty)
         #expect(Self.look(picture) == NetIconLook(dimmed: true, dot: nil, line: "KoreNet is off"))
     }
 
@@ -62,7 +68,7 @@ struct DevicesPictureTests {
         let picture = Self.picture(status: status, boxes: [Self.box()], phones: [Self.phone])
         #expect(Self.look(picture) == NetIconLook(dimmed: false, dot: nil, line: "MacBook, mybox and Pixel 9 connected"))
         // Tailnet is the normal route: the box's row says nothing; the phone's says its presence.
-        #expect(picture.devices.map { DevicesWords.detail($0, now: Self.now) } == [nil, "on deploy fix"])
+        #expect(picture.devices.map { DevicesWords.detail($0, now: Self.now) } == [nil, "in deploy fix"])
         #expect(picture.tailnetName == "macbook")
         #expect(Self.look(Self.picture()) == NetIconLook(dimmed: false, dot: nil, line: "No other devices yet"))
     }

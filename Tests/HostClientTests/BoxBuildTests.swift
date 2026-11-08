@@ -119,7 +119,9 @@ struct BoxBuildTests {
             "swift build --swift-sdk aarch64-swift-linux-musl -c release --product kore-host --scratch-path \(scratch) -Xlinker --strip-all",
             "swift build --swift-sdk aarch64-swift-linux-musl -c release --product kore-host --scratch-path \(scratch) --show-bin-path",
         ])
-        #expect(steps.all == ["Building kore-host for Linux arm64…"])
+        // A first build says its hint once, and the line holds still.
+        #expect(BoxHostBuild.stepLine("Building kore-host for Linux arm64", hint: "about 3 min") == "Building kore-host for Linux arm64… ·\u{00A0}about\u{00A0}3\u{00A0}min")
+        #expect(steps.all == [BoxHostBuild.stepLine("Building kore-host for Linux arm64", hint: "about 3 min")])
 
         // Next time: the cache, nothing run.
         let again = try await BoxBinary.local(.init(platform: "linux-aarch64"), override: nil, beside: nil, build: build)
@@ -176,7 +178,7 @@ struct BoxBuildTests {
             "git rev-parse HEAD",
         ])
         #expect(box.calls.contains { $0.hasPrefix("swift build --swift-sdk x86_64-swift-linux-musl") })
-        #expect(steps.all.prefix(4) == ["Checking mybox…", "Getting kore-host for Linux · x86_64 · Debian GNU/Linux 13 (trixie)…", "Installing Swift's Linux kit…", "Building kore-host for Linux x86_64…"])
+        #expect(steps.all.prefix(4) == ["Checking mybox…", "Getting kore-host for Linux · x86_64 · Debian GNU/Linux 13 (trixie)…", "Installing Swift's Linux kit…", BoxHostBuild.stepLine("Building kore-host for Linux x86_64", hint: "about 3 min")])
         #expect(fake.calls.contains { $0.hasPrefix("scp") })
     }
 
@@ -322,7 +324,7 @@ struct BoxBuildTests {
         let got = try await BoxBinary.local(.init(platform: "linux-x86_64") { steps.add($0) }, override: nil, beside: nil, build: build)
         let kind = await BoxHostBuild.system("/usr/bin/file", [got.url.path], nil, nil).output
         #expect(kind.contains("ELF 64-bit") && kind.contains("x86-64") && kind.contains("statically linked"))
-        #expect(steps.all.first == "Building kore-host for Linux x86_64…")
+        #expect(steps.all.first?.hasPrefix("Building kore-host for Linux x86_64…") == true)
         #expect(build.cached("linux-x86_64") == got.url)
     }
 }
