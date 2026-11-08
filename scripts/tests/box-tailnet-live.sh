@@ -45,6 +45,8 @@ cleanup() {
     if [[ -n $pid ]]; then
         "${ssh_box[@]}" "kill -INT $pid 2>/dev/null; i=0; while kill -0 $pid 2>/dev/null && [ \$i -lt 50 ]; do sleep 0.2; i=\$((i+1)); done; kill -KILL $pid 2>/dev/null; true" </dev/null
     fi
+    # Its pid unknown (a launch that never answered): this run's daemon and helper by their folder.
+    "${ssh_box[@]}" "pkill -INT -f '^$dir/bin/kore-host run' 2>/dev/null; sleep 2; pkill -KILL -f '^$dir/bin/kore-(host|tailnet)' 2>/dev/null; true" </dev/null
     "${ssh_box[@]}" "rm -rf '$dir'" </dev/null && lap "cleaned up: the test daemon stopped, $box:$dir removed"
     rm -rf "$here"
     print "note: $name is ephemeral and leaves the tailnet once offline (or remove it under Machines)"
@@ -87,7 +89,9 @@ lap "copied to $box:$dir/bin"
 
 # 4. KoreNet on, and the test daemon (its own lock, sockets and node: the real one is left alone).
 "${ssh_box[@]}" "$remote net on" </dev/null >/dev/null || fail "net on failed"
-pid=$("${ssh_box[@]}" "cd '$dir' && nohup $remote run > '$dir/run.log' 2>&1 < /dev/null & echo \$!" </dev/null)
+# Only the daemon goes to the background (a brace group, not a subshell holding ssh's output):
+# ssh returns at once with its pid.
+pid=$("${ssh_box[@]}" "cd '$dir' && { nohup $remote run > '$dir/run.log' 2>&1 < /dev/null & echo \$!; }" </dev/null)
 [[ $pid == <-> ]] || fail "the test daemon didn't start"
 lap "test daemon running (pid $pid), its node $name starting"
 
