@@ -1,5 +1,6 @@
 import AppKit
 import KoreCore
+import src
 
 // What a chat's controls do, for a storyline host (phase 12): the same calls the composer, the
 // Stop button, approval cards and Fork buttons make, plus the rows in plain terms for checks.

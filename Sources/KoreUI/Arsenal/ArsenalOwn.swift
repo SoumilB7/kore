@@ -1,4 +1,5 @@
 import Foundation
+import src
 
 /// What Own lets a chat's agent change on its own chat, through `kore` (`z-docs/agent-protocol.md`):
 /// its name, model, effort and fast mode, its mode only downwards, and a compaction. Each takes only

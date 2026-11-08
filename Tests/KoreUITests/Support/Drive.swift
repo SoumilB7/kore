@@ -2,6 +2,7 @@ import Foundation
 
 @testable import KoreCore
 @testable import KoreUI
+@testable import src
 
 /// Plays a cassette through a translator the way Kore does: each line Kore sent makes the calls
 /// `Chat.send` and the backend make (the user's message shown, a turn opened, a stamped message

@@ -1,6 +1,7 @@
 import Foundation
 
 import KoreUI
+import src
 
 /// What in Kore needs the user, for a companion's alerts: each chat's waiting cards, and its turn
 /// ends. Turn ends are kept from the moment the link opens, so a client that reconnects hears

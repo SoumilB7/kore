@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import KoreCore
 import Observation
+import src
 
 /// A tab: empty (provider picker), showing a chat, one of a chat's sub-agents, a file, or a
 /// board of chats.

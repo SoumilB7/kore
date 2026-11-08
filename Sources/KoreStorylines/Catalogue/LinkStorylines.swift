@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import KoreLink
 import KoreUI
+import src
 
 /// The local link end to end (`z-docs/link-protocol.md`): a ring shows Kore's card, Allow wakes a
 /// connection, a client on the socket proves itself (offering one command) and the title row's

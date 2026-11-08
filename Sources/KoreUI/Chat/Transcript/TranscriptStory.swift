@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import src
 
 /// A chat's transcript as a storyline reads it (phase 12, §3): its entries in order, in the
 /// user's terms, and a way to bring one into view from the model side. Only the storyline host

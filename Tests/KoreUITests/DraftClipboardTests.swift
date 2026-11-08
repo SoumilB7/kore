@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import ImageIO
+@testable import src
 import Testing
 import UniformTypeIdentifiers
 

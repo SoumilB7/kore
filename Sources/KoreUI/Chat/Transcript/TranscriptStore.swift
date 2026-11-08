@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import KoreCore
 import Observation
+import src
 
 /// The conversation as the transcript draws it. Entries arrive in order and are grouped into
 /// turns; a finished turn folds its work into one "Worked for …" line above its answer.

@@ -1,6 +1,7 @@
 import Foundation
 import KoreLink
 import KoreUI
+import src
 
 /// Arsenal's Drive through the real `kore`: a new chat opens in a tab of its own in front with its
 /// first message, as a person opens one, at a mode no freer than the caller's; another chat is

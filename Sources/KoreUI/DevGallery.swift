@@ -1,4 +1,5 @@
 import AppKit
+import src
 import SwiftUI
 
 /// KORE_GALLERY=1: a window showing every approval card and composer chip with fixed sample

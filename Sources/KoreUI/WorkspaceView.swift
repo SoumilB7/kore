@@ -1,5 +1,6 @@
 import KoreCore
 import Observation
+import src
 import SwiftUI
 
 /// The active tab: a file, a sub-agent, the provider picker, or a chat. The chats' view stays

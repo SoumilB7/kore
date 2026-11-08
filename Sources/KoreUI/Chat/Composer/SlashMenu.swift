@@ -1,3 +1,4 @@
+import src
 import SwiftUI
 
 /// Commands matching the typed "/word"; ↑↓ move, Return/Tab accept (handled by the composer).

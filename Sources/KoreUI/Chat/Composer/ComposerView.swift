@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import src
 import SwiftUI
 
 /// The input box: attachments, text, and the bar of controls under it, with the slash menu

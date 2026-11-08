@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+@testable import src
 import Testing
 
 @testable import KoreLink

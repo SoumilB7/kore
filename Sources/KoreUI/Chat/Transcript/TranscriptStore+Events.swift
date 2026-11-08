@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import src
 
 /// The transcript's side of `ChatEvent`: content, turns and sub-agents. Session, control and
 /// approval events belong to other stores and pass through untouched.
@@ -131,14 +132,6 @@ extension TranscriptStore {
     private static func attachment(_ a: SentAttachment) -> Attachment {
         if let url = a.url, FileManager.default.fileExists(atPath: url.path) { return Attachment(url: url) }
         return Attachment(name: a.name, kind: a.kind, imageData: a.image)
-    }
-}
-
-extension AgentID {
-    /// The sub-agent's id; nil for the chat's own agent.
-    var sub: String? {
-        if case .sub(let id) = self { return id }
-        return nil
     }
 }
 

@@ -1,5 +1,6 @@
 import AppKit
 import KoreCore
+import src
 import UniformTypeIdentifiers
 
 /// The right-click menu of an image or a file in a chat (a message's chip, a tool's file, a

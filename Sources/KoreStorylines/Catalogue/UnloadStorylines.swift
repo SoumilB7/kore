@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// A chat keeps its newest 15 turns in memory, and what's older can always be read back: these
 /// tell where that happens and where it must not.

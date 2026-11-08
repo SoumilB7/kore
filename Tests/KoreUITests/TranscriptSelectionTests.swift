@@ -1,4 +1,5 @@
 import AppKit
+@testable import src
 import SwiftUI
 import Testing
 

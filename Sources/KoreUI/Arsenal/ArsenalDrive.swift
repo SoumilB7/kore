@@ -1,5 +1,6 @@
 import Foundation
 import KoreCore
+import src
 
 /// What Drive adds (`z-docs/agent-protocol.md`): new chats in the caller's window, sends, stops,
 /// a tab brought to the front, question cards answered, and Own's changes on the window's other

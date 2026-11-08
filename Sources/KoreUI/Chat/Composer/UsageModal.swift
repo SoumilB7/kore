@@ -1,5 +1,6 @@
 import AppKit
 import KoreCore
+import src
 import SwiftUI
 
 /// The Usage popup's extended view (usage-monitor.html §10), a card centred over the chat: the

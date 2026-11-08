@@ -1,5 +1,6 @@
 import AppKit
 import KoreCore
+import src
 
 /// Debug hook for checking the UI without clicking through it:
 ///   KORE_OPEN=<folder>       open that folder's window at launch

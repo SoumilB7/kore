@@ -1,6 +1,7 @@
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// Kore's state as the link's wire values: windows, tabs, chats, cards and transcript entries.
 /// Every cap on what goes over the link is here, named.

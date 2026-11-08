@@ -1,5 +1,6 @@
 import Foundation
 import KoreCore
+import src
 
 /// The other half of an imported chat: what was carried from the source, shown above the
 /// divider, from the neutral turns kept with the import's record (the source file may be gone

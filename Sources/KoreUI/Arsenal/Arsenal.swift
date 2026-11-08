@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import src
 
 /// A chat's Arsenal tier (`z-docs/design/kore-access.html`). Each adds to the one before; Full has no
 /// commands behind it yet, so the popup leaves it out. The raw values are the wire and defaults ids

@@ -1,6 +1,7 @@
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// Several logins for one CLI (Account popup): signed in, the row's sign-in reads Add account,
 /// and its palette lists only the methods that make a login of their own. Finished as someone

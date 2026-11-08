@@ -1,6 +1,7 @@
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// What the scripted CLI does in one chat (phase 12, package C): what it plays when the chat
 /// starts, on each send, on a compaction, and for each sub-agent's card. `ScriptedBackend` plays

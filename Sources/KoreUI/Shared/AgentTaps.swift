@@ -1,3 +1,4 @@
+import src
 /// Where Kore meets its agent channel (the KoreLink module's `AgentChannel`,
 /// `z-docs/agent-protocol.md`). While no caller follows a transcript, `on` is false and the hook
 /// costs one branch.

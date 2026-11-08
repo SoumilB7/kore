@@ -1,6 +1,7 @@
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// The scroller on a long chat's right: a mark for every user message, plain for those built,
 /// the rest dim, a click on any brings its message to the top of the view, reading it in first if

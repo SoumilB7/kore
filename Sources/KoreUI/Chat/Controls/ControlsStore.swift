@@ -1,5 +1,6 @@
 import KoreCore
 import Observation
+import src
 import SwiftUI
 
 /// The chat's mode, model, effort and `/` commands: what the composer bar shows. Model and

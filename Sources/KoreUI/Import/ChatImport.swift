@@ -1,5 +1,6 @@
 import Foundation
 import KoreCore
+import src
 
 /// Why an import didn't happen. `notImportable` is said quietly (the picker just doesn't offer
 /// it): a file no format recognises, one damaged part-way, or one with nothing to carry.

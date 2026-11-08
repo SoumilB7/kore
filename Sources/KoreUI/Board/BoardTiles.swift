@@ -1,4 +1,5 @@
 import AppKit
+import src
 import SwiftUI
 
 /// What chips and cards draw: a few words of a chat read from its drawn rows (they follow

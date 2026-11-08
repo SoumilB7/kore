@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import KoreCore
+import src
 
 /// A row of the @ menu: a file or folder of the chat's folder, a model, a skill, or another tab.
 struct AtItem: Identifiable, Equatable, Sendable {

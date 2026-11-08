@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// The / menu's Account (account-popup.html's worked example and states): after Usage on a bare
 /// "/", in place of the CLI's own login and logout; picked, the popup opens where the menu was

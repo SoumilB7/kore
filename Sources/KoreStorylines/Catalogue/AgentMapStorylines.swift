@@ -1,5 +1,6 @@
 import AppKit
 import KoreUI
+import src
 
 /// The Agents button opens the agent map over a chat whose reader is part way up a long
 /// transcript: the helpers have all finished, so they wait in the closed Done group; opened, every

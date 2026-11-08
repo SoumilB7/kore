@@ -1,6 +1,7 @@
 import Foundation
 
 @testable import KoreUI
+@testable import src
 
 /// A `ChatEvent` as a short tag ("turnStarted", "tool Bash", "queued inTurn"), so a test can
 /// say which events came, in what order, without their ids, times or text.

@@ -1,6 +1,7 @@
 import AppKit
 import KoreCore
 import Observation
+import src
 
 /// Each CLI's login, app-wide: who it's signed in as, the one sign-in (or sign-out) under way
 /// for it, and a generation that goes up whenever the account changes, so every chat of that
@@ -292,7 +293,7 @@ package final class AccountStore {
         let pin = adding[provider].map { CLIProfiles.Pin(cli: provider, id: $0) } ?? aimed[provider]
         Task { await CLIProfiles.$pinned.withValue(pin) {
             do {
-                let handle = try await ops.calls.signIn(method.mechanism, SignInContext(folder: folder))
+                let handle = try await ops.calls.signIn(method.mechanism, SignInContext(folder: folder, open: { _ = NSWorkspace.shared.open($0) }))
                 guard serials[provider] == serial else { return await handle.cancel() }
                 handles[provider] = handle
                 if let url = handle.url {

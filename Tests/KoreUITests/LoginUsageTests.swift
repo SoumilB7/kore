@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import KoreCore
+@testable import src
 import Testing
 
 @testable import KoreUI

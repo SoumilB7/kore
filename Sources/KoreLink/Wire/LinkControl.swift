@@ -1,4 +1,5 @@
 import Foundation
+import src
 
 // KoreLink 1.2 (`z-docs/link-protocol.md` §11): what a companion granted full control for this run
 // may also read and do. Without the grant every command and read here is answered

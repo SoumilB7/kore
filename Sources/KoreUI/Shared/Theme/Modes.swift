@@ -1,19 +1,32 @@
+import src
 import SwiftUI
 
-/// The mode ladder: how strongly the composer outline signals a mode. Providers say which
-/// rung each of their modes takes (`ModeOption.rung`); the look of each rung is decided here.
-struct Rung: Sendable, Equatable {
-    let color: Color
-    /// Outline opacity when focused (×0.65 unfocused).
-    let opacity: Double
-    let width: CGFloat
+/// The look of each step on the mode ladder (`Rung`): how strongly the composer outline signals
+/// a mode.
+extension Rung {
+    var color: Color {
+        switch self {
+        case .plan: Theme.Blue.b200
+        case .edits: Theme.Blue.b400
+        case .auto: Theme.Blue.b300
+        case .danger: Theme.danger
+        }
+    }
 
-    /// Plan: the lightest, calmest step.
-    static let plan = Rung(color: Theme.Blue.b200, opacity: 0.55, width: 1)
-    /// Edit automatically.
-    static let edits = Rung(color: Theme.Blue.b400, opacity: 0.85, width: 1)
-    /// Auto / approve for me: the accent itself, heavier line.
-    static let auto = Rung(color: Theme.Blue.b300, opacity: 1, width: 1.5)
-    /// Full access / bypass: the one red.
-    static let danger = Rung(color: Theme.danger, opacity: 0.9, width: 1.5)
+    /// Outline opacity when focused (×0.65 unfocused).
+    var opacity: Double {
+        switch self {
+        case .plan: 0.55
+        case .edits: 0.85
+        case .auto: 1
+        case .danger: 0.9
+        }
+    }
+
+    var width: CGFloat {
+        switch self {
+        case .plan, .edits: 1
+        case .auto, .danger: 1.5
+        }
+    }
 }

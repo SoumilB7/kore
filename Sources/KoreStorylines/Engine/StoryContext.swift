@@ -1,5 +1,6 @@
 import AppKit
 import KoreUI
+import src
 
 /// The app as a storyline sees it: its folder's workspace, the active tab and its chat.
 @MainActor

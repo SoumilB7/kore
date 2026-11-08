@@ -1,6 +1,7 @@
 import AppKit
 import KoreCore
 import Observation
+import src
 import SwiftUI
 
 /// App-wide state: recent folders and whether the CLI is usable. Each window owns one

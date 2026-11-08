@@ -4,6 +4,7 @@ import Foundation
 import KoreCore
 import KoreLink
 import KoreUI
+import src
 
 // The agent channel checked whole (`z-docs/agent-protocol.md`): every read through the built
 // `kore` run the way an agent runs it, from inside a chat's process tree with that chat's pass,

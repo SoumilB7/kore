@@ -1,5 +1,6 @@
 import Foundation
 import KoreUI
+import src
 
 /// A command carried out in Kore, after the policy allows it against the chat as it is now (not
 /// as the client last saw it).

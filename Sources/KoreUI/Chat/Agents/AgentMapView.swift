@@ -1,3 +1,4 @@
+import src
 import SwiftUI
 
 /// Every agent the chat has spawned, over the chat area (phase 10 §6): a graph on the left with

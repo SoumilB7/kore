@@ -1,5 +1,6 @@
 import AppKit
 import KoreCore
+import src
 import SwiftUI
 
 /// The clock in the title row. It opens the history panel, which is drawn inside the window

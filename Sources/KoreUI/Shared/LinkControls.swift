@@ -1,6 +1,7 @@
 import AppKit
 import KoreCore
 import Foundation
+import src
 
 // What the local link (the KoreLink module) may do in Kore with full control (link 1.2): each is
 // one of Kore's own controls, as its button or menu runs it, except that nothing the link starts

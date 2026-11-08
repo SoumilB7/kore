@@ -1,4 +1,5 @@
 import KoreCore
+import src
 import SwiftUI
 
 /// What the transcript's rows can do. One value shared by every row, so rows compare by content.

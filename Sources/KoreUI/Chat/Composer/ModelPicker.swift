@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import src
 import SwiftUI
 
 /// The model and mode pickers' state in one chat: which is open (one at a time, in the popups'
@@ -542,5 +543,14 @@ private struct ChipFlow: SwiftUI.Layout {
             widest = max(widest, x - spacing)
         }
         return (points, widest, y + line)
+    }
+}
+
+extension ModelFamily {
+    /// A chip's width for its label: the label in the chip's type (medium, the wider of its
+    /// two weights, so a chip turning current doesn't fold its row) and its padding.
+    @MainActor static func chipWidth(_ label: String) -> CGFloat {
+        let font = NSFont.monospacedDigitSystemFont(ofSize: 12 * Zoom.shared.scale, weight: .medium)
+        return ((label as NSString).size(withAttributes: [.font: font]).width).rounded(.up) + 2 * Space.md
     }
 }

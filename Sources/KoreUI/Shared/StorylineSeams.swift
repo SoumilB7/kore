@@ -1,5 +1,6 @@
 import Foundation
 import KoreCore
+import src
 
 /// Where a storyline host (phase 12's `kore-storylines`, in the `KoreStorylines` target) reaches
 /// into the app. Each is nil in Kore itself, so the app runs as it always has.

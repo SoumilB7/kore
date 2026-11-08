@@ -1,6 +1,7 @@
 import AppKit
 import KoreCore
 import KoreUI
+import src
 
 // The steps every storyline starts from: open the folder, start or resume a chat, wait, check,
 // and keep evidence. Input steps (press, click, keys…) live in Input/; the scripted CLI's steps

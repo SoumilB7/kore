@@ -1,4 +1,5 @@
 import AppKit
+import src
 import SwiftUI
 
 /// The mode pill's popup (model-picker.html, "The mode pill"): over the composer's trailing

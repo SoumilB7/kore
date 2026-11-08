@@ -1,6 +1,7 @@
 import Foundation
 import KoreCore
 import Observation
+import src
 
 /// Account-list reads use the login's own CLI folder, never an open chat's session. One read
 /// at a time, only while the list is visible, shared across windows. The card reads the active

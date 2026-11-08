@@ -1,4 +1,5 @@
 import Foundation
+import src
 
 // What the local link (the KoreLink module) reads of Kore's state. Each is a plain read with no
 // cost of its own.

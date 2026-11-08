@@ -1,4 +1,5 @@
 import AppKit
+import src
 import UniformTypeIdentifiers
 
 /// A whole composer draft on a pasteboard (⌘A ⌘C): its text, its command and its attachments,

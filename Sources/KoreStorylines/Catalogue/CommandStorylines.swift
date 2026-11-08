@@ -1,6 +1,7 @@
 import AppKit
 import KoreCore
 import KoreUI
+import src
 
 /// A command the chat leaves running in the background: the Agents button counts it (">_ 1",
 /// with no agents to show), the map opens on the chat's own BACKGROUND, and its Stop asks first

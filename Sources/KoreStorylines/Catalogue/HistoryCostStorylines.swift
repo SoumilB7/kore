@@ -1,6 +1,7 @@
 import AppKit
 import KoreCore
 import KoreUI
+import src
 
 /// Opening a long history, in-process: resuming a chat of many turns, then opening its heavy
 /// sub-agent (hundreds of tool calls with long outputs) in its own tab, and scrolling each to its

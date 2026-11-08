@@ -21,16 +21,20 @@ let package = Package(
     ],
     targets: [
         .target(name: "KoreCore", swiftSettings: releaseForSize),
+        // The chat engine with no UI: providers, translators, chat and transcript state, saved
+        // sessions. Foundation and KoreCore only (no SwiftUI, AppKit or Combine), so a headless
+        // host can build it; nothing here imports KoreUI.
+        .target(name: "src", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
         // The app's views, stores and providers; `Kore` is its launcher. Other targets in this
         // package reach its `package` declarations.
         .target(
-            name: "KoreUI", dependencies: ["KoreCore", .product(name: "SwiftTerm", package: "SwiftTerm")],
+            name: "KoreUI", dependencies: ["src", "KoreCore", .product(name: "SwiftTerm", package: "SwiftTerm")],
             // mermaid.js for the diagram preview: bundled, so it never loads from the network.
             resources: [.copy("Resources/mermaid.min.js")], swiftSettings: releaseForSize),
         // The local link (`z-docs/link-protocol.md`): a companion app on the same Mac, allowed by
         // the user at a ring, follows chats and acts in them under Kore's rules. Asleep (no
         // socket, timer or observer) until then.
-        .target(name: "KoreLink", dependencies: ["KoreUI", "KoreCore"], swiftSettings: releaseForSize),
+        .target(name: "KoreLink", dependencies: ["KoreUI", "src", "KoreCore"], swiftSettings: releaseForSize),
         .executableTarget(name: "Kore", dependencies: ["KoreUI", "KoreCore", "KoreLink"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
         // The `kore` command in Kore.app (Contents/Helpers/kore): the reads over Kore's agent
@@ -39,7 +43,7 @@ let package = Package(
         .executableTarget(name: "kore-command", swiftSettings: releaseForSize),
         // User storylines (phase 12): the engine, steps, scripted CLI and catalogue, and the app
         // with them inside. Neither is part of Kore.app.
-        .target(name: "KoreStorylines", dependencies: ["KoreUI", "KoreCore", "KoreLink"], swiftSettings: releaseForSize),
+        .target(name: "KoreStorylines", dependencies: ["KoreUI", "src", "KoreCore", "KoreLink"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-storylines", dependencies: ["KoreStorylines", "KoreUI"], swiftSettings: releaseForSize),
         // Plays recorded CLI sessions as `claude` / `codex` for storylines.
         .executableTarget(name: "kore-fake-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
@@ -47,8 +51,8 @@ let package = Package(
         .executableTarget(name: "kore-power-bench", dependencies: ["KoreUI"], swiftSettings: releaseForSize),
         // `swift test`: Swift Testing, in the Command Line Tools (phase 12's core layer).
         .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore", "kore-fake-cli"]),
-        .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "KoreCore", "kore-fake-cli"]),
-        .testTarget(name: "KoreLinkTests", dependencies: ["KoreLink", "KoreUI", "KoreCore"]),
-        .testTarget(name: "StorylineTests", dependencies: ["KoreStorylines", "KoreUI", "KoreCore"]),
+        .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "src", "KoreCore", "kore-fake-cli"]),
+        .testTarget(name: "KoreLinkTests", dependencies: ["KoreLink", "KoreUI", "src", "KoreCore"]),
+        .testTarget(name: "StorylineTests", dependencies: ["KoreStorylines", "KoreUI", "src", "KoreCore"]),
     ]
 )

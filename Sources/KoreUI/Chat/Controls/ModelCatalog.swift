@@ -1,4 +1,5 @@
 import Foundation
+import src
 
 /// When a CLI's model list is read again: a session's start reads it anyway (free), and a turn's
 /// end may ask the running CLI, at most once per `interval` per CLI, one read at a time.

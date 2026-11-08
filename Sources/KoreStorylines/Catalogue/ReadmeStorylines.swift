@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 // The README's pictures: each one tells a feature with the scripted CLI in a demo folder, so no
 // real account, email or chat shows. `scripts/readme-shots.sh` takes and frames them all; the

@@ -1,5 +1,6 @@
 import AppKit
 import KoreCore
+import src
 import SwiftUI
 
 /// An agent's command as a shell shows one it ran: its prompt line, the output Kore kept for it

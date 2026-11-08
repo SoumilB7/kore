@@ -1,3 +1,4 @@
+@testable import src
 import Testing
 
 @testable import KoreUI

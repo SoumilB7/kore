@@ -1,4 +1,5 @@
 import AppKit
+import src
 import SwiftUI
 
 /// A timeline item's dot: its state, or a sub-agent's avatar. `.none` is a piece of line with

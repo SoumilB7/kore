@@ -1,6 +1,7 @@
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// The scripted CLI for a whole run: which script each new chat plays, every backend made (with
 /// its call log), and each session's history, so resuming or forking a scripted session replays

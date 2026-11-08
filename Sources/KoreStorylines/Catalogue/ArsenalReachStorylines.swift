@@ -2,6 +2,7 @@ import Foundation
 import KoreCore
 import KoreLink
 import KoreUI
+import src
 
 /// What every chat's CLI is given so its agent can reach Kore (`KoreReach`): the `kore` MCP server
 /// in its launch arguments, the instruction saying it's there, and `kore` on its PATH. Under the

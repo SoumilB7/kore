@@ -1,5 +1,6 @@
 import AppKit
 import KoreUI
+import src
 
 /// An agent with a long brief and many commands, opened in its own tab: the timeline takes the
 /// tab's whole height, the brief is its first row and scrolls away with the rest, and a long

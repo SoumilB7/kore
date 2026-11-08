@@ -1,6 +1,7 @@
 import AppKit
 import KoreCore
 import KoreUI
+import src
 
 /// A real PTY survives chat-tab changes and panel hiding, follows native sizing and ends when
 /// its window closes. The explorer stays outside the split, full height.

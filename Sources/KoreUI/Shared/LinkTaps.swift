@@ -1,5 +1,6 @@
 import AppKit
 import Observation
+import src
 
 /// Where Kore meets the local link (the KoreLink module, `z-docs/link-protocol.md`). While no
 /// companion is linked, `on` is false and every hook costs one branch; nothing else exists.

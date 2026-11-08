@@ -2,6 +2,7 @@ import CoreFoundation
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// The scripted CLI (phase 12, package C): a `ChatBackend` that answers each call with its
 /// chat's `CLIScript`, the storylines' default CLI. Each event goes out on a main run-loop pass

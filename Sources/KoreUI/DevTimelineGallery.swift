@@ -1,5 +1,6 @@
 import AppKit
 import KoreCore
+import src
 import SwiftUI
 
 /// KORE_GALLERY=timeline: the transcript timeline over a sample conversation, with every item

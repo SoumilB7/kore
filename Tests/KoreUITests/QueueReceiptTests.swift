@@ -1,4 +1,5 @@
 import Foundation
+@testable import src
 import Testing
 @testable import KoreCore
 

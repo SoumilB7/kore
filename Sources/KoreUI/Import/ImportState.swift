@@ -1,6 +1,7 @@
 import AppKit
 import KoreCore
 import Observation
+import src
 
 /// The import picker's state in one empty chat (chat-handoff.html §2 A): open or not, the
 /// chats it offers, the one picked, and the footer's one line. Only the footer changes as you

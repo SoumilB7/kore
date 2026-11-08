@@ -1,6 +1,7 @@
 import AppKit
 import KoreCore
 import Observation
+import src
 import SwiftUI
 import SwiftTerm
 

@@ -1,3 +1,4 @@
+import src
 import SwiftUI
 
 /// A sub-agent in its own tab (look.md §10): a crumb back to its parent chat, its prompt and

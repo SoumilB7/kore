@@ -1,6 +1,7 @@
 import AppKit
 import KoreCore
 import KoreUI
+import src
 
 /// The rows lit right now: the `.lit` marks a one-highlight list puts on its lit row, under `area`.
 @MainActor private func litRows(_ area: String) -> [String] {

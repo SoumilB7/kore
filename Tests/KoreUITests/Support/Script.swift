@@ -1,6 +1,7 @@
 import Foundation
 
 @testable import KoreUI
+@testable import src
 
 /// A transcript fed by hand: short calls for the events a rule test needs, and the drawn rows
 /// as one line each ("§ hello", "tool Bash stopped", "fold Worked for 2s interrupted").

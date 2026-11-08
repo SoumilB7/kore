@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import KoreUI
+import src
 
 /// The model chip's picker (model-picker.html, A): one row per family in the CLI's order, its
 /// versions newest first, the current model the accent chip. A chip picks at once and the popup

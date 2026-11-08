@@ -1,6 +1,7 @@
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// The scripted CLIs' logins (with `ScriptedBackend`, the storylines' default CLI): each CLI's
 /// status as it answers it (Kore parses it with its own code), and sign-ins and sign-outs a

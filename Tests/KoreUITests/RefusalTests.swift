@@ -1,5 +1,6 @@
 import Foundation
 @testable import KoreCore
+@testable import src
 import Testing
 
 @testable import KoreUI

@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// One connection of an allowed companion (`LinkRun`): from a ring's reply until the client goes.
 /// It holds the socket, the one client, the tick that turns Kore's state into what the client is

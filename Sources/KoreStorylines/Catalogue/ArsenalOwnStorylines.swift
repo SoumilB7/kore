@@ -1,6 +1,7 @@
 import Foundation
 import KoreLink
 import KoreUI
+import src
 
 /// Arsenal's Own through the real `kore`: chosen in the tab's tiers popup, it changes the chat it
 /// runs in as the composer would (model, effort, name, compact, the mode only downwards), says so in

@@ -1,3 +1,4 @@
+import src
 import SwiftUI
 
 /// Cards above the composer: what the CLI is waiting on (permissions, questions, plans).

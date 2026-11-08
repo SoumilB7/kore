@@ -1,6 +1,7 @@
 import Foundation
 
 @testable import KoreUI
+@testable import src
 
 /// The recorded runs as `ChatEvent` streams, each through its own CLI's translator.
 @MainActor

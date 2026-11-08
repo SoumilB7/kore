@@ -1,6 +1,7 @@
 import AppKit
 import KoreCore
 import KoreUI
+import src
 
 /// A chat with the scripted CLI, told once by Claude and once by Codex: the folder opens, the
 /// script is set, a chat starts. Its subclasses give the script and what happens next.

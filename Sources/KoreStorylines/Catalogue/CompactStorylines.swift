@@ -1,6 +1,7 @@
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// A compaction the user didn't ask for doesn't leave work stopped: Kore's own at its point,
 /// right after a turn that ran to its end, is followed by "Continue"; so is the CLI's own when

@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import src
 
 // The local link's protocol, version 1.0, as Swift values. `z-docs/link-protocol.md` is the
 // definition; `Tests/Fixtures/link/v1` holds one JSON file per message, and `LinkFixtureTests`

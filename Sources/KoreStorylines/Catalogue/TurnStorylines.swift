@@ -1,5 +1,6 @@
 import Foundation
 import KoreUI
+import src
 
 /// Compacting from the context wheel: the "Conversation compacted" divider, then the summary.
 final class CompactViaWheel: ChatStoryline {

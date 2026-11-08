@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// The / menu's Usage: first on a bare "/" (in place of the CLI's own usage command), picked
 /// with Return it takes the "/" out and opens the popup where the menu was, with no chip and

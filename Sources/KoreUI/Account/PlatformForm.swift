@@ -1,5 +1,6 @@
 import Foundation
 import KoreCore
+import src
 
 /// A platform form's values that aren't secret (the credential choice, profile, region, project,
 /// key file's path, resource), kept for this run of Kore so reopening a form fills it in again.

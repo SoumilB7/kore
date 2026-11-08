@@ -1,6 +1,7 @@
 import Foundation
 import KoreCore
 import os
+import src
 
 /// Dev only: a Claude session's history played back as if it were streaming, with no CLI and no
 /// model, to measure the transcript under a live turn (phase 11). With `KORE_RESUME=claude:<id>`:

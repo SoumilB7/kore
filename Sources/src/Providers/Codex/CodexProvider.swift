@@ -1,0 +1,46 @@
+import Foundation
+import KoreCore
+
+extension ProviderDescriptor {
+    package static let codex = ProviderDescriptor(
+        id: "codex", name: "Codex", logoSVG: Logos.codex,
+        // White glyph; as a template it takes the surrounding foreground colour.
+        logoIsTemplate: true,
+        modes: CodexModes.all, planToggle: CodexModes.plan, historyAgent: .codex,
+        availableModes: { _ in CodexModes.all.filter(\.listed) },
+        // Shift+Tab toggles Plan, as in the Codex CLI.
+        nextMode: { _, _, _ in .togglePlan },
+        makeBackend: { CodexBackend($0) },
+        sessions: { folder in try? await CodexHistory.threads(in: folder) },
+        setArchived: { id, archived, folder in
+            if archived {
+                try? await CodexHistory.archive(id, in: folder)
+            } else {
+                try? await CodexHistory.unarchive(id, in: folder)
+            }
+        },
+        historyFile: { id, folder in try? await CodexHistory.rolloutPath(id, in: folder) },
+        usage: UsageWording(product: "Codex", rows: ["5h limit", "Weekly limit"], resetsCaption: "Reset your current usage limits",
+            // OpenAI's Codex speed page: plan limits at 2.5× the Standard rate, credits at 2×.
+            fastCost: FastCost(times: "2.5×", detail: "Fast mode: 2.5× plan usage per token (2× on credits)")),
+        account: .codex,
+        install: InstallWording(maker: "OpenAI", source: "chatgpt.com/codex · into ~/.local/bin · about a minute · no Node needed"))
+}
+
+/// Codex's permission presets as its VS Code extension shows them, and its separate Plan toggle.
+package enum CodexModes {
+    package static let fullAccess = "fullAccess"
+    package static let all: [ModeOption] = [
+        ModeOption(id: "askForApproval", label: "Ask for approval", icon: ModeIcons.askForApproval, rung: nil, iconSize: 15),
+        ModeOption(id: "approveForMe", label: "Approve for me", icon: ModeIcons.approveForMe, rung: .auto, iconSize: 15),
+        ModeOption(id: fullAccess, label: "Full access", icon: ModeIcons.fullAccess, rung: .danger, iconSize: 15),
+        // Not in the menu: a start Arsenal can give a Codex chat it opens (read-only sandbox,
+        // asking on request before any edit). It reads any file without asking, so it ranks above
+        // Edit automatically.
+        ModeOption(id: readOnly, label: "Read only", icon: ModeIcons.askForApproval, rung: nil, listed: false, iconSize: 15),
+    ]
+
+    package static let readOnly = "readOnly"
+
+    package static let plan = ModeOption(id: "plan", label: "Plan", icon: ModeIcons.codexPlan, rung: .plan, iconSize: 14)
+}

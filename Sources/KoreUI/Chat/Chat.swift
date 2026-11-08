@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import KoreCore
 import Observation
+import src
 
 /// One conversation with a CLI. It owns the backend and hands each `ChatEvent` to the stores,
 /// one per feature: the transcript, approvals, controls (mode, model, commands), status and
@@ -485,6 +486,8 @@ package final class Chat: Identifiable {
             model: launchModel, effort: launchEffort, fork: fork, forkTitle: fork == nil ? nil : status.name)
         options.fastMode = launchFastMode
         options.agentPass = agentPass
+        let cli = provider.id
+        options.planWindows = { UsageCues.shared.take(cli, snapshot: $0) }
         if let imported {
             options.hiddenRows = Set(imported.record.written)
             options.instructions = imported.record.instructions.map { URL(fileURLWithPath: $0) }

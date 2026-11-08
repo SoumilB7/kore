@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 import Foundation
 import KoreCore
+@testable import src
 import SwiftTerm
 import Testing
 

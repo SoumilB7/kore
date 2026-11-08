@@ -1,5 +1,6 @@
 import AppKit
 import KoreCore
+import src
 import SwiftUI
 
 /// Compact plan totals below a login. Missing, loading and inaccessible readings have words,

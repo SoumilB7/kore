@@ -2,6 +2,7 @@ import Foundation
 import KoreCore
 import KoreLink
 import KoreUI
+import src
 
 /// The agent channel end to end (`z-docs/agent-protocol.md`), through the built `kore` binary
 /// run as a terminal would run it. A grant alone opens nothing while the switch is off; the

@@ -1,6 +1,7 @@
 import Foundation
 import KoreCore
 import KoreUI
+import src
 
 /// A 1.2 command carried out in Kore (`z-docs/link-protocol.md` §11), after the policy allows it
 /// against the run's grant and the chat as it is now. Each runs Kore's own control for it; what

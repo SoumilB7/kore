@@ -1,5 +1,6 @@
 import AppKit
 import Combine
+import src
 import SwiftUI
 
 /// The running turn's last row, as in the Claude Code extension (look.md §12): a glyph cycling

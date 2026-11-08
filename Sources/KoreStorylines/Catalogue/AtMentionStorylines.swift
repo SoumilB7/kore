@@ -1,5 +1,6 @@
 import AppKit
 import KoreUI
+import src
 
 /// "@" in the composer opens one search over the folder's files, the models and the rest:
 /// "@Read" and Return attach README.md as a chip, the "@Read" gone; "@hai" and Return switch the
