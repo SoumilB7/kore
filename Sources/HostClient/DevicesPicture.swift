@@ -271,7 +271,7 @@ extension DevicesPicture {
             if row.needsTailscale { row.status = .offline }
             picture.devices.append(row)
         }
-        // Waiting: deduped by node key, cooled ones gone, newest last, at most 8.
+        // Waiting: deduped by node key, cooled ones gone, newest first, at most 8.
         var seen = Set<String>()
         var waiting: [PendingRow] = []
         for box in boxes where box.online {
@@ -279,7 +279,7 @@ extension DevicesPicture {
                 waiting.append(PendingRow(device: device, box: box.key, at: box.name))
             }
         }
-        if net.on { picture.pending = Array(waiting.sorted { $0.device.lastSeen < $1.device.lastSeen }.suffix(pendingCap)) }
+        picture.pending = Array(waiting.sorted { $0.device.lastSeen > $1.device.lastSeen }.prefix(pendingCap))
         return picture
     }
 
@@ -430,7 +430,7 @@ package struct NetIconLook: Equatable, Sendable {
         case .starting: return NetIconLook(dimmed: true, dot: nil, line: "KoreNet is starting")
         default: break
         }
-        if let first = picture.pending.last {
+        if let first = picture.pending.first {
             let more = picture.pending.count - 1
             return NetIconLook(dimmed: false, dot: .accent, line: DevicesWords.waiting(first) + (more > 0 ? " · \(more) more" : ""))
         }

@@ -75,6 +75,11 @@ package final class Devices {
     @ObservationIgnored package var phones: (any PhoneDevices)?
     /// The Welcome's claims of tailnet boxes.
     @ObservationIgnored package var claims: (any BoxClaims)?
+    /// The boxes as held (Kore: the box list, their links, KoreNet's directory; storylines and
+    /// snapshots: their own).
+    @ObservationIgnored package var boxes: (@MainActor () -> [BoxFacts])?
+    /// This Mac's name as Devices says it.
+    @ObservationIgnored package var macNameOverride: String?
     /// Opens a page in the browser, or an app (storylines: recorded, nothing opens).
     @ObservationIgnored package var openURL: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
     @ObservationIgnored package var openTailscaleApp: @MainActor () -> Void = { Devices.launchTailscale() }
@@ -117,11 +122,11 @@ package final class Devices {
 
     package func picture(now: Date = Date()) -> DevicesPicture {
         _ = revision
-        guard let net else { return DevicesPicture(net: .off, macName: macName) }
+        guard let net else { return DevicesPicture(net: .off, macName: macNameOverride ?? macName) }
         let facts = net.facts
-        guard facts.on else { return DevicesPicture(net: .off, macName: macName) }
+        guard facts.on else { return DevicesPicture(net: .off, macName: macNameOverride ?? macName) }
         return DevicesPicture.make(
-            net: facts, macName: macName, boxes: boxFacts(), phones: phones?.phones ?? [], addUntil: phones?.addUntil, refusals: phones?.refusals ?? [],
+            net: facts, macName: macNameOverride ?? macName, boxes: boxes?() ?? boxFacts(), phones: phones?.phones ?? [], addUntil: phones?.addUntil, refusals: phones?.refusals ?? [],
             signingIn: signingIn, nudge: nudge, now: now)
     }
 

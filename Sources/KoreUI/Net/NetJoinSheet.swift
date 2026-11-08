@@ -141,9 +141,9 @@ struct NetJoinSheet: View {
     // MARK: Showing
 
     /// Starts `key`'s join and shows its sheet under `anchor` (the Welcome's line, or the icon).
-    static func show(_ key: String, under anchor: NSView?) {
+    static func show(_ key: String, under anchor: NSView?, in window: NSWindow? = nil) {
         Devices.shared.join(key)
-        guard let join = Devices.shared.joining, let window = anchor?.window ?? NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        guard let join = Devices.shared.joining, let window = anchor?.window ?? window ?? NSApp.keyWindow ?? NSApp.mainWindow else { return }
         NetPopupHost.shared.show("join", NetJoinSheet(join: join), in: window, under: anchor, edge: .center, modal: true) { Devices.shared.endJoin() }
     }
 
@@ -180,5 +180,13 @@ struct NetJoinLine: View {
         }
         .font(Chrome.caption)
         .background(BoxAnchor { anchor.value = $0 })
+    }
+}
+
+extension Devices {
+    /// A box's join sheet in `window`, under its network icon (storylines; Kore opens it from
+    /// Devices ⋯ and the Welcome's line).
+    package func openJoin(_ key: String, in window: NSWindow?) {
+        NetJoinSheet.show(key, under: window.flatMap { NetAnchors.icon(in: $0) }, in: window)
     }
 }

@@ -83,7 +83,7 @@ let package = Package(
         .target(name: "AgentTools", swiftSettings: releaseForSize),
         // User storylines (phase 12): the engine, steps, scripted CLI and catalogue, and the app
         // with them inside. Neither is part of Kore.app.
-        .target(name: "KoreStorylines", dependencies: ["KoreUI", "src", "KoreCore", "KoreLink", "LinkProtocol"], swiftSettings: releaseForSize),
+        .target(name: "KoreStorylines", dependencies: ["KoreUI", "src", "KoreCore", "KoreLink", "LinkProtocol", "HostClient"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-storylines", dependencies: ["KoreStorylines", "KoreUI"], swiftSettings: releaseForSize),
         // Plays recorded CLI sessions as `claude` / `codex` for storylines.
         .executableTarget(name: "kore-fake-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),

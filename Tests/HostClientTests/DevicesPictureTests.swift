@@ -117,8 +117,8 @@ struct DevicesPictureTests {
         #expect(picture.pending.count == 8)
         #expect(!picture.pending.contains { $0.id == "cold" })
         #expect(Set(picture.pending.map(\.id)).count == 8)
-        // Newest last; the oldest beyond the cap go.
-        #expect(picture.pending.last?.id == "n0")
+        // Newest first; the oldest beyond the cap go.
+        #expect(picture.pending.first?.id == "n0" && !picture.pending.contains { $0.id == "n8" })
         #expect(picture.pending.first?.kind == .phone)
     }
 

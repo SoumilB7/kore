@@ -111,6 +111,9 @@ final class NetPopupHost {
     }
 
     func isShowing(_ id: String) -> Bool { showing == id }
+
+    /// The window it shows in.
+    var window: NSWindow? { owner }
 }
 
 /// The anchors popups hang from, by window: each title row's network icon registers its own, so

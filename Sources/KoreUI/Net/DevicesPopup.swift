@@ -160,7 +160,6 @@ struct DevicesPopup: View {
             if lit {
                 NetMoreButton(lit: menuFor.value == row.id) { openMenu(row) }
                     .background(BoxAnchor { [anchors] view in anchors.value[row.id] = view })
-                    .storyID(StoryID.Net.more(row.id), press: { openMenu(row) })
             } else if let dot = rowDot(row) {
                 NetDot(fill: dot)
             }
@@ -169,8 +168,11 @@ struct DevicesPopup: View {
             if inside { hoveredRow.value = row.id } else if hoveredRow.value == row.id { hoveredRow.value = nil }
         }
         .help(DevicesWords.help(row) ?? "")
+        .background(BoxAnchor { [anchors] view in anchors.value["row:" + row.id] = view })
         .storyID(StoryID.Net.row(row.id))
         .background {
+            // ⋯ shows on hover only: storylines open its menu without one.
+            Color.clear.storyAction(StoryID.Net.more(row.id)) { openMenu(row) }
             // ⋯'s items, for storylines (a Kore menu's rows are found by index otherwise).
             Color.clear.storyAction(StoryID.Net.row(row.id).part(.field)) { startRename(row) }
             Color.clear.storyAction(StoryID.Net.row(row.id).part(.stop)) { devices.setPaused(row, true) }
@@ -193,8 +195,11 @@ struct DevicesPopup: View {
     }
 
     private func openMenu(_ row: DeviceRow) {
-        guard let view = anchors.value[row.id], let window = view.window else { return }
-        let point = view.convert(CGPoint(x: view.bounds.minX, y: view.isFlipped ? view.bounds.maxY : view.bounds.minY), to: nil)
+        // Under ⋯, or (opened without the pointer) at the row's trailing end.
+        let more = anchors.value[row.id].flatMap { $0.window == nil ? nil : $0 }
+        guard let view = more ?? anchors.value["row:" + row.id], let window = view.window else { return }
+        let x = more == nil ? view.bounds.maxX - Size.Net.more : view.bounds.minX
+        let point = view.convert(CGPoint(x: x, y: view.isFlipped ? view.bounds.maxY : view.bounds.minY), to: nil)
         var items = [OptionItem("Rename") { startRename(row) }]
         items.append(row.paused ? OptionItem("Bring online") { devices.setPaused(row, false) } : OptionItem("Take offline") { devices.setPaused(row, true) })
         if row.canJoin { items.append(OptionItem("Join KoreNet") { join(row) }) }
@@ -215,9 +220,10 @@ struct DevicesPopup: View {
     }
 
     private func join(_ row: DeviceRow) {
-        let anchor = NetAnchors.icon(in: NSApp.keyWindow ?? NSApp.mainWindow ?? NSWindow())
+        let window = NetPopupHost.shared.window ?? NSApp.keyWindow ?? NSApp.mainWindow
+        let anchor = window.flatMap { NetAnchors.icon(in: $0) }
         NetPopupHost.shared.close()
-        NetJoinSheet.show(row.id, under: anchor)
+        NetJoinSheet.show(row.id, under: anchor, in: window)
     }
 
     // MARK: Lines
