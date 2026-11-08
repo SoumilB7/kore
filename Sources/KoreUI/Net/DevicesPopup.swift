@@ -102,6 +102,7 @@ struct DevicesPopup: View {
             header(picture, now: now)
             macRow(picture)
             ForEach(picture.devices) { row in deviceRow(row, now: now) }
+            if picture.devices.contains(where: { $0.kind == .box }) { keepBoxesRow }
             lines(picture, now: now)
             addBox(picture)
         }
@@ -142,6 +143,22 @@ struct DevicesPopup: View {
     }
 
     // MARK: Rows
+
+    /// "Keep boxes updated": one quiet line with its switch, while there are boxes.
+    private var keepBoxesRow: some View {
+        @Bindable var updates = BoxUpdates.shared
+        return NetLine {
+            Text("Keep boxes updated")
+            Spacer(minLength: Space.md)
+            Toggle("", isOn: $updates.keep)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .tint(Theme.accent)
+                .accessibilityLabel("Keep boxes updated")
+                .storyID(StoryID.Net.keepBoxes, press: { updates.keep.toggle() })
+        }
+    }
 
     private func macRow(_ picture: DevicesPicture) -> some View {
         NetRowFrame(lit: false) {

@@ -100,6 +100,11 @@ A box runs the latest release without anyone logging in to it:
   the latest release the Mac found, and no chat is working there, the Mac asks it to update.
 - The box downloads its own binary from the release and checks it as `kore-host update` does. It
   swaps it in and restarts; the Mac and phones reconnect by themselves.
+- If the box can't reach GitHub, the Mac downloads the release itself, checks it, and the box
+  pulls the three files over the link. The box checks them the same way.
+- Devices shows `Updating mybox…`, then `updated to 0.3.0` for a moment.
+- A box on the same version or newer (a dev build) is never asked, and the box refuses a
+  downgrade anyway.
 - The box writes a journal line, and `kore-host status` says what happened:
   `updated  to 0.3.0 by Soumil's MacBook Air, 5 min ago`.
 

@@ -115,6 +115,8 @@ package struct DeviceRow: Identifiable, Equatable, Sendable {
     package var upgradeFix: BoxFix?
     /// On KoreNet a moment ago ("on KoreNet" for `BoxUpgrades.shownFor`).
     package var joinedAt: Date?
+    /// Its kore-host update from this Mac: "Updating mybox…", then "updated to 0.3.1".
+    package var update: String?
 
     package init(id: String, kind: Kind, name: String, status: Status, route: Route? = nil) {
         self.id = id
@@ -206,6 +208,8 @@ package struct BoxFacts: Equatable, Sendable {
     package var pending: [PendingDevice] = []
     /// Its SSH → KoreNet upgrade, as `BoxUpgrades` says it.
     package var upgrade: BoxUpgradeFacts?
+    /// Its kore-host update, as `BoxUpdates` holds it.
+    package var update: BoxUpdates.Work?
 
     package init(key: String, name: String) {
         self.key = key
@@ -245,6 +249,7 @@ extension DevicesPicture {
             for box in boxes where box.listed != nil {
                 var row = DeviceRow(id: box.key, kind: .box, name: box.name, status: boxStatus(box), route: .ssh)
                 row.paused = box.paused
+                row.update = updateLine(box)
                 row.lastSeen = box.lastHeard
                 picture.devices.append(row)
             }
@@ -273,6 +278,7 @@ extension DevicesPicture {
             row.tailscaleOff = box.entry.map { $0.on && !$0.listening } ?? false
             row.identityChanged = box.entry?.identityChanged ?? false
             row.enrolled = box.entry?.enrolled ?? false
+            row.update = updateLine(box)
             if net.on, let upgrade = box.upgrade {
                 row.upgrading = upgrade.working
                 row.upgradeNote = upgrade.note
@@ -372,6 +378,10 @@ extension DevicesPicture {
         }
     }
 
+    static func updateLine(_ box: BoxFacts) -> String? {
+        box.update.map { $0.done == nil ? "Updating \(box.name)…" : "updated to \($0.to)" }
+    }
+
     static func boxStatus(_ box: BoxFacts) -> DeviceRow.Status {
         if box.online { return box.older ? .needsUpdate : .connected }
         switch box.refused {
@@ -429,6 +439,7 @@ package enum DevicesWords {
         if row.identityChanged { return "identity changed · Forget and set up again" }
         if row.needsTailscale { return "needs Tailscale on" }
         if let upgrading = row.upgrading { return upgrading }
+        if let update = row.update { return update }
         if let at = row.joinedAt, now.timeIntervalSince(at) < Double(BoxUpgrades.shownFor.components.seconds) { return "on KoreNet" }
         if let note = row.upgradeNote { return note }
         switch row.status {

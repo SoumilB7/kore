@@ -856,6 +856,8 @@ package final class HostConnection {
             self.chats = Dictionary(chats.map { ($0.id, $0) }, uniquingKeysWith: { _, b in b })
             if let clis = extras?.clis { self.clis = clis }
             becameReady()
+            // Keep boxes updated: the box hears the setting, and is asked when it's behind and idle.
+            if let box = BoxUpdates.Box(self) { BoxUpdates.shared.linkedUp(box) }
             for (id, entry) in followers where self.chats[id] != nil || old[id] != nil {
                 entry.follower?.meta(self.chats[id])
             }
@@ -881,6 +883,9 @@ package final class HostConnection {
                 followers[id]?.follower?.meta(nil)
             }
             if let chats, !chats.isEmpty { for watcher in metaWatchers.values { watcher(chats.map(\.id)) } }
+            if chats?.isEmpty == false, BoxUpdates.shared.latest != nil, let box = BoxUpdates.Box(self), !box.working {
+                BoxUpdates.shared.consider(box)
+            }
             if windows != nil || chats?.isEmpty == false { for watcher in tabWatchers.values { watcher() } }
             saveSoon()
         case .historyPage(let id, _, let sessions, _):
@@ -913,6 +918,11 @@ package final class HostConnection {
             filesHits(raw)
         case .unknown(let type) where type == FilesProgress.type:
             filesProgress(raw)
+        case .unknown(let type) where type == UpdateWire.result:
+            if let result = try? JSONDecoder().decode(UpdateWire.Result.self, from: raw) { BoxUpdates.shared.answered(alias, result) }
+        case .unknown(let type) where type == UpdateWire.get:
+            // The box pulls the release this Mac holds for it, a piece at a time.
+            if let get = try? JSONDecoder().decode(UpdateWire.Get.self, from: raw) { post(StreamWire.encode(BoxUpdates.shared.piece(get))) }
         case .unknown(let type) where type == UsageWire.page:
             if let page = try? JSONDecoder().decode(UsageWire.Page.self, from: raw) { usageWaits.removeValue(forKey: page.id)?.resume(returning: page) }
         case .unknown(let type) where type == NetNodeWire.type:

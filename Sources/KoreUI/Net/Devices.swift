@@ -201,6 +201,7 @@ package final class Devices {
         facts.paused = NetPauses.shared.contains(key)
         facts.pending = connection?.pendingDevices ?? facts.entry?.pending ?? []
         facts.upgrade = upgrades?.facts(key)
+        facts.update = BoxUpdates.shared.work[connection?.alias ?? key]
         return facts
     }
 
@@ -441,6 +442,8 @@ extension StoryID {
         package static let toggle = popup.part(.toggle)
         package static let add = popup.part(.add)
         package static let closeAdd = popup.part(.close)
+        /// "Keep boxes updated", under the rows while there are boxes.
+        package static let keepBoxes = StoryID(.titlebar, "net.keepboxes")
         /// The Add window's countdown, and "Get the phone app".
         package static let countdown = StoryID(.titlebar, "net.countdown")
         package static let phoneApp = StoryID(.titlebar, "net.phoneapp")
