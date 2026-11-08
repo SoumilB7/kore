@@ -145,6 +145,13 @@ step "Building and installing Kore (first time ~5–10 min)…"
 # terminal, that closes this one: the install goes on, through tee, with nowhere left to print.
 trap '' HUP
 set +eo pipefail
+# This Mac's own signing identity (scripts/local-sign.sh, made once): every build the same app
+# to macOS, so the Keychain's Always Allow and privacy permissions hold across updates. Without
+# it (an older source, or it couldn't be made) the build is ad-hoc, as before.
+if [[ -z "${KORE_SIGN_IDENTITY:-}" && -x "$DIR/scripts/local-sign.sh" ]]; then
+    KORE_SIGN_IDENTITY="$("$DIR/scripts/local-sign.sh" 2>/dev/null || true)"
+fi
+export KORE_SIGN_IDENTITY="${KORE_SIGN_IDENTITY:-}"
 ( cd "$DIR" && KORE_RELEASES="$RELEASES" ./scripts/build-app.sh --install ) 2>&1 | tee "$DIR/install.log"
 status=${PIPESTATUS[0]}
 set -eo pipefail
