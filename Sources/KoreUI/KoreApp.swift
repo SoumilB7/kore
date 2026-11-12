@@ -34,7 +34,7 @@ package struct KoreApp: App {
                 .environment(app)
                 .modifier(WindowActions(app: app))
                 .containerBackground(Theme.background, for: .window)
-                .preferredColorScheme(.dark)
+                .modifier(ThemeScheme())
         }
         .windowStyle(.hiddenTitleBar)
         .windowResizability(.contentSize)
@@ -83,7 +83,7 @@ package struct KoreApp: App {
                 BoxWindow(place: Binding(get: { value }, set: { $place.wrappedValue = $0 }))
                     .modifier(WindowActions(app: app))
                     .containerBackground(Theme.background, for: .window)
-                    .preferredColorScheme(.dark)
+                    .modifier(ThemeScheme())
             }
         }
         .windowStyle(.hiddenTitleBar)

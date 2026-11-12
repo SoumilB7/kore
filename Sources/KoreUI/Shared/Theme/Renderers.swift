@@ -97,7 +97,7 @@ extension Theme {
         static let nodeLine = Blue.b500
         static let alternate = surfaceRaised
         static let cluster = surface
-        static let clusterLine = Color(hex: 0x2A3338)
+        static let clusterLine = Appearance.role(\.clusterLine)
         static let edge = secondary
         static let text = Theme.text
         static let label = background
