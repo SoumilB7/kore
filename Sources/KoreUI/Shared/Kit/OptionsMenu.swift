@@ -162,9 +162,13 @@ final class OptionsMenu {
         anchor = point
         self.source = source
         let host = NSHostingView(rootView: OptionsList(menu: self))
+        // Above the content it's under the title bar's safe area, which would push the list down
+        // inside its frame and cut its last rows off.
+        host.safeAreaRegions = []
         host.setAccessibilityRole(.menu)
         self.host = host
-        window.contentView?.addSubview(host)
+        guard let content = window.contentView else { return }
+        Self.layer(over: content).addSubview(host)
         place()
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown, .scrollWheel]) { [weak self] event in
             guard let self else { return event }
@@ -180,6 +184,33 @@ final class OptionsMenu {
             MainActor.assumeIsolated { self?.close() }
         })
         UILog.event("options-open", ["source": source])
+    }
+
+    /// Where menus go: a see-through view over the window's content, in its coordinates. On
+    /// macOS 27 a view added inside SwiftUI's hosting view isn't drawn, so the menu sits beside
+    /// it, above.
+    private static func layer(over content: NSView) -> NSView {
+        guard let frame = content.superview else { return content }
+        if let existing = frame.subviews.first(where: { ($0 as? MenuLayer)?.flips == content.isFlipped }) {
+            existing.frame = content.frame
+            return existing
+        }
+        let layer = MenuLayer(frame: content.frame)
+        // Same coordinates as the content, so `place()`'s frame holds in it.
+        layer.flips = content.isFlipped
+        layer.autoresizingMask = [.width, .height]
+        frame.addSubview(layer, positioned: .above, relativeTo: content)
+        return layer
+    }
+
+    /// Takes only the clicks that land on a menu in it.
+    private final class MenuLayer: NSView {
+        var flips = true
+        override var isFlipped: Bool { flips }
+        override func hitTest(_ point: NSPoint) -> NSView? {
+            let hit = super.hitTest(point)
+            return hit === self ? nil : hit
+        }
     }
 
     private func place() {
