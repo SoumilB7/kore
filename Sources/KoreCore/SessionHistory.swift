@@ -563,7 +563,7 @@ public enum ClaudeHistory {
     /// made "-".
     public static func projectKey(for folder: URL) -> String {
         // realpath, like the CLI: Foundation's resolvingSymlinksInPath turns /private/tmp into /tmp.
-        let path = realpath(folder.path, nil).map { defer { free($0) }; return String(cString: $0) } ?? folder.path
+        let path = realpath(folder.path, nil).map { p in defer { free(p) }; return String(cString: p) } ?? folder.path
         return String(path.map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
     }
 
