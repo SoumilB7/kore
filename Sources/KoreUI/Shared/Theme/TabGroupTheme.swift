@@ -4,18 +4,8 @@ import SwiftUI
 /// window's ground and kept apart from the accent, danger and warning colours.
 extension Theme {
     enum TabGroups {
-        static func color(_ color: TabGroupColor) -> Color {
-            switch color {
-            case .grey: Color(hex: 0x9AA4AD)
-            case .blue: Color(hex: 0x6FA8DC)
-            case .teal: Color(hex: 0x5FB5AE)
-            case .green: Color(hex: 0x7DBE8B)
-            case .sand: Color(hex: 0xCDB173)
-            case .orange: Color(hex: 0xDE9467)
-            case .rose: Color(hex: 0xDC7F92)
-            case .violet: Color(hex: 0xA390D8)
-            }
-        }
+        /// From the theme's terminal colours (Kore's own eight for Kore: ThemePalette.Roles).
+        static func color(_ color: TabGroupColor) -> Color { Appearance.color { $0.group(color) } }
         /// The chip's wash of its colour, at rest and under the pointer.
         static func wash(_ color: TabGroupColor, hovered: Bool) -> Color { Self.color(color).opacity(hovered ? 0.24 : 0.15) }
         /// The line under a group's tabs.

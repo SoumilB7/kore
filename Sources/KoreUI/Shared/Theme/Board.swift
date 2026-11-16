@@ -61,7 +61,7 @@ extension Size {
 extension Theme {
     enum Board {
         /// The window ground between sections (the 1pt section lines).
-        static let ground = Color(hex: 0x212326)
+        static let ground = Appearance.role(\.boardGround)
         /// A section's own ground.
         static let section = background
         static let tile = surface
@@ -76,8 +76,8 @@ extension Theme {
         static let grip = secondary
         static let gripHot = accent
         /// A slot's dashed outline at rest and hovered; a room that will open draws `accentLine`.
-        static let slotLine = Color(hex: 0xBED7EB).opacity(0.22)
-        static let slotLineHover = Color(hex: 0xBED7EB).opacity(0.38)
+        static let slotLine = Appearance.color(\.line).opacity(0.22)
+        static let slotLineHover = Appearance.color(\.line).opacity(0.38)
         static let roomLine = accentLine
         /// The tile being dragged, where it was.
         static let dragged: Double = 0.4
