@@ -1,7 +1,8 @@
 import Foundation
+import KoreCore
 
 /// The phone app this Mac offers its phones over KoreNet (1.13, phase 18 "Mac copy"): the three
-/// files of a phone release, `SHA256SUMS`, `SHA256SUMS.sig` and `kore.apk`, kept in
+/// files of a phone release, `SHA256SUMS`, `SHA256SUMS.sig` and `kore.apk`, kept in (`KoreFolders`)
 /// `~/Library/Application Support/Kore/phone-app/` (android/scripts/offer-to-phone.sh puts a build
 /// there). The Mac only serves them; the phone checks the signature, the hash and the signer.
 package enum PhoneApp {
@@ -9,8 +10,7 @@ package enum PhoneApp {
     package static let pieceSize = 512 * 1024
 
     /// Set only by tests (before any phone asks).
-    nonisolated(unsafe) package static var folder: URL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Kore", isDirectory: true).appendingPathComponent("phone-app", isDirectory: true)
+    nonisolated(unsafe) package static var folder: URL = KoreFolders.support.appendingPathComponent("phone-app", isDirectory: true)
 
     /// The file for a part the wire names; anything else is no part.
     package static func file(_ part: String) -> String? {

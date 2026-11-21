@@ -1,0 +1,22 @@
+#!/bin/zsh
+# scripts/devrun [--name NAME] [--] command [args…]
+# scripts/devrun --hold NAME PID      the Mac stays out of idle sleep while PID lives ("Kore Dev: NAME")
+# scripts/devrun --who [PID]          PID's responsible pid and resource coalition, and its Kore if any
+#
+# Runs a dev job (one-build.sh, verify-fast.sh, storylines.sh, android/scripts/check.sh,
+# release.sh --prepare start themselves through it) so macOS charges its energy to the job, never
+# to the Kore whose chat started it. The command's stdout, stderr and exit code are the caller's;
+# its stdin is /dev/null. Outside a Kore (Terminal, a job already) it runs the command in place.
+# KORE_DEVRUN=always routes any caller, KORE_DEVRUN=off none. The job sees KORE_DEVRUN_JOB=NAME.
+# How and why: docs/dev-builds.md. The helper (devrun.c) is compiled once per source change into
+# ~/Library/Caches/KoreDev/devrun/<cksum>/kore-devrun.
+src=${0:A:h}/devrun.c
+cache=$HOME/Library/Caches/KoreDev/devrun
+sum=${$(cksum < $src)%% *}
+bin=$cache/$sum/kore-devrun   # its name is what Activity Monitor and pmset show
+if [[ ! -x $bin ]]; then
+  mkdir -p $cache/$sum
+  cc -O2 -Wall -o $bin.$$ $src -framework CoreFoundation -framework IOKit || exit 126
+  mv -f $bin.$$ $bin
+fi
+exec $bin "$@"

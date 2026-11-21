@@ -50,7 +50,7 @@ package enum StorylineHost {
                 // Offscreen and in the background, the host is App Nap's to slow down: its timers
                 // and run loop held back for a minute and more mid-step. Not while it runs (the
                 // Mac may still sleep when idle).
-                let activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "Storylines running")
+                let activity = ProcessInfo.processInfo.beginActivity(options: .userInitiatedAllowingIdleSystemSleep, reason: "Kore Dev: storylines")
                 let report = await runner.run()
                 ProcessInfo.processInfo.endActivity(activity)
                 print(report.text)

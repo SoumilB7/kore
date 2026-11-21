@@ -3,11 +3,14 @@ import Foundation
 /// Kore's own folders on this Mac, decided here and nowhere else: every path into Application
 /// Support, Logs or Caches goes through `support`, `logs` and `caches`.
 ///
-/// The owner's Kore, whose settings are the `dev.kore.Kore` defaults domain (Kore.app) or `Kore`
-/// (its binary run as built), keeps `~/Library/Application Support/Kore`, `~/Library/Logs/Kore`
-/// and `~/Library/Caches/Kore`; so does `kore-host` on a box, as it always has. Every other process keeps its own, so a renamed dev binary,
-/// KoreBench or a storyline host never reads or writes the owner's: `Kore-<domain>` beside them,
-/// a test process's scratch folder, or the folder a host `place`s (a storyline run's).
+/// The owner's Kore, whose settings are the `dev.kore.Kore` defaults domain (the installed
+/// Kore.app), keeps `~/Library/Application Support/Kore`, `~/Library/Logs/Kore` and
+/// `~/Library/Caches/Kore`; so does `kore-host` on a box, as it always has. Kore Dev (a dev
+/// build: `scripts/build-app.sh --dev`'s `dev.kore.KoreDev`, or the `Kore` binary run as built)
+/// keeps `Kore Dev` beside them, with its own agent socket, link, KoreNet identity and logs in it.
+/// Every other process keeps its own, so a renamed dev binary, KoreBench or a storyline host never
+/// reads or writes the owner's: `Kore-<domain>` beside them, a test process's scratch folder, or
+/// the folder a host `place`s (a storyline run's).
 /// A process that isn't the owner's Kore and would resolve to the owner's folders stops at once.
 package enum KoreFolders {
     package struct Places: Equatable, Sendable {
@@ -38,7 +41,16 @@ package enum KoreFolders {
     }
 
     /// The defaults domains of the owner's Kore, and kore-host's on a box.
-    package static let ownerDomains: Set<String> = ["dev.kore.Kore", "Kore", "kore-host"]
+    package static let ownerDomains: Set<String> = ["dev.kore.Kore", "kore-host"]
+
+    /// Kore Dev's bundle identifier and name (`scripts/build-app.sh --dev`): a dev build never
+    /// shares the owner's settings, folders, keys or sockets, and macOS (Battery, Activity
+    /// Monitor) shows it apart from the owner's Kore.
+    package static let devBundleID = "dev.kore.KoreDev"
+    package static let devName = "Kore Dev"
+
+    /// Kore Dev's defaults domains: its app's, and the `Kore` binary run as built.
+    package static let devDomains: Set<String> = [devBundleID, "Kore", devName]
 
     /// This process's defaults domain (`UserDefaults.standard`'s): its bundle's identifier, else
     /// its executable's name.
@@ -46,6 +58,9 @@ package enum KoreFolders {
 
     /// Whether this process is the owner's Kore (and so keeps the owner's folders).
     package static var isOwner: Bool { isOwner(domain: domain, testing: KoreLog.isTestProcess) }
+
+    /// Whether this process is Kore Dev.
+    package static var isDev: Bool { !KoreLog.isTestProcess && devDomains.contains(domain) }
 
     package static func isOwner(domain: String, testing: Bool) -> Bool { !testing && ownerDomains.contains(domain) }
 
@@ -85,11 +100,12 @@ package enum KoreFolders {
     /// The owner's folders.
     package static func owner(_ bases: Bases = .system) -> Places { named("Kore", bases) }
 
-    /// Where a process with this domain keeps its folders: the owner's, `Kore-<domain>`, or (a
-    /// test process) a scratch folder of its own under `scratch`.
+    /// Where a process with this domain keeps its folders: the owner's, Kore Dev's, `Kore-<domain>`,
+    /// or (a test process) a scratch folder of its own under `scratch`.
     package static func places(domain: String, testing: Bool, bases: Bases, scratch: URL, pid: Int32 = getpid()) -> Places {
         if testing { return Places(under: scratch.appendingPathComponent("kore-data-\(pid)", isDirectory: true)) }
         if ownerDomains.contains(domain) { return owner(bases) }
+        if devDomains.contains(domain) { return named(devName, bases) }
         let safe = String(domain.map { $0 == "/" || $0 == ":" ? "-" : $0 })
         return named("Kore-" + (safe.isEmpty ? "unnamed" : safe), bases)
     }

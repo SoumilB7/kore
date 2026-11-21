@@ -28,6 +28,9 @@
 # signs with a throwaway key, writes the notes to <dir>/notes.md and only says what it would
 # publish. A dry run skips files it can't build (no Go, no keystore); a real run needs them all.
 set -euo pipefail
+# --prepare's builds are a dev job: they run as their own to macOS, so their energy is never
+# charged to the Kore whose chat started them (scripts/devrun, docs/dev-builds.md).
+[[ ${1:-} != --prepare || -n ${KORE_DEVRUN_JOB-} ]] || exec "${0:A:h}/devrun" --name release-prepare -- /bin/zsh "$0" "$@"
 
 cd "${0:A:h}/.."
 DRY=""; PREPARE=""; PUBLISH=1

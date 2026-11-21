@@ -5,6 +5,9 @@
 #   16 KB alignment, and the release dex free of relay, uitest and debug-hook strings.
 # Prints one line per part (tests with their runtimes) and exits 0 only when every part passed.
 set -u
+# A dev job: it runs as its own to macOS, so its energy is never charged to the Kore whose chat
+# started it (scripts/devrun, docs/dev-builds.md).
+[[ -n ${KORE_DEVRUN_JOB-} || ! -x ${0:A:h:h:h}/scripts/devrun ]] || exec ${0:A:h:h:h}/scripts/devrun --name android-check -- /bin/zsh "$0" "$@"
 export KORE_ANDROID="${0:A:h:h}"
 source "$KORE_ANDROID/scripts/env.sh"
 BUDGET_MB=${KORE_APK_BUDGET_MB:-26}

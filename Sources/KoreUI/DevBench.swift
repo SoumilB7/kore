@@ -82,7 +82,7 @@ enum DevBench {
                 output = FileHandle(forWritingAtPath: path)
             }
             DevBench.activity = ProcessInfo.processInfo.beginActivity(
-                options: [.userInitiated, .latencyCritical], reason: "Navigation bench")
+                options: [.userInitiated, .latencyCritical], reason: "Kore Dev: navigation bench")
             // The window first.
             for _ in 0..<200 where window == nil {
                 window = NSApp.windows.first { $0.isVisible && $0.styleMask.contains(.fullSizeContentView) }

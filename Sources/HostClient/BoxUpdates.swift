@@ -42,8 +42,7 @@ package final class BoxUpdates {
     /// The release key the files must be signed with.
     @ObservationIgnored package var releaseKey = KoreReleaseKey.base64
     /// Where this Mac keeps a release for boxes that can't reach GitHub, a folder per version.
-    @ObservationIgnored package var folder = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Kore", isDirectory: true).appendingPathComponent("box-release", isDirectory: true)
+    @ObservationIgnored package var folder = KoreFolders.caches.appendingPathComponent("box-release", isDirectory: true)
     /// Each box's last ask: the version and when.
     @ObservationIgnored private(set) var asked: [String: (version: String, at: Date)] = [:]
     /// The boxes linked now, as each link sees them.

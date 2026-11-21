@@ -20,6 +20,9 @@
 # Package.swift, scripts/, Tests/Fixtures) runs the full check. The identity, traces, lint,
 # release build, launch check and replays always run. The full check (no --radius) stays the one
 # for installs and releases.
+# A dev job: it runs as its own to macOS, so its energy is never charged to the Kore whose chat
+# started it (scripts/devrun, docs/dev-builds.md).
+[[ -n ${KORE_DEVRUN_JOB-} || ! -x ${0:A:h}/devrun ]] || exec ${0:A:h}/devrun --name verify-fast -- /bin/zsh "$0" "$@"
 set -u
 zmodload zsh/datetime zsh/mathfunc
 pos=(); radius=0; plan=0; shards=${KORE_GATE_SHARDS:-}; jobs=${KORE_GATE_JOBS:-}
@@ -48,8 +51,8 @@ phase() { began[$1]=$EPOCHREALTIME }
 done_() { ended[$1]=$EPOCHREALTIME }
 
 # The Mac stays awake while the check runs (an idle sleep froze one mid-run); the display may
-# sleep. The hold is this script's: it ends by itself when the check ends.
-caffeinate -i -w $$ &!
+# sleep. The hold ("Kore Dev: verify-fast") is this script's: it ends by itself when the check ends.
+$tools/devrun --hold verify-fast $$ &!
 
 # One check at a time uses the kept build folder (its wait is its own phase: the time another
 # gate or an install held it).

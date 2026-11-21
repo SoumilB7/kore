@@ -14,11 +14,32 @@ final class AgentClient: AgentCalls {
     private var serial = 0
     private(set) var welcome: Object = [:]
 
-    /// `~/Library/Application Support/Kore/agent/kore.sock`, or `KORE_AGENT_SOCKET`.
+    /// `~/Library/Application Support/Kore/agent/kore.sock` (`Kore Dev/…` in Kore Dev.app, as
+    /// `KoreFolders` places it), or `KORE_AGENT_SOCKET`.
     static var socketPath: String {
         if let path = ProcessInfo.processInfo.environment["KORE_AGENT_SOCKET"], !path.isEmpty { return path }
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        return support.appendingPathComponent("Kore/agent/kore.sock").path
+        return support.appendingPathComponent(folder(bundleID: appBundleID()) + "/agent/kore.sock").path
+    }
+
+    /// The app's support folder by its bundle: Kore Dev's own, else the owner's Kore's.
+    static func folder(bundleID: String?) -> String { bundleID == "dev.kore.KoreDev" ? "Kore Dev" : "Kore" }
+
+    /// The bundle identifier of the app this `kore` ships in (Contents/Helpers/kore), if any.
+    private static func appBundleID() -> String? { app().flatMap { Bundle(url: $0)?.bundleIdentifier } }
+
+    /// This binary, links resolved.
+    private static func executable() -> URL? {
+        var size = UInt32(MAXPATHLEN)
+        var raw = [CChar](repeating: 0, count: Int(size))
+        guard _NSGetExecutablePath(&raw, &size) == 0 else { return nil }
+        return URL(fileURLWithPath: String(decoding: raw.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)).resolvingSymlinksInPath()
+    }
+
+    /// The app this `kore` ships in: …/Kore.app for …/Kore.app/Contents/Helpers/kore.
+    private static func app() -> URL? {
+        guard let me = executable(), me.deletingLastPathComponent().lastPathComponent == "Helpers" else { return nil }
+        return me.deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
     }
 
     /// Connects and says hello with the chat's pass, if this runs under one of Kore's chats.
@@ -97,14 +118,12 @@ final class AgentClient: AgentCalls {
     }
 
     private static func expectedServers() -> [String] {
-        var size = UInt32(MAXPATHLEN)
-        var raw = [CChar](repeating: 0, count: Int(size))
-        guard _NSGetExecutablePath(&raw, &size) == 0 else { return [] }
-        let me = URL(fileURLWithPath: String(decoding: raw.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)).resolvingSymlinksInPath()
-        let folder = me.deletingLastPathComponent()
-        if folder.lastPathComponent == "Helpers" {
-            return [folder.deletingLastPathComponent().appendingPathComponent("MacOS/Kore").resolvingSymlinksInPath().path]
+        // The app's own binary: MacOS/Kore, or Kore Dev.app's MacOS/Kore Dev.
+        if let app = app() {
+            let binary = Bundle(url: app)?.executableURL ?? app.appendingPathComponent("Contents/MacOS/Kore")
+            return [binary.resolvingSymlinksInPath().path]
         }
+        guard let folder = executable()?.deletingLastPathComponent() else { return [] }
         return ["Kore", "kore-storylines"].map { folder.appendingPathComponent($0).resolvingSymlinksInPath().path }
     }
 
