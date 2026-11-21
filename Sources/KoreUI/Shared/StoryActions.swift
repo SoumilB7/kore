@@ -279,7 +279,7 @@ extension Chat {
     package var storyHasWork: Bool { hasWork }
     package var storyRunningAgents: Int { transcript.agentSummary.running.count }
     /// The caption under the action row ("Also signs out Terminal and VS Code on this Mac.",
-    /// "Stored in your Keychain.", "Pick Console account, then …").
+    /// "Kept in a file only you can read.", "Pick Console account, then …").
     package var storyAccountCaption: String? {
         let store = AccountStore.shared
         if account.askingSignOut {

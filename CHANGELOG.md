@@ -2,6 +2,20 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
+## [0.3.7] - 2026-11-21
+
+### Changed
+- Kore makes no Keychain call at all. KoreNet's identity and tailnet keys live in files only you
+  can read, in Kore's own support folder; this Mac gets a new identity key, never reading the old one. Boxes
+  set up over SSH take the new key by themselves; phones show "Key changed · Pair again" and
+  pair again through Add device.
+- A Claude API key typed in Kore goes to a file only you can read, which Claude's helper prints. A key saved by
+  an older Kore asks once: "Enter your API key again: Kore no longer uses the Keychain".
+- Claude logins aren't copied between devices any more: "Sign in on mybox" runs Claude's own
+  sign-in on the box, its page opened here; "Sign in here" brings a moved one back the same
+  way. Nothing is logged out. Codex logins move as before.
+- Update a box before its Mac: a box on 0.3.6 can't take the Mac's new key.
+
 ## [0.3.6] - 2026-11-21
 
 ### Added

@@ -170,7 +170,12 @@ class NetClientSession(
             ?: return fail(NetControl.Companion.Reason.PROOF)
         // Only a Mac takes a phone in (its Add device window); a box learns of it from the Mac.
         if (record == null && known.kind != NodeKind.MAC) return fail(NetControl.Companion.Reason.PROOF)
-        if (known.id != server || !IdentityProof.verify(w.sig, b.digest, known.identityKey)) return fail(NetControl.Companion.Reason.PROOF)
+        if (known.id != server) return fail(NetControl.Companion.Reason.PROOF)
+        if (!IdentityProof.verify(w.sig, b.digest, known.identityKey)) {
+            // A Mac this phone pinned, answering with another key: it was given a new one, and this
+            // phone pairs again (its Add device window). Never trusted as it is.
+            return fail(if (record != null && known.kind == NodeKind.MAC) NetControl.Companion.Reason.KEY_CHANGED else NetControl.Companion.Reason.PROOF)
+        }
         // Its node key as this side's WhoIs saw it: one its record holds, or (rotation, or the
         // first pin) appended after the proof held and the WhoIs said it's this phone's own user.
         val pinned = when {

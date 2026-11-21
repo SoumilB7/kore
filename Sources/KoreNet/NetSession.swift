@@ -77,6 +77,11 @@ package final class NetSession {
         /// otherwise), or checked against a record made from its enroll, kept only once its proof
         /// holds (`commit`; false refuses).
         package var stranger: ((NetControl.Hello) -> Stranger)?
+        /// A hello from a device the book holds whose proof fails its record but holds for the
+        /// key its enroll names (a Mac that made a new identity key): the record with that key,
+        /// kept only once its proof holds (`commit`), or nil to refuse as unknown. Only over SSH,
+        /// where the box vouches for the grant it came in on; nil (every other route) never.
+        package var rekey: ((NetControl.Hello, DeviceRecord) -> Stranger?)?
         /// This node's own Tailscale user: a device enrolled over SSH takes its first node key only
         /// from a WhoIs of this user.
         package var ownUser: Int64?
@@ -432,13 +437,23 @@ package final class NetSession {
         var commit: (@Sendable (VerifiedPeer) -> Bool)?
         let record: DeviceRecord
         let peer: VerifiedPeer
-        if let known {
-            guard let proven = IdentityProof.verify(hello.sig, binding: binding, side: .client, record: known) else {
-                return fail(NetControl.Reason.unknown)
-            }
+        if let known, let proven = IdentityProof.verify(hello.sig, binding: binding, side: .client, record: known) {
             guard !known.isPaused || server.admitPaused else { return fail(NetControl.Reason.paused) }
             record = known
             peer = proven
+        } else if let known {
+            // Its record's key doesn't prove it. Over SSH a Mac with a new identity key may take
+            // it in its own record: its hello signed with the key its enroll names, the box's
+            // check of its grant, then the proof against the record made with it.
+            guard server.route == .ssh, let rekey = server.rekey, let enroll = hello.enroll, enroll.identityKey != known.identityKey,
+                IdentityProof.verify(hello.sig, over: binding.digest, key: enroll.identityKey),
+                case .enroll(let made, let keep)? = rekey(hello, known), made.id == known.id, made.identityKey == enroll.identityKey,
+                let proven = IdentityProof.verify(hello.sig, binding: binding, side: .client, record: made)
+            else { return fail(NetControl.Reason.unknown) }
+            guard !known.isPaused || server.admitPaused else { return fail(NetControl.Reason.paused) }
+            record = made
+            peer = proven
+            commit = keep
         } else {
             // A stranger's enroll names its key: the hello must be signed with it before
             // anything is noted about it.

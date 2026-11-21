@@ -8,7 +8,7 @@ import Tailnet
 /// interactive queue, after the identity proofs over B. Everything runs on its own queue, woken
 /// by the socket only (a write source exists only while frames wait); nothing touches the main
 /// actor. `open` finds and dials the box and builds the session's setup there too (a LocalAPI
-/// read, a WhoIs, the Keychain), so a dial never blocks navigation.
+/// read, a WhoIs, the identity file), so a dial never blocks navigation.
 package final class NetTransport: HostTransport, @unchecked Sendable {
     package static let stream: UInt32 = 1
 

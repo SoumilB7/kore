@@ -43,6 +43,13 @@ class WordsTest {
         assertEquals("Removed on MacBook · Join again", troubleWords(State.Removed, false, "mybox", "MacBook")?.fact)
     }
 
+    @Test fun aMacWhoseKeyChangedSaysPairAgain() {
+        assertEquals(
+            Trouble("This Mac's key changed: pair again", "● Key changed · Pair again", RowAction.JOIN_AGAIN),
+            troubleWords(State.Denied("key-changed"), true, "MacBook", "MacBook"))
+        assertEquals("● Key changed · Pair again", stateWords(State.Denied("key-changed")).first)
+    }
+
     @Test fun aMacThatDoesntHoldThisPhoneOffersAskAgain() {
         assertEquals(Trouble("Not allowed · Ask again", "● Not allowed · Ask again", RowAction.ASK_AGAIN), troubleWords(State.Denied("unknown"), true, "MacBook", "MacBook"))
     }

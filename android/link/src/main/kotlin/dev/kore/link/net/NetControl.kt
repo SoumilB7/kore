@@ -99,6 +99,9 @@ sealed class NetControl {
             const val PAUSED = "paused"
             const val REPLACED = "replaced"
             const val PROOF = "proof"
+            /** This side's own end: a Mac it pinned answered with another identity key (Kore 0.3.7
+             * made a new one, out of the Keychain). The phone pairs again through Add device. */
+            const val KEY_CHANGED = "key-changed"
             const val REFUSED = "refused"
             /** The Mac's KoreNet was switched off: it comes back when switched on. */
             const val OFF = "off"

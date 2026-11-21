@@ -190,7 +190,7 @@ package enum NetClaim {
 
 extension KoreNetSwitch {
     /// What a claim reads of this Mac, while KoreNet reaches a tailnet; the identity (the
-    /// Keychain) is read when the returned closure runs, off the main actor.
+    /// identity file) is read when the returned closure runs, off the main actor.
     package func claimMac() -> (@Sendable () throws -> NetClaim.Mac)? {
         guard state.reaches, let tailnet, let env else { return nil }
         let book = book(env)

@@ -609,6 +609,9 @@ package final class HostNet {
         setup.stranger = { [weak self] hello in
             MainActor.assumeIsolated { self?.stranger(hello, route: route, facts: facts, whois: whois) ?? .refuse(NetControl.Reason.unknown) }
         }
+        if route == .ssh {
+            setup.rekey = { [weak self] hello, known in MainActor.assumeIsolated { self?.rekey(hello, known) } }
+        }
         let session = NetSession(fd: fd, role: .server(setup), clock: host.now)
         let shake = Handshake(session: session, route: route, facts: facts, remote: remote)
         let key = ObjectIdentifier(shake)
@@ -833,6 +836,46 @@ package final class HostNet {
                 }
                 host.rehome(grant: legacy.name, to: record.id)
                 HostJournal.audit("enroll", ["device": record.id.uuidString.lowercased(), "kind": kind.rawValue, "grant": legacy.name, "route": "ssh"])
+                return true
+            }
+        }
+    }
+
+    /// Over SSH only: a Mac this book holds, with a new identity key (Kore 0.3.7 keeps it in a
+    /// file and made a new one, never reading the Keychain's). The grant it came in on (`attach`
+    /// fills it in, so the secret never left this box) must be the one that Mac enrolled with:
+    /// the same trust as its first enroll, given by the SSH login that runs `attach`. An expired
+    /// grant counts (its Mac proves itself on it from then on). Only the key changes: its name,
+    /// abilities, owner and node keys stay. Anything else is refused as unknown.
+    func rekey(_ hello: NetControl.Hello, _ known: DeviceRecord) -> NetSession.Stranger? {
+        let id = known.id.uuidString.lowercased()
+        guard let enroll = hello.enroll, let legacy = hello.legacyGrant, known.kind == .mac, enroll.kind ?? .mac == .mac else {
+            HostJournal.audit("deny", ["device": id, "reason": "rekey without a grant"])
+            return nil
+        }
+        let grants = GrantStore(host.paths.grants)
+        guard let grant = grants.load(legacy.name), Self.same(grant.secret, legacy.secret), grant.device == known.id else {
+            HostJournal.audit("deny", ["device": id, "grant": legacy.name, "reason": "rekey grant"])
+            return nil
+        }
+        var record = known
+        record.identityKey = enroll.identityKey
+        guard (try? record.validate()) != nil else { return nil }
+        let host = host
+        let old = known.identityKey
+        return .enroll(record) { _ in
+            MainActor.assumeIsolated {
+                do {
+                    try host.devices.book.update { devices in
+                        guard let i = devices.firstIndex(where: { $0.id == record.id }), devices[i].identityKey == old else {
+                            throw TrustError.refused("changed meanwhile")
+                        }
+                        devices[i].identityKey = record.identityKey
+                    }
+                } catch {
+                    return false
+                }
+                HostJournal.audit("rekey", ["device": id, "grant": legacy.name, "route": "ssh"])
                 return true
             }
         }

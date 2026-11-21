@@ -498,6 +498,54 @@ struct HostUpgradeTests {
         #expect(enrolling.closed == "bye grant" && kept == nil)
     }
 
+    /// Kore 0.3.7 keeps its identity in a file and made a new key (the Keychain's never read):
+    /// the same Mac, over SSH on the grant it enrolled with, takes the new key in its own record.
+    @Test func aMacWithANewKeyTakesItOverSSHOnItsOwnGrantOnly() async throws {
+        let rig = try await NetRig.make()
+        defer { rig.finish() }
+        let journal = Journal()
+        let grants = GrantStore(rig.rig.paths.grants)
+        let grant = try grants.allow("laptop", control: .full, socket: rig.rig.paths.socket)
+        let other = try grants.allow("desk", control: .full, socket: rig.rig.paths.socket)
+        let mac = Device("mac")
+        _ = try await upgraded(rig, mac, grant: grant)
+        let before = try #require(try rig.store.book.record(mac.id))
+        var fresh = Device("mac")
+        fresh.id = mac.id
+        let enroll = NetControl.Enroll(name: "MacBook", kind: .mac, identityKey: fresh.key.publicKey)
+        // Not proved: on the tailnet, over SSH on another grant, or saying no key.
+        let net = try rig.dial(fresh, enroll: enroll)
+        try await net.until { net.closed != nil }
+        let wrong = try rig.dialAttach(fresh, grant: other, enroll: enroll)
+        try await wrong.until { wrong.closed != nil }
+        let silent = try rig.dialAttach(fresh, grant: grant, enroll: nil)
+        try await silent.until { silent.closed != nil }
+        #expect(net.closed == "bye unknown" && wrong.closed == "bye unknown" && silent.closed == "bye unknown")
+        #expect(try rig.store.book.record(mac.id)?.identityKey == mac.key.publicKey)
+        #expect(journal.audit("deny").contains { $0.contains("grant=desk") && $0.contains("rekey grant") })
+        // On its own grant, expired too (SSH vouches, as for its first enroll): the key is taken,
+        // nothing else of the record changes.
+        rig.clock.advance(Grant.upgradeGrace + 1)
+        let expired = try #require(grants.load("laptop"))
+        let rekeyed = try rig.dialAttach(fresh, grant: expired, enroll: enroll)
+        try await rekeyed.until { rekeyed.types.contains("snapshot") || rekeyed.closed != nil }
+        #expect(rekeyed.up, "\(rekeyed.closed ?? "")")
+        var after = try #require(try rig.store.book.record(mac.id))
+        #expect(after.identityKey == fresh.key.publicKey)
+        after.identityKey = before.identityKey
+        after.lastSeen = before.lastSeen
+        #expect(after == before)
+        #expect(journal.audit("rekey").contains { $0.contains(mac.id.uuidString.lowercased()) && $0.contains("grant=laptop") && $0.contains("route=ssh") })
+        rekeyed.session.close("quit")
+        // The old key no longer proves it, and the new one gets in with no enroll.
+        let old = try rig.dialAttach(mac, grant: expired, enroll: nil)
+        try await old.until { old.closed != nil }
+        #expect(old.closed == "bye unknown")
+        let plain = try rig.dialAttach(fresh, grant: expired, enroll: nil)
+        try await plain.until { plain.types.contains("snapshot") || plain.closed != nil }
+        #expect(plain.up)
+    }
+
     @Test func theFirstTailnetLinkOfAnUpgradedMacTakesItsNodeKey() async throws {
         let rig = try await NetRig.make()
         defer { rig.finish() }

@@ -68,7 +68,7 @@ package struct NetEnvironment: @unchecked Sendable {
     /// `kore-tailnet`: built without Go, or not a signed release): the hover's words.
     package static let noHelper = "This copy of Kore has no tailnet of its own"
 
-    /// The Mac's own: LocalAPI discovery, `Contents/Helpers/kore-tailnet`, the Keychain, ssh.
+    /// The Mac's own: LocalAPI discovery, `Contents/Helpers/kore-tailnet`, Kore's secrets files, ssh.
     package static func standard(defaults: UserDefaults = .standard) -> NetEnvironment {
         let support = NodeMigration.standardRoot()
         return NetEnvironment(
@@ -80,7 +80,7 @@ package struct NetEnvironment: @unchecked Sendable {
                 let sidecar = try NetSidecar.start(helper: helper, folder: support.appendingPathComponent("net/tailnet", isDirectory: true), key: key)
                 return (sidecar.tailnet, { sidecar.stop() })
             },
-            secrets: KeychainSecrets(), defaults: defaults, support: support,
+            secrets: FileSecrets(folder: FileSecrets.folder(support: support)), defaults: defaults, support: support,
             upgradeDial: { alias, grant, command in
                 let (mine, theirs) = try Sockets.pair()
                 let process = Process()
@@ -114,7 +114,7 @@ extension NetEnvironment {
     }
 }
 
-/// This Mac's identity, read from the Keychain once, off the main actor, on first need.
+/// This Mac's identity, read from its file once, off the main actor, on first need.
 package final class NetIdentityBox: Sendable {
     private let held = Mutex<MacIdentity?>(nil)
 
@@ -160,7 +160,7 @@ package final class KoreNetSwitch: NetRouter {
     @ObservationIgnored private var stopSidecar: (@Sendable () -> Void)?
     @ObservationIgnored private var bus: Task<Void, Never>?
     @ObservationIgnored private var holders: Set<String> = []
-    /// This Mac's identity while on (read from the Keychain once, off the main actor). The
+    /// This Mac's identity while on (read from its file once, off the main actor). The
     /// phones' listener (`MacNet`, KoreLink) reads it too.
     @ObservationIgnored package private(set) var identities = NetIdentityBox()
     @ObservationIgnored private var upgrading: Set<String> = []
@@ -239,7 +239,10 @@ package final class KoreNetSwitch: NetRouter {
             var problem: String?
             if choice.startsSidecar {
                 do {
-                    sidecar = try env.sidecar(try MacIdentity.tailnetKey(secrets: env.secrets))
+                    // A fresh key can't open state sealed under an earlier one: that goes first.
+                    let state = env.support.appendingPathComponent("net/tailnet/state/state.sealed")
+                    let key = try MacIdentity.tailnetKey(secrets: env.secrets) { try? FileManager.default.removeItem(at: state) }
+                    sidecar = try env.sidecar(key)
                 } catch {
                     problem = "\(error)"
                 }
@@ -640,9 +643,12 @@ package final class KoreNetSwitch: NetRouter {
         return NetTransport(route: .ssh) {
             let identity = try identities.get(env)
             let (fd, onClose) = try env.upgradeDial(alias, grant, command)
-            let setup = NetSession.Client(
+            var setup = NetSession.Client(
                 local: NetLocal(device: identity.device, kind: .mac, nodeKey: Binding.Route.sshNodeKey, signer: identity.signer), route: .ssh, peer: .ssh,
                 book: book, server: server, service: "link")
+            // Its key, said every time over SSH: a box that holds an older one for this Mac (kept
+            // in the Keychain before 0.3.7) takes this one on the grant `attach` fills in (`rekey`).
+            setup.enroll = NetControl.Enroll(name: env.macName(), kind: .mac, identityKey: identity.signer.publicKey)
             return NetTransport.Opened(fd: fd, setup: setup, onClose: onClose)
         }
     }

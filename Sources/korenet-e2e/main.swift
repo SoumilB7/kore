@@ -3,7 +3,7 @@
 // against an isolated kore-host on a box: enroll over SSH (`attach --proto 2`), dial over the
 // tailnet, WhoIs and both identity proofs, ping/pong, `fs.list`, a resume after a dropped TCP
 // connection, `chat.call` dedupe, and the box daemon idle. The identity is made for the run in a
-// temp folder: no Keychain item, no defaults domain. Prints a line per check; exits 1 on any ✘.
+// temp folder: no secrets file of Kore's, no defaults domain. Prints a line per check; exits 1 on any ✘.
 //
 // `--embedded <kore-tailnet>`: this Mac's tailnet is Kore's own (the `kore-tailnet` helper, an
 // ephemeral node named for the run, its state in the temp folder under a random key), as when

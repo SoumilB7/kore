@@ -44,7 +44,7 @@ package enum HostJournal {
     }
 
     /// Phase 18's audit lines, tagged `audit` (`audit connect device=… route=tailnet`): connect,
-    /// enroll, allow, deny, revoke, pending, node-key, denied (the command's kind only). Who and
+    /// enroll, rekey, allow, deny, revoke, pending, node-key, denied (the command's kind only). Who and
     /// what kind, never anything a message carried.
     package static func audit(_ event: String, _ fields: KeyValuePairs<String, String?> = [:]) { note("audit " + event, fields) }
 

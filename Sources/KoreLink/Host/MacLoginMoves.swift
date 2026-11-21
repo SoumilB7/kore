@@ -8,8 +8,7 @@ import LinkProtocol
 /// places, pauses or deletes, each step idempotent by the move's id.
 ///
 /// - A login coming in is staged where no CLI looks: its own folder under Kore's, the credential
-///   in the vault under that folder's place (Claude: a Keychain item named for it; Codex: its
-///   `auth.json`, 0600). It's checked as bytes only: complete, and the ones sent. No CLI reads it
+///   in the vault under that folder's place (Codex's `auth.json`, 0600). It's checked as bytes only: complete, and the ones sent. No CLI reads it
 ///   while the other Mac still holds its copy. On commit (sent after the other Mac deleted its
 ///   copy) it becomes a new added login, the active one unchanged; then, one copy left, its CLI
 ///   reads it. Staging is never removed here on its own: after the other Mac's delete it's the
@@ -17,16 +16,16 @@ import LinkProtocol
 /// - A login going out is paused first (locked in `AccountStore`: no read, no switch, no CLI
 ///   start on it; kept in a file through a restart), refused while a chat works on it, read and
 ///   sent; deleted on commit (an added login's folder goes too), un-paused on abort. Never a
-///   logout. A Claude login is refused: it's in this Mac's Keychain, which Kore reads only for a
-///   move the owner asks for at this Mac ("Move it from MacBook Air").
-/// - Nothing here reads the Keychain to compare: who a login is (email, account id) comes from
-///   files and Kore's own lists.
+///   logout.
+/// - A Claude login is refused both ways: on a Mac it's Claude's own Keychain item, which Kore
+///   never reads or writes. It reaches this Mac by Claude's own sign-in here.
+/// - Who a login is (email, account id) comes from files and Kore's own lists.
 @MainActor
 package final class MacLoginMoves {
     /// What it touches, swapped whole by tests.
     @MainActor
     package struct Seams {
-        /// The CLIs' credentials (the Keychain, the files).
+        /// The CLIs' credential files.
         package var vault: () -> any LoginVaultStore = { LoginVault.store.value }
         /// Where logins coming in are staged.
         package var staging: URL = KoreFolders.support.appendingPathComponent("login-staging", isDirectory: true)
@@ -178,6 +177,7 @@ package final class MacLoginMoves {
 
     package func importPrepare(_ args: ControlArgs, id: String) -> LoginMoveResult {
         guard let cli = args.provider, LinkLogins.clis.contains(cli) else { return .refused(id, .invalid, "That CLI's logins don't move here.") }
+        if cli == "claude" { return .refused(id, .invalid, "Sign in to Claude on \(seams.name()) instead") }
         guard let moveId = args.moveId, let data = args.data.flatMap({ Data(base64Encoded: $0) }), let sha = args.sha else {
             return .refused(id, .invalid, "Name the move and send the login.")
         }
@@ -306,9 +306,8 @@ package final class MacLoginMoves {
     package func exportPrepare(_ args: ControlArgs, id: String) -> LoginMoveResult {
         guard let cli = args.provider, LinkLogins.clis.contains(cli) else { return .refused(id, .invalid, "That CLI's logins don't move here.") }
         guard let moveId = args.moveId, let login = args.login, exists(cli, login) else { return .refused(id, .goneLogin, "notThere") }
-        // Claude's logins here are in the Keychain: read only for a move the owner asks for at
-        // this Mac, never for another Mac's ask (nobody may be here to answer the Keychain).
-        if cli == "claude" { return .refused(id, .invalid, "Move it from \(seams.name())") }
+        // Claude's logins here are Claude's own Keychain items: Kore never reads them.
+        if cli == "claude" { return .refused(id, .invalid, "Sign in to Claude on the other device instead") }
         let key = cli + "/" + login
         if let other = saved.paused[key] { return other == moveId ? exportRead(cli, login, id: id) : .refused(id, .invalid, "busy") }
         let running = seams.chatsUsing(cli, Self.id(login))
@@ -329,8 +328,6 @@ package final class MacLoginMoves {
                 return LoginMoveResult(id: id, ok: true, data: data.base64EncodedString(), sha: LoginMove.sha(data))
             }
             failure = "notThere"
-        } catch LoginMove.Failure.keychainDenied {
-            failure = "keychainDenied"
         } catch {
             failure = "Couldn't read the login."
         }

@@ -195,7 +195,7 @@ fun stateWords(s: State, mac: String = "your Mac"): Pair<String, Int> = when (s)
         NodeMachine.AwayWhy.WAITING -> "● Waiting for $mac" to K.dim
         NodeMachine.AwayWhy.NET_OFF -> "● KoreNet is off" to K.dim
     }
-    is State.Denied -> "● Not allowed" to K.err
+    is State.Denied -> (if (s.reason == "key-changed") "● Key changed · Pair again" else "● Not allowed") to K.err
     State.Removed -> "● Removed" to K.err
     State.SignedOut -> "● Signed out" to K.warn
     State.Idle -> "● Off" to K.dim
@@ -251,6 +251,8 @@ fun troubleWords(s: State, isMac: Boolean, name: String, mac: String): Trouble? 
     s == State.Removed -> Trouble("Removed on ${if (isMac) name else mac} · Join again", "● Removed · Join again", RowAction.JOIN_AGAIN)
     s !is State.Denied -> null
     !isMac -> Trouble("waiting for $mac", "● Waiting for $mac", null)
+    // Its Mac made a new identity key: the old pairing can't prove it, so it's paired again.
+    (s as State.Denied).reason == "key-changed" -> Trouble("This Mac's key changed: pair again", "● Key changed · Pair again", RowAction.JOIN_AGAIN)
     else -> Trouble("Not allowed · Ask again", "● Not allowed · Ask again", RowAction.ASK_AGAIN)
 }
 

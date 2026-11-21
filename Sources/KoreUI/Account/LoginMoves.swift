@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import HostClient
 import KoreCore
@@ -12,8 +13,12 @@ import Observation
 ///
 /// It also finds a moved login's copy left on both devices: each place's logins against this
 /// Mac's own by who they are (email, account id), never by a token, and only for a login Kore
-/// moved there. The same account signed in on two devices by itself is fine. Kore reads a Claude login's Keychain item
-/// only for a move the owner asked for here (Move, Move back, Keep): then the Keychain may ask.
+/// moved there. The same account signed in on two devices by itself is fine.
+///
+/// Claude's logins are never copied: on a Mac each is Claude's own Keychain item, which Kore
+/// never reads or writes. "Sign in on mybox" runs Claude's own sign-in on the box (its page opens
+/// here, its code goes back in the box's line); "Sign in here" (a login an older Kore moved) runs
+/// it on this Mac, and Claude keeps what it gets. Nothing is logged out on either side.
 @MainActor @Observable
 package final class LoginMoves {
     package static let shared = LoginMoves()
@@ -21,8 +26,14 @@ package final class LoginMoves {
     /// A login's row while it moves, or after one didn't.
     package enum Line: Equatable {
         case moving(String)
+        /// Claude's own sign-in running on that place (its name).
+        case signingIn(String)
         case failed(String)
     }
+
+    /// Whether a CLI's logins are copied between devices: Codex's (a file). Claude's never: a
+    /// Mac's is Claude's Keychain item, so it's signed in where it's wanted instead.
+    nonisolated package static func copies(_ cli: String) -> Bool { cli != "claude" }
 
     /// By "cli/login".
     private(set) var lines: [String: Line] = [:]
@@ -58,14 +69,18 @@ package final class LoginMoves {
         package let login: (_ cli: String, _ email: String?) async -> String?
         /// Another of the owner's Macs (it keeps many logins of each CLI), not a box.
         package let mac: Bool
+        /// The CLI's own sign-in there, to its end (its page opened with `open`): nil when it
+        /// signed in, else why not. Nil where Kore can't start one (another Mac).
+        package let signIn: (@MainActor (_ cli: String, _ open: @escaping @MainActor (URL) -> Void) async -> String?)?
 
         package init(
             key: String, name: String, unready: LoginMove.Failure?, device: String?,
             remote: @escaping (String, String, String?, Bool) -> any LoginMove.Remote,
-            prints: @escaping (String, Data) async -> [LoginPrint]?, login: @escaping (String, String?) async -> String?, mac: Bool = false
+            prints: @escaping (String, Data) async -> [LoginPrint]?, login: @escaping (String, String?) async -> String?, mac: Bool = false,
+            signIn: (@MainActor (String, @escaping @MainActor (URL) -> Void) async -> String?)? = nil
         ) {
             (self.key, self.name, self.unready, self.device, self.mac) = (key, name, unready, device, mac)
-            (self.remote, self.prints, self.login) = (remote, prints, login)
+            (self.remote, self.prints, self.login, self.signIn) = (remote, prints, login, signIn)
         }
     }
 
@@ -100,7 +115,16 @@ package final class LoginMoves {
             device: connection.netPeer?.record.id.uuidString.lowercased(),
             remote: { cli, login, profile, force in BoxLogins(connection: connection, cli: cli, login: login, host: host, profile: profile, force: force) },
             prints: { cli, key in await BoxLogins.fingerprints(connection, cli: cli, key: key) },
-            login: { _, email in await LoginMoves.boxLogin(connection, email: email) })
+            login: { _, email in await LoginMoves.boxLogin(connection, email: email) },
+            signIn: { cli, open in await connection.accounts.signInToEnd(cli, open: open) })
+    }
+
+    /// Opens a sign-in's page on this Mac (storylines and tests: their own).
+    @ObservationIgnored package var openPage: @MainActor (URL) -> Void = { _ = NSWorkspace.shared.open($0) }
+    /// Claude's own sign-in on this Mac for one login (nil: main), Claude keeping what it gets.
+    @ObservationIgnored package var signInHere: @MainActor (_ cli: String, _ id: String?) -> Void = { cli, id in
+        let aim: AccountStore.Aim = CLIProfiles.active(cli) == id ? .active : .login(id)
+        AccountStore.shared.signIn(cli, in: FileManager.default.homeDirectoryForCurrentUser, aim: aim)
     }
 
     init(file: URL = KoreFolders.support.appendingPathComponent("login-moves.json")) {
@@ -143,7 +167,9 @@ package final class LoginMoves {
     package func targets(_ cli: String) -> [Target] {
         guard LinkLogins.clis.contains(cli) else { return [] }
         _ = placesVersion
-        return places().map { box in Target(key: box.key, name: box.name, why: box.unready.map { Self.words($0, box: box.name, mac: box.mac) }) }
+        // A Claude login goes only where Kore can start Claude's sign-in (a box).
+        return places().filter { Self.copies(cli) || $0.signIn != nil }
+            .map { box in Target(key: box.key, name: box.name, why: box.unready.map { Self.words($0, box: box.name, mac: box.mac) }) }
         .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
     }
 
@@ -157,8 +183,9 @@ package final class LoginMoves {
     /// first (nil: none left; the caller asked).
     func move(_ cli: String, _ id: String?, to box: String, fallback: String??) {
         let key = Self.key(cli, id)
-        guard lines[key].map({ if case .moving = $0 { false } else { true } }) ?? true, let target = self.box(box) else { return }
+        guard !busy(key), let target = self.box(box) else { return }
         let name = target.name
+        guard Self.copies(cli) else { return signIn(cli, id, on: target) }
         lines[key] = .moving(name)
         let store = AccountStore.shared
         let email = Self.email(cli, id)
@@ -192,9 +219,16 @@ package final class LoginMoves {
     func moveBack(_ cli: String, _ id: String?) {
         let key = Self.key(cli, id)
         let email = Self.email(cli, id)
-        guard lines[key].map({ if case .moving = $0 { false } else { true } }) ?? true,
-            let box = CLIProfiles.movedTo(cli, email: email), let target = self.box(box)
-        else { return }
+        guard !busy(key), let box = CLIProfiles.movedTo(cli, email: email) else { return }
+        guard Self.copies(cli) else {
+            // Moved by an older Kore: it's this Mac's again, and Claude signs it in here itself.
+            // The box's copy stays where it is (never a logout).
+            CLIProfiles.noteBack(cli, email: email)
+            AccountStore.shared.loginsChanged(cli)
+            UILog.event("login-move", ["cli": cli, "login": AccountStore.loginKey(id), "to": "here", "outcome": "sign-in"])
+            return signInHere(cli, id)
+        }
+        guard let target = self.box(box) else { return }
         let name = target.name
         lines[key] = .moving(name)
         Task {
@@ -216,9 +250,7 @@ package final class LoginMoves {
     /// refreshed last) is what stays; the other is deleted. Nothing is logged out.
     func keep(_ cli: String, _ id: String?, here: Bool) {
         let key = Self.key(cli, id)
-        guard lines[key].map({ if case .moving = $0 { false } else { true } }) ?? true,
-            let box = incompatible[key], let login = incompatibleLogin[key], let target = self.box(box)
-        else { return }
+        guard Self.copies(cli), !busy(key), let box = incompatible[key], let login = incompatibleLogin[key], let target = self.box(box) else { return }
         let name = target.name
         lines[key] = .moving(name)
         Task {
@@ -232,6 +264,29 @@ package final class LoginMoves {
             }
             UILog.event("login-keep", ["cli": cli, "login": AccountStore.loginKey(id), "where": here ? "here" : target.mac ? "mac" : "box", "outcome": outcome.failure.map(Self.code) ?? "kept"])
             self.finish(key, outcome, box: name, here: here, mac: target.mac)
+        }
+    }
+
+    /// A move or a sign-in of this login under way.
+    private func busy(_ key: String) -> Bool {
+        switch lines[key] {
+        case .moving?, .signingIn?: true
+        case .failed?, nil: false
+        }
+    }
+
+    /// Claude's own sign-in on `target` for a login of this Mac's: its page opens here, its code
+    /// goes in the box's line. This Mac's login stays as it is: nothing is read, copied or
+    /// logged out.
+    private func signIn(_ cli: String, _ id: String?, on target: Box) {
+        let key = Self.key(cli, id)
+        guard let start = target.signIn else { return }
+        lines[key] = .signingIn(target.name)
+        UILog.event("login-move", ["cli": cli, "login": AccountStore.loginKey(id), "to": "box", "outcome": "sign-in"])
+        let open = openPage
+        Task {
+            let failure = await start(cli, open)
+            lines[key] = failure.map { .failed($0) }
         }
     }
 
@@ -309,11 +364,12 @@ package final class LoginMoves {
     /// id): a login Kore moved to that place whose copy still shows here is flagged on its row.
     /// The same account signed in on both by itself isn't: each sign-in has its own tokens, and
     /// only a copied one clashes. Nothing secret is read on either side: never a token, never
-    /// the Keychain. The key is a throwaway an older peer asks for.
+    /// a credential store. The key is a throwaway an older peer asks for.
     @discardableResult package func check() -> Task<Void, Never>? {
         let ready = places().filter { $0.unready == nil }
         guard !ready.isEmpty else { return nil }
-        let held = LinkLogins.clis.sorted().map { ($0, self.held($0)) }.filter { !$0.1.isEmpty }
+        // Only a copied login can be on two devices at once: Claude's are signed in, never copied.
+        let held = LinkLogins.clis.sorted().filter(Self.copies).map { ($0, self.held($0)) }.filter { !$0.1.isEmpty }
         guard !held.isEmpty else { return nil }
         let key = Data((0..<32).map { _ in UInt8.random(in: 0...255) })
         return Task {
@@ -343,7 +399,7 @@ package final class LoginMoves {
     }
 
     /// The file that names a login's account: Claude's `.claude.json` (its folder's, or the home
-    /// one for the default folder), Codex's `auth.json` (a file: Codex keeps no Keychain item).
+    /// one for the default folder), Codex's `auth.json`.
     nonisolated package static func identityFile(_ cli: String, _ id: String?) -> URL? {
         if cli == "codex" { return LoginVault.file(MacLogin(cli: cli, id: id).place) }
         guard cli == "claude" else { return nil }
@@ -360,12 +416,12 @@ package final class LoginMoves {
     static func words(_ failure: LoginMove.Failure, box: String, mac: Bool = false) -> String {
         switch failure {
         case .tooOld where mac: "\(box) needs a newer Kore"
-        case .keychainDenied where mac: "\(box)'s Keychain didn't let Kore read it"
+        case .keychainDenied where mac: "\(box) runs an older Kore: sign in there instead"
         case .busy: "It's already moving"
         case .inUse(let n): n == 1 ? "A chat is using it here" : "\(n) chats are using it here"
         case .notThere: "It isn't on \(box)"
         case .alreadyThere: "It's already on \(box)"
-        case .keychainDenied: "The Keychain wasn't allowed"
+        case .keychainDenied: "Sign in on \(box) instead"
         case .unreachable: "\(box) isn't reachable"
         case .tooOld: "\(box) needs a newer kore-host"
         case .sentWrong: "It arrived changed on \(box): not moved"
@@ -417,7 +473,8 @@ package final class LoginMoves {
 }
 
 /// One of this Mac's logins, as `LoginMove` moves it: locked in `AccountStore` while it moves,
-/// read and written in-process (`LoginVault`, off the main thread: the Keychain may ask).
+/// read and written in-process (`LoginVault`, off the main thread). Codex's only: a Claude login
+/// on a Mac is Claude's Keychain item, which Kore never reads, writes or deletes.
 struct MacLogin: LoginMove.Local {
     let cli: String
     let id: String?
@@ -438,11 +495,13 @@ struct MacLogin: LoginMove.Local {
     }
 
     func read() async throws -> Data? {
+        guard LoginMoves.copies(cli) else { throw LoginMove.Failure.refused("Claude logins aren't copied") }
         let place = place
         return try await Task.detached { try LoginVault.store.value.read(place, prompt: true) }.value
     }
 
     func write(_ data: Data) async throws {
+        guard LoginMoves.copies(cli) else { throw LoginMove.Failure.refused("Claude logins aren't copied") }
         let place = place
         try await Task.detached { try LoginVault.store.value.write(data, place) }.value
     }
@@ -450,6 +509,7 @@ struct MacLogin: LoginMove.Local {
     func signedIn() async -> Bool { await AccountStore.shared.readsSignedIn(cli, id) }
 
     func delete() async throws {
+        guard LoginMoves.copies(cli) else { throw LoginMove.Failure.refused("Claude logins aren't copied") }
         let place = place
         try await Task.detached { try LoginVault.store.value.delete(place) }.value
     }

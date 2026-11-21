@@ -49,9 +49,12 @@ import Testing
         #expect(KoreFolders.allowed(beside, domain: "x", testing: false, bases: bases))
     }
 
-    @Test func keychainServiceIsTheOwnersOnly() {
-        #expect(KeychainSecrets.service(domain: "dev.kore.Kore", owner: true) == "dev.kore.korenet")
-        #expect(KeychainSecrets.service(domain: "kore-storylines", owner: false) == "dev.kore.korenet.kore-storylines")
+    @Test func secretsFolderIsUnderEachDomainsOwnSupport() {
+        let bases = KoreFolders.Bases(home: URL(fileURLWithPath: "/Users/me"))
+        let owner = KoreFolders.places(domain: "dev.kore.Kore", testing: false, bases: bases, scratch: URL(fileURLWithPath: "/tmp"))
+        let other = KoreFolders.places(domain: "kore-storylines", testing: false, bases: bases, scratch: URL(fileURLWithPath: "/tmp"))
+        #expect(FileSecrets.folder(support: owner.support).path == "/Users/me/Library/Application Support/Kore/secrets")
+        #expect(FileSecrets.folder(support: other.support).path == "/Users/me/Library/Application Support/Kore-kore-storylines/secrets")
     }
 
     /// Every path provider, as this (non-Kore) process resolves it: none is in the owner's folders.
@@ -87,7 +90,8 @@ import Testing
         outside(KoreLog.folder, "KoreLog")
         // A chat this process launched is told of its own agent socket, never `kore`'s default.
         #expect(KoreReach.socket != nil)
-        #expect(KeychainSecrets.service != "dev.kore.korenet")
-        #expect(KeychainSecrets().service != "dev.kore.korenet")
+        outside(FileSecrets.standard, "FileSecrets.standard")
+        outside(FileSecrets().folder, "FileSecrets")
+        outside(ClaudeSettings.keyFile, "ClaudeSettings.keyFile")
     }
 }

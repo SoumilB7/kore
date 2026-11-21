@@ -119,22 +119,31 @@ package final class BoxAccounts {
     }
 
     package func signIn(_ provider: String) {
-        guard !busy(provider) else { return }
+        Task { _ = await signInToEnd(provider) }
+    }
+
+    /// The CLI's own sign-in on the box, to its end: its page (`open`, once, as it's known: a
+    /// Mac's Move of a Claude login opens it here), the code pasted in the box's line, then what
+    /// the box says. Nil when it signed in; else why not.
+    package func signInToEnd(_ provider: String, open: (@MainActor (URL) -> Void)? = nil) async -> String? {
+        let failed = "Couldn't sign in on \(NodeNames.name(alias))"
+        guard !busy(provider) else { return "It's already signing in on \(NodeNames.name(alias))" }
         set(provider) { $0.step = .starting }
-        Task {
-            let result = await connection.command { HostWire.signIn(id: $0, provider: provider) }
-            guard result.ok else {
-                set(provider) { $0.step = .failed(result.message ?? "Couldn't sign in on \(NodeNames.name(alias))") }
-                return
-            }
-            set(provider) { $0.step = .waiting(HostWire.page(result.message)) }
-            let done = await connection.later(result.id + HostWire.doneSuffix)
-            set(provider) {
-                $0.said = done.message ?? $0.said
-                $0.signedIn = done.signedIn ?? $0.signedIn
-                $0.step = done.ok ? .idle : .failed(done.message ?? "Couldn't sign in on \(NodeNames.name(alias))")
-            }
+        let result = await connection.command { HostWire.signIn(id: $0, provider: provider) }
+        guard result.ok else {
+            set(provider) { $0.step = .failed(result.message ?? failed) }
+            return result.message ?? failed
         }
+        let page = HostWire.page(result.message)
+        set(provider) { $0.step = .waiting(page) }
+        if let url = page.url { open?(url) }
+        let done = await connection.later(result.id + HostWire.doneSuffix)
+        set(provider) {
+            $0.said = done.message ?? $0.said
+            $0.signedIn = done.signedIn ?? $0.signedIn
+            $0.step = done.ok ? .idle : .failed(done.message ?? failed)
+        }
+        return done.ok ? nil : done.message ?? failed
     }
 
     /// The code the page showed, pasted back (Claude's login).

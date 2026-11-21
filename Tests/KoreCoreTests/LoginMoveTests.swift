@@ -394,13 +394,6 @@ struct LoginMoveTests {
 /// Where a login's credential is, and how a file of one is written.
 @Suite("Login vault")
 struct LoginVaultTests {
-    @Test func claudesKeychainServiceIsNamedForItsFolderAsClaudeNamesIt() {
-        #expect(LoginVault.claudeService(folder: nil) == "Claude Code-credentials")
-        // `printf %s <path> | shasum -a 256 | cut -c1-8`
-        let folder = URL(fileURLWithPath: "/Users/me/Library/Application Support/Kore/accounts/claude/82f61c23")
-        #expect(LoginVault.claudeService(folder: folder) == "Claude Code-credentials-834cc82f")
-    }
-
     @Test func aCredentialFileIsTheOwnersOnlyAndReplacedInOneStep() throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vault-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -415,8 +408,8 @@ struct LoginVaultTests {
         #expect(mode == 0o600)
         // Nothing else was left beside it.
         #expect(try FileManager.default.contentsOfDirectory(atPath: dir.path) == ["auth.json"])
-        // Codex's file through the system vault (no Keychain for Codex).
-        let vault = SystemLoginVault()
+        // Codex's file through the file vault (the only one there is).
+        let vault = FileLoginVault()
         #expect(try vault.read(place, prompt: false) == Data("two".utf8))
         try vault.delete(place)
         #expect(try vault.read(place, prompt: false) == nil)

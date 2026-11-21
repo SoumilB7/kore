@@ -5,10 +5,10 @@ import src
 
 /// The scripted CLIs' logins (with `ScriptedBackend`, the storylines' default CLI): each CLI's
 /// status as it answers it (Kore parses it with its own code), and sign-ins and sign-outs a
-/// storyline drives. Nothing reaches a real CLI, a browser, Terminal, the owner's Keychain or
+/// storyline drives. Nothing reaches a real CLI, a browser, Terminal or the owner's
 /// clipboard. Everything Kore asks is in `log`. Claude's status follows the run's own settings
 /// file (Kore's real writer writes it): a platform switched on there reads `third_party`, Kore's
-/// key helper `api_key_helper`, as the CLI would. Kore's Keychain is an in-memory one.
+/// key helper `api_key_helper`, as the CLI would. Kore's key file is in the run's own support folder.
 @MainActor
 package final class ScriptedAccounts {
     package static let shared = ScriptedAccounts()
@@ -22,7 +22,7 @@ package final class ScriptedAccounts {
         case signOut(String)
         /// A page Kore would have opened: its host.
         case opened(String)
-        /// A typed key reached the CLI (Codex) or Kore's Keychain (Claude); never the key itself.
+        /// A typed key reached the CLI (Codex) or Kore's key file (Claude); never the key itself.
         case key(String)
         /// A submitted OAuth input; never records its value.
         case loginInput(String)
@@ -60,9 +60,7 @@ package final class ScriptedAccounts {
     /// CLIs whose status first looks for the binary, as the real CLIs' does (`CLIExecutable`,
     /// in a storyline's own `places`): not found, the status read fails as the real one would.
     package var lookup: Set<String> = []
-    /// Kore's Keychain while storylines run.
-    package let keychain = MemoryKeychain()
-    /// The CLIs' own logins (Claude's Keychain items, their files) while storylines run: never the real ones.
+    /// The CLIs' own login files while storylines run: never the real ones.
     package let loginVault = MemoryLoginVault()
     /// The sign-in waiting for the browser, by provider.
     private var waiting: [String: CheckedContinuation<JSONValue?, any Error>] = [:]
@@ -72,7 +70,6 @@ package final class ScriptedAccounts {
         StorylineSeams.accounts = { [unowned self] provider in calls(provider) }
         StorylineSeams.opened = { [unowned self] url in log.append(.opened(url.host() ?? "")) }
         StorylineSeams.chooseFile = { [unowned self] in chosenFile }
-        Keychain.store.value = keychain
         LoginVault.store.value = loginVault
         // No real box ever takes a storyline's login.
         LoginMoves.shared.boxes = { [] }
@@ -94,7 +91,7 @@ package final class ScriptedAccounts {
         if CLIExecutable.places.value != nil { CLIExecutable.look(in: nil) }
         CLIInstaller.standIn.value = nil
         StorylineSeams.loginUsage = nil
-        keychain.removeAll()
+        try? FileManager.default.removeItem(at: ClaudeSettings.keyFile)
         loginVault.removeAll()
         LoginMoves.shared.boxes = { [] }
         LoginMoves.shared.reset()
@@ -162,7 +159,7 @@ package final class ScriptedAccounts {
                 keys[provider] = key
                 log.append(.key(provider))
                 guard provider == "codex" else {
-                    // Kore's own path: the (in-memory) Keychain, then the run's settings file.
+                    // Kore's own path: its key file (the run's support folder), then the run's settings file.
                     try ClaudeSettingsStore.saveKey(key)
                     return nil
                 }
@@ -185,7 +182,7 @@ package final class ScriptedAccounts {
             switch ClaudeSettings.saved(in: ClaudeSettingsStore.read()) {
             case .platform(let platform, _):
                 fields = ["loggedIn": true, "authMethod": "third_party", "apiProvider": .string(platform.provider)]
-            case .key:
+            case .key, .oldKey:
                 fields = ["loggedIn": true, "authMethod": "api_key_helper", "apiKeySource": "apiKeyHelper", "apiProvider": "firstParty"]
             case nil: break
             }

@@ -3,7 +3,7 @@ import KoreTrust
 
 /// Kore's own `kore-tailnet` (phase 18 step 5a): started only while KoreNet is on and installed
 /// Tailscale is absent or its LocalAPI unreadable, stopped when KoreNet turns off. Its state is
-/// sealed under a key from the Keychain, handed over its socket (`TailnetSidecar.start`, never
+/// sealed under a key from Kore's secrets file (`FileSecrets`), handed over its socket (`TailnetSidecar.start`, never
 /// argv or env); the connection that sent it keeps the node up, and `stop` (or closing it) ends
 /// the program.
 package final class NetSidecar: @unchecked Sendable {

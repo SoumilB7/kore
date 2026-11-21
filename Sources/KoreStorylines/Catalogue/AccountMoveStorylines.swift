@@ -6,15 +6,16 @@ import HostClient
 import LinkProtocol
 import src
 
-/// A Claude or Codex login moved to a box and back from its row's ⋯ (`account-move-subtle.html`): the
+/// A Codex login moved to a box and back from its row's ⋯ (`account-move-subtle.html`): the
 /// ⋯ offers "Move to mybox"; it goes in the safe order, leaving no copy on this Mac, the row
 /// dimmed "On mybox"; its ⋯ then holds "Move back here", which brings it back. A box that stops
 /// answering stops the move with one amber line, the login untouched here.
-/// The box is held in memory, and this Mac's Keychain is the storylines' own. A box keeps one
-/// Codex login, "main".
+/// The box is held in memory, and the login files are the storylines' own. A box keeps one
+/// Codex login, "main". A Claude login is never copied (Kore makes no Keychain call): its ⋯
+/// signs in on the box instead (`NoKeychainTests`).
 final class AccountMove: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
-    override class var variants: [Variant] { [.claude, .codex] }
+    override class var variants: [Variant] { [.codex] }
 
     /// A box in memory: what it staged, what's placed, by name.
     final class StoryBox: LoginMove.Remote, @unchecked Sendable {
@@ -91,7 +92,7 @@ final class AccountMove: ChatStoryline {
         ]
         return [
             UseScript(AccountPopup.script(provider), for: provider), SeedLogins(provider: provider),
-            Do("A second login on this Mac, its credential in this Mac's Keychain, and mybox to move it to") { _ in
+            Do("A second login on this Mac, its credential file, and mybox to move it to") { _ in
                 let id = try CLIProfiles.prepare(provider)
                 CLIProfiles.adopt(provider, id, email: "work@acme.dev", workspace: "Acme Labs")
                 CLIProfiles.activate(provider, nil)
@@ -146,17 +147,16 @@ final class AccountMove: ChatStoryline {
     }
 }
 
-/// A Claude or Codex login moved to another of the owner's Macs and back, from its row's ⋯:
+/// A Codex login moved to another of the owner's Macs and back, from its row's ⋯:
 /// "Move to MacBook Air" beside a Mac that needs a newer Kore (dimmed, its reason as the hint);
 /// moved, it's a new login on MacBook Air (its active one unchanged), none left here, the row
-/// "On MacBook Air"; "Move back here" brings a Codex login back and leaves none there, while a
-/// Claude one stays there, "Move it from MacBook Air" (its Keychain is read only for a move the
-/// owner clicks at that Mac). Nothing reads MacBook Air's vault. MacBook Air is this
+/// "On MacBook Air"; "Move back here" brings it back and leaves none there. A Claude login never
+/// goes to another Mac (it would be that Mac's Keychain). MacBook Air is this
 /// app's own `MacLoginMoves` over a vault in memory and a scratch folder, reached as its link
 /// would carry it.
 final class AccountMoveToMac: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
-    override class var variants: [Variant] { [.claude, .codex] }
+    override class var variants: [Variant] { [.codex] }
 
     /// The other Mac: its receiver, its vault and its logins.
     @MainActor

@@ -172,11 +172,11 @@ final class AccountMethods: ChatStoryline {
             Press(Self.part(.cancel)),
             Self.lines("cancelled", Self.me),
         ]
-        // 5 · Use an API key…: the masked field; typing keeps the popup; the key goes to the
-        // (in-memory) Keychain and Claude's helper reads it; the field is cleared.
+        // 5 · Use an API key…: the masked field; typing keeps the popup; the key goes to Kore's
+        // 0600 file (the run's own support folder) and Claude's helper prints it; the field is cleared.
         steps += Self.pick("Anthropic Console account/Use an API key…") + [
             Self.lines("the key field, empty", Self.me + ["API key: "]),
-            Self.caption("where the key goes", "Stored in your Keychain."),
+            Self.caption("where the key goes", "Kept in a file only you can read."),
             WaitForFocus(Self.field("key")),
             TypeText("sk-ant-kore-test-0001"),
             Self.lines("the key masked", Self.me + ["API key: ••••"]),
@@ -184,22 +184,23 @@ final class AccountMethods: ChatStoryline {
             FadesEnd(),
             Snapshot("methods-key-row"),
             Key(.returnKey),
-            Self.lines("signed in with Kore's key", ["API key", "Claude Console · Keychain", "Switched accounts."]),
-            Self.check("the key in the Keychain, Claude's helper reading it") {
-                accounts.keychain.secret(ClaudeSettings.keyService) == "sk-ant-kore-test-0001"
+            Self.lines("signed in with Kore's key", ["API key", "Claude Console · API key", "Switched accounts."]),
+            Self.check("the key in Kore's 0600 file, Claude's helper printing it") {
+                (try? String(contentsOf: ClaudeSettings.keyFile, encoding: .utf8)) == "sk-ant-kore-test-0001"
+                    && Self.mode(ClaudeSettings.keyFile) == 0o600
                     && Self.settings.string("apiKeyHelper") == ClaudeSettings.keyHelper && accounts.log.contains(.key("claude"))
             },
             Self.check("the settings file is 0600") { Self.mode(ClaudeSettings.userFile()) == 0o600 },
         ]
-        // Signing Kore's key out: its helper and item go, the Claude.ai login underneath shows.
+        // Signing Kore's key out: its helper and file go, the Claude.ai login underneath shows.
         steps += Self.reopen + [
             Press(Self.part(.signOut)),
             Self.caption("a setting's reach", "Removes it from Claude's settings everywhere."),
             Expect("a double click's time gone by", timeout: .seconds(6)) { $0.app.chat?.storyAccountConfirmable == true },
             Press(Self.part(.allow)),
             Self.lines("back on Claude.ai", Self.me + ["Signed out of API key."]),
-            Self.check("the helper and the item gone") {
-                Self.settings.text("apiKeyHelper") == nil && !accounts.keychain.contains(service: ClaudeSettings.keyService)
+            Self.check("the helper and the file gone") {
+                Self.settings.text("apiKeyHelper") == nil && !FileManager.default.fileExists(atPath: ClaudeSettings.keyFile.path)
             },
         ]
         // 6 · Amazon Bedrock, with the run's AWS config: the profiles listed, the region follows

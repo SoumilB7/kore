@@ -14,7 +14,7 @@ import Crypto
 /// 2. no CLI runs on it;
 /// 3. it is read in-process (never on a command line);
 /// 4. it goes sealed to the target, in the KoreNet session;
-/// 5. the target writes it (0600, or its Keychain) where nothing runs it yet;
+/// 5. the target writes it (0600) where nothing runs it yet;
 /// 6. the target checks the file only: a complete login (its refresh token and expiry there)
 ///    whose sha256 is the one sent. No CLI runs on a copy while two exist: `claude auth status`
 ///    online refreshes the login (or wipes its tokens when that fails), which would leave two
@@ -37,7 +37,8 @@ public enum LoginMove {
         case notThere
         /// The target already holds this login (it would be two copies).
         case alreadyThere
-        /// macOS's Keychain prompt was denied.
+        /// An older Kore's word: the other Mac's Keychain didn't let it read a Claude login
+        /// (this Kore never reads one).
         case keychainDenied
         /// The target isn't reachable, or stopped answering.
         case unreachable
@@ -93,7 +94,7 @@ public enum LoginMove {
         func unlock() async
         /// Chats using it here now.
         func chatsUsing() async -> Int
-        /// Its bytes, read in-process; nil when it isn't here. Throws `Failure.keychainDenied`.
+        /// Its bytes, read in-process; nil when it isn't here.
         func read() async throws -> Data?
         /// Writes it where this device keeps it. Throws when it can't.
         func write(_ data: Data) async throws
@@ -380,7 +381,7 @@ public enum LoginFingerprint {
 
 /// Who a login is, from what isn't secret: the account's email and its id. Two devices holding
 /// logins of the same account hold one sign-in twice, as far as Kore tells. Read from files only
-/// (Claude's `.claude.json`, Codex's `auth.json`), never a token and never the Keychain.
+/// (Claude's `.claude.json`, Codex's `auth.json`), never a token and never a credential store.
 public struct LoginIdentity: Sendable, Equatable {
     public var email: String?
     /// Claude's `oauthAccount.accountUuid`; Codex's `tokens.account_id`.

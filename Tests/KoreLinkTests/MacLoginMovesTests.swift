@@ -153,7 +153,7 @@ struct MacLoginMovesTests {
         return out
     }
 
-    @Test(arguments: ["claude", "codex"]) func aLoginMovesToTheOtherMacAndIsReadThereOnlyAfterItsTheOnlyCopy(_ cli: String) async throws {
+    @Test(arguments: ["codex"]) func aLoginMovesToTheOtherMacAndIsReadThereOnlyAfterItsTheOnlyCopy(_ cli: String) async throws {
         let (a, b, server, root) = try macs(cli)
         defer { try? FileManager.default.removeItem(at: root) }
         a.vault.set(Server.login("r-1", 1, cli: cli), a.place(cli, "work"))
@@ -187,8 +187,8 @@ struct MacLoginMovesTests {
         b.vault.set(Server.login("r-1", 1, cli: cli), b.place(cli, "work"))
         let outcome = await LoginMove.back(Local(mac: a, cli: cli, id: "work"), from: Remote(mac: b, cli: cli), cli: cli)
         if cli == "claude" {
-            // A Claude login is in Mac B's Keychain: never read for Mac A's ask. It's moved from B.
-            #expect(outcome.failure == .refused("Move it from MacBook B"))
+            // A Claude login is Mac B's Keychain item: never read. It's signed in on A instead.
+            #expect(outcome.failure == .refused("Sign in to Claude on the other device instead"))
             #expect(b.vault.reads() == 0 && b.vault.held(b.place(cli, "work")) != nil && b.added[cli]?.count == 1)
             #expect(a.vault.held(a.place(cli, "work")) == nil && a.locked.isEmpty && b.locked.isEmpty && !b.moves.paused(cli, "work"))
             return
@@ -228,6 +228,20 @@ struct MacLoginMovesTests {
         #expect(!again.paused(cli, "work") && b.locked.isEmpty && b.vault.held(b.place(cli, "work")) != nil)
     }
 
+    /// A Claude login coming to this Mac is refused before anything is staged: on a Mac it would
+    /// be Claude's Keychain item, which Kore never writes.
+    @Test func aClaudeLoginIsNeverTakenInOnAMac() throws {
+        let cli = "claude"
+        let (_, b, _, root) = try macs(cli)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let login = Server.login("r-1", 1, cli: cli)
+        let sent = b.moves.importPrepare(
+            ControlArgs(provider: cli, data: login.base64EncodedString(), phase: "prepare", moveId: "move-c1", sha: LoginMove.sha(login)), id: "p")
+        #expect(!sent.ok && sent.message == "Sign in to Claude on MacBook B instead")
+        #expect(b.added[cli]?.isEmpty ?? true)
+        #expect(((try? FileManager.default.contentsOfDirectory(atPath: b.root.appendingPathComponent("staging").path)) ?? []).isEmpty)
+    }
+
     @Test func theOtherMacsKeychainIsNeverReadForThisMacsAsk() async throws {
         let cli = "claude"
         let (a, b, _, root) = try macs(cli)
@@ -240,14 +254,14 @@ struct MacLoginMovesTests {
             a.vault.set(Server.login("r-1", 1, cli: cli), a.place(cli, "work"))
             let remote = Remote(mac: b, cli: cli, force: true)
             let outcome = keep ? await LoginMove.keepThere(local, remote, cli: cli) : await LoginMove.keepHere(local, remote, cli: cli)
-            #expect(outcome.failure == .refused("Move it from MacBook B"))
+            #expect(outcome.failure == .refused("Sign in to Claude on the other device instead"))
         }
         let prints = b.moves.fingerprints(ControlArgs(provider: cli, key: Data(repeating: 1, count: 32).base64EncodedString()), id: "f")
         #expect(prints.ok && prints.prints?.allSatisfy { $0.fingerprint.isEmpty } == true)
         #expect(b.vault.reads() == 0 && b.vault.held(b.place(cli, "work")) != nil && !b.moves.paused(cli, "work") && b.locked.isEmpty)
     }
 
-    @Test(arguments: ["claude", "codex"]) func wrongBytesTheSameSignInOrAnAbortLeaveNothingOnTheOtherMac(_ cli: String) async throws {
+    @Test(arguments: ["codex"]) func wrongBytesTheSameSignInOrAnAbortLeaveNothingOnTheOtherMac(_ cli: String) async throws {
         let (_, b, _, root) = try macs(cli)
         defer { try? FileManager.default.removeItem(at: root) }
         let login = Server.login("r-1", 1, cli: cli)
@@ -278,7 +292,7 @@ struct MacLoginMovesTests {
         #expect(b.vault.reads() == 0)
     }
 
-    @Test(arguments: ["claude", "codex"]) func aCommitSentAgainOrAnAbortAfterItNeverMovesItTwice(_ cli: String) async throws {
+    @Test(arguments: ["codex"]) func aCommitSentAgainOrAnAbortAfterItNeverMovesItTwice(_ cli: String) async throws {
         let (_, b, _, root) = try macs(cli)
         defer { try? FileManager.default.removeItem(at: root) }
         let login = Server.login("r-1", 1, cli: cli)

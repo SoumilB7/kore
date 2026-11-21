@@ -2,7 +2,7 @@ import Foundation
 
 /// What Kore writes into Claude Code's user settings (`settings.json` in `CLAUDE_CONFIG_DIR`, else
 /// `~/.claude`): a cloud platform's `env` keys, the same ones Claude's own `/login` wizard writes,
-/// and an `apiKeyHelper` that reads Kore's Keychain item. Every change keeps the file's other
+/// and an `apiKeyHelper` that prints Kore's key file (`cat` of its path). Every change keeps the file's other
 /// keys as they were; the platforms' keys are the only ones it adds or removes.
 package enum ClaudeSettings {
     /// The user settings file the CLI reads.
@@ -16,9 +16,26 @@ package enum ClaudeSettings {
     /// The machine's managed settings, which outrank every other file.
     package static let managedFile = URL(fileURLWithPath: "/Library/Application Support/ClaudeCode/managed-settings.json")
 
-    /// The Keychain item Kore keeps a Claude API key in, and the helper that reads it.
-    package static let keyService = "dev.kore.claude.api-key"
-    package static let keyHelper = "security find-generic-password -s \(keyService) -w"
+    /// The file Kore keeps a Claude API key in (0600, in its 0700 `secrets` folder, per defaults
+    /// domain like the rest of Kore's support folder).
+    package static var keyFile: URL { keyFile(support: KoreFolders.support) }
+
+    package static func keyFile(support: URL) -> URL {
+        support.appendingPathComponent("secrets", isDirectory: true).appendingPathComponent("claude-api-key")
+    }
+
+    /// The helper Claude runs for the key: `/bin/cat` of the file, its path single-quoted for the
+    /// shell Claude runs it in. Nothing of Kore's has to be installed or on PATH for it to work.
+    package static var keyHelper: String { keyHelper(file: keyFile) }
+
+    package static func keyHelper(file: URL) -> String { "/bin/cat " + shellQuoted(file.path) }
+
+    /// `'…'`, with each `'` in it as `'\''`.
+    static func shellQuoted(_ text: String) -> String { "'" + text.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+
+    /// The helper Kore set before 0.3.7, when the key was a Keychain item. Kore never runs or
+    /// reads it: a settings file naming it asks for the key again (`Saved.oldKey`).
+    package static let oldKeyHelper = "security find-generic-password -s dev.kore.claude.api-key -w"
 
     /// The `awsAuthRefresh` command the CLI would run: managed settings first, then the user's;
     /// nil when neither sets one.
@@ -193,10 +210,11 @@ package enum ClaudeSettings {
         return document
     }
 
-    /// The document with Kore's key off: the helper gone only when it's Kore's own.
+    /// The document with Kore's key off: the helper gone only when it's Kore's own (today's, or
+    /// the Keychain one Kore set before 0.3.7).
     package static func removingKey(from document: SettingsDocument) -> SettingsDocument {
         var document = document
-        if document.string("apiKeyHelper") == keyHelper { document.remove("apiKeyHelper") }
+        if let helper = document.string("apiKeyHelper"), helper == keyHelper || helper == oldKeyHelper { document.remove("apiKeyHelper") }
         return document
     }
 
@@ -207,6 +225,8 @@ package enum ClaudeSettings {
     package enum Saved: Equatable, Sendable {
         case platform(Platform, Summary)
         case key
+        /// The helper Kore set when the key was in the Keychain: the key is asked for again.
+        case oldKey
     }
 
     /// A saved platform's details, for the caption and to fill its form in again. No secret.
@@ -245,7 +265,11 @@ package enum ClaudeSettings {
         for platform in Platform.allCases where isOn(env.string(platform.switchKey)) {
             return .platform(platform, summary(platform, env))
         }
-        return document.string("apiKeyHelper") == keyHelper ? .key : nil
+        switch document.string("apiKeyHelper") {
+        case keyHelper: return .key
+        case oldKeyHelper: return .oldKey
+        default: return nil
+        }
     }
 
     /// The saved details of `platform` (whether or not it's on).

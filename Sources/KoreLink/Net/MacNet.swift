@@ -23,7 +23,7 @@ package protocol MacNetHost: AnyObject, Sendable {
     /// This Mac's name, for a phone's directory.
     var macName: String { get }
     /// How to read this Mac's identity (made on first use) while KoreNet is on. The reader may
-    /// block on the Keychain: it's called off the main actor.
+    /// block on a file read: it's called off the main actor.
     func identityReader() -> (@Sendable () throws -> (device: UUID, signer: any IdentitySigner))?
     /// Holds the tailnet's IPN bus (`key` held) or lets it go: held while a phone is allowed or
     /// the Add device window is open, so Tailscale coming back rebinds the port with no window.
@@ -764,7 +764,7 @@ package final class MacNet {
         connection.start()
     }
 
-    /// The identity's signer: read (the Keychain) off the main actor at a `refresh`.
+    /// The identity's signer: read (its file) off the main actor at a `refresh`.
     private var signer: (any IdentitySigner)?
     private var learning = false
 

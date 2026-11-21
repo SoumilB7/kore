@@ -217,12 +217,19 @@ struct MacPairTests {
         try await macs.pair()
         let peers = macs.peers
         let b = macs.b.host.device
-        let login = Data(#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"r-1","expiresAt":1}}"#.utf8)
+        // A Claude login never moves between Macs: Kore doesn't touch Claude's Keychain item.
+        let claude = Data(#"{"claudeAiOauth":{"accessToken":"a","refreshToken":"r-1","expiresAt":1}}"#.utf8)
+        let refused = await peers.command(
+            b, .accountImport,
+            ControlArgs(provider: "claude", login: "work", data: claude.base64EncodedString(), phase: "prepare", moveId: "move-0000", host: "MacBook A", sha: LoginMove.sha(claude)))
+        #expect(!refused.ok)
+        // A Codex login (a file) still does.
+        let login = Data(#"{"tokens":{"access_token":"a","refresh_token":"r-1","account_id":"acct"}}"#.utf8)
         let staged = await peers.command(
             b, .accountImport,
-            ControlArgs(provider: "claude", login: "work", data: login.base64EncodedString(), phase: "prepare", moveId: "move-0001", host: "MacBook A", sha: LoginMove.sha(login)))
+            ControlArgs(provider: "codex", login: "work", data: login.base64EncodedString(), phase: "prepare", moveId: "move-0001", host: "MacBook A", sha: LoginMove.sha(login)))
         #expect(staged.ok)
-        let stagedPlace = LoginVault.Place(cli: "claude", folder: macs.scratch.appendingPathComponent("staging/move-0001", isDirectory: true))
+        let stagedPlace = LoginVault.Place(cli: "codex", folder: macs.scratch.appendingPathComponent("staging/move-0001", isDirectory: true))
         #expect(macs.vault.held(stagedPlace) == login)
         // Its welcome said it takes logins.
         #expect(peers.paired().first?.takesLoginMove == true)

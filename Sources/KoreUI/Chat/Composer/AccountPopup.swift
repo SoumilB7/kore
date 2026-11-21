@@ -369,8 +369,13 @@ final class AccountState {
     var moveRows: [MoveRow] {
         guard !store.onBox, case .login(let id) = palette, let login = store.logins(provider).first(where: { $0.id == id }) else { return [] }
         let moves = LoginMoves.shared
-        if case .moving = moves.line(provider, id) { return [] }
-        if login.onBox != nil { return [MoveRow(title: "Move back here") { [weak self] in self?.moveBack(id) }] }
+        switch moves.line(provider, id) {
+        case .moving?, .signingIn?: return []
+        case .failed?, nil: break
+        }
+        // A Claude login isn't copied: Claude signs in where it's wanted (`LoginMoves.copies`).
+        let copies = LoginMoves.copies(provider)
+        if login.onBox != nil { return [MoveRow(title: copies ? "Move back here" : "Sign in here") { [weak self] in self?.moveBack(id) }] }
         if let box = moves.alsoOn(provider, id) {
             let name = moves.placeName(box)
             return [
@@ -379,7 +384,9 @@ final class AccountState {
             ]
         }
         return moves.targets(provider).map { target in
-            MoveRow(title: "Move to \(target.name)", hint: target.why, enabled: target.why == nil) { [weak self] in self?.move(id, to: target.key) }
+            MoveRow(title: copies ? "Move to \(target.name)" : "Sign in on \(target.name)", hint: target.why, enabled: target.why == nil) { [weak self] in
+                self?.move(id, to: target.key)
+            }
         }
     }
 
@@ -392,7 +399,8 @@ final class AccountState {
         palette = nil
         let active = CLIProfiles.active(provider) == id
         // The only login here: asked once, in the row, the way Sign out asks.
-        if active, others(id).isEmpty { return askingMove = MoveAsk(login: id, box: box) }
+        // A Claude sign-in on a box leaves this login as it is: nothing to ask.
+        if active, others(id).isEmpty, LoginMoves.copies(provider) { return askingMove = MoveAsk(login: id, box: box) }
         LoginMoves.shared.move(provider, id, to: box, fallback: active ? .some(others(id).first?.id) : nil)
     }
 
@@ -1036,6 +1044,7 @@ private struct LoginList: View {
         if !store.onBox {
             switch LoginMoves.shared.line(provider, login.id) {
             case .moving(let box): return (login.onBox != nil ? "Moving back here…" : "Moving to \(box)…", false, false)
+            case .signingIn(let box): return ("Signing in on \(box): paste the page's code in its agents popup", false, false)
             case .failed(let words): return (words, true, false)
             case nil: break
             }

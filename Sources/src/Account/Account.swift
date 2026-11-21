@@ -26,7 +26,7 @@ package struct SignInMethod: Identifiable, Hashable, Sendable {
         case codexLogin(JSONValue)
         /// `claude auth login --sso` over pipes.
         case claudeSSO
-        /// Kore's key field: a Keychain item and Claude's `apiKeyHelper`.
+        /// Kore's key field: a 0600 file of Kore's and Claude's `apiKeyHelper` printing it.
         case claudeKey
         /// Kore's key field: Codex's `account/login/start {type: "apiKey"}`.
         case codexKey
@@ -381,7 +381,7 @@ extension SignInMethod {
             kind: .browserOAuth, mechanism: .claudeAuthenticate(["loginWithClaudeAi": false]), forced: ["", "console"],
             providers: ["firstParty"]),
         SignInMethod(
-            id: "claudeKey", label: "Use an API key…", hint: "Stored in your Keychain", group: claudeConsole, kind: .secret,
+            id: "claudeKey", label: "Use an API key…", hint: "Kept in a file only you can read", group: claudeConsole, kind: .secret,
             mechanism: .claudeKey, separated: true, forced: ["", "console"], providers: ["firstParty"]),
         SignInMethod(
             id: "bedrock", label: "Amazon Bedrock…", group: claudePlatforms, kind: .external, mechanism: .platform(.bedrock),
@@ -500,7 +500,7 @@ package enum ClaudeSignIn {
     }
 }
 
-/// Claude's user settings as Kore reads and writes them, and Kore's Keychain item.
+/// Claude's user settings as Kore reads and writes them, and Kore's key file.
 package enum ClaudeSettingsStore {
     package static func read() -> SettingsDocument { (try? SettingsFile.read(ClaudeSettings.userFile())) ?? SettingsDocument() }
 
@@ -513,27 +513,25 @@ package enum ClaudeSettingsStore {
         try SettingsFile.write(change(document), to: file)
     }
 
-    /// The key in the Keychain, then Claude's helper reading it.
-    package static func saveKey(_ key: String) throws {
-        do { try Keychain.store.value.set(key, service: ClaudeSettings.keyService) } catch let failure as Keychain.Failure {
-            throw KeychainFailed(words: failure.words)
-        }
+    /// The key in its file (0600), then Claude's helper printing it.
+    package static func saveKey(_ key: String, file: URL = ClaudeSettings.keyFile) throws {
+        do { try SecretFile.write(Data(key.utf8), to: file, narrow: true) } catch { throw KeyNotSaved(words: error.localizedDescription) }
         try change(ClaudeSettings.savingKey(in:))
     }
 
-    /// Kore's key out: the helper (only Kore's own) and the item.
-    package static func removeKey() throws {
+    /// Kore's key out: the helper (only Kore's own) and the file.
+    package static func removeKey(file: URL = ClaudeSettings.keyFile) throws {
         try change(ClaudeSettings.removingKey(from:))
-        try? Keychain.store.value.remove(service: ClaudeSettings.keyService)
+        try? FileManager.default.removeItem(at: file)
     }
 
     package struct NotJSON: LocalizedError {
         package var errorDescription: String? { "Claude's settings.json isn't valid JSON." }
     }
 
-    package struct KeychainFailed: LocalizedError {
+    package struct KeyNotSaved: LocalizedError {
         package let words: String
-        package var errorDescription: String? { "Kore couldn't save to your Keychain (\(words))" }
+        package var errorDescription: String? { "Kore couldn't save the key (\(words))" }
     }
 }
 
@@ -609,7 +607,10 @@ package extension AccountText {
         case "oauth_token":
             return .signedIn(AccountIdentity(email: email, plan: plan, method: "Token from env", changeable: false))
         case "api_key_helper" where saved == .key:
-            return .signedIn(AccountIdentity(email: email, plan: "Claude Console", method: "Keychain", changeable: true, methodID: "claudeKey"))
+            return .signedIn(AccountIdentity(email: email, plan: "Claude Console", method: "API key", changeable: true, methodID: "claudeKey"))
+        case "api_key_helper" where saved == .oldKey:
+            // Kore's helper from when the key was in the Keychain: Kore reads nothing of it.
+            return .signedIn(AccountIdentity(email: email, method: AccountText.oldKeyNotice, changeable: true, methodID: "claudeKey"))
         case "api_key_helper":
             return .signedIn(AccountIdentity(email: email, plan: "Claude Console", method: "API key helper", changeable: false))
         case "third_party":
@@ -703,7 +704,10 @@ package extension AccountText {
     }
 
     /// Under the key field: where the key goes; its prompt.
-    static func keyCaption(_ provider: String) -> String { provider == "codex" ? "Stored by Codex." : "Stored in your Keychain." }
+    static func keyCaption(_ provider: String) -> String { provider == "codex" ? "Stored by Codex." : "Kept in a file only you can read." }
+
+    /// A key Kore kept in the Keychain before 0.3.7: one line, the owner enters it again.
+    package static let oldKeyNotice = "Enter your API key again: Kore no longer uses the Keychain"
     static func keyPrompt(_ provider: String) -> String { provider == "codex" ? "OpenAI API key" : "Anthropic API key" }
 
     static func askSignOut(_ product: String) -> String { "Sign out of \(product)?" }

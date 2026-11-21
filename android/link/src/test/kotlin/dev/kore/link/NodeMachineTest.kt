@@ -99,6 +99,12 @@ class NodeMachineTest {
         assertNull((m.on(Event.Screen(false), 7) as State.Away).at)
     }
 
+    @Test fun aMacWithANewKeyIsDeniedAsKeyChanged() {
+        val m = machine()
+        m.on(Event.Start, 0)
+        assertEquals(State.Denied("key-changed"), m.on(Event.Ended("key-changed"), 0))
+    }
+
     @Test fun theOwnersDenyIsStillDenied() {
         val m = machine()
         m.on(Event.Start, 0)

@@ -75,13 +75,22 @@ class NetSessionTest {
             sent(s).single().encoded().decodeToString())
     }
 
-    @Test fun aWelcomeSignedByAnotherKeyEndsIt() {
+    @Test fun aPinnedMacSigningWithAnotherKeyReadsAsKeyChanged() {
         val s = session()
         s.receive(challenge())
         sent(s)
         s.receive(welcome(sig = b64(tn.s("sigC"))))
+        // Its Mac made a new identity key: this phone pairs again, never trusts it as it is.
+        assertEquals(State.Closed("key-changed"), s.state)
+        assertEquals(NetControl.Bye("key-changed"), sent(s).single())
+    }
+
+    @Test fun aPinnedBoxSigningWithAnotherKeyIsAFailedProof() {
+        val s = session(record = mac.copy(kind = NodeKind.BOX))
+        s.receive(challenge())
+        sent(s)
+        s.receive(welcome(sig = b64(tn.s("sigC"))))
         assertEquals(State.Closed("proof"), s.state)
-        assertEquals(NetControl.Bye("proof"), sent(s).single())
     }
 
     @Test fun aChallengeFromAnotherDeviceEndsIt() {

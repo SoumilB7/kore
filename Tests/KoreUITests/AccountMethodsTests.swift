@@ -27,7 +27,7 @@ struct AccountMethodsTests {
         let top = MethodMenuItem.build(methods, policy: LoginPolicy(), current: nil)
         #expect(top.map(\.title) == ["Claude account with subscription", "Claude account with SSO", "Anthropic Console account", "3rd-party platform"])
         #expect(top.map(\.hint) == ["Pro, Max, Team, or Enterprise", nil, "API usage billing", nil])
-        #expect(top[2].children.map(\.hint) == ["Opens Terminal", "Adds a key to your Console workspace", "Stored in your Keychain"])
+        #expect(top[2].children.map(\.hint) == ["Opens Terminal", "Adds a key to your Console workspace", "Kept in a file only you can read"])
         let byID = Dictionary(uniqueKeysWithValues: methods.map { ($0.id, $0.mechanism) })
         #expect(byID["sso"] == .claudeSSO && byID["consoleTerminal"] == .terminal(["/login"]) && byID["claudeKey"] == .claudeKey)
         #expect(byID["bedrock"] == .platform(.bedrock) && byID["awsRefresh"] == .awsRefresh)
@@ -91,11 +91,17 @@ struct AccountMethodsTests {
         // Set somewhere Kore didn't write: named, and can't change.
         let elsewhere = Self.claude(["loggedIn": true, "authMethod": "third_party", "apiProvider": "vertex"], saved)
         #expect(elsewhere.map(AccountText.header) == "Google Vertex AI" && elsewhere?.changeable == false)
-        // Kore's key: "API key", "Claude Console · Keychain".
+        // Kore's key: "API key", "Claude Console · API key".
         let key = Self.claude(
             ["loggedIn": true, "authMethod": "api_key_helper", "apiKeySource": "apiKeyHelper"], ClaudeSettings.savingKey(in: SettingsDocument()))
-        #expect(key.map(AccountText.header) == "API key" && key.map(AccountText.caption) == "Claude Console · Keychain")
+        #expect(key.map(AccountText.header) == "API key" && key.map(AccountText.caption) == "Claude Console · API key")
         #expect(key?.changeable == true && key?.methodID == "claudeKey")
+        // Kore's helper from when the key was in the Keychain: one line asks for it again.
+        var old = SettingsDocument()
+        old.set("apiKeyHelper", string: ClaudeSettings.oldKeyHelper)
+        let asked = Self.claude(["loggedIn": true, "authMethod": "api_key_helper", "apiKeySource": "apiKeyHelper"], old)
+        #expect(asked.map(AccountText.caption) == "Enter your API key again: Kore no longer uses the Keychain")
+        #expect(asked?.changeable == true && asked?.methodID == "claudeKey")
         #expect(AccountText.signOutCaption(working: 1, setting: true) == "Removes it from Claude's settings everywhere. Stops 1 working chat.")
     }
 

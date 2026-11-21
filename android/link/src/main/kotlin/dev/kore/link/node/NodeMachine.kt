@@ -137,6 +137,8 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
         // the same story as a live `revoked`, never "not allowed" (the Join flow keeps its own words).
         "unknown" -> if (box) waiting(now) else State.Removed
         "refused", "proof" -> State.Denied(reason)
+        // The Mac's identity key changed (Kore 0.3.7 made a new one): pair again, never retried.
+        "key-changed", "bye key-changed" -> State.Denied("key-changed")
         // The Mac's KoreNet switched off: back by itself once it's on again.
         "off" -> slowly(now, AwayWhy.NET_OFF)
         "paused" -> State.Away(AwayWhy.OFF, null, lastSeen)

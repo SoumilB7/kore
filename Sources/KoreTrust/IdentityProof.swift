@@ -5,7 +5,7 @@ import CryptoKit
 import Crypto
 #endif
 
-/// A device's P-256 identity key: Keychain on a Mac, Keystore on a phone, a 0600 file on a box.
+/// A device's P-256 identity key: a 0600 file on a Mac and on a box, Keystore on a phone.
 /// Signatures are ECDSA P-256 over SHA-256 of the message, DER encoded (Android's
 /// `SHA256withECDSA`).
 package protocol IdentitySigner: Sendable {

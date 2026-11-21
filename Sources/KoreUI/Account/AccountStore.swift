@@ -503,7 +503,7 @@ package final class AccountStore {
         signIn(provider, method: method, in: folder, aim: aim)
     }
 
-    /// A typed key, sent once: the CLI takes it (Codex), or Kore keeps it in the Keychain for
+    /// A typed key, sent once: the CLI takes it (Codex), or Kore keeps it in a 0600 file for
     /// Claude's helper. `done` says whether it landed; on failure the row says why and the field
     /// comes back. The key goes nowhere else. A key the CLI keeps in the login's own folder
     /// (Codex's) can add a login, or sign another listed one in (`aim`).

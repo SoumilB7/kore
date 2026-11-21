@@ -95,7 +95,7 @@ struct ClaudeSettingsTests {
         env.set("FOO", string: "1")
         document.set("env", object: env)
         let on = ClaudeSettings.savingKey(in: document)
-        #expect(on.string("apiKeyHelper") == "security find-generic-password -s dev.kore.claude.api-key -w")
+        #expect(on.string("apiKeyHelper") == ClaudeSettings.keyHelper && ClaudeSettings.keyHelper.hasPrefix("/bin/cat '"))
         #expect(on.object("env").keys == ["FOO"])
         #expect(ClaudeSettings.saved(in: on) == .key)
         #expect(ClaudeSettings.removingKey(from: on).text("apiKeyHelper") == nil)
@@ -155,20 +155,41 @@ struct ClaudeSettingsTests {
         #expect(ClaudeSettings.awsAuthRefresh(files: [managed]) == nil)
     }
 
-    // MARK: The Keychain
+    // MARK: Kore's key file
 
-    @Test func theFakeKeychainHoldsAndForgets() throws {
-        let keychain = MemoryKeychain()
-        try keychain.set("sk-1", service: "svc")
-        #expect(keychain.contains(service: "svc") && keychain.secret("svc") == "sk-1")
-        try keychain.set("sk-2", service: "svc")
-        #expect(keychain.secret("svc") == "sk-2")
-        try keychain.remove(service: "svc")
-        #expect(!keychain.contains(service: "svc"))
-        keychain.failNext = -128
-        #expect(throws: Keychain.Failure.self) { try keychain.set("sk-3", service: "svc") }
-        #expect(!keychain.contains(service: "svc"))
-        #expect(Keychain.Failure(-128).words.isEmpty == false)
+    @Test func theKeyGoesToAPrivateFileClaudesHelperPrints() throws {
+        let scratch = Scratch()
+        let support = scratch.folder.appendingPathComponent("it's support", isDirectory: true)
+        let file = ClaudeSettings.keyFile(support: support)
+        #expect(file.lastPathComponent == "claude-api-key" && file.deletingLastPathComponent().lastPathComponent == "secrets")
+        try SecretFile.write(Data("sk-ant-1".utf8), to: file, narrow: true)
+        try SecretFile.write(Data("sk-ant-2".utf8), to: file, narrow: true)
+        let mode = { (url: URL) in (try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int) ?? 0 }
+        #expect(try mode(file) == 0o600 && mode(file.deletingLastPathComponent()) == 0o700)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path) == ["claude-api-key"])
+        // The helper is `/bin/cat` of the quoted path; the shell Claude runs it in prints the key.
+        let helper = ClaudeSettings.keyHelper(file: file)
+        #expect(helper.hasPrefix("/bin/cat '") && !helper.contains("security"))
+        let run = Process()
+        run.executableURL = URL(fileURLWithPath: "/bin/sh")
+        run.arguments = ["-c", helper]
+        let out = Pipe()
+        run.standardOutput = out
+        try run.run()
+        run.waitUntilExit()
+        #expect(String(decoding: out.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self) == "sk-ant-2")
+        // A key file others may read is refused.
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path)
+        #expect(throws: SecretFile.Loose.self) { _ = try SecretFile.read(file) }
+    }
+
+    @Test func theOldKeychainHelperIsKnownNeverRunAndGoesOnlyOnSignOut() {
+        var old = SettingsDocument()
+        old.set("apiKeyHelper", string: ClaudeSettings.oldKeyHelper)
+        #expect(ClaudeSettings.saved(in: old) == .oldKey)
+        // Entering the key again replaces it; signing out removes it; anyone else's stays.
+        #expect(ClaudeSettings.savingKey(in: old).string("apiKeyHelper") == ClaudeSettings.keyHelper)
+        #expect(ClaudeSettings.removingKey(from: old).text("apiKeyHelper") == nil)
     }
 
     // MARK: What the methods read
