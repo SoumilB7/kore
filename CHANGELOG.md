@@ -4,6 +4,11 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
 
 ## [0.3.7] - 2026-11-21
 
+### Added
+- Claude chats have Full access, as Codex chats do: edits and every command without asking (Claude's
+  bypass permissions). Only you put a chat in it: phones and links stop at Auto, and Arsenal never
+  raises a chat past the one asking. Picking it starts Claude again in it, between turns.
+
 ### Changed
 - Kore makes no Keychain call at all. KoreNet's identity and tailnet keys live in files only you
   can read, in Kore's own support folder; this Mac gets a new identity key, never reading the old one. Boxes
@@ -15,6 +20,10 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
   sign-in on the box, its page opened here; "Sign in here" brings a moved one back the same
   way. Nothing is logged out. Codex logins move as before.
 - Update a box before its Mac: a box on 0.3.6 can't take the Mac's new key.
+
+### Fixed
+- `/rename <name>` is in Claude chats' command menu on the Mac, a box and the phone, and renames
+  the chat in Kore and Claude together, without waking a sleeping box chat.
 
 ## [0.3.6] - 2026-11-21
 

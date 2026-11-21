@@ -776,6 +776,13 @@ package final class HostDaemon {
         case .send(_, let text, let blobs):
             guard let hc else { return fail(.goneChat, "") }
             if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
+            // A typed /rename renames as `chat.rename` does, its CLI asleep or not (the policy
+            // refused one without a name).
+            if blobs.isEmpty, let name = SlashCommand.renameArgument(text), !name.isEmpty {
+                hc.rename(name)
+                broadcast(chats: [hc])
+                return .init(id: id, ok: true)
+            }
             // Uploaded files (`blob.put`), kept on the box until a turn has read them.
             let files = blobs.compactMap { self.blobs[$0] }
             guard files.count == blobs.count else { return fail(.goneBlob, "A file wasn't uploaded, or expired. Attach it again.") }

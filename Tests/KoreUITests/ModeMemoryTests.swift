@@ -56,8 +56,8 @@ struct ModeMemoryTests {
 
     @Test func aModeNoLongerOfferedFallsBackToTheFirst() {
         let memory = scratchMemory()
-        // Not in the menu (Bypass needs a setting), Plan, or gone from the provider.
-        for kept in ["bypassPermissions", "plan", "noSuchMode"] {
+        // Not in the menu (Don't ask), Plan, or gone from the provider.
+        for kept in ["dontAsk", "plan", "noSuchMode"] {
             memory.remember(kept, for: .claude)
             #expect(ControlsStore(provider: .claude, memory: memory).mode == "default")
         }

@@ -469,8 +469,9 @@ package final class HostChat {
     /// The "/" commands it offers: its CLI's while it runs, else as the CLI last listed them, else
     /// its CLI's own built-ins (a chat that hasn't started yet). A send starts the CLI.
     var commands: [SlashCommand] {
-        if let live = chat?.controls.commands, !live.isEmpty { return live }
-        return record.commands ?? provider.commands
+        let listed = chat.map(\.controls.commands).flatMap { $0.isEmpty ? nil : $0 } ?? record.commands ?? provider.commands
+        // Kore's /rename, on a list kept before Kore listed it too.
+        return provider.commands.contains { $0.name == SlashCommand.rename.name } ? SlashCommand.withRename(listed) : listed
     }
 
     static let commandsKept = 200
@@ -561,6 +562,13 @@ package final class HostChat {
         if chat == nil, !title.isEmpty { record.renamePending = true }
         chat?.adoptName(title)
         try? saveRecord()
+    }
+
+    /// Kore's rename (`chat.rename`, a typed `/rename`): kept with the chat, and its CLI's title
+    /// too, now or at its next start.
+    func rename(_ title: String) {
+        setTitle(title)
+        chat?.rename(title)
     }
 
     /// A rename kept while the CLI slept reaches its session, once the CLI has started.

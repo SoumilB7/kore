@@ -43,6 +43,8 @@ package struct ClaudeCommands {
     package func knows(_ id: String) -> Bool { tracked[id] != nil }
 
     package func isLive(_ id: String) -> Bool { tracked[id]?.state.isLive == true }
+    /// Something it ran still runs (a shell, a monitor, an armed job): it ends with the process.
+    package var anyLive: Bool { tracked.values.contains { $0.state.isLive } }
 
     /// The Bash call a live foreground command came from (what `background_tasks` takes).
     package func toolId(of id: String) -> String? { tracked[id]?.toolId }

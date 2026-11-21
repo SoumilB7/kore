@@ -1034,6 +1034,13 @@ package final class ClaudeTranslator {
     /// Kore asked the CLI for a mode; its status confirms it.
     package func requestMode(_ id: String) { requestedMode = id }
 
+    /// The CLI started again in the mode the user picked (Full access): said as a pick the CLI
+    /// confirmed, since a launch reports its mode only with the next turn.
+    package func modeLaunched(_ id: String) {
+        requestedMode = nil
+        setMode(id, .user, at: .now)
+    }
+
     /// The CLI rejected the mode Kore asked for and kept its own.
     package func modeRefused() {
         guard let asked = requestedMode else { return }

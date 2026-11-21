@@ -228,7 +228,7 @@ final class ModelPicker: ChatStoryline {
 /// The mode pill's popup: the modes the model offers, as the CLI's own menu lists them (Claude's
 /// Auto where the model supports it), the current one ✓, Codex's Plan as a switch under a rule. ↓ and Return pick and close; a click on a mode picks and closes, the Plan
 /// switch flips and stays; ⇧Tab cycles without opening it. With it open, a press on the model
-/// chip switches to the model picker in one click.
+/// chip switches to the model picker in one click. Full access reads the same for both CLIs.
 final class ModePicker: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
     /// A model that offers Claude's Auto.
@@ -259,7 +259,7 @@ final class ModePicker: ChatStoryline {
                 "the modes, Manual checked",
                 codex
                     ? ["✓ Ask for approval", "Approve for me", "Full access", "Plan: off"]
-                    : ["✓ Manual", "Edit automatically", "Plan", "Auto"]),
+                    : ["✓ Manual", "Edit automatically", "Plan", "Auto", "Full access"]),
             FadesEnd(),
             Snapshot("mode-picker"),
             // 2 · ↓ and Return pick and close.
@@ -313,7 +313,7 @@ final class ModePicker: ChatStoryline {
                 ExpectElement(popup, .absent),
                 mode("Auto picked", "auto"),
             ] + open + [
-                rows("Auto checked", ["Manual", "Edit automatically", "Plan", "✓ Auto"]),
+                rows("Auto checked", ["Manual", "Edit automatically", "Plan", "✓ Auto", "Full access"]),
                 Expect("Auto in the accent's rung, as its pill", found: { $0.app.chat?.storyModeTint("auto") }) {
                     $0.app.chat?.storyModeTint("auto") == "auto" && $0.app.chat?.storyModePill == "Auto"
                 },
@@ -323,6 +323,17 @@ final class ModePicker: ChatStoryline {
                 ExpectElement(popup, .absent),
             ]
         }
+        // 7 · Full access, each CLI's: the same words and the one red, and down again.
+        let full = codex ? CodexModes.fullAccess : ClaudeModes.fullAccess
+        steps += open + [
+            Press(row(full)),
+            ExpectElement(popup, .absent),
+            mode("Full access picked", full),
+            Expect("the CLI told") { try $0.scriptedBackend().log.contains(.setMode(full)) },
+            Expect("Full access in the danger rung, as its pill", found: { $0.app.chat?.storyModePill }) {
+                $0.app.chat?.storyModeTint(full) == "danger" && $0.app.chat?.storyModePill == "Full access"
+            },
+        ] + open + [Press(row(first)), ExpectElement(popup, .absent), mode("lowered again", first)]
         return steps
     }
 }

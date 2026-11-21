@@ -147,8 +147,8 @@ extension Workspace {
 
 /// A source's mode and effort in the target CLI's terms (chat-handoff.md §10), by the mode's
 /// rung on the ladder, so no CLI is named here: the same rung where the target has it, else the
-/// next one down (Full access → Edit automatically, Approve for me → Auto where the model allows
-/// it); Plan stays Plan (a toggle or a mode).
+/// next one down (Full access → Full access, Approve for me → Auto where the model allows it,
+/// else Edit automatically); Plan stays Plan (a toggle or a mode).
 enum ImportMapping {
     static func settings(_ preview: HandoffPreview, into target: Provider, model: ModelOption?) -> ImportSettings? {
         guard let source = Registry.provider(preview.format) else { return nil }

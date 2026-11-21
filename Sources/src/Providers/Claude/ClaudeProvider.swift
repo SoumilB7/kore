@@ -49,6 +49,7 @@ extension ProviderDescriptor {
                 hint: "<optional custom summarization instructions>", kind: .command),
             SlashCommand(name: "context", description: "Show current context usage", hint: "", kind: .command),
             SlashCommand(name: "init", description: "Initialize a new CLAUDE.md file with codebase documentation", hint: "", kind: .command),
+            .rename,
             SlashCommand(
                 name: "security-review", description: "Complete a security review of the pending changes on the current branch", hint: "",
                 kind: .command),
@@ -63,11 +64,17 @@ package enum ClaudeModes {
         ModeOption(id: "acceptEdits", label: "Edit automatically", icon: ModeIcons.editAutomatically, rung: .edits),
         ModeOption(id: "plan", label: "Plan", icon: ModeIcons.plan, rung: .plan),
         ModeOption(id: "auto", label: "Auto", icon: ModeIcons.auto, rung: .auto),
-        // Not offered, as in the extension (Bypass needs its allowDangerouslySkipPermissions
-        // setting); kept so the label is right if the CLI reports them.
-        ModeOption(id: "bypassPermissions", label: "Bypass permissions", icon: ModeIcons.bypass, rung: .danger, listed: false),
+        // The CLI's bypassPermissions (owner, 2026-11-21): Edit automatically and yes to every
+        // command. Named, drawn and ranked as Codex's Full access. Only a person raises a chat into
+        // it (`LinkPolicy.raiseCap`, `Chat.arsenalMayMove`); a CLI not launched able to bypass
+        // starts again in it (`ClaudeBackend.setMode`). Not in Shift+Tab's cycle.
+        ModeOption(id: fullAccess, label: "Full access", icon: ModeIcons.fullAccess, rung: .danger, iconSize: 15),
+        // Not offered, as in the extension; kept so the label is right if the CLI reports it.
         ModeOption(id: "dontAsk", label: "Don't ask", icon: ModeIcons.manual, rung: .danger, listed: false),
     ]
+
+    /// The CLI's id for Full access.
+    package static let fullAccess = "bypassPermissions"
 }
 
 /// Archived Claude sessions. The Claude CLI has no archive for local sessions (each of its

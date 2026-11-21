@@ -56,9 +56,11 @@ struct BoxChatOpsUITests {
         #expect(!chat.controls.availableModes.contains { $0.id == CodexModes.fullAccess })
         #expect(chat.controls.cappedModes.map(\.id) == [CodexModes.fullAccess])
         #expect(chat.controls.levelCapNote == "Box chats go up to Auto")
-        // A Mac chat offers it, with none dim. (Claude's Bypass isn't in its picker anywhere.)
+        // A Mac chat offers it, with none dim. Claude's Full access the same, in the same words.
         let mac = Chat(provider: .codex, folder: URL(fileURLWithPath: "/tmp"))
         #expect(mac.controls.availableModes.contains { $0.id == CodexModes.fullAccess } && mac.controls.cappedModes.isEmpty)
-        #expect(box.newChat(.claude).controls.cappedModes.isEmpty)
+        #expect(box.newChat(.claude).controls.cappedModes.map(\.label) == ["Full access"])
+        let macClaude = Chat(provider: .claude, folder: URL(fileURLWithPath: "/tmp"))
+        #expect(macClaude.controls.availableModes.contains { $0.id == ClaudeModes.fullAccess } && macClaude.controls.cappedModes.isEmpty)
     }
 }

@@ -262,6 +262,20 @@ package final class Chat: Identifiable {
         try? await backend?.rename(newName)
     }
 
+    /// The name a typed `/rename` gives (nil: not one, or this chat's CLI keeps no title).
+    private func typedRename(_ text: String, files: Bool) -> String? {
+        guard !files, provider.commands.contains(where: { $0.name == SlashCommand.rename.name }) else { return nil }
+        return SlashCommand.renameArgument(text)
+    }
+
+    /// A typed `/rename <name>` renames as the tab's Rename does; nothing goes to the CLI as a
+    /// message. Without a name, the usage line.
+    private func renameTyped(_ name: String) {
+        let line = ChatEvent.notice(name.isEmpty ? SlashCommand.renameUsage : "Renamed to \(name)")
+        if awaitingHistory { hold(line) } else { dispatch(line) }
+        if !name.isEmpty { rename(name) }
+    }
+
     // MARK: Events
 
     /// Every event goes to every store; each takes what it shows. `own`: the chat made it, not its backend.
@@ -867,6 +881,12 @@ package final class Chat: Identifiable {
         let text = Self.message(command: command, draft: draft)
         let sent = attachments
         guard !text.isEmpty || !sent.isEmpty else { return }
+        // Without a name the composer keeps it, for the name.
+        if let name = typedRename(text, files: !sent.isEmpty) {
+            if !name.isEmpty { (draft, command) = ("", nil) }
+            renameTyped(name)
+            return
+        }
         // Sent during a compaction: it waits for it, shown queued (a typed /compact has nothing to add).
         if context.compacting {
             guard !sent.isEmpty || Self.compactCommand(text) == nil else { return }
@@ -907,6 +927,11 @@ package final class Chat: Identifiable {
         _ text: String, files: [URL] = [], note: String? = nil, done: (@MainActor (Result<Bool, Error>) -> Void)? = nil
     ) -> Bool {
         guard !closed, !accountRestartPending else { return false }
+        if let name = typedRename(text, files: !files.isEmpty) {
+            renameTyped(name)
+            done?(.success(false))
+            return true
+        }
         let sent = services.attachments(files)
         // During a compaction a phone's message waits for it, shown queued, as the composer's does.
         if context.compacting {

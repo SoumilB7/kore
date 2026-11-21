@@ -105,6 +105,11 @@ package enum LinkPolicy {
             if trimmed.hasPrefix("/") {
                 let name = String(trimmed.dropFirst().prefix { !$0.isWhitespace })
                 if koreOnly.contains(name) || chat.koreEntries.contains(name) { return .deny(.command, "/\(name) is Kore's own; use it in Kore.") }
+                // Kore's own rename, every chat's (`SlashCommand.rename`): within what ask may do.
+                if name == SlashCommand.rename.name {
+                    guard let title = SlashCommand.renameArgument(trimmed), !title.isEmpty else { return .deny(.invalid, SlashCommand.renameUsage) }
+                    return title.count <= maxTitle ? .allow : .deny(.invalid, "A title is one line, up to 200 characters.")
+                }
                 guard name == "compact" || chat.commands.contains(name) else { return .deny(.command, "This chat doesn't offer /\(name).") }
             }
             return .allow

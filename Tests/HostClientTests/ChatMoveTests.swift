@@ -152,35 +152,37 @@ struct ChatMoveTests {
     /// resumes at the point, `--resume-session-at`): the point goes with the session both ways,
     /// and only a message's uuid is taken (anything else, the session resumes at its end).
     @Test func aRollbackPointGoesWithTheSession() async throws {
+        // Its own session: RollbackPoints is shared, and ChatCopyClientTests uses Self.session.
+        let session = "7d1e3c40-0000-4000-8000-00000000ab01"
         let s = try await sides()
         defer {
             s.rig.finish()
-            RollbackPoints.forget(Self.session)
+            RollbackPoints.forget(session)
         }
-        let hc = try #require(s.rig.host.newChat(folder: s.rig.folder.path, provider: "claude", modelId: "haiku", title: "Repos", session: Self.session))
-        try write(Self.rows(SessionFiles.real(s.rig.folder.path), count: 3), s.boxProjects.appendingPathComponent("\(Self.session).jsonl"))
+        let hc = try #require(s.rig.host.newChat(folder: s.rig.folder.path, provider: "claude", modelId: "haiku", title: "Repos", session: session))
+        try write(Self.rows(SessionFiles.real(s.rig.folder.path), count: 3), s.boxProjects.appendingPathComponent("\(session).jsonl"))
         let onBox = "0a1b2c3d-0000-4000-8000-000000000001", onMac = "0a1b2c3d-0000-4000-8000-000000000002"
         var moves = s.moves
         var kept: [(String?, String)] = []
         moves.keepRollbackPoint = { kept.append(($0, $1)) }
 
         // Cut back on the box (a phone's rollback): the Mac's CLI resumes there too.
-        RollbackPoints.set(onBox, for: Self.session)
+        RollbackPoints.set(onBox, for: session)
         _ = try await moves.bring(chatId: hc.id, gen: 0, boxFolder: s.rig.folder.path, pair: s.pair).get()
-        #expect(kept.count == 1 && kept.first?.0 == onBox && kept.first?.1 == Self.session)
+        #expect(kept.count == 1 && kept.first?.0 == onBox && kept.first?.1 == session)
 
         // Cut back here: the box's CLI resumes at this Mac's point.
-        RollbackPoints.forget(Self.session)
-        moves.rollbackPoint = { $0 == Self.session ? onMac : nil }
-        _ = try await moves.sendBack(try #require(moves.store.session(Self.session)), title: "Repos", settings: ChatSettings(modelId: "haiku"), mirrored: nil).get()
-        #expect(RollbackPoints.at(Self.session) == onMac)
+        RollbackPoints.forget(session)
+        moves.rollbackPoint = { $0 == session ? onMac : nil }
+        _ = try await moves.sendBack(try #require(moves.store.session(session)), title: "Repos", settings: ChatSettings(modelId: "haiku"), mirrored: nil).get()
+        #expect(RollbackPoints.at(session) == onMac)
 
         // A point that isn't a message's uuid never reaches a CLI's arguments: the box forgets its own.
         _ = try await moves.bring(chatId: hc.id, gen: 2, boxFolder: s.rig.folder.path, pair: s.pair).get()
         #expect(kept.last?.0 == onMac)
         moves.rollbackPoint = { _ in "--dangerously-skip-permissions" }
-        _ = try await moves.sendBack(try #require(moves.store.session(Self.session)), title: "Repos", settings: ChatSettings(modelId: "haiku"), mirrored: nil).get()
-        #expect(RollbackPoints.at(Self.session) == nil)
+        _ = try await moves.sendBack(try #require(moves.store.session(session)), title: "Repos", settings: ChatSettings(modelId: "haiku"), mirrored: nil).get()
+        #expect(RollbackPoints.at(session) == nil)
         #expect(LinkMoves.rollbackPoint("--resume-session-at") == nil && LinkMoves.rollbackPoint(onBox.uppercased()) == onBox.uppercased())
     }
 

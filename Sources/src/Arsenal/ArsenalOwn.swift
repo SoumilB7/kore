@@ -53,7 +53,7 @@ extension Chat {
         }
     }
 
-    /// Bypass permissions, Full access, and any mode Kore doesn't know.
+    /// Full access (Claude's bypassPermissions, Codex's fullAccess), and any mode Kore doesn't know.
     package static let top = 6
 
     /// The mode that says what the CLI may do on its own. Codex's Plan switch changes how it works

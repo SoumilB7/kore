@@ -653,6 +653,12 @@ extension HostDaemon {
         case .rename(let title) where hc.chat == nil:
             hc.setTitle(title.trimmingCharacters(in: .whitespacesAndNewlines))
             return ok()
+        // A typed /rename from a Kore that sends it as a message: the same rename.
+        case .send(let text, let files, _, _) where files.isEmpty && !(SlashCommand.renameArgument(text) ?? "").isEmpty:
+            hc.rename(SlashCommand.renameArgument(text) ?? "")
+            var value = CallValue()
+            value.bool = false
+            return ok(value)
         case .setAutoCompact(let point):
             hc.setAutoCompact(point)
             return ok()

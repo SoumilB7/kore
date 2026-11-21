@@ -27,8 +27,9 @@ struct ImportWordsTests {
         #expect(ImportMapping.settings(preview(format: "claude", mode: "auto"), into: .codex, model: nil)?.mode == "approveForMe")
         let plan = ImportMapping.settings(preview(format: "claude", mode: "plan"), into: .codex, model: nil)
         #expect(plan?.planMode == true)
-        // Full access: Bypass isn't offered, so Edit automatically.
-        #expect(ImportMapping.settings(preview(format: "codex", mode: "fullAccess"), into: .claude, model: nil)?.mode == "acceptEdits")
+        // Full access both ways: each CLI's own.
+        #expect(ImportMapping.settings(preview(format: "codex", mode: "fullAccess"), into: .claude, model: nil)?.mode == "bypassPermissions")
+        #expect(ImportMapping.settings(preview(format: "claude", mode: "bypassPermissions"), into: .codex, model: nil)?.mode == "fullAccess")
         #expect(ImportMapping.settings(preview(format: "codex", mode: "plan"), into: .claude, model: nil)?.mode == "plan")
         #expect(ImportMapping.settings(preview(format: "codex", mode: "askForApproval"), into: .claude, model: nil)?.mode == "default")
     }

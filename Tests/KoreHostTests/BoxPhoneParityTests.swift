@@ -77,15 +77,16 @@ struct BoxPhoneParityTests {
         try await until { hc.record.commands?.map(\.name) == ["review"] && hc.idle }
         rig.host.sleep(hc)
         #expect(!hc.cliRunning)
-        #expect(HostMeta.facts(hc).commands == ["review"])
-        #expect(HostMeta.meta(hc).commands?.map(\.name) == ["review"])
+        // And Kore's /rename besides.
+        #expect(HostMeta.facts(hc).commands == ["review", "rename"])
+        #expect(HostMeta.meta(hc).commands?.map(\.name) == ["review", "rename"])
         // Asleep, the command is taken, starts the CLI and reaches it.
         #expect(rig.host.apply(.send(chatId: hc.id, text: "/review now"), id: "2", control: .act) { _ in }?.ok == true)
         try await until { made().count == 2 && made()[1].calls.contains { $0.hasPrefix("send /review now") } }
         // Kept across a restart.
         rig.restart()
         let back = try #require(rig.host.chat(hc.id))
-        #expect(back.record.commands?.map(\.name) == ["review"] && HostMeta.facts(back).commands == ["review"])
+        #expect(back.record.commands?.map(\.name) == ["review"] && HostMeta.facts(back).commands == ["review", "rename"])
     }
 
     // MARK: 2. Uploads from a phone

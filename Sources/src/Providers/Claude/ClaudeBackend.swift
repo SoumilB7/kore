@@ -259,8 +259,10 @@ package final class ClaudeBackend: ChatBackend {
         }
         self.session = session
         opening = nil
+        bypassReady = launch.permissionMode == .bypassPermissions
         // A resumed chat carries on in the mode its history ended in (the pill shows it), not
-        // the one it launched in. One the CLI refuses (Bypass) it reports at the first turn.
+        // the one it launched in. One the CLI refuses (Full access, when not launched in it) it
+        // reports at the first turn.
         if let mode = pastMode, mode != options.mode, let permission = ClaudeSession.PermissionMode(rawValue: mode) {
             do {
                 try await session.setPermissionMode(permission)
@@ -313,13 +315,7 @@ package final class ClaudeBackend: ChatBackend {
         let listed = Self.options(await session.capabilities["models"]?.array ?? [])
         let applied = try? await session.settings()["applied"]
         let models = Self.withLongContext(listed, applied: applied?["model"]?.string)
-        let commands = (await session.capabilities["commands"]?.array ?? []).compactMap { json -> SlashCommand? in
-            guard let name = json["name"]?.string else { return nil }
-            return SlashCommand(
-                name: name, description: json["description"]?.string ?? "",
-                hint: json["argumentHint"]?.string ?? "", kind: .command)
-        }
-        var controls = ChatControls(models: models, model: nil, effort: nil, commands: commands)
+        var controls = ChatControls(models: models, model: nil, effort: nil, commands: Self.commands(await session.capabilities["commands"]?.array ?? []))
         if let applied {
             if let model = applied["model"]?.string {
                 controls.model = models.first { $0.resolved == model }?.id ?? model
@@ -327,6 +323,17 @@ package final class ClaudeBackend: ChatBackend {
             controls.effort = applied["effort"]?.string
         }
         return controls
+    }
+
+    /// The "/" commands as the CLI lists them, and Kore's /rename besides: the CLI renames
+    /// headless too (`rename_session`), but doesn't list it.
+    package nonisolated static func commands(_ list: [JSONValue]) -> [SlashCommand] {
+        SlashCommand.withRename(list.compactMap { json -> SlashCommand? in
+            guard let name = json["name"]?.string else { return nil }
+            return SlashCommand(
+                name: name, description: json["description"]?.string ?? "",
+                hint: json["argumentHint"]?.string ?? "", kind: .command)
+        })
     }
 
     /// The CLI names a model by its version ("Opus 5.5") or, with some of its catalogs, by its
@@ -1155,7 +1162,13 @@ package final class ClaudeBackend: ChatBackend {
     }
 
     package func setMode(_ id: String) async throws {
+        let previous = options.mode
         options.mode = id
+        if id == ClaudeModes.fullAccess {
+            // One still starting comes up in the mode it was started in: this waits for it.
+            if let starting { _ = try? await starting.value }
+            if session != nil, !bypassReady { return try await relaunchInFullAccess(from: previous) }
+        }
         guard let session, let mode = ClaudeSession.PermissionMode(rawValue: id) else { return }
         translator.requestMode(id)
         do {
@@ -1166,6 +1179,42 @@ package final class ClaudeBackend: ChatBackend {
             throw error
         }
         await syncAskHook(id)
+    }
+
+    /// The running CLI was launched in Full access, so it can go back into it (claude 2.1.318
+    /// takes `set_permission_mode` bypassPermissions only from a process launched in it or with
+    /// `--allow-dangerously-skip-permissions`; it answers others "the session was not launched
+    /// with --dangerously-skip-permissions").
+    private var bypassReady = false
+
+    /// Why Full access waits: the CLI starts again for it, which would end what it runs.
+    package static let fullAccessBusy = "Full access starts Claude again. Pick it once this chat's turn, agents and commands have ended."
+
+    package struct FullAccessRefused: Error, CustomStringConvertible {
+        package let description: String
+    }
+
+    /// Full access for a CLI not launched able to bypass: it starts again in it, on the same
+    /// session, as an account change does. Every other launch keeps its flags: the CLI refuses
+    /// any bypass flag as root (`--allow-dangerously-skip-permissions` too), so a box running as
+    /// root would lose every Claude chat, not only this one. Between turns only: the process's
+    /// shells and agents end with it. A launch the CLI refuses goes back to `previous`.
+    private func relaunchInFullAccess(from previous: String) async throws {
+        let ownAgents = translator.unfinishedAgents().contains { !observed.contains($0.id) }
+        guard translator.turn == nil, !ownAgents, !translator.commands.anyLive else {
+            options.mode = previous
+            throw FullAccessRefused(description: Self.fullAccessBusy)
+        }
+        await relaunch(reason: "full access")
+        do {
+            try await start()
+        } catch {
+            options.mode = previous
+            try? await start()
+            throw error
+        }
+        translator.modeLaunched(ClaudeModes.fullAccess)
+        flush()
     }
 
     /// The hook a chat in `mode` runs: Kore's in Auto, none otherwise.

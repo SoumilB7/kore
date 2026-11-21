@@ -104,7 +104,7 @@ otherwise. All additions are optional fields or new command types, so a 1.3 peer
 | `chat.setEffort` | `chatId, level` | Also for an `act` grant. A running CLI switches; a stopped one starts on it. `invalid` when the chat's models offer no such level. |
 | `chat.setFast` | `chatId, on` | Also for an `act` grant. A running CLI that has said fast mode switches it, `invalid` when its model has none; a stopped one keeps it and starts on it (`invalid` when the CLI listed its model without fast mode). |
 | `chat.setPlanAllow` | `chatId, on` | Allow commands in Plan, kept by the box with the chat: its chat answers each permission while planning, and `controls.planAllow` says it to every client. Off for an `act` grant; on for `full` only. |
-| `chat.setMode`, `chat.setPlan`, `chat.planReady`, `chat.answer approvePlanAcceptEdits` | as in link 1.0 | A `full` grant is full control, which may raise a chat's mode up to Auto (Auto, Approve for me, leaving plan, approving with auto-accept edits), the same rule as the Mac's link under full control (1.2). Bypass, Codex's Full access and unknown modes stay refused to every client; `watch` and `act` stay lower-only (`denied.raiseMode`). Under full control `ChatMeta.allowedModeIds` lists every mode up to Auto, and a plan card's `approvePlanAcceptEdits` isn't marked `refused`. Always allow and `!` lines stay refused. |
+| `chat.setMode`, `chat.setPlan`, `chat.planReady`, `chat.answer approvePlanAcceptEdits` | as in link 1.0 | A `full` grant is full control, which may raise a chat's mode up to Auto (Auto, Approve for me, leaving plan, approving with auto-accept edits), the same rule as the Mac's link under full control (1.2). Full access (Claude's and Codex's) and unknown modes stay refused to every client; `watch` and `act` stay lower-only (`denied.raiseMode`). Under full control `ChatMeta.allowedModeIds` lists every mode up to Auto, and a plan card's `approvePlanAcceptEdits` isn't marked `refused`. Always allow and `!` lines stay refused. |
 | `folders.list` | | Result: `folders: [{windowId, path, missing?}]`; `missing: true` for a served folder that isn't there any more. |
 | `folder.add` | `path` | An existing folder, by absolute path or under `~` (the box's home); it's added to `config.json`. Result: `folders`, and (0.3.5) `windowId`, its window. `gone.folder` otherwise. An act grant (a phone's Open here) adds only an absolute folder inside the home with no hidden name on the way, its links resolved inside the home (`denied.path` otherwise); each add is journalled `audit folder add device=… control=… path=… ok=…`. |
 | `account.refresh` | `provider, chatId?, login?` | Result `message`: "Signed in as …" / "… isn't signed in.". With `chatId` (or `login`), Claude's status in that chat's (or that) account's folder. |
@@ -636,7 +636,7 @@ yet; each answers `busy` otherwise.
 
 The Mac shows these dim, with a line saying why:
 
-- Modes above Auto in the picker (Codex's Full access; Claude's Bypass is in no picker): "Set on <box> itself".
+- Modes above Auto in the picker (Full access, Claude's and Codex's): "Set on <box> itself".
 - Always allow on a card: "Always allow is set on <box> itself".
 - Import into an empty chat: "Imports come from this Mac's chats, not <box>'s".
 - Remote control: "Not in a chat on a box" (1.5).

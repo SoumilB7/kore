@@ -407,7 +407,7 @@ package final class CodexBackend: ChatBackend {
         SlashCommand(name: "plan", description: "Plan mode", hint: "", kind: .command),
         SlashCommand(name: "compact", description: "Summarize the thread to free up context", hint: "", kind: .command),
         SlashCommand(name: "goal", description: "Set a goal Codex keeps working toward until it is done", hint: "objective", kind: .command),
-        SlashCommand(name: "rename", description: "Rename the current thread", hint: "name", kind: .command),
+        .rename,
     ]
 
     private func controls(_ session: CodexSession) async -> ChatControls {
