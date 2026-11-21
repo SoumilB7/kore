@@ -2,7 +2,7 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
-## [0.3.7] - 2026-11-21
+## [0.3.7] - 2026-11-22
 
 ### Added
 - Claude chats have Full access, as Codex chats do: edits and every command without asking (Claude's
@@ -19,11 +19,36 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
 - Claude logins aren't copied between devices any more: "Sign in on mybox" runs Claude's own
   sign-in on the box, its page opened here; "Sign in here" brings a moved one back the same
   way. Nothing is logged out. Codex logins move as before.
-- Update a box before its Mac: a box on 0.3.6 can't take the Mac's new key.
+- Update a box before its Mac: a box on 0.3.6 can't take the Mac's new key; its row says "update
+  kore-host on <box>". A box claimed over the tailnet with no SSH says what to run there.
+- Kore's own tailnet needs signing in again after the key change (its old state can't be opened);
+  the Devices line says so, and the old node stays in the Tailscale admin console until removed.
+- "Sign in on mybox" signs in to an account of its own on the box, never the box's main login.
 
 ### Fixed
+- Set up on a box again no longer locks its Mac out: the box keeps the grant tied to that Mac, and
+  takes the Mac's new key on a grant issued again.
+- A phone whose Mac's key changed shows "Key changed · Pair again" instead of retrying forever.
+- Two Kore processes making a key at once agree on one; a secrets file others can read names its fix.
 - `/rename <name>` is in Claude chats' command menu on the Mac, a box and the phone, and renames
   the chat in Kore and Claude together, without waking a sleeping box chat.
+- Auto asks you before more of what it shouldn't run alone: removals of the working folder or a
+  parent, removals by path, `env`, `xargs`, `find -delete`, subshells and `sh -c`, downloads into a
+  shell by any route, and removals of files Kore can't see (from `$(…)`). Those used to end as an
+  "Auto stopped" card with only OK; now you get Run once. Always allow keeps the exact line for
+  sudo, shells and interpreters, never `sudo bash *`.
+- A chat can't allow commands in a chat it started. Chats made from the phone or by another chat
+  never start in Full access, and a Full access chat moved to a box runs there in Auto.
+- Picking a lower mode while Full access restarts Claude sticks, and the pill shows the real mode.
+- Box chats: a rollback from the Mac no longer loses a message the phone sent at that moment; a
+  message held during a rollback isn't shown twice; a rename while the CLI sleeps isn't undone
+  when it starts; settings changed on a chat this Mac holds wait for it.
+- A turn that ended before the chat showed anything no longer crashes Kore or kore-host.
+- Phone: a failed send keeps your text and files (uploads again when they expired); selecting text
+  while output streams holds still; a timed-out action is never sent later; the folder browser
+  retries; "Not connected" before the first welcome.
+- The table Copy button sits beside the table's corner, never over a cell; a tab's "Stop turn?"
+  shows at once and Stop works on the first click; an empty `/rename` leaves "/rename " to finish.
 
 ## [0.3.6] - 2026-11-21
 

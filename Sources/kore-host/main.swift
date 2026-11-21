@@ -149,7 +149,11 @@ case "allow":
     }
     let replacing = grants.load(arguments[1]) != nil
     do {
-        let grant = try grants.allow(arguments[1], control: control, socket: paths.socket)
+        let book = DeviceStore(paths: paths).book
+        let grant = try grants.allow(arguments[1], control: control, socket: paths.socket) { id in
+            // A book that can't be read keeps the binding: only a device gone from it frees the grant.
+            do { return try book.record(id) != nil } catch { return true }
+        }
         print("allowed \(grant.name) (\(grant.control.rawValue))" + (replacing ? ": its old connection ends at its next command" : ""))
     } catch { fail("\(error)") }
 case "revoke":

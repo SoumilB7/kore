@@ -75,9 +75,13 @@ package struct ChatCopy: Sendable, Equatable {
 extension ChatSettings {
     /// As said to box `connection`: a tier it doesn't take is the one below (Act device to an
     /// older box is Act unlimited), and none while this Mac's chats can't use Arsenal
-    /// (`arsenal` false), said in `notes`.
-    @MainActor package func said(to connection: HostConnection, arsenal allowed: Bool = true, notes: inout [String]) -> ChatSettings {
+    /// (`arsenal` false); a mode above Auto is Auto (box chats go up to it), each said in `notes`.
+    @MainActor package func said(to connection: HostConnection, provider: String, arsenal allowed: Bool = true, notes: inout [String]) -> ChatSettings {
         var said = self
+        if let mode, case let capped = LinkPolicy.cappedMode(mode, provider: provider), capped != mode {
+            said.mode = capped
+            notes.append(LinkPolicy.boxCappedLine(provider, to: capped))
+        }
         said.arsenal = allowed ? BoxTools.said(arsenal, caps: connection.caps) : nil
         if let asked = arsenal, said.arsenal != asked {
             notes.append(
@@ -145,6 +149,7 @@ package struct ChatCopies {
             guard var settings = settings?.linkable else { return ChatSettings() }
             if !draft { settings.draft = nil }
             settings.at = nil
+            settings.changed = nil
             return settings
         }
         switch source.end {
@@ -248,7 +253,7 @@ package struct ChatCopies {
         made.cost.rsyncReceived += pushed.received
         made.cost.files = found.files.count
         guard pushed.ok else { return await abort("Couldn't copy the session: \(pushed.said)") }
-        made.settings = settings.settings.said(to: connection, arsenal: arsenalAllowed, notes: &made.notes).linkable
+        made.settings = settings.settings.said(to: connection, provider: provider, arsenal: arsenalAllowed, notes: &made.notes).linkable
         var commit = ControlArgs(
             title: settings.title.map { String($0.prefix(LinkPolicy.maxTitle)) }, modelId: made.settings.modelId, level: made.settings.effort, sourceId: old,
             provider: provider, sessionId: new, mode: made.settings.mode, folder: folder, folders: folders, phase: MovePhase.commit.rawValue, moveId: moveId,

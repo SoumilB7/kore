@@ -261,6 +261,8 @@ class NodeClient(
                         // This phone's tailnet wants a sign-in (a key that expired): Sign in, not "retrying" (A3).
                         e is NetFailure && e.reason == "signedOut" -> NodeMachine.Event.SignedOut
                         e is NetFailure && e.reason.startsWith("bye ") -> NodeMachine.Event.Ended(e.reason.removePrefix("bye "))
+                        // This side's own check: the Mac answered with another identity key (Kore 0.3.7). Pair again, never retried.
+                        e is NetFailure && e.reason == dev.kore.link.net.NetControl.Companion.Reason.KEY_CHANGED -> NodeMachine.Event.Ended(e.reason)
                         else -> NodeMachine.Event.Failed
                     },
                     clock(),
@@ -446,7 +448,8 @@ class NodeClient(
 
     /**
      * Sends a [Control] command and waits for its `result`. A command queued while the node is
-     * out of reach waits with it; no answer gives `timeout`.
+     * out of reach waits with it; no answer gives `timeout`, and a command still queued then is
+     * taken out, so what the caller reported as unanswered never runs later.
      */
     suspend fun call(cmd: JsonObject, timeoutMs: Long = 45_000): JsonObject {
         val id = UUID.randomUUID().toString()
@@ -454,6 +457,10 @@ class NodeClient(
         issue(id) { cmd.toString() }
         return withTimeoutOrNull(timeoutMs) { answer.await() } ?: run {
             answer.cancel()
+            if (outbox.remove(id)) {
+                queuedFlow.value = outbox.ids()
+                armExpiry()
+            }
             failure(id, "timeout")
         }
     }

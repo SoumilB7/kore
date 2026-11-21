@@ -110,13 +110,17 @@ package struct GrantStore: Sendable {
         return names.filter { $0.hasSuffix(".json") }.map { String($0.dropLast(5)) }.sorted().compactMap(load)
     }
 
-    /// A new grant with a fresh secret, replacing one of the same name.
+    /// A new grant with a fresh secret, replacing one of the same name. One issued again keeps
+    /// the device its Mac enrolled as (and that upgrade's `expires`) while `known` still holds
+    /// that device: Set up runs `allow` again, and the Mac's record and its SSH re-key stay tied
+    /// to it. A device gone from the book lets the grant go back to unbound.
     @discardableResult
-    package func allow(_ name: String, control: GrantControl, socket: URL) throws -> Grant {
+    package func allow(_ name: String, control: GrantControl, socket: URL, known: (UUID) -> Bool = { _ in true }) throws -> Grant {
         guard Grant.valid(name) else { throw GrantError.badName }
+        let bound = load(name).flatMap { old in old.device.map { (device: $0, expires: old.expires) } }.flatMap { known($0.device) ? $0 : nil }
         let grant = Grant(
             name: name, socket: socket.path, secret: LinkProof.random(32), control: control,
-            created: Int(Date().timeIntervalSince1970))
+            created: Int(Date().timeIntervalSince1970), device: bound?.device, expires: bound?.expires)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         try HostPaths.privateFile(encoder.encode(grant), to: file(name))

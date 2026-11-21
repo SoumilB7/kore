@@ -7,6 +7,29 @@ package enum SecretFile {
     /// Writes `data` to `url` (0600) in one step; its folder is made 0700 when missing, and
     /// with `narrow` (a folder of Kore's own secrets) made 0700 when it was looser.
     package static func write(_ data: Data, to url: URL, narrow: Bool = false) throws {
+        let temp = try staged(data, beside: url, narrow: narrow)
+        if rename(temp.path, url.path) != 0 {
+            let problem = errno
+            unlink(temp.path)
+            throw POSIXError(POSIXErrorCode(rawValue: problem) ?? .EIO)
+        }
+    }
+
+    /// Writes `data` to `url` (0600) only when there's no file there yet, in one step (`link(2)`
+    /// of a written temporary file: never over one). Returns what `url` holds after: `data` when
+    /// this call made it, else the file another process made first (read as `read` does).
+    package static func create(_ data: Data, at url: URL, narrow: Bool = false) throws -> Data {
+        let temp = try staged(data, beside: url, narrow: narrow)
+        defer { unlink(temp.path) }
+        if link(temp.path, url.path) == 0 { return data }
+        let problem = errno
+        guard problem == EEXIST else { throw POSIXError(POSIXErrorCode(rawValue: problem) ?? .EIO) }
+        guard let winner = try read(url) else { throw POSIXError(.ENOENT) }
+        return winner
+    }
+
+    /// `data` in a new 0600 temporary file beside `url`, synced; its folder made 0700 as `write` says.
+    private static func staged(_ data: Data, beside url: URL, narrow: Bool) throws -> URL {
         let dir = url.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         if narrow, chmod(dir.path, 0o700) != 0 { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EPERM) }
@@ -32,11 +55,11 @@ package enum SecretFile {
         }
         if problem == 0, fsync(fd) != 0 { problem = errno }
         close(fd)
-        if problem == 0, rename(temp.path, url.path) != 0 { problem = errno }
         if problem != 0 {
             unlink(temp.path)
             throw POSIXError(POSIXErrorCode(rawValue: problem) ?? .EIO)
         }
+        return temp
     }
 
     /// The file's text when it's a plain file of this user's that nobody else may read or write;

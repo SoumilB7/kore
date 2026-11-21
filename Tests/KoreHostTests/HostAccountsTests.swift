@@ -109,6 +109,33 @@ struct HostAccountsTests {
 
     var accountsRoot: (HostRig) -> URL { { $0.root.appendingPathComponent(".config/claude-accounts") } }
 
+    /// "Sign in on mybox" from a Mac: Claude's own sign-in runs with `CLAUDE_CONFIG_DIR` at an
+    /// added account named for the login (made when missing), never the box's default; "main" or
+    /// a bad name is refused, Codex and the box's own Sign in are as before.
+    @Test func aMacsSignInGoesToItsOwnAccountFolderNeverTheDefault() async throws {
+        let rig = try rig()
+        defer { rig.finish() }
+        let accounts = rig.host.accounts
+        let main = accounts.main
+        let before = try Data(contentsOf: main.appendingPathComponent(".credentials.json"))
+        let dir = try #require(try HostDaemon.signInFolder(cli: "claude", login: "me", accounts: accounts))
+        #expect(dir == accounts.root.appendingPathComponent("me", isDirectory: true))
+        #expect(accounts.ids().contains("me") && dir.path.hasPrefix(rig.root.path))
+        let mode = (try FileManager.default.attributesOfItem(atPath: dir.path)[.posixPermissions] as? Int) ?? -1
+        #expect(mode == 0o700)
+        // The CLI the sign-in starts reads that folder, never the default's.
+        let pinned = try await HostAccounts.pinned(dir) { CLIProfiles.overrides("claude") }
+        #expect(pinned == ["CLAUDE_CONFIG_DIR": dir.path])
+        // An existing account is signed in again in its own folder.
+        #expect(try HostDaemon.signInFolder(cli: "claude", login: "ajinkya", accounts: accounts)?.lastPathComponent == "ajinkya")
+        for bad in ["main", ".hidden", "bad name", "../x"] {
+            #expect(throws: HostAccounts.Failure.self) { _ = try HostDaemon.signInFolder(cli: "claude", login: bad, accounts: accounts) }
+        }
+        #expect(try HostDaemon.signInFolder(cli: "claude", login: nil, accounts: accounts) == nil)
+        #expect(try HostDaemon.signInFolder(cli: "codex", login: "me", accounts: accounts) == nil)
+        #expect(try Data(contentsOf: main.appendingPathComponent(".credentials.json")) == before)
+    }
+
     @Test func listsTheDefaultAndEachAccountFolderOnDemand() async throws {
         let calls = StatusCalls()
         let rig = try rig(calls)

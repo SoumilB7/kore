@@ -55,4 +55,18 @@ class OffersTest {
         assertEquals("This phone can only watch mybox.", Offers.uploadsOff(old - "history", control = false, box = true, name = "mybox"))
         assertEquals("Files need a newer Kore on MacBook.", Offers.uploadsOff(mac - "blob", control = true, box = false, name = "MacBook"))
     }
+
+    /** A cold start with no link: the menus keep the device's last caps; 📎 says it isn't connected. */
+    @Test fun beforeTheFirstWelcomeTheLastCapsHold() {
+        assertEquals(mac, Offers.caps(null, mac))
+        assertEquals(listOf("Rename…", "Show on the Mac", "Group", "Attach to board"), Offers.tabItems(Offers.caps(null, mac), box = false, hasBoards = true, closable = false))
+        assertEquals(listOf("Board"), Offers.newItems(Offers.caps(null, mac), canReopen = false))
+        // Never seen: nothing assumed.
+        assertEquals(emptySet<String>(), Offers.caps(null, null))
+        // A welcome wins over what was kept.
+        assertEquals(box, Offers.caps(Json.parseToJsonElement("""{"t":"welcome","caps":["tx","attn","commands","control","box","device","history","blob","diff"]}""").jsonObject, mac))
+        assertEquals("Not connected to mybox.", Offers.uploadsOff(box, control = true, box = true, name = "mybox", welcomed = false))
+        assertEquals("Not connected to MacBook.", Offers.uploadsOff(emptySet(), control = false, box = false, name = "MacBook", welcomed = false))
+        assertNull(Offers.uploadsOff(mac, control = true, box = false, name = "MacBook", welcomed = true))
+    }
 }

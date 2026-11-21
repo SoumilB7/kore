@@ -104,8 +104,8 @@ final class SelectWordsAndParagraphs: ChatStoryline {
     }
 }
 
-/// A table copies whole by a drag across it, as tabbed rows under its header. (Its Copy row is
-/// off for now: the room kept for it moved the reader on a quick resize.)
+/// A table copies whole by a drag across it, as tabbed rows under its header; its Copy, beside its
+/// top-right corner on hover and taking no room, copies the same.
 final class TableCopy: ChatStoryline {
     static let reply = """
         Totals so far:
@@ -138,12 +138,12 @@ final class TableCopy: ChatStoryline {
                 return true
             },
             Press(.id(Self.table.part(.hover))),
-            Expect("Copy inside the table's bottom-right corner, the table no taller") { _ in
+            Expect("Copy beside the table's top-right corner, outside it, the table no taller") { _ in
                 guard let table = StoryRegistry.entry(Self.table.raw)?.frame, let copy = StoryRegistry.entry(Self.table.part(.copy).raw)?.frame
                 else { return false }
-                // Frames are the window's, y up: the table's bottom is its minY.
-                return abs(table.height - Self.resting) < 0.5 && copy.maxX <= table.maxX + 0.5 && copy.minY >= table.minY - 0.5
-                    && copy.maxX > table.maxX - 40 && copy.minY < table.minY + 40
+                // Frames are the window's, y up: the table's top is its maxY.
+                return abs(table.height - Self.resting) < 0.5 && copy.minX >= table.maxX - 0.5 && copy.minX < table.maxX + 4
+                    && abs(copy.maxY - table.maxY) < 0.5
             },
             Snapshot("table-copy"),
             Do("clear the pasteboard") { _ in StoryTranscript.clearCopied() },

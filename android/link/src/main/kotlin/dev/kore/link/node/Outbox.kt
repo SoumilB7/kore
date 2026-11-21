@@ -36,6 +36,10 @@ class Outbox<T>(private val ttlMs: Long = TTL_MS, private val now: () -> Long) {
         return old.map { it.id }
     }
 
+    /** Takes [id] out of the queue unsent (its caller gave up on it); false when it wasn't waiting. */
+    @Synchronized
+    fun remove(id: String): Boolean = entries.removeAll { it.id == id }
+
     /** When the oldest entry expires (ms), or null when empty. */
     @Synchronized
     fun nextExpiry(): Long? = entries.minOfOrNull { it.at }?.plus(ttlMs)

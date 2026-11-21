@@ -127,17 +127,21 @@ struct ChatSettingsHostTests {
     }
 
     /// On a send back the box's settings stand only when changed here after the Mac took the chat
-    /// and not on the Mac after: each side's "since" is its own clock's.
-    @Test func theNewerSettingsWinWhicheverClockIsAhead() {
+    /// (the box's clock) and the Mac says none changed there (the Mac's clock): the two clocks are
+    /// never compared, and a Mac that doesn't say keeps its own.
+    @Test func eachSideDecidesItsOwnSinceAndTheClocksNeverMeet() {
         let since: Int64 = 1_000_000
-        // Neither changed, or only the Mac: the Mac's.
-        #expect(!HostDaemon.boxNewer(boxAt: nil, since: since, macAt: nil))
-        #expect(!HostDaemon.boxNewer(boxAt: since - 5, since: since, macAt: nil))
-        #expect(!HostDaemon.boxNewer(boxAt: since - 5, since: since, macAt: since - 60_000))  // the Mac's clock a minute behind
-        // Only the box: the box's, whatever the Mac's clock says.
-        #expect(HostDaemon.boxNewer(boxAt: since + 5, since: since, macAt: nil))
-        // Both: the later one.
-        #expect(HostDaemon.boxNewer(boxAt: since + 10, since: since, macAt: since + 5))
-        #expect(!HostDaemon.boxNewer(boxAt: since + 5, since: since, macAt: since + 10))
+        // Nothing changed on the box since: the Mac's, whatever the Mac says.
+        for mac in [nil, false, true] as [Bool?] {
+            #expect(!HostDaemon.boxNewer(boxAt: nil, since: since, macChanged: mac))
+            #expect(!HostDaemon.boxNewer(boxAt: since - 5, since: since, macChanged: mac))
+        }
+        // Changed on the box only: the box's.
+        #expect(HostDaemon.boxNewer(boxAt: since + 5, since: since, macChanged: false))
+        // Both changed: the Mac's, which held it (no "later" across two clocks).
+        #expect(!HostDaemon.boxNewer(boxAt: since + 5, since: since, macChanged: true))
+        #expect(!HostDaemon.boxNewer(boxAt: Int64.max, since: since, macChanged: true))
+        // A Mac that doesn't say (one from before, or a time it lost): the Mac's.
+        #expect(!HostDaemon.boxNewer(boxAt: since + 5, since: since, macChanged: nil))
     }
 }

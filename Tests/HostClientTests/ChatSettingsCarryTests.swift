@@ -112,16 +112,16 @@ struct ChatSettingsCarryTests {
 
         // Changed here after: the Mac's point, draft and tier go back (the box's were older).
         var mine = brought.settings
-        (mine.autoCompact, mine.draft, mine.arsenal, mine.at) = (90, "next step", "own", ChatSettings.ms(Date()))
+        (mine.autoCompact, mine.draft, mine.arsenal, mine.at, mine.changed) = (90, "next step", "own", ChatSettings.ms(Date()), true)
         let moved = try #require(s.moves.store.session(Self.session))
         let back = try await s.moves.sendBack(moved, title: "Repos", settings: mine, mirrored: nil).get()
         #expect(back.chatId == hc.id && hc.ownedHere)
         #expect(hc.record.autoCompact == 90 && hc.record.draft == "next step" && hc.arsenal == "own" && hc.record.account == "work")
 
-        // Here again, then changed on the box's replica after this Mac last did: the box's stay.
+        // Here again, then changed on the box's replica and not on this Mac: the box's stay.
         let again = try await s.moves.bring(chatId: hc.id, gen: 2, boxFolder: s.rig.folder.path, pair: s.pair).get()
         var stale = again.settings
-        stale.at = ChatSettings.ms(Date()) - 60_000
+        stale.changed = false
         stale.autoCompact = 50
         hc.setAutoCompact(60)
         stale.draft = "typed on the Mac"
@@ -143,11 +143,23 @@ struct ChatSettingsCarryTests {
         // the box no longer has gives way to the one the chat had there, said.
         let fourth = try await s.moves.bring(chatId: hc.id, gen: 6, boxFolder: s.rig.folder.path, pair: s.pair).get()
         var behind = fourth.settings
-        (behind.autoCompact, behind.login, behind.at) = (80, "gone", ChatSettings.ms(Date()) - 600_000)
+        (behind.autoCompact, behind.login, behind.at, behind.changed) = (80, "gone", ChatSettings.ms(Date()) - 600_000, true)
         let moved4 = try #require(s.moves.store.session(Self.session))
         let back4 = try await s.moves.sendBack(moved4, title: "Repos", settings: behind, mirrored: nil).get()
         #expect(hc.record.autoCompact == 80 && hc.record.account == "work")
         #expect(back4.notes == ["gone isn't signed in here · on work"] && back4.settings.login == "work")
+
+        // Changed on both, whichever clock is ahead: the Mac's, which held it. A Mac that doesn't
+        // say whether it changed them (one from before): the Mac's too.
+        for (gen, said) in [(8, true), (10, nil)] as [(Int, Bool?)] {
+            let here = try await s.moves.bring(chatId: hc.id, gen: gen, boxFolder: s.rig.folder.path, pair: s.pair).get()
+            hc.setAutoCompact(90)
+            var both = here.settings
+            (both.autoCompact, both.at, both.changed) = (50, ChatSettings.ms(Date()) - 600_000, said)
+            let moved = try #require(s.moves.store.session(Self.session))
+            _ = try await s.moves.sendBack(moved, title: "Repos", settings: both, mirrored: nil).get()
+            #expect(hc.record.autoCompact == 50, "\(String(describing: said))")
+        }
     }
 
     @Test func aMacChatCutToABoxCarriesItsDraftAndSaysTheLoginItFellBackFrom() async throws {

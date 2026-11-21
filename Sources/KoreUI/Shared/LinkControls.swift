@@ -1,6 +1,7 @@
 import AppKit
 import KoreCore
 import Foundation
+import LinkProtocol
 import src
 
 // What the local link (the KoreLink module) may do in Kore with full control (link 1.2): each is
@@ -201,6 +202,8 @@ extension Workspace {
             let before = Set(board.board?.orderedChats.map(ObjectIdentifier.init) ?? [])
             keepingActive { startChat(provider, on: board, section: section, slot: nil) }
             let chat = board.board?.orderedChats.first { !before.contains(ObjectIdentifier($0)) }
+            // As a strip chat from the link: the provider's first mode, never the one last picked here.
+            if let chat { Self.linkStarts(chat) }
             if let model { chat?.launchModel = model }
             return chat
         }
@@ -217,7 +220,22 @@ extension Workspace {
         let start = after ? await chat.forkStart(after: entry) : await chat.forkStart(entry)
         guard let start else { return nil }
         let made = newTabs { fork(chat, start, text: after ? "" : entry.text, arsenal: arsenal) }
+        // In its original's mode, as high as a link raises one (Auto): Full access stays the person's to give.
+        if let fork = made.first?.chat { Self.linkCaps(fork) }
         return made.first?.chat
+    }
+
+    /// A chat the link made, before its CLI starts: in its provider's first mode (Manual), as
+    /// `startChatFromLink` starts one, whatever was picked last on this Mac.
+    static func linkStarts(_ chat: Chat) {
+        let first = chat.provider.modes[0].id
+        if chat.controls.mode != first { chat.setMode(first, remember: false) }
+    }
+
+    /// A chat the link carried on from another (a fork): no higher than a link raises one.
+    static func linkCaps(_ chat: Chat) {
+        let capped = LinkPolicy.cappedMode(chat.controls.mode, provider: chat.provider.id)
+        if capped != chat.controls.mode { chat.setMode(capped, remember: false) }
     }
 
     package func linkNewBoard() -> ChatTab? { newTabs { newBoard() }.first }
@@ -247,7 +265,11 @@ extension Workspace {
     package func linkOpenSession(_ id: String) -> Chat? {
         guard let session = chats.first(where: { $0.id == id }) else { return nil }
         if let open = tabs.first(where: { $0.chat?.sessionId == id })?.chat { return open }
-        return newTabs { open(session) }.first?.chat ?? tabs.first(where: { $0.chat?.sessionId == id })?.chat
+        if let opened = newTabs({ open(session) }).first?.chat {
+            Self.linkStarts(opened)
+            return opened
+        }
+        return tabs.first(where: { $0.chat?.sessionId == id })?.chat
     }
 
     package func linkRenameSession(_ id: String, to title: String) async -> Bool {

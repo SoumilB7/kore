@@ -85,6 +85,12 @@ package enum TailnetError: Error, Equatable, CustomStringConvertible {
     case sidecar(String)
     case notRunning(BackendState)
 
+    /// kore-tailnet's own words when the state key doesn't open the saved state (`errWrongKey`).
+    package static let wrongStateKey = "the state key doesn't open the saved state"
+
+    /// The state on disk was sealed under another key.
+    package var wrongKey: Bool { if case .sidecar(let why) = self { why == Self.wrongStateKey } else { false } }
+
     package var description: String {
         switch self {
         case .unavailable(let why): "Tailscale's LocalAPI is unavailable (\(why))"

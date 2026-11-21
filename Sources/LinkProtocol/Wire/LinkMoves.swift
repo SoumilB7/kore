@@ -159,12 +159,17 @@ package struct ChatSettings: Codable, Sendable, Equatable {
     package var arsenal: String?
     /// The composer's draft: a move's and a cut's (a copy leaves it with its original).
     package var draft: String?
-    /// When they last changed where they come from, ms since 1970: on a send back the newer wins.
+    /// When they last changed where they come from, ms since 1970 by that side's clock (a box
+    /// from before `changed` compares it with its own).
     package var at: Int64?
+    /// A Mac's send back: whether they changed on the Mac since it took the chat, by the Mac's own
+    /// clock (`Chat.settingsChangedAt`). Nil: it doesn't say, and the Mac's stand.
+    package var changed: Bool?
 
     package init(
         modelId: String? = nil, effort: String? = nil, mode: String? = nil, fast: Bool? = nil, plan: Bool? = nil, planAllow: Bool? = nil,
-        autoCompact: Int? = nil, login: String? = nil, arsenal: String? = nil, draft: String? = nil, at: Int64? = nil
+        autoCompact: Int? = nil, login: String? = nil, arsenal: String? = nil, draft: String? = nil, at: Int64? = nil,
+        changed: Bool? = nil
     ) {
         self.modelId = modelId
         self.effort = effort
@@ -177,6 +182,7 @@ package struct ChatSettings: Codable, Sendable, Equatable {
         self.arsenal = arsenal
         self.draft = draft
         self.at = at
+        self.changed = changed
     }
 
     /// The same without the draft (a copy's: the original keeps it).
@@ -228,7 +234,8 @@ extension ChatSettings {
             modelId: c.modelId ?? chat.launchModel, effort: c.effort ?? chat.launchEffort, mode: c.mode,
             fast: chat.launchFastMode ?? (c.fastKnown ? c.fastMode : nil), plan: chat.provider.planToggle != nil ? c.planMode : nil,
             planAllow: c.planAllow, autoCompact: chat.ownsAutoCompact ? chat.context.autoCompactAt ?? 0 : nil, login: login,
-            arsenal: chat.arsenal?.rawValue, draft: draft ? Self.composer(chat) : nil, at: chat.settingsChangedAt.map(Self.ms))
+            arsenal: chat.arsenal?.rawValue, draft: draft ? Self.composer(chat) : nil, at: chat.settingsChangedAt.map(Self.ms),
+            changed: chat.settingsChangedAt != nil)
     }
 
     /// The composer as one line of text: its command, then the draft.

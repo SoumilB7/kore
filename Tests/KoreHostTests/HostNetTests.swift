@@ -264,7 +264,9 @@ struct HostNetTests {
         }
         let record = try #require(try rig.store.book.record(mac.id))
         #expect(record.nodeKeys == ["nodekey:mac2", "nodekey:mac3", "nodekey:mac4"])
-        #expect(journal.audit("node-key").count == 3 && journal.audit("node-key").last?.contains("dropped=1") == true)
+        // Only this test's Mac: other suites rotate node keys in the same process.
+        let mine = journal.audit("node-key").filter { $0.localizedCaseInsensitiveContains(mac.id.uuidString) }
+        #expect(mine.count == 3 && mine.last?.contains("dropped=1") == true)
         // Another user behind a new key: refused, nothing kept.
         mac.nodeKey = "nodekey:mac5"
         let other = try rig.dial(mac, whois: FakeTailnet.who(key: "nodekey:mac5", user: 8))
@@ -544,6 +546,90 @@ struct HostUpgradeTests {
         let plain = try rig.dialAttach(fresh, grant: expired, enroll: nil)
         try await plain.until { plain.types.contains("snapshot") || plain.closed != nil }
         #expect(plain.up)
+    }
+
+    /// Set up runs `allow` again on the grant a Mac enrolled with: the reissue keeps its device,
+    /// and the Mac's new key still goes in over SSH (the critic's lockout: `bye unknown`, then
+    /// Set up reissuing the grant again, round and round).
+    @Test func criticRekeyOnAReissuedGrant() async throws {
+        let rig = try await NetRig.make()
+        defer { rig.finish() }
+        let grants = GrantStore(rig.rig.paths.grants)
+        let grant = try grants.allow("laptop", control: .full, socket: rig.rig.paths.socket)
+        let mac = Device("mac")
+        let first = try await upgraded(rig, mac, grant: grant)
+        #expect(first.up)
+        first.session.close("quit")
+        let bound = try #require(grants.load("laptop"))
+        // Set up again from the Mac (same grant name): a fresh secret, its device and expiry kept.
+        let again = try grants.allow("laptop", control: .full, socket: rig.rig.paths.socket)
+        #expect(again.secret != grant.secret && again.device == mac.id && again.expires == bound.expires)
+        // 0.3.6 over SSH on the new grant: its old key still proves it.
+        let old = try rig.dialAttach(mac, grant: again, enroll: nil)
+        try await old.until { old.types.contains("snapshot") || old.closed != nil }
+        #expect(old.up, "\(old.closed ?? "")")
+        old.session.close("quit")
+        // 0.3.7: a new key, on the grant it holds now.
+        var fresh = Device("mac")
+        fresh.id = mac.id
+        let enroll = NetControl.Enroll(name: "MacBook", kind: .mac, identityKey: fresh.key.publicKey)
+        let rekeyed = try rig.dialAttach(fresh, grant: again, enroll: enroll)
+        try await rekeyed.until { rekeyed.types.contains("snapshot") || rekeyed.closed != nil }
+        #expect(rekeyed.up, "rekey on reissued grant: \(rekeyed.closed ?? "")")
+        rekeyed.session.close("quit")
+        #expect(try rig.store.book.record(mac.id)?.identityKey == fresh.key.publicKey)
+    }
+
+    /// A grant a 0.3.6 `allow` issued again (no device on it): the Mac's SSH re-key on it binds
+    /// it to that Mac, with an audit line; another Mac's grant, a forged id and the tailnet still
+    /// get `bye unknown`.
+    @Test func aRekeyOnAnUnboundReissuedGrantBindsItToItsMacOnly() async throws {
+        let rig = try await NetRig.make()
+        defer { rig.finish() }
+        let journal = Journal()
+        let grants = GrantStore(rig.rig.paths.grants)
+        let mac = Device("mac"), desk = Device("desk")
+        _ = try await upgraded(rig, mac, grant: try grants.allow("laptop", control: .full, socket: rig.rig.paths.socket))
+        let deskGrant = try grants.allow("desk", control: .full, socket: rig.rig.paths.socket)
+        _ = try await upgraded(rig, desk, grant: deskGrant)
+        // kore-host 0.3.6's `allow` again: a fresh secret, no device, no expiry.
+        try grants.save(Grant(name: "laptop", socket: rig.rig.paths.socket.path, secret: LinkProof.random(32), control: .full, created: 0))
+        let unbound = try #require(grants.load("laptop"))
+        var fresh = Device("mac")
+        fresh.id = mac.id
+        let enroll = NetControl.Enroll(name: "MacBook", kind: .mac, identityKey: fresh.key.publicKey)
+        // Not on the tailnet; not on the desk Mac's own grant.
+        let net = try rig.dial(fresh, enroll: enroll)
+        try await net.until { net.closed != nil }
+        let others = try rig.dialAttach(fresh, grant: try #require(grants.load("desk")), enroll: enroll)
+        try await others.until { others.closed != nil }
+        // A forged id: the desk Mac's id with a key it never held, on the unbound grant (desk has
+        // its own grant, so this one isn't its).
+        var forger = Device("desk")
+        forger.id = desk.id
+        let forged = try rig.dialAttach(forger, grant: unbound, enroll: .init(name: "x", kind: .mac, identityKey: forger.key.publicKey))
+        try await forged.until { forged.closed != nil }
+        #expect(net.closed == "bye unknown" && others.closed == "bye unknown" && forged.closed == "bye unknown")
+        #expect(try rig.store.book.record(desk.id)?.identityKey == desk.key.publicKey)
+        #expect(try #require(grants.load("laptop")).device == nil)
+        // The Mac itself: its new key is taken and the grant is its own from now on.
+        let rekeyed = try rig.dialAttach(fresh, grant: unbound, enroll: enroll)
+        try await rekeyed.until { rekeyed.types.contains("snapshot") || rekeyed.closed != nil }
+        #expect(rekeyed.up, "\(rekeyed.closed ?? "")")
+        rekeyed.session.close("quit")
+        let stamped = try #require(grants.load("laptop"))
+        #expect(stamped.device == mac.id && stamped.secret == unbound.secret)
+        #expect(stamped.expires == Int(rig.clock.now.timeIntervalSince1970 + Grant.upgradeGrace))
+        #expect(try rig.store.book.record(mac.id)?.identityKey == fresh.key.publicKey)
+        let id = mac.id.uuidString.lowercased()
+        #expect(journal.audit("bind").contains { $0.contains(id) && $0.contains("grant=laptop") && $0.contains("how=rekey") })
+        #expect(journal.audit("rekey").contains { $0.contains(id) && $0.contains("grant=laptop") })
+        // An expired unbound grant isn't one.
+        try grants.save(Grant(name: "spare", socket: rig.rig.paths.socket.path, secret: "s", control: .full, created: 0, expires: 1))
+        #expect(!HostNet.rekeys(try #require(grants.load("spare")), for: UUID(), among: grants.all(), at: rig.clock.now))
+        // A device gone from the book: `allow` lets its grant go back to unbound.
+        let freed = try grants.allow("desk", control: .full, socket: rig.rig.paths.socket) { _ in false }
+        #expect(freed.device == nil && freed.expires == nil)
     }
 
     @Test func theFirstTailnetLinkOfAnUpgradedMacTakesItsNodeKey() async throws {

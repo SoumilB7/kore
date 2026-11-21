@@ -518,6 +518,8 @@ package final class BoxNetJoinRun: BoxNetJoinRunner {
         }
         // Turned away before (the box had forgotten this Mac; the upgrade made its grant again).
         if case .refused(.auth) = connection.phase { connection.retry() }
+        // Or it held this Mac's old key (claimed again since).
+        if case .refused(.oldKey) = connection.phase { connection.retry() }
         watch(join)
         // Up already (a window holds it): dialled again, so the box's `net.node` is heard anew.
         if connection.isOnline, connection.route != .net { connection.relink("korenet on") }

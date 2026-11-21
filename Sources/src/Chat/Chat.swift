@@ -234,6 +234,12 @@ package final class Chat: Identifiable {
     @ObservationIgnored package var arsenalWaiting = false
     /// Opened by an agent (Act unlimited's open): a kept tier isn't brought back for it.
     @ObservationIgnored package var arsenalByAgent = false
+    /// The chats whose agents made it (a new chat, a fork, a woken one), nearest first, by
+    /// `arsenalKey`, for as long as it's open: none of them allows its commands (`arsenalStarted`).
+    @ObservationIgnored package var arsenalOrigins: [String] = []
+    /// What `arsenalOrigins` names it by: its id; on kore-host, its box chat's (`hostKey`).
+    package var arsenalKey: String { hostKey ?? id.uuidString }
+    @ObservationIgnored package var hostKey: String?
 
     package var sessionId: String? { status.sessionId }
     /// The id the folder's history lists it under: its session's, or a fork's own before its
@@ -259,12 +265,15 @@ package final class Chat: Identifiable {
         guard !newName.isEmpty else { return }
         status.name = newName
         await start()
-        try? await backend?.rename(newName)
+        // A CLI started for it says its session's old title as it starts: once it has the new
+        // one, that's the name again.
+        guard let backend, (try? await backend.rename(newName)) != nil else { return }
+        status.name = newName
     }
 
     /// The name a typed `/rename` gives (nil: not one, or this chat's CLI keeps no title).
     private func typedRename(_ text: String, files: Bool) -> String? {
-        guard !files, provider.commands.contains(where: { $0.name == SlashCommand.rename.name }) else { return nil }
+        guard !files, provider.renames else { return nil }
         return SlashCommand.renameArgument(text)
     }
 
@@ -881,9 +890,16 @@ package final class Chat: Identifiable {
         let text = Self.message(command: command, draft: draft)
         let sent = attachments
         guard !text.isEmpty || !sent.isEmpty else { return }
-        // Without a name the composer keeps it, for the name.
+        // Without a name the composer keeps the command, ready for the name: its chip, or
+        // "/rename " with the caret after it.
         if let name = typedRename(text, files: !sent.isEmpty) {
-            if !name.isEmpty { (draft, command) = ("", nil) }
+            if !name.isEmpty {
+                (draft, command) = ("", nil)
+            } else if command == nil {
+                draft = "/\(SlashCommand.rename.name) "
+            } else {
+                draft = ""
+            }
             renameTyped(name)
             return
         }
@@ -994,9 +1010,10 @@ package final class Chat: Identifiable {
             return
         }
         // A rollback under way: the CLI it would reach is ending, and the rows are about to be
-        // replaced. It goes once the rollback is done (`endRollback`).
+        // replaced. It goes once the rollback is done (`endRollback`), under the id and queued
+        // state it was sent with: its sender knows its row by that id.
         if rollingBack {
-            heldForRollback.append((text, sent))
+            heldForRollback.append(HeldMessage(text: text, files: sent, id: given, queued: forced, note: note))
             transcriptView.sending(true)
             done?(.success(true))
             return
@@ -1460,7 +1477,19 @@ package final class Chat: Identifiable {
     /// A rollback under way (`rollBack(to:)`).
     @ObservationIgnored private var rollingBack = false
     /// Messages sent while it runs, in order: they go once it's done.
-    @ObservationIgnored private var heldForRollback: [(text: String, files: [Attachment])] = []
+    @ObservationIgnored private var heldForRollback: [HeldMessage] = []
+    private struct HeldMessage {
+        var text: String
+        var files: [Attachment]
+        var id: String?
+        var queued: String??
+        var note: String?
+    }
+
+    /// A rollback is under way: another is refused until it ends.
+    package var isRollingBack: Bool { rollingBack }
+    package static let rollbackUnderway = "A rollback is already under way."
+    package static let rollbackBusy = "A turn is running. Stop it, then go back."
     /// Sent while a compaction ran, in order: they go as it ends and no turn runs.
     @ObservationIgnored private var heldForCompaction: [(id: String, text: String, files: [Attachment])] = []
 
@@ -1528,8 +1557,7 @@ package final class Chat: Identifiable {
                 return
             }
             do {
-                let left = try await connect().rollback(message: entry.source, text: entry.text)
-                adoptRollback(left.events, more: left.more)
+                _ = try await cutBack(message: entry.source, text: entry.text)
                 dispatch(.notice("Rolled back. Files not changed."))
                 if giveBack { giveBackToComposer(entry.text, services.reattach(files)) }
             } catch {
@@ -1537,6 +1565,28 @@ package final class Chat: Identifiable {
             }
             endRollback()
         }
+    }
+
+    /// A rollback another Kore's chat asked through this one (a Mac's, holding a box's chat): the
+    /// same one-at-a-time path as this chat's own, so what's sent meanwhile (a phone's message)
+    /// waits for it and goes after its rows. Refused while a turn runs (the Mac ends its turn
+    /// first) or another rollback is under way; the history left is the caller's too.
+    package func rollBackForwarded(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
+        guard !closed else { throw CallRefusal("The chat can't roll back right now.") }
+        guard !rollingBack else { throw CallRefusal(Self.rollbackUnderway) }
+        guard !isBusy else { throw CallRefusal(Self.rollbackBusy) }
+        rollingBack = true
+        defer { endRollback() }
+        try await connect().start()
+        return try await cutBack(message: id, text: text)
+    }
+
+    /// The CLI cut back at a message and its history adopted: only inside a rollback
+    /// (`rollingBack`), which holds what's sent meanwhile.
+    private func cutBack(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
+        let left = try await connect().rollback(message: id, text: text)
+        adoptRollback(left.events, more: left.more)
+        return left
     }
 
     /// The one way a rollback's history comes in: this chat's own, or one another Kore's chat
@@ -1557,7 +1607,7 @@ package final class Chat: Identifiable {
         let held = heldForRollback
         heldForRollback = []
         if !held.isEmpty, transcriptView.pendingSendSince != nil { transcriptView.sending(false) }
-        for message in held { deliver(message.text, message.files) }
+        for message in held { deliver(message.text, message.files, id: message.id, queued: message.queued, note: message.note) }
     }
 
     /// Where a fork from an answer starts: through that answer's turn. That's the history before
@@ -1748,24 +1798,51 @@ package final class Chat: Identifiable {
         controls.agentChangeSeq &+= 1
     }
 
-    /// `remember`: the user picked it, so new chats start in it.
+    /// `remember`: the user picked it, so new chats start in it. Picks reach the CLI one at a
+    /// time, in order: one made while another is under way (Full access starting the CLI again)
+    /// waits for it, and only the latest of those waiting goes. The pill and the remembered mode
+    /// end on the mode the CLI is in.
     package func setMode(_ id: String, remember: Bool = true) {
         controls.changedBy = nil
         settingsChangedAt = Date()
-        let previous = controls.mode
+        if modeInEffect == nil { modeInEffect = controls.mode }
         controls.mode = id
         arsenalFollowMode()
         allowWaitingInPlan()
+        modePicks &+= 1
+        let pick = modePicks
+        let before = modeChanging
         let backend = backend
-        Task {
+        modeChanging = Task { [weak self] in
+            await before?.value
+            // A later pick replaces this one before it reached the CLI.
+            guard let self, pick == self.modePicks else { return }
             do {
                 try await backend?.setMode(id)
-                if remember { controls.remember(id) }
+                self.modeInEffect = id
+                if remember { self.controls.remember(id) }
             } catch {
-                controls.mode = previous
-                fail("Couldn't switch mode: \(error)")
+                if pick == self.modePicks, let back = self.modeInEffect { self.controls.mode = back }
+                self.fail("Couldn't switch mode: \(error)")
+            }
+            if pick == self.modePicks {
+                self.modeInEffect = nil
+                self.modeChanging = nil
             }
         }
+    }
+
+    /// The mode changes on their way to the CLI, one after another (`setMode`).
+    @ObservationIgnored private var modeChanging: Task<Void, Never>?
+    /// Counts picks: a change goes only while it's the latest.
+    @ObservationIgnored private var modePicks = 0
+    /// The mode the CLI was last known to be in while picks wait: the pill goes back to it if the
+    /// latest fails.
+    @ObservationIgnored private var modeInEffect: String?
+
+    /// Until every mode pick made so far has reached the CLI.
+    package func modeSettled() async {
+        while let changing = modeChanging { await changing.value }
     }
 
     /// A quiet line of Kore's own in the transcript.

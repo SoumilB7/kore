@@ -237,25 +237,74 @@ package final class KoreNetSwitch: NetRouter {
             let choice = TailnetChooser.choose(installed)
             var sidecar: (tailnet: any Tailnet, stop: @Sendable () -> Void)?
             var problem: String?
+            var resealed = false
             if choice.startsSidecar {
                 do {
-                    // A fresh key can't open state sealed under an earlier one: that goes first.
-                    let state = env.support.appendingPathComponent("net/tailnet/state/state.sealed")
-                    let key = try MacIdentity.tailnetKey(secrets: env.secrets) { try? FileManager.default.removeItem(at: state) }
-                    sidecar = try env.sidecar(key)
+                    let started = try Self.startSidecar(env)
+                    sidecar = started.sidecar
+                    resealed = started.resealed
                 } catch {
                     problem = "\(error)"
                 }
             }
-            let (made, failure) = (sidecar, problem)
+            let (made, failure, signInAgain) = (sidecar, problem, resealed)
             await MainActor.run {
                 guard self.generation == mine, self.env != nil else {
                     made?.stop()
                     return
                 }
+                if signInAgain { self.tailnetSignInAgain = true }
                 self.chose(choice, local: local, sidecar: made, problem: failure)
             }
         }
+    }
+
+    /// Kore's own tailnet started with its key, made on first use. A fresh key can't open state
+    /// sealed under an earlier one (kept in the Keychain before 0.3.7), so that goes first; state
+    /// the key still doesn't open (another Kore process's key won the race) goes once more and the
+    /// start is tried again. `resealed`: a node's sign-in went with it.
+    package nonisolated static func startSidecar(_ env: NetEnvironment) throws -> (sidecar: (tailnet: any Tailnet, stop: @Sendable () -> Void), resealed: Bool) {
+        let state = env.support.appendingPathComponent("net/tailnet/state/state.sealed")
+        let files = FileManager.default
+        var resealed = false
+        let key = try MacIdentity.tailnetKey(secrets: env.secrets) {
+            resealed = files.fileExists(atPath: state.path)
+            try? files.removeItem(at: state)
+        }
+        do {
+            return (try env.sidecar(key), resealed)
+        } catch let error as TailnetError where error.wrongKey {
+            HostLog.note("korenet", "tailnet state", "sealed under another key: dropped, started again")
+            try? files.removeItem(at: state)
+            return (try env.sidecar(key), true)
+        }
+    }
+
+    /// Kore's own tailnet lost its sign-in with its state (the key change): one line until it's
+    /// signed in again. Kept across launches.
+    package static let signInAgainKey = "koreNetTailnetSignInAgain"
+    package static let signInAgainLine = "Kore's tailnet needs signing in again after the key change"
+
+    package var tailnetSignInAgain: Bool {
+        get {
+            access(keyPath: \.tailnetSignInAgain)
+            return defaults.bool(forKey: Self.signInAgainKey)
+        }
+        set {
+            guard newValue != defaults.bool(forKey: Self.signInAgainKey) else { return }
+            withMutation(keyPath: \.tailnetSignInAgain) { defaults.set(newValue, forKey: Self.signInAgainKey) }
+        }
+    }
+
+    /// The line, while Kore's own tailnet waits for that sign-in.
+    package var tailnetNote: String? {
+        guard tailnetSignInAgain, state == .sidecar, status?.backendState != .running else { return nil }
+        return Self.signInAgainLine
+    }
+
+    /// Signed in again: the line goes for good.
+    private func signedInAgain() {
+        if state == .sidecar, status?.backendState == .running, tailnetSignInAgain { tailnetSignInAgain = false }
     }
 
     private func chose(_ choice: TailnetChooser.Choice, local: (any Tailnet)?, sidecar: (tailnet: any Tailnet, stop: @Sendable () -> Void)?, problem: String?) {
@@ -482,6 +531,7 @@ package final class KoreNetSwitch: NetRouter {
                 }
                 guard self.generation == mine, self.env != nil, let read else { return }
                 if read != self.status { self.status = read }
+                self.signedInAgain()
                 // A read is as good as the bus: Tailscale stopped or signed out shows without one.
                 self.follow(read.backendState)
             }
@@ -491,6 +541,7 @@ package final class KoreNetSwitch: NetRouter {
     private func heard(_ event: TailnetEvent) {
         let before = status?.backendState
         note(event)
+        signedInAgain()
         switch event {
         case .peer(_, let key?, let online?) where online:
             for connection in connections() where directory.entry(forKey: connection.alias)?.isPeer(key) == true { connection.peerOnline() }
@@ -688,6 +739,19 @@ package final class KoreNetSwitch: NetRouter {
         directoryChanged?()
         upgrades?.reached(connection.alias, fresh: true)
         return true
+    }
+
+    package func oldKeyOnNet(_ connection: HostConnection) -> String? {
+        guard let entry = directory.entry(forKey: connection.alias), entry.ssh == nil else { return nil }
+        let device = defaults.string(forKey: MacIdentity.deviceKey).flatMap(UUID.init(uuidString:))
+        return Self.oldKeyLine(NodeNames.name(connection.alias), mac: device)
+    }
+
+    /// A box claimed over the tailnet, with no SSH, that holds this Mac's old key: its record goes
+    /// there and the box is claimed again as at first (`join`'s 10 minutes, then Allow here).
+    package static func oldKeyLine(_ box: String, mac: UUID?) -> String {
+        let remove = mac.map { "kore-host devices remove '\(DeviceRecord.code($0))'" } ?? "kore-host devices remove <this Mac>"
+        return "\(box) has this Mac's old key · on \(box) run \(remove), then kore-host join, and Allow it here"
     }
 
     package func watchNode(_ key: String, _ watcher: (@MainActor (NetNodeWire.Node) -> Void)?) { nodeWatchers[key] = watcher }

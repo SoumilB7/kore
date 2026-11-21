@@ -66,7 +66,8 @@ enum LinkControlActions {
             return Outcome(ok: true, newChat: fork, newWindowId: LinkSnapshot.windowID(workspace))
         case .chatRollback:
             // The Mac's rule: never under a running turn (the client stops it first).
-            guard !chat.isBusy else { return .failed(.busy, "A turn is running. Stop it, then go back.") }
+            guard !chat.isBusy else { return .failed(.busy, Chat.rollbackBusy) }
+            guard !chat.isRollingBack else { return .failed(.busy, Chat.rollbackUnderway) }
             guard let entry = chat.transcript.linkEntry(args.entryId ?? "") else { return .failed(.invalid, "No message to go back to there.") }
             if args.after == true { chat.rollBack(after: entry) } else { chat.rollBack(entry) }
         case .chatRetry:

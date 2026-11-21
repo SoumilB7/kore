@@ -8,16 +8,24 @@ import Foundation
 package enum KoreAlwaysRule {
     /// The rule an Always allow keeps for `command` (a `Bash(…)` rule's content); nil where Kore
     /// doesn't offer one (a critical removal, an empty line). `suggested`: the CLI's own rule
-    /// contents, used when one is a prefix rule that covers the command.
+    /// contents, used when one is a prefix rule that covers the command and the command is one
+    /// whose kind may be a wildcard.
     package static func rule(for command: String, cwd: String?, suggested: [String] = []) -> String? {
         let line = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !line.isEmpty, !critical(line, cwd: cwd) else { return nil }
-        if let theirs = suggested.first(where: { ($0.contains("*")) && covers($0, line) }) { return theirs }
         // A download into a shell is the download it names: that line only.
         if KoreAskList.pipesDownloadToShell(line) { return line }
-        let segments = KoreAskList.segments(line).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
-        let risky = segments.first { KoreAskList.reason(for: $0) != nil } ?? segments.first ?? line
-        return kind(of: risky)
+        let judged = KoreAskList.judged(line, cwd: cwd, environment: ProcessInfo.processInfo.environment)
+        let segments = judged.map { $0.segment.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let risky = judged.first { $0.why != nil }.map { $0.segment.trimmingCharacters(in: .whitespaces) } ?? segments.first ?? line
+        let kind = kind(of: risky)
+        // An exact kind stays exact, and the CLI's prefix rule is taken only when it is no wider
+        // than Kore's kind (`git push:*` for `git push *`, never `sudo *`).
+        guard kind.contains("*") else { return kind }
+        return suggested.first { theirs in
+            let text = theirs.hasSuffix(":*") ? String(theirs.dropLast(2)) + " *" : theirs
+            return theirs.contains("*") && covers(theirs, line) && covers(kind, text)
+        } ?? kind
     }
 
     /// How a rule reads on the card: `sudo apt install …`.
@@ -28,40 +36,78 @@ package enum KoreAlwaysRule {
     }
 
     /// Program and subcommand, the rest a `*`: `sudo apt install *`, `security find-generic-password *`,
-    /// `rm -rf "$BUILD"/*`. A line with nothing that varies stays as it is.
+    /// `rm -rf "$BUILD"/*`. A line with nothing that varies stays as it is, and so does one whose
+    /// wildcard would reach too far: a program that runs others or arbitrary code
+    /// (`sudo bash x.sh`, not `sudo bash *`), one that writes any file under sudo, a removal
+    /// from a folder near the top.
     static func kind(of segment: String) -> String {
         let tokens = rawWords(segment)
         guard !tokens.isEmpty else { return segment }
         var index = 0
         // Leading `VAR=value`s stay as typed.
         while index < tokens.count, isAssignment(tokens[index]) { index += 1 }
-        let sudo = index < tokens.count && unquoted(tokens[index]) == "sudo"
+        guard index < tokens.count else { return segment }
+        let sudo = KoreAskList.basename(unquoted(tokens[index])) == "sudo"
         if sudo {
             index += 1
             while index < tokens.count, tokens[index].hasPrefix("-") {
                 let flag = tokens[index]
                 index += 1
-                if ["-u", "-g", "-h", "-p", "-C", "-D", "-U", "-r", "-t"].contains(flag), index < tokens.count { index += 1 }
+                if flag == "--" { break }
+                if KoreAskList.sudoOptionsWithArgument.contains(flag), index < tokens.count { index += 1 }
             }
         }
         guard index < tokens.count else { return segment }
-        let program = unquoted(tokens[index])
+        let program = KoreAskList.basename(unquoted(tokens[index]))
         index += 1
-        if ["rm", "rmdir"].contains(program) {
+        if ["rm", "rmdir", "unlink"].contains(program) {
             while index < tokens.count, tokens[index].hasPrefix("-") { index += 1 }
             let targets = Array(tokens[index...])
             guard targets.count == 1, let slash = targets[0].lastIndex(of: "/"), targets[0].index(after: slash) != targets[0].endIndex else {
                 return segment
             }
+            // `rm -rf /x` would keep `rm -rf /*`, `rm -rf ~/x` `rm -rf ~/*`: a folder that high
+            // up (or one Kore can't place) keeps the line.
+            if tooHigh(String(targets[0][..<slash])) { return segment }
             let head = tokens[..<index].joined(separator: " ")
             return head + " " + targets[0][...slash] + "*"
         }
+        if runsOthers(program) || writesFiles.contains(program) { return segment }
         // Without sudo, a program whose argument is a file or process keeps the line as it is.
         if !sudo && fileTaking.contains(program) { return segment }
+        // `security -q find-generic-password`: the verb after the program's own flags.
+        if program == KoreAskList.keychainTool {
+            while index < tokens.count, tokens[index].hasPrefix("-") { index += tokens[index] == "-p" ? 2 : 1 }
+            index = min(index, tokens.count)
+        }
         if index < tokens.count, !fileTaking.contains(program), isSubcommand(tokens[index]) { index += 1 }
         guard index < tokens.count else { return tokens.joined(separator: " ") + " *" }
         return tokens[..<index].joined(separator: " ") + " *"
     }
+
+    /// A removal's folder whose `*` reaches a home or system path, or that Kore can't place.
+    static func tooHigh(_ folder: String) -> Bool {
+        let bare = unquoted(folder)
+        if bare.isEmpty || bare == "." || bare == "~" || bare.hasPrefix("~") && !bare.contains("/") { return true }
+        if bare.split(separator: "/").contains("..") || KoreAskList.isGlob(bare) { return true }
+        if ["$HOME", "${HOME}"].contains(bare) { return true }
+        let home = ProcessInfo.processInfo.environment["HOME"].flatMap { $0.isEmpty ? nil : ["HOME": $0] } ?? [:]
+        guard let path = KoreAskList.resolve(bare, known: home, here: nil) else { return false }
+        return KoreAskList.pathReason(path, home: home["HOME"]) != nil
+    }
+
+    /// Programs that run other programs or arbitrary code: their kind is the exact line.
+    static func runsOthers(_ program: String) -> Bool {
+        if program.hasPrefix("python") || program.hasPrefix("pip") && program.count <= 4 { return true }
+        return KoreAskList.shells.contains(program) || [
+            "env", "xargs", "su", "sudo", "doas", "eval", "exec", "nohup", "timeout", "nice", "command", "builtin", "time", "find",
+            "perl", "ruby", "node", "osascript", "awk", "gawk", "php", "lua", "deno", "bun", "vi", "vim", "nvim", "less", "ssh",
+            "chroot", "watch", "script", "source", ".",
+        ].contains(program)
+    }
+
+    /// Programs that write any file named on the line: under sudo a wildcard is any path.
+    static let writesFiles: Set<String> = ["cp", "mv", "tee", "dd", "chmod", "chown", "chgrp", "ln", "install", "rsync", "truncate", "shred"]
 
     /// Programs whose first argument is what varies (a file, a process), not a subcommand.
     static let fileTaking: Set<String> = [
@@ -78,7 +124,7 @@ package enum KoreAlwaysRule {
         token.range(of: "^[A-Za-z_][A-Za-z0-9_]*=", options: .regularExpression) != nil
     }
 
-    static func unquoted(_ token: String) -> String { token.filter { $0 != "\"" && $0 != "'" } }
+    static func unquoted(_ token: String) -> String { token.filter { $0 != "\"" && $0 != "'" && $0 != "\\" } }
 
     /// A simple command's words as typed (quotes kept), split at unquoted spaces.
     static func rawWords(_ segment: String) -> [String] {
@@ -106,34 +152,13 @@ package enum KoreAlwaysRule {
     // MARK: The floor
 
     /// A forced removal of the working folder or a folder above it, a home folder, or a system
-    /// path (`sudo` or not): no Always rule covers it, and the hook asks whatever the rules say.
-    package static func critical(_ command: String, cwd: String?) -> Bool {
-        for segment in KoreAskList.segments(command) {
-            var words = KoreAskList.words(segment)
-            if words.first == "sudo" {
-                words.removeFirst()
-                while let first = words.first, first.hasPrefix("-") { words.removeFirst() }
-            }
-            guard let program = words.first, ["rm", "rmdir"].contains(program) else { continue }
-            let arguments = Array(words.dropFirst())
-            let flags = arguments.filter { $0.hasPrefix("-") }
-            let forced = flags.contains { $0.hasPrefix("--") ? ["--recursive", "--force"].contains($0) : $0.dropFirst().contains { "rRf".contains($0) } }
-            guard forced else { continue }
-            for target in arguments where !target.hasPrefix("-") {
-                if let why = KoreAskList.removal(flags + [target]), !why.contains("variable") { return true }
-                let home = target.replacingOccurrences(of: "${HOME}", with: "$HOME")
-                if ["$HOME", "$HOME/", "$HOME/*"].contains(home) { return true }
-                if [".", "./", "..", "../", "*", "./*", "/*", "~/*", "../*"].contains(target) || target.allSatisfy({ $0 == "." || $0 == "/" }) {
-                    return true
-                }
-                if let cwd, target.hasPrefix("/") {
-                    let path = URL(fileURLWithPath: target).standardizedFileURL.path
-                    let here = URL(fileURLWithPath: cwd).standardizedFileURL.path
-                    if here == path || here.hasPrefix(path == "/" ? "/" : path + "/") { return true }
-                }
-            }
-        }
-        return false
+    /// path (`sudo` or not, through `env`, `xargs`, `sh -c`, `find -delete`, …, with the line's
+    /// own variables read): no Always rule covers it, and the hook asks whatever the rules say.
+    /// `environment`: where `HOME` and `TMPDIR` come from.
+    package static func critical(
+        _ command: String, cwd: String?, environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        KoreAskList.judged(command, cwd: cwd, environment: environment).contains { $0.critical }
     }
 
     // MARK: Rules
@@ -158,14 +183,18 @@ package enum KoreAlwaysRule {
     /// The command is allowed by one of `rules` (`Bash(…)` rule contents, `*` for all of Bash):
     /// the whole line by a rule without a wildcard, else each part Kore asks about by a rule of
     /// its own, as the CLI splits a line before it matches. Never a critical removal.
-    package static func allowed(_ command: String, by rules: [String], cwd: String?) -> Bool {
-        guard !rules.isEmpty, !critical(command, cwd: cwd) else { return false }
+    package static func allowed(
+        _ command: String, by rules: [String], cwd: String?, environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        guard !rules.isEmpty, !critical(command, cwd: cwd, environment: environment) else { return false }
         let line = command.trimmingCharacters(in: .whitespacesAndNewlines)
         if rules.contains(where: { !$0.contains("*") && $0 == line } ) || rules.contains("*") { return true }
         if KoreAskList.pipesDownloadToShell(line) { return false }
-        let risky = KoreAskList.segments(line).map { $0.trimmingCharacters(in: .whitespaces) }.filter { KoreAskList.reason(for: $0) != nil }
+        let risky = KoreAskList.judged(line, cwd: cwd, environment: environment).filter { $0.why != nil }
+            .map { $0.segment.trimmingCharacters(in: .whitespaces) }
         guard !risky.isEmpty else { return false }
-        return risky.allSatisfy { part in rules.contains { covers($0, part) } }
+        // A wildcard never stretches over `..`: `rm -rf build/*` doesn't reach `build/../..`.
+        return risky.allSatisfy { part in rules.contains { covers($0, part) && ($0 == part || !part.contains("..")) } }
     }
 
     /// The `Bash` allow rules (their contents; `*` for a bare `Bash`) in the settings files the

@@ -33,9 +33,12 @@ final class BoxCLI: ChatBackend {
         sink.yield(.controlsLoaded(ChatControls(models: Self.models, model: "small", effort: "low", commands: [SlashCommand(name: "review", description: "", hint: "", kind: .command)])))
         sink.yield(.contextUsage(ContextUsage(used: 30_000, window: 200_000, autoCompacts: true, at: .now)))
     }
+    /// A message sent while a turn runs waits in the CLI, unanswered (a real CLI's queue).
+    var holdsQueued = false
     func send(_ text: String, files: [Attachments.File], queued: String?, id: String?) async throws -> Bool {
         calls.append("send \(text) \(id ?? "-")")
         self.files += files
+        if holdsQueued, queued != nil { return true }
         let turn = "t\(calls.count)"
         sink.yield(.turnStarted(turn, origin: .user, at: .now))
         // One model request, its copy streamed twice as the CLI does.

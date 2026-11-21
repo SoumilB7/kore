@@ -67,6 +67,10 @@ package final class ScriptedBackend: ChatBackend {
     // MARK: - ChatBackend
 
     private var relaunched = false
+    /// The mode it's in, and whether its process was launched in Full access (Claude's can go
+    /// into it in place then).
+    private lazy var mode = options.mode
+    private var bypassReady = false
     /// A launch held by `holdLaunch`: a start meanwhile waits for it, as the real backends' do.
     private var launching: Task<Void, Never>?
     private var historyShown = false
@@ -79,6 +83,7 @@ package final class ScriptedBackend: ChatBackend {
         if relaunched {
             relaunched = false
             log.append(.restarted)
+            bypassReady = mode == ClaudeModes.fullAccess
             if remoteOn {
                 log.append(.setRemoteControl(true))
                 sink.yield(.remoteControl(RemoteControl(state: .connected, place: provider == "claude" ? "claude.ai/code" : "acme-mac")))
@@ -105,6 +110,7 @@ package final class ScriptedBackend: ChatBackend {
             throw CLIExecutable.ExitedAtStart(name: provider, status: 1, output: script.startError)
         }
         started = true
+        bypassReady = mode == ClaudeModes.fullAccess
         // A fork also names the session it came from as `resume` (`Workspace.fork`): the fork wins.
         if let fork = options.fork {
             // Claude's fork takes the id Kore gives it (`--session-id`); Codex names its thread.
@@ -183,6 +189,17 @@ package final class ScriptedBackend: ChatBackend {
 
     package func setMode(_ id: String) async throws {
         log.append(.setMode(id))
+        // Claude takes Full access only in a process launched in it: one that wasn't starts
+        // again for it, refused while it runs something (`ClaudeBackend.setMode`).
+        if provider == "claude", id == ClaudeModes.fullAccess, started, !bypassReady {
+            if let refused = ClaudeBackend.fullAccessRefusal(turn: turn != nil || compacting, agents: false, commands: !openTools.isEmpty) {
+                throw refused
+            }
+            mode = id
+            await relaunch(reason: "full access")
+            try await start()
+        }
+        mode = id
         sink.yield(.modeChanged(ModeChange(mode: id, previous: nil, source: .user, at: Date())))
     }
 

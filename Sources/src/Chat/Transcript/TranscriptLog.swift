@@ -410,7 +410,12 @@ package final class TranscriptLog {
         let interrupted = outcome == .interrupted
         let abandoned = outcome != .completed
         var answered = false
-        for i in (turnIndex(id) ?? entries.count)..<entries.count where entries[i].turn == id {
+        // Bounds checked each step: nothing here removes entries, but a slip can't trap the chat.
+        var i = max(turnIndex(id) ?? entries.count, 0) - 1
+        while true {
+            i += 1
+            guard i < entries.count else { break }
+            guard entries[i].turn == id else { continue }
             switch entries[i].kind {
             case .answer:
                 entries[i].done = true
@@ -981,10 +986,12 @@ package final class TranscriptLog {
         changed(at: turnIndex(id))
     }
 
-    /// The turn's first entry, or the last entry for a turn with none yet; nil for no turn.
+    /// The turn's first entry, or the last entry for a turn with none yet; nil for no turn, and
+    /// for a chat with no entries at all (a turn can start and end before any: the CLI's own, or
+    /// one whose message is still queued).
     package func turnIndex(_ id: String?) -> Int? {
-        guard let id else { return entries.count - 1 }
-        return turnFirst[id].flatMap { position[$0] } ?? (current == id ? entries.count - 1 : nil)
+        guard let id else { return entries.indices.last }
+        return turnFirst[id].flatMap { position[$0] } ?? (current == id ? entries.indices.last : nil)
     }
 
     /// The chat's own card an agent's work shows in: its card, or its parent's, up to the one

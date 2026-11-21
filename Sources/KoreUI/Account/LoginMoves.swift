@@ -71,13 +71,14 @@ package final class LoginMoves {
         package let mac: Bool
         /// The CLI's own sign-in there, to its end (its page opened with `open`): nil when it
         /// signed in, else why not. Nil where Kore can't start one (another Mac).
-        package let signIn: (@MainActor (_ cli: String, _ open: @escaping @MainActor (URL) -> Void) async -> String?)?
+        /// Claude's own sign-in there, into the added account `login` names (never the box's own).
+        package let signIn: (@MainActor (_ cli: String, _ login: String?, _ open: @escaping @MainActor (URL) -> Void) async -> String?)?
 
         package init(
             key: String, name: String, unready: LoginMove.Failure?, device: String?,
             remote: @escaping (String, String, String?, Bool) -> any LoginMove.Remote,
             prints: @escaping (String, Data) async -> [LoginPrint]?, login: @escaping (String, String?) async -> String?, mac: Bool = false,
-            signIn: (@MainActor (String, @escaping @MainActor (URL) -> Void) async -> String?)? = nil
+            signIn: (@MainActor (String, String?, @escaping @MainActor (URL) -> Void) async -> String?)? = nil
         ) {
             (self.key, self.name, self.unready, self.device, self.mac) = (key, name, unready, device, mac)
             (self.remote, self.prints, self.login, self.signIn) = (remote, prints, login, signIn)
@@ -116,7 +117,7 @@ package final class LoginMoves {
             remote: { cli, login, profile, force in BoxLogins(connection: connection, cli: cli, login: login, host: host, profile: profile, force: force) },
             prints: { cli, key in await BoxLogins.fingerprints(connection, cli: cli, key: key) },
             login: { _, email in await LoginMoves.boxLogin(connection, email: email) },
-            signIn: { cli, open in await connection.accounts.signInToEnd(cli, open: open) })
+            signIn: { cli, login, open in await connection.accounts.signInToEnd(cli, login: login, open: open) })
     }
 
     /// Opens a sign-in's page on this Mac (storylines and tests: their own).
@@ -284,8 +285,11 @@ package final class LoginMoves {
         lines[key] = .signingIn(target.name)
         UILog.event("login-move", ["cli": cli, "login": AccountStore.loginKey(id), "to": "box", "outcome": "sign-in"])
         let open = openPage
+        // A Claude login goes to the box's added account named for its email (as a Move put it),
+        // never the box's own default.
+        let login = cli == "claude" ? LinkLogins.name(forEmail: Self.email(cli, id)) : nil
         Task {
-            let failure = await start(cli, open)
+            let failure = await start(cli, login, open)
             lines[key] = failure.map { .failed($0) }
         }
     }

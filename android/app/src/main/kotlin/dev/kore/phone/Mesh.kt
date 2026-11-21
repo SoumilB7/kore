@@ -135,6 +135,15 @@ class Mesh(private val app: KoreApp) {
     /** The Mac that tells boxes about this phone, by name (the first Mac known). */
     fun ownerName(): String = nodesFlow.value.firstOrNull { it.device.value.kind == NodeKind.MAC }?.name ?: "your Mac"
 
+    /**
+     * What [n] last said it does (its welcome's `caps`), kept across launches: before this
+     * launch's first welcome the menus stay as they were, not as an unknown device's.
+     */
+    fun caps(n: NodeClient?): Set<String> =
+        if (n == null) emptySet() else dev.kore.phone.ui.Offers.caps(n.welcome.value, prefs.getStringSet(capsKey(n.id), null))
+
+    private fun capsKey(id: UUID) = "caps.$id"
+
     /** The Mac this phone joined through, as rows name it ("waiting for MacBook"). */
     val macName: String get() = ownerName()
 
@@ -228,6 +237,14 @@ class Mesh(private val app: KoreApp) {
                             "attempt" to (s as? NodeMachine.State.Away)?.attempt)
                     }
                 }
+                // Each welcome's caps kept for the next cold start (only when they changed).
+                app.scope.launch {
+                    client.welcome.collect { w ->
+                        if (w == null) return@collect
+                        val caps = dev.kore.phone.ui.Offers.caps(w)
+                        if (prefs.getStringSet(capsKey(d.id), null) != caps) prefs.edit().putStringSet(capsKey(d.id), caps).apply()
+                    }
+                }
                 if (keeper.running) client.start()
                 val notifier = Notifier(app, d.id.toString()) { if (many) client.name else null }
                 notifiers[d.id] = notifier to app.scope.launch { client.attention.collect { notifier.handle(it, client.chatOnScreen) } }
@@ -235,6 +252,7 @@ class Mesh(private val app: KoreApp) {
         }
         (have.keys - next.map { it.id }.toSet()).forEach { id ->
             have[id]?.close()
+            prefs.edit().remove(capsKey(id)).apply()
             notifiers.remove(id)?.let { (n, job) -> job.cancel(); n.clearAll() }
         }
         nodesFlow.update { next }

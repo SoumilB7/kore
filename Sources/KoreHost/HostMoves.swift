@@ -120,6 +120,8 @@ extension HostDaemon {
 
     func adopt(_ args: ControlArgs, id: String, from client: LinkClient) -> MoveResult {
         func refused(_ code: ResultCode, _ message: String) -> MoveResult { .refused(id, code, message) }
+        // Box chats go up to Auto: an older Mac's Full access comes in at Auto, said once.
+        let (args, capped) = Self.boxCapped(args)
         guard let grant = client.holder, let phase = args.phase.flatMap(MovePhase.init(rawValue:)), let moveId = args.moveId,
             LinkMoves.plainMoveID(moveId)
         else { return refused(.invalid, "Name the move.") }
@@ -190,9 +192,9 @@ extension HostDaemon {
                 // A fast-forward: the box's chat again, its history the one that came back.
                 let complete = hc.record.owner?.mirrored == args.seq && args.seq != nil
                 // The newer settings win: the Mac's, unless one was changed here since the Mac took
-                // the chat and not on the Mac after (each side's own clock decides its own "since").
-                let boxNewer = Self.boxNewer(boxAt: hc.record.settingsAt, since: hc.record.owner?.since, macAt: args.settings?.at)
-                var notes: [String] = []
+                // the chat and not on the Mac (each side's own clock decides its own "since").
+                let boxNewer = Self.boxNewer(boxAt: hc.record.settingsAt, since: hc.record.owner?.since, macChanged: args.settings?.changed)
+                var notes = [capped].compactMap { $0 }
                 if boxNewer {
                     hc.adopted(session: session, transcript: main, title: args.title, modelId: nil, effort: nil, mode: nil)
                 } else {
@@ -231,7 +233,7 @@ extension HostDaemon {
             hc.adoptedNew(from: args.host ?? grant, transcript: main)
             HostJournal.note("move adopt", ["chat": hc.id, "move": moveId, "new": "true"])
             broadcast(chats: [hc])
-            return MoveResult(id: id, ok: true, message: hc.carriedNote, chatId: hc.id, owner: nil, settings: Self.said(hc))
+            return MoveResult(id: id, ok: true, message: Self.joined(capped, hc.carriedNote), chatId: hc.id, owner: nil, settings: Self.said(hc))
         case .abort:
             moveClients[moveId] = nil
             try? FileManager.default.removeItem(at: dir)
@@ -286,18 +288,42 @@ extension HostDaemon {
     }
 
     /// On a send back, whether the box's settings stand over the Mac's: one was changed here
-    /// after the Mac took the chat (`since`, this box's clock), and not on the Mac after that
-    /// (`macAt`, the Mac's clock, compared only when both changed). Nil times: never changed.
-    nonisolated static func boxNewer(boxAt: Int64?, since: Int64?, macAt: Int64?) -> Bool {
+    /// since the Mac took the chat (`boxAt` after `since`, both this box's clock) and the Mac says
+    /// none changed there since it took it (`macChanged`, decided by the Mac's own clock). The two
+    /// clocks are never compared. Both changed, or a Mac that doesn't say: the Mac's, which held it.
+    nonisolated static func boxNewer(boxAt: Int64?, since: Int64?, macChanged: Bool?) -> Bool {
         guard let boxAt, boxAt > (since ?? 0) else { return false }
-        guard let macAt else { return true }
-        return boxAt > macAt
+        return macChanged == false
+    }
+
+    /// A move's or copy's commit as a box takes it: a mode above Auto (`LinkPolicy.raiseCap`), an
+    /// older Mac's Full access, is the highest at or below it, and the line that says so. The CLI
+    /// is never launched able to bypass here (as root it refuses to start at all).
+    static func boxCapped(_ args: ControlArgs) -> (ControlArgs, String?) {
+        guard let provider = args.provider else { return (args, nil) }
+        var args = args
+        var line: String?
+        if let mode = args.mode, case let capped = LinkPolicy.cappedMode(mode, provider: provider), capped != mode {
+            args.mode = capped
+            line = LinkPolicy.boxCappedLine(provider, to: capped)
+        }
+        if let mode = args.settings?.mode, case let capped = LinkPolicy.cappedMode(mode, provider: provider), capped != mode {
+            args.settings?.mode = capped
+            line = LinkPolicy.boxCappedLine(provider, to: capped)
+        }
+        return (args, line)
+    }
+
+    static func joined(_ lines: String?...) -> String? {
+        let said = lines.compactMap { $0 }
+        return said.isEmpty ? nil : said.joined(separator: " · ")
     }
 
     /// A chat's settings as the box has them now, for the client that brought it (no draft, no time).
     static func said(_ hc: HostChat) -> ChatSettings {
         var settings = hc.settings.withoutDraft
         settings.at = nil
+        settings.changed = nil
         return settings
     }
 }

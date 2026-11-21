@@ -79,7 +79,7 @@ package enum LinkPolicy {
     }
 
     /// The longest title a rename may set.
-    package static let maxTitle = 200
+    package static let maxTitle = SlashCommand.maxTitle
     /// The longest code a sign-in takes back from its manual page.
     package static let maxSignInInput = 4096
     /// Arsenal's built tiers, lowest first: what `chat.setArsenal` takes besides "off". Full isn't
@@ -546,6 +546,24 @@ package enum LinkPolicy {
     /// The highest a full-control client may raise a mode (owner, 2026-11-10: Auto, not Bypass or
     /// Full access).
     package static let raiseCap = ModeLevel.auto
+    /// `mode` no higher than `raiseCap`: its own when it's at or below, else the highest of its
+    /// CLI's modes that is (Full access → Auto, Codex's → Approve for me). What a box runs a chat
+    /// in, and the most a chat the link carries on from another starts in.
+    package static func cappedMode(_ mode: String, provider id: String) -> String {
+        guard let provider = Registry.provider(id) else { return mode }
+        let level = { (option: ModeOption) in ModeLevel(rawValue: option.level) ?? .danger }
+        guard let own = provider.modes.first(where: { $0.id == mode }), level(own) <= raiseCap else {
+            return provider.modes.filter { $0.listed && level($0) <= raiseCap }.max { $0.level < $1.level }?.id ?? provider.modes[0].id
+        }
+        return mode
+    }
+
+    /// What a chat moved or copied to a box from Full access is told (`cappedMode`).
+    package static func boxCappedLine(_ provider: String, to mode: String) -> String {
+        let label = Registry.provider(provider)?.modes.first { $0.id == mode }?.label ?? mode
+        return "Full access stays on this Mac: the box chat runs in \(label)"
+    }
+
     /// What a box chat's picker and refusals say of the cap.
     package static let boxCapLine = "Box chats go up to Auto"
     /// What a box says in its welcome when a full grant may Always allow its chats' cards.

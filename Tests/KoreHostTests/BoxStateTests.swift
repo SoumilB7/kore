@@ -27,6 +27,7 @@ final class StateCLI: ChatBackend {
         guard !calls.contains("start") else { return }
         calls.append("start")
         sink.yield(.sessionIdentified("s1"))
+        if let title = Self.startTitle { sink.yield(.titleChanged(title, rename: true)) }
         sink.yield(.controlsLoaded(ChatControls(models: Self.models, model: options.model ?? "big", effort: options.effort ?? "high", commands: [])))
         // As both CLIs do at their start: fast mode's state, off unless launched on.
         sink.yield(.fastModeChanged(FastModeReport(on: options.fastMode ?? false, offered: true)))
@@ -51,7 +52,13 @@ final class StateCLI: ChatBackend {
     func agentHistory(_ id: String) async -> [ChatEvent] { [] }
     func fork(message id: String?, text: String) async throws -> ForkStart { .fresh }
     func forkAtEnd() async throws -> ForkStart { .fresh }
-    func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) { ([], false) }
+    nonisolated(unsafe) static var startTitle: String?
+    var rollbackGate: (() async -> Void)?
+    func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
+        calls.append("rollback")
+        await rollbackGate?()
+        return ([.userMessage(text: "kept", attachments: [], id: "k1")], false)
+    }
     func earlier() async -> (events: [ChatEvent], more: Bool)? { nil }
     func compact(instructions: String) async throws {}
     func close() async { sink.finish() }

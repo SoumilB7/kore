@@ -1145,6 +1145,8 @@ package final class AgentChannel {
     }
 
     private func spentNew(_ chat: Chat, _ client: Client) {
+        // Made by this chat (and so by whatever made it): it never allows commands there.
+        if let own = callerChat(client), own !== chat { chat.arsenalOrigins = Chat.origins(madeBy: own) }
         _ = newBudgets[client.key, default: RateLimiter(limit: Self.newPerHour, per: 3600)].take()
         let mine = made[client.key, default: .weakObjects()]
         made[client.key] = mine

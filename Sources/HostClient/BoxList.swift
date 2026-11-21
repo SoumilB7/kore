@@ -61,6 +61,12 @@ package final class BoxList {
 
         package init(alias: String) { self.alias = alias }
 
+        /// kore-host before 0.3.7: no `rekey`, so a Mac's new identity key never gets in there.
+        package static func beforeRekey(_ version: String) -> Bool {
+            let parts = HostWire.versionParts(version)
+            return !parts.isEmpty && parts.lexicographicallyPrecedes([0, 3, 7])
+        }
+
         /// The hover card's line: what kind of machine, and how kore-host runs there.
         package var kind: String? { machine?.kind }
 
@@ -82,7 +88,12 @@ package final class BoxList {
                 if let why = machine?.unsupported(alias) { return Note(line: why) }
                 return Note(line: "Not set up on \(NodeNames.name(alias))", action: .setUp)
             case .stopped: return Note(line: "Stopped on \(NodeNames.name(alias))", action: .start)
-            case .noGrant: return Note(line: "\(NodeNames.name(alias)) doesn't know this Mac", action: .setUp)
+            case .noGrant:
+                // A box from before 0.3.7 can't take this Mac's new key: Set up updates it.
+                if let version = machine?.koreHostVersion, Self.beforeRekey(version) {
+                    return Note(line: "\(NodeNames.name(alias)) doesn't know this Mac · update kore-host on \(NodeNames.name(alias))", action: .setUp)
+                }
+                return Note(line: "\(NodeNames.name(alias)) doesn't know this Mac", action: .setUp)
             case .stale: return Note(line: "\(NodeNames.name(alias)) needs an update", action: .update)
             case .failed(let why, let action): return Note(line: why, action: action)
             case .unreachable(let why, let action): return Note(line: why, action: action)
@@ -533,6 +544,7 @@ package final class BoxList {
             // Another Kore here took over: nothing to set up, and setting up would log it out.
             case .replaced: return .unreachable(why.line(alias), nil)
             case .paused: return .unreachable(why.line(alias), nil)
+            case .oldKey: return .unreachable(why.line(alias), nil)
             }
         }
         let unreachable = Status.unreachable("Can't reach \(NodeNames.name(alias))", .tryAgain)

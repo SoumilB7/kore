@@ -295,6 +295,7 @@ package struct ChatMoves {
         // A box from before `settings` says the four it knows.
         var settings = (info.settings ?? ChatSettings(modelId: info.modelId, effort: info.effort, mode: info.mode)).linkable
         settings.at = nil
+        settings.changed = nil
         return .success(Brought(moved: moved, title: info.title, settings: settings, whole: info.settings != nil, cost: cost))
     }
 
@@ -347,7 +348,7 @@ package struct ChatMoves {
         commit.folder = moved.boxFolder
         commit.folders = Self.spellings(moved.macFolder)
         var notes: [String] = []
-        let said = settings.said(to: connection, notes: &notes).linkable
+        let said = settings.said(to: connection, provider: moved.provider, notes: &notes).linkable
         commit.title = title
         commit.modelId = said.modelId
         commit.level = said.effort

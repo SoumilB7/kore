@@ -4,6 +4,7 @@ import dev.kore.link.node.Outbox
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class OutboxTest {
@@ -34,6 +35,17 @@ class OutboxTest {
         assertEquals(listOf("b" to "B", "c" to "C"), box.drain())
         assertEquals(setOf("a"), box.ids())
         assertEquals(listOf("a"), box.expire())
+    }
+
+    @Test fun aRemovedEntryIsNeverHandedBack() {
+        box.add("a", "A")
+        box.add("b", "B")
+        assertTrue(box.remove("a"))
+        assertFalse(box.remove("a"))
+        assertEquals(setOf("b"), box.ids())
+        now = 25_000
+        assertEquals(listOf("b" to "B"), box.drain())
+        assertNull(box.nextExpiry())
     }
 
     @Test fun anIdQueuesOnce() {

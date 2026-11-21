@@ -57,6 +57,12 @@ class FolderBrowser {
     val more: Boolean get() = path?.let { kept[it]?.more } == true
     val started: Boolean get() = path != null || reading != null || unsupported
 
+    /** Open here takes the folder shown, never while another is being read. */
+    val canOpen: Boolean get() = path != null && reading == null
+
+    /** The home's first read failed (not an older box): nothing to show; the sheet offers Retry. */
+    val failedFirst: Boolean get() = path == null && reading == null && !unsupported
+
     /** Above the home there's nothing a phone may open: up stops there. */
     val canGoUp: Boolean get() = path.let { p -> p != null && p != home && parentOf(p) != null }
 
@@ -85,6 +91,8 @@ class FolderBrowser {
         if (!result.bool("ok")) {
             if (!current) return
             reading = null
+            // The first read failed: nothing of it is kept, so Retry starts clean.
+            if (path == null) { home = null; kept.clear() }
             val code = result.str("code")
             // An older box: a phone's grant isn't let browse at all.
             if (code == "denied.control" || (code == "invalid" && path == null)) unsupported = true

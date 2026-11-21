@@ -247,6 +247,7 @@ final class BoxBinding {
         let login = (original.services as? BoxChatServices)?.chatId.flatMap { connection.chats[$0]?.controls?.login }
         var settings = ChatSettings(of: original, draft: false, login: login)
         settings.at = nil
+        settings.changed = nil
         if !arsenal { settings.arsenal = nil }
         settings.arsenal = BoxTools.said(settings.arsenal, caps: connection.caps)
         let making = LinkChatBackend.Making(

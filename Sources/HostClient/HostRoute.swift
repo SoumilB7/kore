@@ -31,11 +31,15 @@ package protocol NetRouter: AnyObject {
     /// The box said `bye unknown` to this Mac's proof over SSH: it forgot this Mac. True when
     /// this Mac counted itself enrolled there (it isn't any more, and its upgrade looks again).
     func forgotten(_ connection: HostConnection) -> Bool
+    /// The box said `bye unknown` to this Mac over KoreNet and has no SSH route: the line saying
+    /// what to run there; nil when SSH can still reach it.
+    func oldKeyOnNet(_ connection: HostConnection) -> String?
 }
 
 extension NetRouter {
     package func sshTransport(for connection: HostConnection) -> (any HostTransport)? { nil }
     package func forgotten(_ connection: HostConnection) -> Bool { false }
+    package func oldKeyOnNet(_ connection: HostConnection) -> String? { nil }
 }
 
 extension HostConnection {

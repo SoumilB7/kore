@@ -57,7 +57,7 @@ struct NoKeychainTests {
 
     /// A box answering with these logins (who they are; no fingerprint).
     private func box(
-        _ prints: [LoginPrint], signIn: (@MainActor (String, @escaping @MainActor (URL) -> Void) async -> String?)? = nil
+        _ prints: [LoginPrint], signIn: (@MainActor (String, String?, @escaping @MainActor (URL) -> Void) async -> String?)? = nil
     ) -> LoginMoves.Box {
         LoginMoves.Box(
             key: "mybox", name: "mybox", unready: nil, device: nil, remote: { _, _, _, _ in fatalError("no copy here") },
@@ -111,14 +111,16 @@ struct NoKeychainTests {
             _ = CLIProfiles.note("claude", email: "me@example.com", workspace: "Example")
             var opened: [URL] = []
             var asked: [String] = []
+            var logins: [String?] = []
             let finish = AsyncStream<String?>.makeStream()
             let moves = LoginMoves.shared
             let beforeOpen = moves.openPage
             defer { moves.openPage = beforeOpen }
             moves.openPage = { opened.append($0) }
             moves.macs = { [] }
-            moves.boxes = { [self] in [box([], signIn: { cli, open in
+            moves.boxes = { [self] in [box([], signIn: { cli, login, open in
                 asked.append(cli)
+                logins.append(login)
                 open(URL(string: "https://claude.ai/oauth/authorize?code=true")!)
                 var said: String?? = nil
                 for await one in finish.stream { said = .some(one); break }
@@ -132,6 +134,8 @@ struct NoKeychainTests {
             moves.move("claude", nil, to: "mybox", fallback: nil)
             while asked.isEmpty || opened.isEmpty { await Task.yield() }
             #expect(asked == ["claude"] && opened.map(\.host) == ["claude.ai"])
+            // Into the box's added account named for this login, never the box's own.
+            #expect(logins == ["me"])
             finish.continuation.yield(nil)
             while moves.line("claude", nil) != nil { await Task.yield() }
             // This Mac's login stays here, unread and not marked moved.
@@ -158,7 +162,7 @@ struct NoKeychainTests {
                 #expect(cli == "claude")
                 here.append(id)
             }
-            moves.boxes = { [self] in [box([], signIn: { _, _ in "no box sign-in for this" })] }
+            moves.boxes = { [self] in [box([], signIn: { _, _, _ in "no box sign-in for this" })] }
             moves.macs = { [] }
             moves.moveBack("claude", nil)
             // Listed here again, and Claude's own sign-in started for it: nothing read or copied.
@@ -194,11 +198,17 @@ struct NoKeychainTests {
         for (name, line) in [
             ("A", "let s = SecItemCopyMatching(q as CFDictionary, &out)"), ("B", "q[kSecClass as String] = kSecClassGenericPassword"),
             ("C", "process.executableURL = URL(fileURLWithPath: \"/usr/bin/security\")"), ("D", "run([\"security\", \"add-generic-password\", \"-s\", s])"),
+            ("F", "shell([\"/bin/sh\", \"-c\", \"security unlock-keychain -p \\(p) login.keychain\"])"), ("G", "run(\"/bin/sh\", [\"-c\", \"list-keychains -d user\"])"),
+            ("H", "let c = URLCredential(user: u, password: p, persistence: .permanent)"), ("I", "URLCredential(user: u, password: p, persistence: .synchronizable)"),
+            ("J", "sh(\"security set-keychain-settings -t 3600\")"),
         ] {
             try line.write(to: fake.appendingPathComponent("Kore/\(name).swift"), atomically: true, encoding: .utf8)
         }
-        try "let ok = kSecGuestAttributeAudit // code signing".write(to: fake.appendingPathComponent("Kore/E.swift"), atomically: true, encoding: .utf8)
-        #expect(Set(try Self.keychainCalls(root: fake.path).map { String($0.prefix(6)) }) == ["Kore/A", "Kore/B", "Kore/C", "Kore/D"])
+        try "let ok = kSecGuestAttributeAudit // code signing\nlet c = URLCredential(user: u, password: p, persistence: .forSession)"
+            .write(to: fake.appendingPathComponent("Kore/E.swift"), atomically: true, encoding: .utf8)
+        #expect(
+            Set(try Self.keychainCalls(root: fake.path).map { String($0.prefix(6)) })
+                == ["Kore/A", "Kore/B", "Kore/C", "Kore/D", "Kore/F", "Kore/G", "Kore/H", "Kore/I", "Kore/J"])
     }
 
     /// `path:line` of each Keychain call in the Mac targets' sources under `root` (kore-host,
@@ -211,7 +221,11 @@ struct NoKeychainTests {
             "AgentTools/KoreAlwaysRule.swift": ["security find-generic-password"],
             "KoreCore/ClaudeSettings.swift": ["oldKeyHelper = \"security find-generic-password"],
         ]
-        let call = try NSRegularExpression(pattern: #"\bSecItem[A-Z]\w*|\bkSec(?!GuestAttribute|CS)\w+|\bSecKeychain\w*|\bSecAccess\w*|\bSecTrustedApplication\w*|/usr/bin/security\b|"security"|(?:add|find|delete)-(?:generic|internet)-password|dump-keychain"#)
+        // Also: a `security` verb inside a shell string (`sh -c "security unlock-keychain"`), a
+        // keychain verb alone, and a URL credential kept past the session (the Keychain holds it).
+        let call = try NSRegularExpression(pattern: #"\bSecItem[A-Z]\w*|\bkSec(?!GuestAttribute|CS)\w+|\bSecKeychain\w*|\bSecAccess\w*|\bSecTrustedApplication\w*|/usr/bin/security\b|"security"|(?:add|find|delete)-(?:generic|internet)-password|dump-keychain"#
+            + #"|\bsecurity\s+[a-z]+(?:-[a-z]+)+\b|\b(?:unlock|lock|create|delete|list|default|login|show)-keychains?\b|\bset-keychain-\w+"#
+            + #"|\.permanent\b|\.synchronizable\b|\bURLCredentialStorage\b"#)
         var found: [String] = []
         let walker = try #require(FileManager.default.enumerator(atPath: root))
         for case let path as String in walker where path.hasSuffix(".swift") && !skipped.contains(where: path.hasPrefix) {

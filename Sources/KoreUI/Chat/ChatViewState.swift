@@ -169,9 +169,13 @@ extension ModeMemory {
     /// Dev runs (any KORE_ hook) and storylines start where a fresh install does, and leave
     /// the owner's choice alone.
     @MainActor static var shared: ModeMemory {
+        if let standIn { return standIn }
         let dev = StoryHost.installed || KoreReach.isDevRun(ProcessInfo.processInfo.environment)
         return ModeMemory(defaults: dev ? nil : .standard)
     }
+
+    /// Tests: the memory new chats read in place of the app's.
+    @MainActor package static var standIn: ModeMemory?
 }
 
 extension AutoCompactMemory {

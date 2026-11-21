@@ -60,6 +60,10 @@ package struct ChatRecord: Codable, Sendable, Equatable {
     package var planAllow: Bool?
     /// Renamed while its CLI slept: the title goes to the CLI's session at its next start.
     package var renamePending: Bool?
+    /// Kore's rename its CLI hasn't taken yet: sent as it starts, and the chat's title until the
+    /// CLI has it (its start-time title, the session's old one, doesn't undo it). Nil in a record
+    /// from before: `title` is sent.
+    package var pendingTitle: String?
     /// A CLI was started for it and hasn't been seen to end.
     package var cliStarted: Bool?
     /// When a client last changed its settings here, ms since 1970: a send back's newer wins.
@@ -144,6 +148,11 @@ package final class HostChat {
     }
     /// What gave way when it was made with carried settings (a login not here, a tier capped).
     package var carriedNote: String?
+    /// The box chats whose agents made it, nearest first, while kore-host runs: none of them
+    /// allows its commands (`Chat.arsenalOrigins`).
+    package var arsenalOrigins: [String] = [] {
+        didSet { chat?.arsenalOrigins = arsenalOrigins }
+    }
     var serverGiven: Bool?
     /// The full grant whose call sent each recent message, by the message's id: a message the CLI
     /// drops goes back to that client's composer (its chat restores it from the log), any other
@@ -360,10 +369,14 @@ package final class HostChat {
         let chat = Chat(
             provider: provider, folder: folderURL, resume: session, fork: fork, modeMemory: ModeMemory(defaults: nil),
             compactMemory: AutoCompactMemory(defaults: nil), services: services)
-        if let mode = record.mode { chat.controls.mode = mode }
+        // Never above Auto here, whatever a record from before says (`LinkPolicy.cappedMode`).
+        if let mode = record.mode { chat.controls.mode = LinkPolicy.cappedMode(mode, provider: provider.id) }
         if provider.planToggle != nil, let on = record.planMode { chat.controls.planMode = on }
         if let on = record.planAllow { chat.controls.planAllow = on }
         chat.copiedFrom = record.copied
+        // Arsenal names it by its box chat id: the origins of the chats it makes, and its own.
+        chat.hostKey = id
+        chat.arsenalOrigins = arsenalOrigins
         // Its name as kept (a rename, a fork's), before its CLI says one.
         if let title = record.title, !title.isEmpty { chat.adoptName(title) }
         chat.backendTap = { [weak self] event in
@@ -512,7 +525,13 @@ package final class HostChat {
         var next = record
         next.session = chat.sessionId ?? next.session
         if next.session != nil { (next.forkFrom, next.forkAt) = (nil, nil) }
-        next.title = chat.status.name ?? next.title
+        if let pending = next.pendingTitle {
+            // A rename the CLI hasn't taken stands over what the CLI says; its echo settles it.
+            next.title = pending
+            if chat.status.name == pending, next.renamePending != true { next.pendingTitle = nil }
+        } else {
+            next.title = chat.status.name ?? next.title
+        }
         next.mode = chat.controls.mode
         if provider.planToggle != nil { next.planMode = chat.controls.planMode }
         // Fast mode as its CLI last said it (a model without it says off, and keeps it for the next).
@@ -558,6 +577,7 @@ package final class HostChat {
     /// when it does).
     func setTitle(_ title: String) {
         record.title = title
+        record.pendingTitle = title.isEmpty ? nil : title
         // With no CLI to take it now, its session is told at the next start.
         if chat == nil, !title.isEmpty { record.renamePending = true }
         chat?.adoptName(title)
@@ -573,15 +593,22 @@ package final class HostChat {
 
     /// A rename kept while the CLI slept reaches its session, once the CLI has started.
     private func renameIfPending() {
-        guard record.renamePending == true, let chat, let title = record.title, !title.isEmpty else { return }
+        guard record.renamePending == true, let chat, let title = record.pendingTitle ?? record.title, !title.isEmpty else { return }
         record.renamePending = nil
         try? saveRecord()
         let backend = chat.connect()
         Task { [weak self] in
             do {
                 try await backend.rename(title)
+                // The CLI has it: the chat's title again, whatever the CLI said at its start.
+                // Unless renamed again meanwhile.
+                guard let self, (self.record.pendingTitle ?? self.record.title) == title else { return }
+                self.record.pendingTitle = nil
+                self.record.title = title
+                self.chat?.adoptName(title)
+                try? self.saveRecord()
             } catch {
-                guard let self, self.record.title == title else { return }
+                guard let self, (self.record.pendingTitle ?? self.record.title) == title else { return }
                 self.record.renamePending = true
                 try? self.saveRecord()
             }

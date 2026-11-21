@@ -42,6 +42,14 @@ interface PickRow {
 }
 
 /**
+ * What holds the picking rows (the chat's list): told when a selection's toolbar opens and when it
+ * closes, so the list holds still under the handles and a row holding a selection isn't redrawn.
+ */
+interface PickWatch {
+    fun picking(v: TextView, on: Boolean)
+}
+
+/**
  * [this] picks ([on]) or not: the system's selection, its toolbar with [TextPick.MESSAGE] for the
  * menu of the row it sits in ([PickRow], looked up when the toolbar opens, so a view built later,
  * a table's cells once its width is known, needs nothing more). Cheap to call on every bind.
@@ -52,8 +60,13 @@ fun TextView.picks(on: Boolean = true) {
 }
 
 private class PickToolbar(private val v: TextView) : ActionMode.Callback {
+    /** The list told this selection opened; told again, the same one, when it closes (the row may be gone by then). */
+    private var watch: PickWatch? = null
+
     override fun onCreateActionMode(mode: ActionMode, m: Menu): Boolean {
         if (row() != null) m.add(Menu.NONE, TextPick.MESSAGE_ID, TextPick.ORDER, TextPick.MESSAGE)
+        watch = up<PickWatch>()
+        watch?.picking(v, true)
         return true
     }
 
@@ -67,12 +80,17 @@ private class PickToolbar(private val v: TextView) : ActionMode.Callback {
         return true
     }
 
-    override fun onDestroyActionMode(mode: ActionMode) = Unit
+    override fun onDestroyActionMode(mode: ActionMode) {
+        watch?.picking(v, false)
+        watch = null
+    }
 
-    private fun row(): ((View) -> Unit)? {
+    private fun row(): ((View) -> Unit)? = up<PickRow>()?.menu
+
+    private inline fun <reified T> up(): T? {
         var at = v.parent
         while (at != null) {
-            if (at is PickRow) return at.menu
+            if (at is T) return at
             at = at.parent
         }
         return null

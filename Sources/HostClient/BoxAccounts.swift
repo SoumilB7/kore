@@ -125,11 +125,12 @@ package final class BoxAccounts {
     /// The CLI's own sign-in on the box, to its end: its page (`open`, once, as it's known: a
     /// Mac's Move of a Claude login opens it here), the code pasted in the box's line, then what
     /// the box says. Nil when it signed in; else why not.
-    package func signInToEnd(_ provider: String, open: (@MainActor (URL) -> Void)? = nil) async -> String? {
+    /// `login`: Claude's sign-in goes to the box's added account of that name, never its default.
+    package func signInToEnd(_ provider: String, login: String? = nil, open: (@MainActor (URL) -> Void)? = nil) async -> String? {
         let failed = "Couldn't sign in on \(NodeNames.name(alias))"
         guard !busy(provider) else { return "It's already signing in on \(NodeNames.name(alias))" }
         set(provider) { $0.step = .starting }
-        let result = await connection.command { HostWire.signIn(id: $0, provider: provider) }
+        let result = await connection.command { HostWire.signIn(id: $0, provider: provider, login: login) }
         guard result.ok else {
             set(provider) { $0.step = .failed(result.message ?? failed) }
             return result.message ?? failed

@@ -6,8 +6,9 @@ import LinkProtocol
 /// was started) and each folder of `~/.config/claude-accounts`, a config folder of its own that
 /// the owner signed in there. A chat runs on one of them (`CLAUDE_CONFIG_DIR` at its CLI's
 /// start); a folder keeps the one its new chats start on. Read only when a client asks (the
-/// Account popup opening), never on a timer: one `claude auth status` per account. Kore never
-/// signs an account in or out here and never reads a token. Before a chat or a usage read runs
+/// Account popup opening), never on a timer: one `claude auth status` per account. Kore signs
+/// in only through Claude's own sign-in, into an added account a Mac names (`signInFolder`);
+/// it never signs one out here and never reads a token. Before a chat or a usage read runs
 /// in an account's folder, the default's chats and settings are linked into it where it has
 /// none (`CLIProfiles.linkShared`): only links are added, its own files are never touched.
 /// Codex keeps its one login on a box.
@@ -144,8 +145,10 @@ package final class HostAccounts {
         case gone(String)
         case moving(String)
         case codexMoving
+        case signInName(String)
         package var errorDescription: String? {
             switch self {
+            case .signInName(let id): "“\(id)” can't be a Claude account's name on this machine."
             case .gone(let id): "The Claude account “\(id)” isn't on this machine any more. Pick another in Account."
             case .moving(let id): "The Claude account “\(id)” is moving to another device. Pick another in Account."
             case .codexMoving: "This box's Codex login is moving to another device. It's back once the move ends."
@@ -169,6 +172,19 @@ package final class HostAccounts {
     /// resumes on any account, and its sessions stay where the box's history reads them.
     private func prepare(_ dir: URL) {
         CLIProfiles.linkShared("claude", into: dir, from: main)
+    }
+
+    /// The folder a Mac's "Sign in on <box>" signs `login` into: an added account of its own
+    /// (`~/.config/claude-accounts/<login>`, made 0700 when missing, the default's shared files
+    /// linked), never the default's: the box's own login is never touched. "main", or a name the
+    /// link can't carry, is refused.
+    package func signInFolder(_ login: String) throws -> URL {
+        guard login != LinkAccount.main, !login.hasPrefix("."), LinkPolicy.plainID(login) else { throw Failure.signInName(login) }
+        if paused(login) { throw Failure.moving(login) }
+        let dir = root.appendingPathComponent(login, isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+        prepare(dir)
+        return dir
     }
 
     /// One account's plan and limits.

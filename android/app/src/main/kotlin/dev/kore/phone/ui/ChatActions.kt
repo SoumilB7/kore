@@ -193,9 +193,11 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         contentDescription = "Attach"
         pressFill(null, Tone.l2, 18)
         setOnClickListener {
-            val caps = Offers.caps(link()?.welcome?.value)
-            val box = link()?.device?.value?.kind == dev.kore.link.trust.NodeKind.BOX
-            Offers.uploadsOff(caps, control = "history" in caps || !box, box = box, name = link()?.name ?: "there")?.let { quiet(it) } ?: chooseAttachment()
+            val l = link()
+            val caps = activity.kore.mesh.caps(l)
+            val box = l?.device?.value?.kind == dev.kore.link.trust.NodeKind.BOX
+            Offers.uploadsOff(caps, control = "history" in caps || !box, box = box, name = l?.name ?: "there", welcomed = l?.welcome?.value != null)
+                ?.let { quiet(it) } ?: chooseAttachment()
         }
     }
     /** The attachments, inside the composer above the field: 52 thumbnails, 8 apart. */
@@ -349,9 +351,15 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     /** A message went: the transcript goes to its end and follows it. */
     var sent: () -> Unit = {}
 
-    /** What a send carried, so one that expired offline can be sent again with a tap. */
-    private val sentText = HashMap<String, String>()
-    private var retryText: String? = null
+    /**
+     * What each send carried until its result: on any failure the text and files go back to the
+     * composer ([SendRecovery]); [retried] once their files were uploaded again; [atReset] a
+     * send at the plan limit's reset.
+     */
+    private class Outgoing(val text: String, val files: List<Attachment>, val atReset: Boolean = false, val retried: Boolean = false)
+    private val outgoing = HashMap<String, Outgoing>()
+    /** A failed message is back in the composer: a tap on the status line sends it again. */
+    private var retryable = false
 
     fun render(chat: JsonObject?, snapshot: JsonObject? = this.snapshot) {
         this.chat = chat
@@ -409,29 +417,89 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     fun result(r: JsonObject) {
         val id = r.str("id") ?: return
         val kind = pending.remove(id) ?: return
+        val out = outgoing.remove(id)
+        if (out != null && !r.bool("ok")) return failed(out, r)
         if (kind in CONTROL) return controlResult(kind, r)
-        val text = sentText.remove(id)
-        retryText = null
         if (r.bool("ok")) {
             note = if (kind == "send") "✓ Sent" else ""
             showStatus()
             if (note.isNotEmpty()) status.postDelayed({ if (note == "✓ Sent") { note = ""; showStatus() } }, 1500)
             return
         }
-        if (r.str("code") == "expired" && text != null) {
-            retryText = text
-            note = "Not sent: connection lost. Tap to retry."
-            showStatus()
-            return
-        }
-        note = when (r.str("code")) {
-            "denied.sendCap" -> "This chat only takes messages on the Mac."
-            "denied.raiseMode" -> r.str("message") ?: "That needs your fingerprint first."
-            "stale.card", "gone.card" -> "That card changed. Look again."
-            "rateLimited" -> "Too fast. Try again in a moment."
-            else -> deviceWords(r.str("message"))?.let { "Not sent: $it" } ?: "Not sent (${r.str("code") ?: "refused"})."
-        }
+        val l = link()
+        note = if (kind == "answer") answerWords(r.str("code"), r.str("message"), l?.name ?: "the device", l?.device?.value?.kind == dev.kore.link.trust.NodeKind.BOX)
+            else sendWords(r.str("code"), r.str("message"))
         showStatus()
+    }
+
+    /** A message that didn't go: its files uploaded again once when the device lost them, else it's back in the composer. */
+    private fun failed(out: Outgoing, r: JsonObject) {
+        val code = r.str("code")
+        when (SendRecovery.step(false, code, out.files.isNotEmpty(), out.retried)) {
+            SendRecovery.Step.Reupload -> reupload(out)
+            else -> restore(out, SendRecovery.line(code, r.str("message"), link()?.name ?: "the device"))
+        }
+    }
+
+    /** The message's text and files back in the composer, before anything typed since, with [line] under it. */
+    private fun restore(out: Outgoing, line: String) {
+        val typed = field.text.toString()
+        val text = SendRecovery.restored(out.text, typed)
+        if (text != typed) {
+            // Typing, as far as the draft goes: the device's draft gets the text back too.
+            field.setText(text)
+            field.setSelection(text.length)
+        }
+        attachments.addAll(0, out.files.filter { it !in attachments })
+        showChips()
+        note = line
+        retryable = true
+        showStatus()
+    }
+
+    /**
+     * The device lost the message's uploads (a new connection): each file read again from where
+     * it was picked and uploaded, then the message sent once more; any file that can't go keeps
+     * the whole message in the composer.
+     */
+    private fun reupload(out: Outgoing) {
+        quiet("Sending the files again…")
+        val resolver = activity.contentResolver
+        activity.kore.scope.launch {
+            val ids = ArrayList<String>()
+            var why: String? = null
+            for (a in out.files) uploading.withLock {
+                if (why != null) return@withLock
+                val read = runCatching { Uploads.read(resolver, a.uri, resolver.getType(a.uri) ?: "application/octet-stream") }.getOrNull()
+                    ?: run { why = Uploads.unread(); return@withLock }
+                val r = runCatching { link()?.uploadResult(read.name ?: a.name, read.mime, read.bytes) }.getOrNull()
+                val id = r?.takeIf { it.bool("ok") }?.str("blobId") ?: run { why = Uploads.refused(r?.str("code"), r?.str("message")); return@withLock }
+                Uploads.budget.spend(read.bytes.size.toLong(), System.currentTimeMillis())
+                ids += id
+            }
+            activity.runOnUiThread {
+                val l = link()
+                when {
+                    why != null -> restore(out, SendRecovery.line("upload", why, l?.name ?: "the device"))
+                    l == null -> restore(out, SendRecovery.line("offline", null, "the device"))
+                    else -> {
+                        out.files.zip(ids).forEach { (a, id) -> a.blobId = id }
+                        dispatch(l, Outgoing(out.text, out.files, out.atReset, retried = true))
+                    }
+                }
+            }
+        }
+    }
+
+    /** Sends [out] (a message, or one for the reset) and keeps it until its result. */
+    private fun dispatch(l: NodeClient, out: Outgoing) {
+        val blobs = out.files.mapNotNull { it.blobId }
+        val id = if (out.atReset) l.command(dev.kore.link.node.Control.sendAtReset(chatId, out.text, blobs)) else l.send(chatId, out.text, blobs)
+        pending[id] = if (out.atReset) "sendAtReset" else "send"
+        outgoing[id] = out
+        if (out.atReset) return
+        sent()
+        quiet(if (id in l.queued.value) "⟳ Waiting for the connection, sends when it's back" else "Sending…")
     }
 
     /** Something to send: typed text, or an attachment. */
@@ -475,21 +543,13 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
 
     private fun quiet(text: String) {
         note = text
-        retryText = null
+        retryable = false
         showStatus()
     }
 
-    /** The status line, tapped after a send expired offline: send that text again. */
+    /** The status line, tapped under a message that didn't go (it's back in the composer): send it again. */
     private fun retry() {
-        val text = retryText ?: return
-        val l = link() ?: return quiet("Not connected")
-        val id = l.send(chatId, text)
-        sent()
-        pending[id] = "send"
-        sentText[id] = text
-        retryText = null
-        note = if (id in l.queued.value) "⟳ Waiting for the connection, sends when it's back" else "Sending…"
-        showStatus()
+        if (retryable && hasSomething) send()
     }
 
     private fun send() {
@@ -497,20 +557,16 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         if ((text.isEmpty() && attachments.isEmpty()) || !canSend) return
         val l = link() ?: return quiet("Not connected")
         if (attachments.any { it.blobId == null && !it.failed }) return quiet("Waiting for the attachments to upload…")
-        val blobs = attachments.mapNotNull { it.blobId }
+        val files = attachments.filter { it.blobId != null }
         showingDraft = true
         field.setText("")
         showingDraft = false
         attachments.clear()
         showChips()
-        val id = l.send(chatId, text, blobs)
-        sent()
+        dispatch(l, Outgoing(text, files))
         // Sent: the draft goes everywhere (after the message, so it never goes first).
         drafts.sent(clock())
         scheduleDraft()
-        pending[id] = "send"
-        sentText[id] = text
-        quiet(if (id in l.queued.value) "⟳ Waiting for the connection, sends when it's back" else "Sending…")
     }
 
     // Attachments: picked with the system's own pickers, uploaded at once, sent with the message.
@@ -524,10 +580,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     private var shot: Uri? = null
 
     /** What the Mac side offers this link (welcome `caps`): "blob" for uploads, "commands" for the "/" list. */
-    private fun hasCap(name: String): Boolean {
-        val caps = link()?.welcome?.value?.get("caps") as? kotlinx.serialization.json.JsonArray ?: return false
-        return caps.any { (it as? kotlinx.serialization.json.JsonPrimitive)?.content == name }
-    }
+    private fun hasCap(name: String): Boolean = name in activity.kore.mesh.caps(link())
 
     /** The Attach sheet (spec §6): three tiles, Photos, Camera and File, and the size limit under them. */
     private fun chooseAttachment() {
@@ -1012,13 +1065,14 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         val text = field.text.toString().trim()
         if (text.isEmpty()) return quiet("Write the message that goes at the reset.")
         if (attachments.any { it.blobId == null && !it.failed }) return quiet("Waiting for the attachments to upload…")
-        val blobs = attachments.mapNotNull { it.blobId }
+        val l = link() ?: return quiet("Not connected")
+        val files = attachments.filter { it.blobId != null }
         showingDraft = true
         field.setText("")
         showingDraft = false
         attachments.clear()
         showChips()
-        run("sendAtReset", dev.kore.link.node.Control.sendAtReset(chatId, text, blobs))
+        dispatch(l, Outgoing(text, files, atReset = true))
         drafts.sent(clock())
         scheduleDraft()
     }

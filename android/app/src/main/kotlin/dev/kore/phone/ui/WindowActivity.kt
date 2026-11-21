@@ -25,7 +25,7 @@ class WindowActivity : NodeActivity() {
     private var more: android.view.View? = null
     private val isBox get() = link?.device?.value?.kind == dev.kore.link.trust.NodeKind.BOX
     /** What the device says it does (groups and boards are a Mac's). */
-    private fun caps(): Set<String> = Offers.caps(link?.welcome?.value)
+    private fun caps(): Set<String> = kore.mesh.caps(link)
 
     override fun body(): View {
         more = barButton(barTitle, "⋮", "More") { windowSheet() }.apply { visibility = View.GONE }

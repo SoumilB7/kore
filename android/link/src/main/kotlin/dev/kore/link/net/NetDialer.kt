@@ -53,8 +53,9 @@ class NetDialer(
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (e: NetFailure) {
-                    // It answered as this Mac (the challenge named it) and said no: that's the word.
-                    if (e.reason.startsWith("bye ")) throw e
+                    // It answered as this Mac (the challenge named it) and said no, or proved itself
+                    // with another key (Kore 0.3.7 made a new one: pair again): that's the word.
+                    if (e.reason.startsWith("bye ") || e.reason == NetControl.Companion.Reason.KEY_CHANGED) throw e
                 } catch (e: Exception) {
                     // Not Kore there, or not this Mac: the next.
                 }

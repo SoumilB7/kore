@@ -97,6 +97,29 @@ struct BoxStateSyncTests {
         chat.close()
     }
 
+    /// The box's CLI runs a turn of its own and a message sent meanwhile waits: this tab holds
+    /// no entry at all when the box puts the chat to sleep. The turn's end still reaches it and
+    /// ends the turn (it once trapped: the turn's place read as entry -1).
+    @Test func aTurnEndingOnATabWithNoEntriesEndsIt() async throws {
+        let rig = try BoxRig()
+        defer { rig.finish() }
+        let (connection, chat, backend) = await open(rig)
+        defer { connection.release() }
+        #expect(await until { chat.controls.models.count == 2 })
+        let id = try #require(backend()?.chatId)
+        let hc = try #require(rig.host.chat(id))
+        rig.cli.holdsQueued = true
+        rig.cli.sink.yield(.turnStarted("t0", origin: .cli, at: .now))
+        #expect(await until { chat.status.isRunning && hc.running })
+        #expect(chat.sendFromLink("after this"))
+        #expect(await until { hc.chat?.queuedCount == 1 && rig.cli.calls.contains { $0.hasPrefix("send after this") } })
+        #expect(chat.transcriptView.entries.isEmpty)
+        rig.host.sleep(hc)
+        #expect(await until { chat.draft == "after this" && !chat.status.isRunning && !chat.isBusy })
+        #expect(chat.transcriptView.entries.isEmpty)
+        chat.close()
+    }
+
     @Test func theCLIsEndClearsCardsHereButARestKeepsThePlan() async throws {
         let rig = try BoxRig()
         defer { rig.finish() }

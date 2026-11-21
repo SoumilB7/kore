@@ -494,6 +494,8 @@ extension HostDaemon {
         }
         _ = boxArsenal.news[hc.id, default: RateLimiter(limit: ArsenalRules.newPerHour, per: 3600)].take()
         boxArsenal.made[hc.id, default: []].append(made.id)
+        // Made by this chat (and so by whatever made it): it never allows commands there.
+        made.arsenalOrigins = [hc.id] + hc.arsenalOrigins.filter { $0 != hc.id }
         var message = "Opened a \(provider.name) chat."
         if plan || !(args.text ?? "").isEmpty {
             if let chat = live(made) {

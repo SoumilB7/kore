@@ -118,4 +118,52 @@ class FollowEndTest {
         assertFalse(f.laidOut(700))
         assertFalse(f.jump)
     }
+
+    /** Text picked while following: the list holds still under the handles until the toolbar closes, then settles. */
+    @Test fun aSelectionHoldsTheListUntilItsToolbarCloses() {
+        val f = FollowEnd(near)
+        f.picked(true)
+        assertTrue(f.holding)
+        // A streaming answer grows below: nothing moves under the selection.
+        assertFalse(f.laidOut(300))
+        assertFalse(f.laidOut(600))
+        // Not the reader's scroll: following isn't lost.
+        f.scrolled(600)
+        assertTrue(f.following)
+        assertFalse(f.jump)
+        f.picked(false)
+        assertFalse(f.holding)
+        // Closed: the next settle goes back to the end.
+        assertTrue(f.laidOut(600))
+    }
+
+    /** A finger lifted while text is still picked doesn't settle the list onto the end. */
+    @Test fun aScrollEndingDuringASelectionStaysPut() {
+        val f = FollowEnd(near)
+        f.picked(true)
+        f.touched(); f.scrolled(20)
+        assertFalse(f.released(20))
+        assertTrue(f.holding)
+        assertFalse(f.laidOut(200))
+        f.picked(false)
+        assertTrue(f.laidOut(200))
+    }
+
+    /** Reading above, the reader's own "Worked · N steps" opened below isn't "↓ New"; real growth still is. */
+    @Test fun theReadersOwnFoldIsntNew() {
+        val f = FollowEnd(near)
+        f.touched(); f.scrolled(800); f.released(800)
+        assertFalse(f.following)
+        f.ownChange()
+        assertFalse(f.laidOut(1400))
+        assertFalse(f.jump)
+        // Closed again: less below, still not new.
+        f.ownChange()
+        assertFalse(f.laidOut(800))
+        assertFalse(f.jump)
+        // Then the answer grows: that is.
+        assertFalse(f.laidOut(900))
+        f.cameBelow()
+        assertTrue(f.jump)
+    }
 }

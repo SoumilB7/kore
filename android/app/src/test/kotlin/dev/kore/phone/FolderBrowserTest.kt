@@ -114,6 +114,41 @@ class FolderBrowserTest {
         assertNull(old.path)
     }
 
+    @Test fun openHereWaitsWhileAnotherFolderIsRead() {
+        val b = FolderBrowser()
+        assertFalse(b.canOpen)
+        b.go(null)
+        b.listed(null, listing("/home/u", "Code"))
+        assertTrue(b.canOpen)
+        assertTrue(b.go(b.into("Code")))
+        // Still showing the home while Code is read: Open here would open the wrong folder.
+        assertEquals("/home/u", b.path)
+        assertFalse(b.canOpen)
+        b.listed("/home/u/Code", listing("/home/u/Code"))
+        assertTrue(b.canOpen)
+    }
+
+    @Test fun aFailedHomeReadOffersRetryAndStartsClean() {
+        val b = FolderBrowser()
+        b.go(null)
+        assertFalse(b.failedFirst)
+        b.listed(null, o("""{"ok":false,"code":"busy","message":"Busy there."}"""))
+        assertTrue(b.failedFirst)
+        assertFalse(b.unsupported)
+        assertFalse(b.canOpen)
+        assertNull(b.home)
+        // Retry asks for the home again.
+        assertTrue(b.go(null))
+        assertFalse(b.failedFirst)
+        b.listed(null, listing("/home/u", "Code"))
+        assertEquals("/home/u", b.path)
+        assertFalse(b.failedFirst)
+        // A later refusal isn't a failed first read.
+        b.go(b.into("Code"))
+        b.listed("/home/u/Code", o("""{"ok":false,"code":"denied.path"}"""))
+        assertFalse(b.failedFirst)
+    }
+
     @Test fun keepsABoundedNumberOfFolders() {
         val b = FolderBrowser()
         b.go(null)

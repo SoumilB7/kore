@@ -2,6 +2,7 @@ package dev.kore.phone
 
 import dev.kore.link.node.NodeMachine
 import dev.kore.link.node.NodeMachine.State
+import dev.kore.phone.ui.answerWords
 import dev.kore.phone.ui.arsenalTint
 import dev.kore.phone.ui.awayFact
 import dev.kore.phone.ui.awayLine
@@ -17,6 +18,13 @@ import org.junit.Test
 
 /** The one-line words screens show for a device's state and a refused command. */
 class WordsTest {
+    /** Allow on a risky card refused by a box that still wants the fingerprint the phone no longer gives. */
+    @Test fun anAnswerRefusedForAFingerprintSaysWhereToAllowIt() {
+        assertEquals("Allow this on mybox, or update kore-host there.", answerWords("denied.raiseMode", "Allowing this takes your fingerprint.", "mybox", box = true))
+        assertEquals("Allow this on MacBook, or update Kore there.", answerWords("denied.raiseMode", null, "MacBook", box = false))
+        assertEquals("That card changed. Look again.", answerWords("stale.card", null, "mybox", box = true))
+    }
+
     @Test fun lastSeen() {
         val now = 10_000_000_000L
         assertEquals(null, lastSeenWords(null, now))

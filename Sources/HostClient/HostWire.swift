@@ -159,7 +159,12 @@ package enum HostWire {
     /// The id of a sign-in's ending: its command's id and this.
     package static let doneSuffix = ":done"
 
-    package static func signIn(id: String, provider: String) -> Data { command(id: id, type: "account.signIn", ["provider": provider]) }
+    /// `login`: the added account a Mac's "Sign in on <box>" signs in to (never the box's default).
+    package static func signIn(id: String, provider: String, login: String? = nil) -> Data {
+        var args: [String: Any] = ["provider": provider]
+        if let login { args["login"] = login }
+        return command(id: id, type: "account.signIn", args)
+    }
     package static func submit(id: String, provider: String, input: String) -> Data {
         command(id: id, type: "account.submit", ["provider": provider, "serial": 0, "input": input])
     }

@@ -167,44 +167,68 @@ private struct CopyBelow<Block: View>: View {
     }
 }
 
-/// Copy inside a block's bottom-right corner, shown on hover over it, on a small chip of the
-/// page's ground so the row under it stays readable: it takes no room, so the block's height is
-/// the same with it or without (a row kept under a table moved the reader to a chat's end on a
-/// quick resize). A press on it is the button's, not a selection of the text under it; a drag
-/// across the block still selects. Zoomed in and panned, it comes in to the visible edge.
-private struct CopyInCorner<Block: View>: View {
+/// Copy by a block's top-right corner, outside it, shown on hover over it: beside the corner in
+/// the page's margin when there's room there, else just above the block's top edge, so it never
+/// covers the block's text (a short table's header was under it). It hangs outside the block and
+/// takes no room, so the block's height is the same with it or without (a row kept under a table
+/// moved the reader to a chat's end on a quick resize). Only the chip takes clicks: a press on it
+/// is the button's, not a selection; a drag from anywhere else still selects. Its reach meets the
+/// block's edge, so the pointer going onto it never leaves both. Zoomed in and panned, it comes
+/// in to the visible edge, above the block.
+private struct CopyByCorner<Block: View>: View {
     let id: StoryID
     let text: () -> String
     @ViewBuilder let block: Block
     @Environment(\.transcriptSelection) private var selection
     @StateObject private var hovered = Local(false)
+    /// The pointer on the chip itself.
+    @StateObject private var held = Local(false)
     @StateObject private var copied = Local(false)
     @StateObject private var past = Local(CGFloat(0))
+    /// The visible page's room right of the block, read while the chip shows.
+    @StateObject private var room = Local(CGFloat(0))
 
     var body: some View {
+        let shown = hovered.value || held.value
         block
-            .overlay(alignment: .bottomTrailing) {
-                if hovered.value {
-                    IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy") {
-                        copyToBoard(text, copied)
-                    }
-                    .background(Theme.background, in: RoundedRectangle(cornerRadius: Radius.chip))
-                    .storyID(id.part(.copy))
-                    // Its frame is the selection's to leave alone: a press here copies.
-                    .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TranscriptSelection.space)) } action: { [selection, raw = id.raw] in
-                        selection?.blocker(raw, $0)
-                    }
-                    .onDisappear { [selection, raw = id.raw] in selection?.blocker(raw, nil) }
-                    .padding(Space.xs)
-                    .padding(.trailing, past.value)
-                }
+            .overlay(alignment: .topTrailing) {
+                if shown { chip }
             }
             // Read only while the button shows: nothing per scroll or frame otherwise.
-            .background(VisibleRightEdge(active: hovered.value, keep: Size.MessageActions.row * 2) { if past.value != $0 { past.value = $0 } })
+            .background(
+                VisibleRightEdge(active: shown, keep: Size.MessageActions.row * 2, room: { if room.value != $0 { room.value = $0 } }) {
+                    if past.value != $0 { past.value = $0 }
+                }
+            )
             .onHover { hovered.value = $0 }
             .storyID(id)
             .storyAction(id.part(.hover)) { hovered.value = true }
             .accessibilityActions { Button("Copy") { copyToBoard(text, copied) } }
+    }
+
+    private var chip: some View {
+        let size = Size.MessageActions.button
+        // Where the button's own reach ends: the gap between it and the block.
+        let gap = HitTarget.reach(width: size, height: size).leading
+        let beside = past.value == 0 && room.value >= size + gap
+        return IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy") {
+            copyToBoard(text, copied)
+        }
+        .background(Theme.background, in: RoundedRectangle(cornerRadius: Radius.chip))
+        .storyID(id.part(.copy))
+        // Its frame is the selection's to leave alone: a press here copies.
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named(TranscriptSelection.space)) } action: { [selection, raw = id.raw] in
+            selection?.blocker(raw, $0)
+        }
+        .onDisappear { [selection, raw = id.raw] in selection?.blocker(raw, nil) }
+        .onHover { held.value = $0 }
+        // Hung off the overlay's top-right point by frames of no size, so it lays out (and takes
+        // clicks) where it shows. Beside: its left edge past the block's right one, tops level.
+        // Above: its bottom over the block's top, right edges level (or in at the visible edge).
+        .padding(beside ? .leading : .bottom, gap)
+        .padding(.trailing, beside ? 0 : past.value)
+        .frame(width: beside ? 0 : nil, alignment: .leading)
+        .frame(height: beside ? nil : 0, alignment: .bottom)
     }
 }
 
@@ -228,18 +252,22 @@ private func copyToBoard(_ text: () -> String, _ copied: Local<Bool>) {
 private struct VisibleRightEdge: NSViewRepresentable {
     let active: Bool
     let keep: CGFloat
+    /// The visible page right of the view's edge (0 when there's none), besides.
+    var room: ((CGFloat) -> Void)? = nil
     let past: (CGFloat) -> Void
 
     func makeNSView(context: Context) -> Probe { Probe() }
     func updateNSView(_ view: Probe, context: Context) {
         view.keep = keep
         view.report = past
+        view.reportRoom = room
         view.active = active
     }
 
     final class Probe: NSView {
         var keep: CGFloat = 0
         var report: (CGFloat) -> Void = { _ in }
+        var reportRoom: ((CGFloat) -> Void)?
         var active = false {
             didSet {
                 guard active != oldValue else { return }
@@ -283,6 +311,7 @@ private struct VisibleRightEdge: NSViewRepresentable {
         private func measure() {
             guard active, let scroll = enclosingScrollView, let document = scroll.documentView else {
                 report(0)
+                reportRoom?(0)
                 return
             }
             let edge = convert(bounds, to: document).maxX
@@ -291,6 +320,8 @@ private struct VisibleRightEdge: NSViewRepresentable {
             let rail = (Size.railWidth + Size.railInset) / max(scroll.magnification, 1)
             let visible = scroll.documentVisibleRect.maxX - (edge > scroll.documentVisibleRect.maxX - rail ? rail : 0)
             report(max(0, min(edge - visible, bounds.width - keep)).rounded())
+            // Room beside it stops short of the rail wherever the rail is.
+            reportRoom?(max(0, scroll.documentVisibleRect.maxX - rail - edge).rounded(.down))
         }
 
     }
@@ -382,8 +413,8 @@ private struct MarkdownListView: View {
 }
 
 /// A table: 1pt rules around every cell (the grid's spacing over a rule-coloured ground), bold
-/// centred header, and sideways scrolling when wider than the column. Copy in its bottom-right
-/// corner on hover (`CopyInCorner`, no room kept) takes exactly what a drag across all of it copies
+/// centred header, and sideways scrolling when wider than the column. Copy by its top-right
+/// corner on hover (`CopyByCorner`, outside it, no room kept) takes exactly what a drag across all of it copies
 /// (its cells split by tabs, a row a line).
 private struct MarkdownTableView: View {
     let table: MarkdownTable
@@ -392,7 +423,7 @@ private struct MarkdownTableView: View {
     private var columns: Int { max(table.header.count, table.rows.map(\.count).max() ?? 0) }
 
     var body: some View {
-        CopyInCorner(id: StoryID.Transcript.table(path), text: { [table] in table.copyText(markdown: false) }) { grid }
+        CopyByCorner(id: StoryID.Transcript.table(path), text: { [table] in table.copyText(markdown: false) }) { grid }
             // Rows as tall as their text: cells fill their row, not the height on offer.
             .fixedSize(horizontal: false, vertical: true)
             .frame(maxWidth: .infinity, alignment: .leading)

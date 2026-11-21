@@ -398,7 +398,7 @@ extension DevicesPicture {
     static func boxStatus(_ box: BoxFacts) -> DeviceRow.Status {
         if box.online { return box.older ? .needsUpdate : .connected }
         switch box.refused {
-        case .auth?: return .needsAllow
+        case .auth?, .oldKey?: return .needsAllow
         case .version?: return .needsUpdate
         case .replaced?, .paused?: return .offline
         case nil: break

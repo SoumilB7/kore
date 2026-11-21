@@ -749,6 +749,8 @@ extension HostDaemon {
                 let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
                 hc.setTitle(title)
                 try await backend.rename(title)
+                // A CLI started for it said its session's old title first: the CLI has this one now.
+                chat.adoptName(title)
                 hc.noted(chat)
             case .stopAgent(let id):
                 await backend.stopAgent(id)
@@ -774,10 +776,9 @@ extension HostDaemon {
                 try await backend.start()
                 return ok(Self.value(try await backend.forkAtEnd()))
             case .rollback(let message, let text):
-                try await backend.start()
-                let left = try await backend.rollback(message: message, text: text)
-                // Its log starts again from there (`HostServices.rolledBack`).
-                chat.adoptRollback(left.events, more: left.more)
+                // The box chat's own one-at-a-time rollback: a phone's message sent meanwhile
+                // waits for it. Its log starts again from there (`HostServices.rolledBack`).
+                let left = try await chat.rollBackForwarded(message: message, text: text)
                 var value = CallValue()
                 value.events = left.events
                 value.more = left.more

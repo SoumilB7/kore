@@ -60,11 +60,39 @@ struct RenameCommandTests {
         try await until { made.last.calls.contains("rename Release notes") }
         #expect(chat.title == "Release notes" && chat.draft.isEmpty)
         #expect(!made.last.calls.contains { $0.hasPrefix("send") })
-        // No name: the usage line, kept in the composer, nothing renamed or sent.
+        // No name: the usage line, "/rename " left for the name, nothing renamed or sent.
         chat.draft = "/rename  "
         chat.send()
-        #expect(chat.draft == "/rename  " && chat.title == "Release notes")
+        #expect(chat.draft == "/rename " && chat.title == "Release notes")
         #expect(made.last.calls.filter { $0.hasPrefix("rename") || $0.hasPrefix("send") } == ["rename Release notes"])
+        // In the chip: the chip stays, nothing typed.
+        (chat.command, chat.draft) = (.rename, " ")
+        chat.send()
+        #expect(chat.command == .rename && chat.draft.isEmpty)
+        // "/rename" typed again after the one left: the one command, never a message.
+        (chat.command, chat.draft) = (nil, "/rename/rename Twice")
+        chat.send()
+        try await until { made.last.calls.contains("rename Twice") }
+        #expect(chat.title == "Twice" && chat.draft.isEmpty && !made.last.calls.contains { $0.hasPrefix("send") })
+    }
+
+    @Test func aTypedRenameIsReadOnce() {
+        #expect(SlashCommand.renameArgument("/rename x") == "x")
+        #expect(SlashCommand.renameArgument("/rename/rename x") == "x")
+        #expect(SlashCommand.renameArgument("/rename/rename") == "")
+        #expect(SlashCommand.renameArgument("/renamed x") == nil)
+        #expect(SlashCommand.renameArgument("/rename/x") == nil)
+    }
+
+    /// The "/" menu offers /rename whatever the CLI listed, or before it lists anything.
+    @Test func theMenuOffersRenameWhateverTheCLIListed() throws {
+        for provider in ["claude", "codex"] {
+            let controls = ControlsStore(provider: try #require(Registry.provider(provider)), memory: ModeMemory(defaults: nil))
+            #expect(controls.commands.isEmpty && controls.offered.map { $0.name } == ["rename"])
+            let review = SlashCommand(name: "review", description: "", hint: "", kind: .command)
+            controls.apply(.controlsLoaded(ChatControls(models: [], model: nil, effort: nil, commands: [review])))
+            #expect(controls.commands.map { $0.name } == ["review"] && controls.offered.map { $0.name } == ["review", "rename"])
+        }
     }
 
     /// A phone (ask) on a sleeping box chat: renamed without waking the CLI, which takes the

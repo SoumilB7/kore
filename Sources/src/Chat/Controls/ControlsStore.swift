@@ -30,7 +30,11 @@ package final class ControlsStore {
     /// Why the CLI can't offer it at all; nil when it can, or can't say yet.
     package private(set) var remoteUnavailable: String?
     package var remoteChanging = false
+    /// The "/" commands as the CLI listed them (kept with a box's chat as they are).
     package private(set) var commands: [SlashCommand] = []
+    /// The "/" menu's commands: the CLI's, and Kore's /rename whenever the chat's provider takes
+    /// it, whatever the CLI listed (or before it has listed anything).
+    package var offered: [SlashCommand] { provider.renames ? SlashCommand.withRename(commands) : commands }
     /// Who changed the mode last, when it was the agent ("Claude", a sub-agent's name); nil
     /// once the user sets it. The pill's help says so.
     package var changedBy: String?

@@ -19,6 +19,8 @@ extension HostDaemon {
             return done
         }
         guard let hc = args.chatId.flatMap(chat) else { return fail(.goneChat, "No such chat on this box.") }
+        // A chat being moved, or held by a Mac, changes only there (`apply` says so first too).
+        if let refusal = Self.held(hc) { return fail(refusal.code, refusal.message) }
         defer { broadcast(chats: [hc]) }
         switch kind {
         case .chatRename:
@@ -74,10 +76,13 @@ extension HostDaemon {
             return nil
         case .chatRollback:
             guard let chat = live(hc) else { return fail(.busy, "Too many CLIs are running on this box.") }
-            guard !chat.isBusy else { return fail(.busy, "A turn is running. Stop it, then go back.") }
+            guard !chat.isBusy else { return fail(.busy, Chat.rollbackBusy) }
+            guard !chat.isRollingBack else { return fail(.busy, Chat.rollbackUnderway) }
             Task {
                 await chat.startOnce()
                 guard let entry = entry(args.entryId ?? "", in: hc, chat) else { return reply(fail(.invalid, "No message to go back to there.")) }
+                // One at a time with a Mac's (`Chat.rollBackForwarded`), whichever came first.
+                guard !chat.isRollingBack, !chat.isBusy else { return reply(fail(.busy, chat.isBusy ? Chat.rollbackBusy : Chat.rollbackUnderway)) }
                 if args.after == true { chat.rollBack(after: entry) } else { chat.rollBack(entry) }
                 reply(done)
             }

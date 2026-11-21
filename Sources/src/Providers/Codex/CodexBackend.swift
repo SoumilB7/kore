@@ -989,6 +989,14 @@ package final class CodexBackend: ChatBackend {
     /// the reverted turns started and still runs (terminals that outlived them, child threads)
     /// stops first: it would go on into a history that no longer has it.
     package func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
+        // One at a time (two devices at once): each reverts the thread as the one before left it.
+        try await rollbacks.run { [self] in try await revert(message: id, text: text) }
+    }
+
+    /// Rollbacks in the order asked (`rollback`).
+    private let rollbacks = OneAtATime()
+
+    private func revert(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
         try await start()
         guard let session, let thread = sessionId else { throw ForkError.notSaved }
         let found = try await locate(session, thread, id: id, text: text)

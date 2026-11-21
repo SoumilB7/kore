@@ -193,7 +193,11 @@ extension Workspace {
             }
         }
         if let effort = settings.effort { chat.launchEffort = effort }
-        if let mode = settings.mode, chat.provider.modes.contains(where: { $0.id == mode }) { chat.setMode(mode, remember: false) }
+        // The mode it had where it was; from a box, no higher than a box runs one (Auto). Never the
+        // one last picked on this Mac: a chat brought here isn't raised by coming.
+        let known = settings.mode.flatMap { mode in chat.provider.modes.contains { $0.id == mode } ? mode : nil }
+        let mode = known.map { landing.alias.isEmpty ? $0 : LinkPolicy.cappedMode($0, provider: chat.provider.id) } ?? chat.provider.modes[0].id
+        if mode != chat.controls.mode { chat.setMode(mode, remember: false) }
         if let fast = settings.fast { chat.launchFastMode = fast }
         if chat.provider.planToggle != nil, let plan = settings.plan, plan != chat.controls.planMode { chat.setPlanMode(plan) }
         if let allow = settings.planAllow, allow != chat.controls.planAllow { chat.setPlanAllow(allow) }

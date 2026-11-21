@@ -393,7 +393,7 @@ package final class Workspace {
         guard let provider = Registry.provider(id) else { return nil }
         let tab = ChatTab()
         let chat = Chat(provider: provider, folder: folder)
-        chat.setMode(provider.modes[0].id, remember: false)
+        Self.linkStarts(chat)
         tab.chat = chat
         tabs.append(tab)
         return chat
@@ -731,9 +731,11 @@ package final class Workspace {
         }
     }
 
-    /// The question's Yes.
+    /// The question's Stop: closes at once. (Only the × and ⌘W wait out a double click's time: the
+    /// question's Cancel is where the × was, Stop isn't.)
     func confirmClose() {
         guard let closing, let tab = tabs.first(where: { $0.id == closing.tab }) else { return }
+        self.closing = CloseAsk(tab: closing.tab, window: closing.window, at: -.infinity)
         requestClose(tab, window: closing.window)
     }
 
@@ -1323,6 +1325,9 @@ package final class Workspace {
             var board: SavedBoard? = nil
             /// The tab group it's in.
             var group: UUID? = nil
+            /// When its chat's settings last changed here (`Chat.settingsChangedAt`): a box chat
+            /// held here says on its send back whether they changed since it came, after a relaunch too.
+            var settingsAt: Date? = nil
         }
 
         struct Closed: Codable, Equatable {
@@ -1355,6 +1360,7 @@ package final class Workspace {
                 } else if let chat = tab.chat {
                     let resumable = chat.hasConversation ? chat.listedId : nil
                     saved = Saved.Tab(provider: chat.provider.rawValue, session: resumable, title: resumable.map { _ in chat.title })
+                    saved.settingsAt = resumable.flatMap { _ in chat.settingsChangedAt }
                 } else {
                     saved = Saved.Tab()
                 }
@@ -1570,7 +1576,7 @@ package final class Workspace {
     /// folder taken as a real one (the gate's hooks and scratch folders would keep nothing).
     package static var storyLaunch: [String: String]?
 
-    private static func tab(_ saved: Saved.Tab, in folder: URL) -> ChatTab {
+    static func tab(_ saved: Saved.Tab, in folder: URL) -> ChatTab {
         let tab = ChatTab()
         if let board = saved.board {
             // Its chats come back as tabs' do, each starting its CLI once it shows.
@@ -1593,6 +1599,7 @@ package final class Workspace {
         }
         tab.chat = session.map { chat($0, provider: provider, in: folder) } ?? Chat(provider: provider, folder: folder)
         if let draft = saved.draft { tab.chat?.restoreComposerDraft(draft) }
+        if session != nil { tab.chat?.settingsChangedAt = saved.settingsAt }
         return tab
     }
 
@@ -1735,7 +1742,9 @@ extension Workspace {
     static func savedChat(_ chat: Chat) -> Saved.Tab {
         let resumable = chat.hasConversation ? chat.listedId : nil
         let draft = chat.composerDraft
-        return Saved.Tab(provider: chat.provider.rawValue, session: resumable, title: resumable.map { _ in chat.title }, draft: draft.isEmpty ? nil : draft)
+        var saved = Saved.Tab(provider: chat.provider.rawValue, session: resumable, title: resumable.map { _ in chat.title }, draft: draft.isEmpty ? nil : draft)
+        saved.settingsAt = resumable.flatMap { _ in chat.settingsChangedAt }
+        return saved
     }
 }
 

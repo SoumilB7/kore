@@ -9,6 +9,8 @@ import dev.kore.link.net.NetFrameDecoder
 import dev.kore.link.net.PhoneIdentity
 import dev.kore.link.net.Tailnet
 import dev.kore.link.net.TailnetNode
+import dev.kore.link.node.NodeClient
+import dev.kore.link.node.NodeMachine
 import dev.kore.link.node.PeerOffline
 import dev.kore.link.trust.Binding
 import dev.kore.link.trust.Device
@@ -22,6 +24,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -151,6 +154,42 @@ class NetDialerTest {
         )
         val failure = runCatching { withTimeout(10_000) { dialer(net, scope).dial(record, null) {} } }.exceptionOrNull()
         assertEquals("bye revoked", (failure as NetFailure).reason)
+        assertEquals(listOf("100.64.0.9"), net.dials)
+        scope.cancel()
+    }
+
+    /**
+     * Kore 0.3.7 gave the Mac a new identity key: its welcome fails this phone's pinned proof, the
+     * handshake ends `key-changed`, and the node's row says Key changed · Pair again (never the
+     * endless "retrying"). Through the real dialer and session, on its node and on a moved one.
+     */
+    @Test fun aMacWithANewKeyIsKeyChangedNotRetried() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val rekeyed = Mac(macId, SoftwareIdentity.fresh(), "nodekey:mac")
+        val net = tailnet(listOf(peer("macbook", "100.64.0.1", "nodekey:mac")), mapOf("100.64.0.1" to rekeyed))
+        val failure = runCatching { withTimeout(10_000) { dialer(net, scope).dial(record, null) {} } }.exceptionOrNull()
+        assertEquals(NetControl.Companion.Reason.KEY_CHANGED, (failure as NetFailure).reason)
+        // The node client over the same dialer: Denied("key-changed"), and no dial after it.
+        val client = NodeClient(record, scope, dialer(net, scope))
+        client.start()
+        val state = withTimeout(10_000) { client.state.first { it is NodeMachine.State.Denied } }
+        assertEquals(NodeMachine.State.Denied("key-changed"), state)
+        assertEquals(2, rekeyed.hellos)
+        client.stop()
+        scope.cancel()
+    }
+
+    /** The Mac on a new node with a new key: that's its answer too, no other Mac tried after it. */
+    @Test fun aMovedMacWithANewKeyIsTheAnswer() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        val moved = Mac(macId, SoftwareIdentity.fresh(), "nodekey:kore-mac")
+        val later = Mac(UUID.randomUUID(), SoftwareIdentity.fresh(), "nodekey:zz")
+        val net = tailnet(
+            listOf(peer("macbook", "100.64.0.1", "nodekey:mac", online = false), peer("macbook-1", "100.64.0.9", "nodekey:kore-mac"), peer("zz", "100.64.0.8")),
+            mapOf("100.64.0.9" to moved, "100.64.0.8" to later),
+        )
+        val failure = runCatching { withTimeout(10_000) { dialer(net, scope).dial(record, null) {} } }.exceptionOrNull()
+        assertEquals(NetControl.Companion.Reason.KEY_CHANGED, (failure as NetFailure).reason)
         assertEquals(listOf("100.64.0.9"), net.dials)
         scope.cancel()
     }

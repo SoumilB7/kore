@@ -121,6 +121,20 @@ struct TabKeysTests {
         #expect(workspace.closeStep(tab, window: false, now: 0) == .close)
     }
 
+    @Test func theQuestionsStopClosesAtOnce() throws {
+        let workspace = workspace(tabs: 2)
+        _ = workspace.start(provider: "claude")
+        let tab = workspace.activeTab
+        try #require(tab.chat).status.setRunning(true)
+        let count = workspace.tabs.count
+        workspace.perform(.closeTab)
+        #expect(workspace.asking(tab))
+        // Stop isn't where the × was: no double click's wait.
+        workspace.confirmClose()
+        #expect(workspace.tabs.count == count - 1 && !workspace.tabs.contains { $0 === tab })
+        #expect(workspace.closing == nil && workspace.can(.reopenClosedTab))
+    }
+
     @Test func escClosesTheQuestionFirst() throws {
         let workspace = workspace(tabs: 2)
         _ = workspace.start(provider: "claude")

@@ -351,7 +351,8 @@ struct DevicesPopup: View {
                 }
                 .storyID(StoryID.Net.line)
             } else {
-                NetAction(title: DevicesWords.signIn, glyph: .external, trailing: true) { devices.signIn() }
+                // Its sign-in went with the key change (0.3.7): that's the line until it's signed in again.
+                NetAction(title: KoreNetSwitch.shared?.tailnetNote ?? DevicesWords.signIn, glyph: .external, trailing: true) { devices.signIn() }
                     .help("Kore runs Tailscale inside the app")
                     .storyID(StoryID.Net.lineAction, press: { devices.signIn() })
             }

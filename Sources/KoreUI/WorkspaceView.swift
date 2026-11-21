@@ -1317,7 +1317,6 @@ private struct TabItem: View {
         .padding(.leading, Space.xl)
         .padding(.trailing, Space.sm)
         .frame(maxHeight: .infinity)
-        .transition(.opacity.animation(Motion.fade))
     }
 
     /// The × shows: on hover, on the active tab, and as a dirty file's dot.

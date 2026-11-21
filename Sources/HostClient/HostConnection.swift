@@ -47,6 +47,10 @@ package final class HostConnection {
         case replaced
         /// Taken offline here (Devices ⋯ Take offline): not dialled until brought online.
         case paused
+        /// A box reached only over KoreNet turned this Mac's proof away (`bye unknown`): it holds
+        /// this Mac's old key (Kore 0.3.7 made a new one) and there's no SSH to give it the new
+        /// one. The line says what to run there.
+        case oldKey(String)
 
         /// The words a box's window and chats say for it.
         package func line(_ alias: String) -> String {
@@ -55,6 +59,7 @@ package final class HostConnection {
             case .version: "\(NodeNames.name(alias)) and this Kore don't match · update one"
             case .replaced: "Another Kore here holds \(NodeNames.name(alias))"
             case .paused: "\(NodeNames.name(alias)) is taken offline on this Mac"
+            case .oldKey(let line): line
             }
         }
     }
@@ -730,6 +735,8 @@ package final class HostConnection {
         // there now, the row says "hasn't allowed this Mac", and its upgrade runs again (G31).
         let forgot: Bool
         if reason == "bye unknown", case .ssh? = route, let router = sshRouter { forgot = router.forgotten(self) } else { forgot = false }
+        // Over KoreNet to a box with no SSH: no way round it from here (the row says what to run there).
+        let oldKey = reason == "bye unknown" && route == .net ? sshRouter?.oldKeyOnNet(self) : nil
         // KoreNet that never came up: SSH at once (`NetPaths`: tailnet, then SSH). A switch of
         // route, or a stale route's `replaced`, dials again at once too. A tailnet dial this Mac
         // ended itself (a relink, a switch) didn't fail: it isn't held off.
@@ -763,6 +770,13 @@ package final class HostConnection {
         // A sign-in's end won't come over a link that's gone.
         for id in waiting.keys where id.hasSuffix(HostWire.doneSuffix) { finish(id, ok: false, message: "Lost \(NodeNames.name(alias)) before it answered") }
         if case .refused = phase { return }
+        if let oldKey {
+            phase = .refused(.oldKey(oldKey))
+            lastReason = reason
+            HostLog.note(alias, "refused", oldKey)
+            for watcher in Array(linkWatchers.values) { watcher(false) }
+            return
+        }
         if forgot {
             phase = .refused(.auth)
             lastReason = reason

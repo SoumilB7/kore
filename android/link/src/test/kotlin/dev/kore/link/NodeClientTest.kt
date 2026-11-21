@@ -170,6 +170,30 @@ class NodeClientTest {
         assertTrue(gaps.toString(), gaps.zipWithNext().all { (x, y) -> y >= x * 8 / 10 })
     }
 
+    @Test fun aCallThatTimedOutIsNeverSentWhenTheNodeComesBack() = runTest {
+        val link = link()
+        val clock = { testScheduler.currentTime }
+        // Away until 25 s, then the next dial reaches the node.
+        val rig = Rig(this, List(40) { { if (clock() >= 25_000) link else PeerOffline() } })
+        rig.client.start()
+        runCurrent()
+        assertTrue(rig.client.state.value is State.Away)
+        val answer = async { rig.client.call(dev.kore.link.node.Control.folderAdd("/srv/app"), 20_000) }
+        runCurrent()
+        assertEquals(1, rig.client.queued.value.size)
+        advanceTimeBy(20_001)
+        runCurrent()
+        assertEquals("timeout", answer.await().s("code"))
+        assertEquals(emptySet<String>(), rig.client.queued.value)
+        advanceTimeBy(5_000)
+        rig.client.reconnectNow()
+        runCurrent()
+        advanceTimeBy(1_000)
+        runCurrent()
+        assertEquals(State.Up, rig.client.state.value)
+        assertEquals(0, link.sent.count { it.s("t") == "cmd" })
+    }
+
     @Test fun queuedCommandsGoOutOnceTheNodeIsBack() = runTest {
         val link = link()
         val rig = Rig(this, listOf({ NetFailure("timeout") }, { link }))

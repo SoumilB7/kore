@@ -83,6 +83,7 @@ extension HostDaemon {
 
     func adoptCopy(_ args: ControlArgs, id: String, from client: LinkClient) -> MoveResult {
         func refused(_ code: ResultCode, _ message: String) -> MoveResult { .refused(id, code, message) }
+        let (args, capped) = Self.boxCapped(args)
         guard client.holder != nil, let phase = args.phase.flatMap(MovePhase.init(rawValue:)), let moveId = args.moveId, LinkMoves.plainMoveID(moveId)
         else { return refused(.invalid, "Name the move.") }
         let dir = staging.appendingPathComponent(moveId, isDirectory: true)
@@ -137,7 +138,7 @@ extension HostDaemon {
             hc.adoptedCopy(transcript: main, line: args.copiedFrom)
             HostJournal.note("copy adopt", ["chat": hc.id, "move": moveId, "files": "\(placed.count)"])
             broadcast(chats: [hc])
-            return MoveResult(id: id, ok: true, message: hc.carriedNote, chatId: hc.id, settings: Self.said(hc))
+            return MoveResult(id: id, ok: true, message: Self.joined(capped, hc.carriedNote), chatId: hc.id, settings: Self.said(hc))
         case .abort:
             moveClients[moveId] = nil
             try? FileManager.default.removeItem(at: dir)

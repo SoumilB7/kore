@@ -419,7 +419,14 @@ class DeviceActivity : NodeActivity() {
         val up = b.up()
         custom(navRow(at?.let { FolderBrowser.shown(it, b.home) } ?: "~", if (up != null) dev.kore.phone.R.drawable.i_up else dev.kore.phone.R.drawable.i_folder,
             if (up != null) "Up to ${FolderBrowser.shown(up, b.home)}" else null) { if (up != null) browse(s, up) })
-        if (at == null) return say(b.problem ?: "Reading the folders on $macName…")
+        if (at == null) {
+            // The home's read failed: Retry makes the browser again and asks once more.
+            if (b.failedFirst) custom(button("Retry", Btn.Secondary) { browser = null; startBrowse(s); s.refresh() }.apply {
+                contentDescription = "Retry"
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(4), dp(14), dp(4), 0) }
+            })
+            return say(b.problem ?: if (b.failedFirst) "Couldn't read the folders on $macName." else "Reading the folders on $macName…")
+        }
         val served = boxFolders.orEmpty().mapNotNull { it.str("path")?.trimEnd('/') }.toSet()
         for (name in b.folders) {
             val p = b.into(name) ?: continue
@@ -443,6 +450,9 @@ class DeviceActivity : NodeActivity() {
         }
         if (field == null) custom(button("Open here", Btn.Primary) { openHere(s) }.apply {
             contentDescription = "Open here"
+            // Another folder is being read: what's shown isn't where Open here would land yet.
+            isEnabled = b.canOpen
+            alpha = if (b.canOpen) 1f else 0.45f
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(4), dp(14), dp(4), 0) }
         })
         val here = FolderBrowser.shown(at, b.home)
@@ -531,6 +541,7 @@ class DeviceActivity : NodeActivity() {
     /** Open here: the box serves the folder (a phone's add is audited there), then its window opens. */
     private fun openHere(s: Sheet) {
         val b = browser ?: return
+        if (!b.canOpen) return
         val at = b.path ?: return
         ask(dev.kore.link.node.Control.folderAdd(at)) { r ->
             if (!r.bool("ok")) { b.refused(boxWords(r)); return@ask s.refresh() }

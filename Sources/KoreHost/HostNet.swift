@@ -854,10 +854,15 @@ package final class HostNet {
             return nil
         }
         let grants = GrantStore(host.paths.grants)
-        guard let grant = grants.load(legacy.name), Self.same(grant.secret, legacy.secret), grant.device == known.id else {
+        let now = host.now()
+        guard let grant = grants.load(legacy.name), Self.same(grant.secret, legacy.secret), Self.rekeys(grant, for: known.id, among: grants.all(), at: now)
+        else {
             HostJournal.audit("deny", ["device": id, "grant": legacy.name, "reason": "rekey grant"])
             return nil
         }
+        // A grant issued again before `allow` kept its device (kore-host 0.3.6, or Set up's
+        // `allow` on one) is tied to this Mac now, as its upgrade would have.
+        let binds = grant.device == nil
         var record = known
         record.identityKey = enroll.identityKey
         guard (try? record.validate()) != nil else { return nil }
@@ -865,6 +870,12 @@ package final class HostNet {
         let old = known.identityKey
         return .enroll(record) { _ in
             MainActor.assumeIsolated {
+                if binds {
+                    guard var unbound = grants.load(legacy.name), unbound.device == nil, unbound.secret == grant.secret else { return false }
+                    unbound.device = record.id
+                    unbound.expires = unbound.expires ?? Int(now.addingTimeInterval(Grant.upgradeGrace).timeIntervalSince1970)
+                    do { try grants.save(unbound) } catch { return false }
+                }
                 do {
                     try host.devices.book.update { devices in
                         guard let i = devices.firstIndex(where: { $0.id == record.id }), devices[i].identityKey == old else {
@@ -873,12 +884,26 @@ package final class HostNet {
                         devices[i].identityKey = record.identityKey
                     }
                 } catch {
+                    if binds, var undo = grants.load(legacy.name), undo.device == record.id, undo.secret == grant.secret {
+                        undo.device = nil
+                        undo.expires = grant.expires
+                        try? grants.save(undo)
+                    }
                     return false
                 }
+                if binds { HostJournal.audit("bind", ["device": id, "grant": legacy.name, "how": "rekey"]) }
                 HostJournal.audit("rekey", ["device": id, "grant": legacy.name, "route": "ssh"])
                 return true
             }
         }
+    }
+
+    /// The grants a Mac's SSH re-key may come in on: the one it enrolled with (expired too), or
+    /// an unexpired one issued again with no device yet, while no grant here is that Mac's
+    /// own. Another device's grant never is.
+    nonisolated static func rekeys(_ grant: Grant, for device: UUID, among all: [Grant], at now: Date) -> Bool {
+        if let bound = grant.device { return bound == device }
+        return !grant.expired(at: now) && !all.contains { $0.device == device }
     }
 
     /// A peer that went mid-write is an error to read, never SIGPIPE (macOS has no MSG_NOSIGNAL).

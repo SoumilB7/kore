@@ -260,6 +260,7 @@ package final class ClaudeBackend: ChatBackend {
         self.session = session
         opening = nil
         bypassReady = launch.permissionMode == .bypassPermissions
+        launchedMode = launch.permissionMode.rawValue
         // A resumed chat carries on in the mode its history ended in (the pill shows it), not
         // the one it launched in. One the CLI refuses (Full access, when not launched in it) it
         // reports at the first turn.
@@ -969,6 +970,14 @@ package final class ClaudeBackend: ChatBackend {
     /// Cut back in place: the CLI starts again at the message before (`--resume-session-at`,
     /// no `--fork-session`), so the same session goes on from there.
     package func rollback(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
+        // One at a time (two devices at once): `rollbackAt` and the history adopted stay one cut's.
+        try await rollbacks.run { [self] in try await cutBack(message: id, text: text) }
+    }
+
+    /// Rollbacks in the order asked (`rollback`).
+    private let rollbacks = OneAtATime()
+
+    private func cutBack(message id: String?, text: String) async throws -> (events: [ChatEvent], more: Bool) {
         // A CLI still starting would come up holding the whole history: its launch (and the
         // history it shows) ends first, and the relaunch below starts it again from the cut. One
         // not running takes the cut with its next launch.
@@ -1188,10 +1197,17 @@ package final class ClaudeBackend: ChatBackend {
     private var bypassReady = false
 
     /// Why Full access waits: the CLI starts again for it, which would end what it runs.
-    package static let fullAccessBusy = "Full access starts Claude again. Pick it once this chat's turn, agents and commands have ended."
+    package nonisolated static let fullAccessBusy = "Full access starts Claude again. Pick it once this chat's turn, agents and commands have ended."
 
     package struct FullAccessRefused: Error, CustomStringConvertible {
         package let description: String
+    }
+
+    /// Full access picked for a CLI not launched able to bypass: it starts again for it, so it
+    /// waits while the chat's turn, its own agents or its commands run (they'd end with it). The
+    /// storylines' scripted Claude takes the same rule.
+    package nonisolated static func fullAccessRefusal(turn: Bool, agents: Bool, commands: Bool) -> FullAccessRefused? {
+        turn || agents || commands ? FullAccessRefused(description: fullAccessBusy) : nil
     }
 
     /// Full access for a CLI not launched able to bypass: it starts again in it, on the same
@@ -1201,21 +1217,39 @@ package final class ClaudeBackend: ChatBackend {
     /// shells and agents end with it. A launch the CLI refuses goes back to `previous`.
     private func relaunchInFullAccess(from previous: String) async throws {
         let ownAgents = translator.unfinishedAgents().contains { !observed.contains($0.id) }
-        guard translator.turn == nil, !ownAgents, !translator.commands.anyLive else {
+        if let refused = Self.fullAccessRefusal(turn: translator.turn != nil, agents: ownAgents, commands: translator.commands.anyLive) {
             options.mode = previous
-            throw FullAccessRefused(description: Self.fullAccessBusy)
+            throw refused
         }
         await relaunch(reason: "full access")
         do {
             try await start()
         } catch {
-            options.mode = previous
+            // Back to where it was, unless another mode was picked meanwhile: it starts in that one.
+            if options.mode == ClaudeModes.fullAccess { options.mode = previous }
             try? await start()
             throw error
         }
-        translator.modeLaunched(ClaudeModes.fullAccess)
+        // Said as the mode it was launched in: a lower pick during the close launched it in that.
+        let launched = launchedMode
+        translator.modeLaunched(launched)
         flush()
+        // A pick after the launch read its mode: in place now (a process launched in Full access takes any).
+        let wanted = options.mode
+        guard wanted != launched, let session, let mode = ClaudeSession.PermissionMode(rawValue: wanted) else { return }
+        translator.requestMode(wanted)
+        do {
+            try await session.setPermissionMode(mode)
+        } catch {
+            translator.modeRefused()
+            flush()
+            throw error
+        }
+        await syncAskHook(wanted)
     }
+
+    /// The mode the running CLI was launched in.
+    private var launchedMode = "default"
 
     /// The hook a chat in `mode` runs: Kore's in Auto, none otherwise.
     package static func askHook(for mode: String) -> String? { mode == "auto" ? askHook : nil }

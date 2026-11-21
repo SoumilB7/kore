@@ -130,4 +130,19 @@ struct WorkspaceRecoveryTests {
         #expect(workspace.activeTab.chat?.draft == "")
         #expect(!workspace.canReopenClosedTab)
     }
+
+    /// When a chat's settings last changed here outlives a relaunch with its tab: a box chat held
+    /// here still says, on its send back, that they changed since it came. A tab saved before
+    /// says nothing (nil).
+    @Test func aTabKeepsWhenItsSettingsChanged() throws {
+        let at = Date(timeIntervalSince1970: 1_800_000_000)
+        let saved = Workspace.Saved.Tab(provider: "claude", session: "7d1e3c40-0000-4000-8000-0000000051a7", title: "Held", settingsAt: at)
+        let decoded = try JSONDecoder().decode(Workspace.Saved.Tab.self, from: try JSONEncoder().encode(saved))
+        #expect(decoded.settingsAt == at)
+        let chat = try #require(Workspace.tab(decoded, in: folder).chat)
+        defer { chat.close() }
+        #expect(chat.settingsChangedAt == at)
+        let old = try JSONDecoder().decode(Workspace.Saved.Tab.self, from: Data(#"{"provider":"claude","session":"s","title":"t"}"#.utf8))
+        #expect(old.settingsAt == nil)
+    }
 }

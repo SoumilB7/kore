@@ -152,7 +152,7 @@ extension Chat {
     package var storyRemote: String? { controls.remote?.line(cli: provider.id) }
 
     /// The `/` menu's names, and the command chip's.
-    package var storyCommands: [String] { controls.commands.map(\.name) }
+    package var storyCommands: [String] { controls.offered.map(\.name) }
 
     /// Whether the agent map shows over the chat (the Agents button, ⇧⌘A).
     package var isAgentMapOpen: Bool { agentMap.isOpen }

@@ -32,6 +32,8 @@ class ChatActivity : NodeActivity() {
     private lateinit var leadPrompt: PromptMark
     /** Follows the transcript's end while the reader is there (FollowEnd); "↓ New" when they read above. */
     private val ending by lazy { FollowEnd(dp(48)) }
+    /** The reader's own fold is being laid out: rows it brings aren't "↓ New". */
+    private var own = false
     private lateinit var jump: TextView
     private var settleQueued = false
     private var laidHeight = 0
@@ -76,7 +78,10 @@ class ChatActivity : NodeActivity() {
             addView(openingText.apply { setPadding(0, dp(14), 0, dp(6)) })
             addView(retry)
         }
-        list = RecyclerView(this@ChatActivity).apply {
+        // A selection opening or closing in a row tells the list (`PickWatch`): it holds still meanwhile.
+        list = object : RecyclerView(this@ChatActivity), PickWatch {
+            override fun picking(v: TextView, on: Boolean) = this@ChatActivity.picking(v, on)
+        }.apply {
             // Each finished layout (rows came, a row grew, the keyboard, a rotation) settles the end once.
             layoutManager = object : LinearLayoutManager(this@ChatActivity) {
                 override fun onLayoutCompleted(state: RecyclerView.State?) {
@@ -248,8 +253,45 @@ class ChatActivity : NodeActivity() {
         if (jump.visibility != v) jump.visibility = v
     }
 
+    /** Text views holding a selection now (their toolbar open). */
+    private val picked = HashSet<TextView>()
+
+    /**
+     * A selection opened or closed in the transcript. Open, the reader holds the list: it stops
+     * following and grows from its top, so what's under the handles stays; rows holding it aren't
+     * redrawn. Closed, those rows take what came meanwhile and the end is followed again.
+     */
+    private fun picking(v: TextView, on: Boolean) {
+        if (on) picked.add(v) else picked.remove(v)
+        val now = picked.isNotEmpty()
+        if (now == ending.picking) return
+        ending.picked(now)
+        if (now) {
+            if (lm.stackFromEnd) {
+                val pin = lm.findFirstVisibleItemPosition().takeIf { it >= 0 }?.let { p -> lm.findViewByPosition(p)?.let { p to lm.getDecoratedTop(it) } }
+                lm.stackFromEnd = false
+                pin?.let { (p, top) -> lm.scrollToPositionWithOffset(p, top - list.paddingTop) }
+            }
+            return
+        }
+        // After the toolbar's own teardown: the held rows draw again, then the end settles.
+        list.post {
+            if (ending.picking) return@post
+            adapter.release()
+            showFollow()
+            settle()
+        }
+    }
+
+    /** [row] holds a picked text view: an update to it waits for the selection to end. */
+    private fun holdsPick(row: View): Boolean = picked.any { v ->
+        var at: android.view.ViewParent? = v.parent
+        while (at != null && at !== row) at = at.parent
+        at === row
+    }
+
     private fun cameAt(last: Int) {
-        if (ending.following || last <= lm.findLastVisibleItemPosition()) return
+        if (own || ending.following || last <= lm.findLastVisibleItemPosition()) return
         ending.cameBelow()
         showFollow()
     }
@@ -418,6 +460,15 @@ class ChatActivity : NodeActivity() {
         private val openTools = HashSet<String>()
         /** The "Worked" row just opened or closed: its chevron turns on the next bind. */
         private var turned: String? = null
+        /** Rows whose update waited while they held a selection, by key: drawn on [release]. */
+        private val held = HashSet<String>()
+
+        /** The selection ended: the rows it held take what came meanwhile. */
+        fun release() {
+            val keys = held.toList()
+            held.clear()
+            for (k in keys) positionOf(k).takeIf { it >= 0 }?.let(::notifyItemChanged)
+        }
         var queued = 0
             set(value) { if (field != value) { field = value; rebuild() } }
         /** A turn runs: its last steps stay out as live lines; when it ends they fold. */
@@ -508,6 +559,11 @@ class ChatActivity : NodeActivity() {
 
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
             val frame = holder.itemView as Row
+            // The row holds a selection: it isn't redrawn under the handles (a streaming answer
+            // would replace its text); it takes the update once the selection ends.
+            val key = keyOf(items[position])
+            if (frame.key == key && holdsPick(frame)) { held.add(key); return }
+            frame.key = key
             val rule = frame.getChildAt(0)
             val v = frame.getChildAt(1) as TextView
             val docBox = frame.getChildAt(2) as LinearLayout
@@ -558,7 +614,14 @@ class ChatActivity : NodeActivity() {
                     if (turned == item.key) turned = null
                     v.setCompoundDrawablesRelative(chevron, null, null, null)
                     v.compoundDrawablePadding = dp(6)
-                    v.setOnClickListener { if (!open.add(item.key)) open.remove(item.key); turned = item.key; rebuild() }
+                    v.setOnClickListener {
+                        if (!open.add(item.key)) open.remove(item.key)
+                        turned = item.key
+                        // The reader's own fold: what it lays out isn't "↓ New".
+                        ending.ownChange()
+                        own = true
+                        try { rebuild() } finally { own = false }
+                    }
                 }
                 is Item.One -> {
                     val doc = item.e.objs("doc")
@@ -643,7 +706,8 @@ class ChatActivity : NodeActivity() {
         override fun onViewAttachedToWindow(holder: RecyclerView.ViewHolder) = rearm(holder.itemView)
 
         private fun rearm(v: View) {
-            if (v is TextView) { if (v.isTextSelectable) { v.isEnabled = false; v.isEnabled = true } }
+            // One holding a selection now is left alone: re-enabling it would drop the selection.
+            if (v is TextView) { if (v.isTextSelectable && v !in picked) { v.isEnabled = false; v.isEnabled = true } }
             else if (v is ViewGroup) for (i in 0 until v.childCount) rearm(v.getChildAt(i))
         }
 
@@ -882,4 +946,6 @@ private class ImageRef(val ref: String, val name: String?)
 /** A chat row: its message menu, for the selection toolbar of the text it holds ([PickRow]). */
 private class Row(context: android.content.Context) : android.widget.FrameLayout(context), PickRow {
     override var menu: ((View) -> Unit)? = null
+    /** The item it shows (the adapter's key). */
+    var key: String? = null
 }

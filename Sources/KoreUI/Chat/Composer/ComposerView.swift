@@ -503,7 +503,7 @@ struct ComposerView: View {
             let known =
                 draft.provider == chat.provider.id
                 ? copied.slashCommand
-                : chat.controls.commands.first { $0.kind == .command && $0.name == copied.name }
+                : chat.controls.offered.first { $0.kind == .command && $0.name == copied.name }
             if command == nil, let known {
                 command = known
             } else {
@@ -594,7 +594,7 @@ struct ComposerView: View {
     private var slashMatches: [SlashCommand] {
         guard !chat.slashClosed, let token = slashToken else { return [] }
         let remote = SlashCommand.remote(on: chat.controls.remote != nil, unavailable: chat.controls.remoteUnavailable)
-        return SlashCommand.matches(chat.controls.commands, sigil: token.sigil, query: token.query, remote: remote, link: LinkTaps.slash?() ?? [])
+        return SlashCommand.matches(chat.controls.offered, sigil: token.sigil, query: token.query, remote: remote, link: LinkTaps.slash?() ?? [])
     }
 
     /// An input method is composing (marked text): its keys are its own.

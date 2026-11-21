@@ -975,6 +975,7 @@ package final class HostDaemon {
             return .init(id: id, ok: true)
         case .chatSetPlanAllow:
             guard let hc = args.chatId.flatMap(chat), let on = args.on else { return fail(.invalid, "Name the chat and on or off.") }
+            if let refusal = Self.held(hc) { return fail(refusal.code, refusal.message) }
             hc.setPlanAllow(on)
             broadcast(chats: [hc])
             return .init(id: id, ok: true)
@@ -1083,6 +1084,13 @@ package final class HostDaemon {
         LinkPolicy.check(command, facts, control: control == .full ? .full : .standard)
     }
 
+    /// Where a sign-in on the box goes: Claude with a login named, that added account's folder
+    /// (made when missing); else nil, as the CLI has it (the box's own Sign in, Codex's one login).
+    static func signInFolder(cli: String, login: String?, accounts: HostAccounts) throws -> URL? {
+        guard cli == "claude", let login else { return nil }
+        return try accounts.signInFolder(login)
+    }
+
     /// The CLIs' own logins on the box. A sign-in's result carries its page (and code) in
     /// `message`, for the client to open; `<id>:done` says how it ended. The others answer once
     /// the CLI has.
@@ -1132,15 +1140,23 @@ package final class HostDaemon {
             let method = ops.methods.first { $0.id == (args.method ?? Self.boxMethod[cli]) } ?? ops.methods.first
             guard let method else { return .init(id: id, ok: false, code: .invalid, message: "No sign-in method.") }
             let home = URL(fileURLWithPath: NSHomeDirectory())
+            // A Mac's "Sign in on <box>" names its login: Claude signs in to an added account of
+            // that name, never the box's default (its own login stays as it is).
+            let folder: URL?
+            do { folder = try Self.signInFolder(cli: cli, login: args.login, accounts: accounts) } catch {
+                return .init(id: id, ok: false, code: .invalid, message: error.localizedDescription)
+            }
             Task { [weak self] in
                 do {
-                    let handle = try await ops.calls.signIn(method.mechanism, SignInContext(folder: home, open: { _ in }))
+                    let handle = try await HostAccounts.pinned(folder) {
+                        try await ops.calls.signIn(method.mechanism, SignInContext(folder: home, open: { _ in }))
+                    }
                     self?.signIns[cli] = handle
                     let page = [handle.url?.absoluteString, handle.manualURL?.absoluteString, handle.code.map { "code " + $0 }].compactMap { $0 }
                     reply(.init(id: id, ok: true, message: page.joined(separator: " ")))
                     _ = try await handle.wait()
                     self?.signIns[cli] = nil
-                    let reading = (try? await ops.calls.status()).map(ops.parse)
+                    let reading = (try? await HostAccounts.pinned(folder) { try await ops.calls.status() }).map(ops.parse)
                     reply(Self.told(id: id + ":done", provider: cli, reading: reading))
                 } catch {
                     self?.signIns[cli] = nil

@@ -201,7 +201,8 @@ package struct HostUpgrade {
                 report.add("mac", held.device == nil ? "allowed" : "enrolled")
             } else {
                 do {
-                    try grants.allow(grant, control: .full, socket: paths.socket)
+                    // Its forgotten Mac's device goes with the old secret.
+                    try grants.allow(grant, control: .full, socket: paths.socket) { _ in !forgotten }
                     HostJournal.audit("allow", ["grant": grant, "how": forgotten ? "upgrade, its Mac forgotten" : "upgrade"])
                     report.add("mac", "allowed")
                 } catch {

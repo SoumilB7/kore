@@ -162,6 +162,7 @@ extension Chat {
         if allow, let senders = card.held {
             return arsenalLetIn(card, senders: senders, by: caller)
         }
+        if allow || always, let refusal = Self.startedRefusal(self, by: caller) { return .failure(refusal) }
         if allow || always, card.autoStop { return arsenalRunAutoAsk(card, always: always, by: caller, tier: tier) }
         if always { return .failure(.init("Only you choose Always allow here; an agent may Always allow only a card Auto asks about.")) }
         if allow {
@@ -194,6 +195,21 @@ extension Chat {
 }
 
 extension Chat {
+    /// What a chat's agent is told when it would allow a command in a chat it made.
+    package static let startedLine = "Only you allow commands in a chat this one started."
+
+    /// `caller` made this chat, or made, forked or woke one that did, while this one has been open:
+    /// its agent could have the new chat run what it wants and allow that itself.
+    package func arsenalStarted(by caller: Chat) -> Bool { arsenalOrigins.contains(caller.arsenalKey) }
+
+    /// The chat it was made from, and that chat's own origins: what a chat made by `caller` keeps.
+    package static func origins(madeBy caller: Chat) -> [String] { [caller.arsenalKey] + caller.arsenalOrigins.filter { $0 != caller.arsenalKey } }
+
+    static func startedRefusal(_ chat: Chat, by caller: Chat?) -> ArsenalRefusal? {
+        guard let caller, chat.arsenalStarted(by: caller) else { return nil }
+        return ArsenalRefusal(startedLine)
+    }
+
     /// The lowest tier that runs a command Auto asks about for another chat (the owner, 2026-11-21).
     package static let autoAskFloor = ArsenalTier.drive
 
@@ -202,6 +218,7 @@ extension Chat {
     /// never a forced removal of the working folder or above, a home folder or a system path
     /// (`KoreAlwaysRule.critical`). The same answer as the person's Run once or Always allow.
     func arsenalRunAutoAsk(_ card: Approval, always: Bool, by caller: Chat?, tier: ArsenalTier?) -> Result<String, ArsenalRefusal> {
+        if let refusal = Self.startedRefusal(self, by: caller) { return .failure(refusal) }
         if let note = card.allowNote { return .failure(.init(note)) }
         guard let caller, Self.mayApprove(caller) else {
             guard Self.approvalFloor != nil else { return .failure(.init("Only you allow a chat's commands.")) }

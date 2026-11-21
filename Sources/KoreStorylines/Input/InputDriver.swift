@@ -297,7 +297,16 @@ package final class InputDriver {
         let y = document.isFlipped
             ? inDocument.midY - insets.top - visible / 2
             : inDocument.midY - insets.bottom - visible / 2
-        try await liveScroll(scrollView, to: min(max(y, low), high))
+        // Its middle past a sideways edge (a tab past the strip's end): scrolled along too, as a
+        // person scrolls the strip to it, wholly in view where it can be. Otherwise the pan is left
+        // as it is at the move (nil), as before.
+        var x: CGFloat?
+        if document.bounds.width > clip.bounds.width + 0.5, inDocument.midX < clip.bounds.minX || inDocument.midX > clip.bounds.maxX {
+            var along = inDocument.maxX > clip.bounds.maxX ? inDocument.maxX - clip.bounds.width : clip.bounds.minX
+            if inDocument.minX < along { along = inDocument.minX }
+            x = min(max(along, 0), document.bounds.width - clip.bounds.width)
+        }
+        try await liveScroll(scrollView, to: min(max(y, low), high), x: x)
     }
 
     /// Whether a frame (window coordinates) is inside the visible part of the element's scroll
@@ -316,14 +325,16 @@ package final class InputDriver {
 
     /// Moves the clip framed as a live scroll, as a gesture is, so the scroll view's owner takes
     /// the new place as the reader's own rather than putting its old one back.
-    private func liveScroll(_ scrollView: NSScrollView, to y: CGFloat) async throws {
+    /// `x`: a sideways move too; nil keeps the clip's own at the move (a pinch's pan can change
+    /// it in the pass before).
+    private func liveScroll(_ scrollView: NSScrollView, to y: CGFloat, x: CGFloat? = nil) async throws {
         let clip = scrollView.contentView
         let center = NotificationCenter.default
         center.post(name: NSScrollView.willStartLiveScrollNotification, object: scrollView)
         // A pass before the move, as a scroller's drag goes: SwiftUI can put the offset back where
         // the interaction began when it begins in the same turn as the move.
         await pass()
-        clip.scroll(to: CGPoint(x: clip.bounds.origin.x, y: y))
+        clip.scroll(to: CGPoint(x: x ?? clip.bounds.origin.x, y: y))
         scrollView.reflectScrolledClipView(clip)
         center.post(name: NSScrollView.didLiveScrollNotification, object: scrollView)
         await pass()
