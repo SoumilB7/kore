@@ -36,7 +36,7 @@ package struct BoxForget {
     }
 
     static let listedKey = "boxHosts"
-    static let prefixes = ["boxGrant.", "boxKoreHost.", "boxRecents."]
+    static let prefixes = ["boxGrant.", "boxKoreHost.", "boxRecents.", BoxList.keysKey]
 
     /// Every key the box `key` names goes by: as given, the ids of its KoreNet entries and their
     /// SSH aliases (it's listed under one of them).

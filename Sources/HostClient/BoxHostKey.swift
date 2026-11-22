@@ -17,7 +17,7 @@ package enum BoxHostKey {
         package var lines: [String]
         /// The command for the user's own Terminal ("ssh mybox-cf"), for Copy.
         package var command: String
-        /// The box was set up over this alias before (its KoreNet entry has it): the alias points
+        /// It's the key this box had before over this alias (`BoxList.keysSeen`): the alias points
         /// at a new address (a Cloudflare quick tunnel's new hostname), not a new box.
         package var moved = false
         /// Set up was under way when the key stopped it: Trust goes on with it.
@@ -76,6 +76,55 @@ package enum BoxHostKey {
         return out
     }
 
+    /// The keys in known_hosts lines ("ssh-ed25519 AAAA…"), whatever they call the host: with
+    /// `HashKnownHosts` ssh writes its name under a new salt each time. A marked line (`@revoked`,
+    /// `@cert-authority`) is no host's key.
+    package static func keys(_ lines: [String]) -> Set<String> {
+        Set(lines.compactMap { line in
+            let words = line.split(whereSeparator: \.isWhitespace)
+            guard words.count >= 3, !line.hasPrefix("#"), !line.hasPrefix("@") else { return nil }
+            return words[1] + " " + words[2]
+        })
+    }
+
+    /// The keys ssh already trusts `alias` with: its known_hosts lines for the name ssh looks it
+    /// up by now (`HostKeyAlias`, else its host and port), hashed or not.
+    package static func known(_ alias: String, shell: BoxShell, file: String? = nil, keygen: String = keygen) async -> Set<String> {
+        let said = await BoxShell.process(shell.ssh, Array(await BoxSSH.argv(alias, program: shell.ssh, options: ["-G"], []).dropFirst()))
+        guard said.ok, let name = knownHostsName(config: said.output) else { return [] }
+        let found = await BoxShell.process(keygen, ["-F", name, "-f", file ?? knownHostsFile(config: said.output, home: NSHomeDirectory())])
+        return found.ok ? keys(found.output.split(whereSeparator: \.isNewline).map(String.init)) : []
+    }
+
+    /// The name ssh looks a host up by in known_hosts, from `ssh -G`.
+    package static func knownHostsName(config: String) -> String? {
+        var said: [String: String] = [:]
+        for line in config.split(whereSeparator: \.isNewline) {
+            let words = line.split(separator: " ").map(String.init)
+            if words.count >= 2, said[words[0].lowercased()] == nil { said[words[0].lowercased()] = words[1] }
+        }
+        if let alias = said["hostkeyalias"], alias.lowercased() != "none" { return alias }
+        guard let host = said["hostname"] else { return nil }
+        guard let port = said["port"], port != "22" else { return host }
+        return "[\(host)]:\(port)"
+    }
+
+    /// What a key means for a box whose keys were `before`. One of a kind not seen before counts
+    /// as different: nothing says it's the same box.
+    package enum Against: Equatable, Sendable { case unknown, same, different }
+
+    package static func against(_ before: Set<String>, _ lines: [String]) -> Against {
+        guard !before.isEmpty else { return .unknown }
+        let now = keys(lines)
+        return !now.isEmpty && now.isSubset(of: before) ? .same : .different
+    }
+
+    /// The line for a box that shows another key than it had: never a Trust.
+    package static func differentLine(_ ssh: String, _ fingerprints: [String]) -> String {
+        "\(ssh) shows a different key than before · this could be an attack, so Kore won't trust it · check with the box · "
+            + (fingerprints.first ?? "a key Kore couldn't read")
+    }
+
     /// The known_hosts file ssh writes for `alias` (`ssh -G`'s first `userknownhostsfile`, `~`
     /// expanded); `~/.ssh/known_hosts` when it doesn't say.
     package static func knownHostsFile(_ alias: String, shell: BoxShell, home: String = NSHomeDirectory()) async -> String {
@@ -107,10 +156,10 @@ package enum BoxHostKey {
     }
 
     /// Trust: looks again, and only when the box shows the key that was shown adds ssh's own lines
-    /// to `file` (made 0600 in a 0700 folder when new). Nil: trusted.
+    /// (this look's, for where the alias points now) to `file` (made 0600 in a 0700 folder when new). Nil: trusted.
     package static func trust(_ offer: Offer, shell: BoxShell, file: String, keygen: String = keygen) async -> Refusal? {
         guard let now = await scan(offer.ssh, shell: shell, keygen: keygen) else { return .unreachable }
-        guard Set(now.fingerprints) == Set(offer.fingerprints), Set(now.lines) == Set(offer.lines) else { return .changed }
+        guard Set(now.fingerprints) == Set(offer.fingerprints), keys(now.lines) == keys(offer.lines), !keys(now.lines).isEmpty else { return .changed }
         let url = URL(fileURLWithPath: file)
         let manager = FileManager.default
         do {
@@ -122,7 +171,7 @@ package enum BoxHostKey {
                 guard manager.createFile(atPath: url.path, contents: Data(), attributes: [.posixPermissions: 0o600]) else { return .unwritable(file) }
             }
             let existing = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
-            let adding = offer.lines.filter { !existing.contains($0) }
+            let adding = now.lines.filter { !existing.contains($0) }
             guard !adding.isEmpty else { return nil }
             let handle = try FileHandle(forWritingTo: url)
             defer { try? handle.close() }

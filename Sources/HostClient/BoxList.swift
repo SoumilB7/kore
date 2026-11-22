@@ -372,6 +372,7 @@ package final class BoxList {
             let machine = try await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).detect(deep: deep)
             machine.keep(alias, root: cacheRoot)
             if !NodeDirectory.isNodeKey(alias) { directory().noteFound(machine.hostname, alias: alias) }
+            noteKeys(alias)
             update(alias) { $0.machine = machine }
             await compare(alias)
             return machine
@@ -548,6 +549,7 @@ package final class BoxList {
             return
         }
         if let grant { BoxSetup.setGrant(grant, for: alias, defaults: defaults) }
+        noteKeys(alias)
         // The box's part is done: probes may say how it is from here.
         working[alias] = nil
         update(alias) { $0.status = .working("Connecting…") }
@@ -643,6 +645,28 @@ package final class BoxList {
     /// Where Trust writes (tests: theirs); nil: the file ssh's config names.
     @ObservationIgnored package var knownHosts: String?
 
+    /// The keys ssh trusts a box with (`BoxHostKey.known`); tests set their own, as `scanKey`.
+    @ObservationIgnored package var knownKeys: (@Sendable (String, BoxShell, String) async -> Set<String>)? =
+        KoreLog.isTestProcess ? nil : { @Sendable alias, shell, keygen in await BoxHostKey.known(alias, shell: shell, keygen: keygen) }
+    static let keysKey = "boxHostKeys."
+
+    /// The SSH keys a box last had over `ssh`: what a new one is compared with. None for a box
+    /// Kore hasn't reached over it since it keeps them, or one forgotten.
+    package func keysSeen(_ ssh: String) -> Set<String> { Set(defaults?.stringArray(forKey: Self.keysKey + ssh) ?? []) }
+
+    /// ssh just reached the box, so its key is one known_hosts holds: kept, for when its address changes.
+    private func noteKeys(_ alias: String) {
+        let ssh = directory().sshAlias(forKey: alias) ?? alias
+        guard let knownKeys, let defaults, !NodeDirectory.isNodeKey(ssh) else { return }
+        let shell = makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell
+        let keygen = keygen
+        Task { @MainActor in
+            let keys = await knownKeys(ssh, shell, keygen)
+            guard !keys.isEmpty, box(alias) != nil else { return }
+            defaults.set(keys.sorted(), forKey: Self.keysKey + ssh)
+        }
+    }
+
     /// A status that's ssh's "host key is new" (before its fingerprint is known).
     private static func newKeyLine(_ status: Status) -> String? {
         switch status {
@@ -657,14 +681,19 @@ package final class BoxList {
         guard let scanKey, scanning.insert(alias).inserted else { return }
         let ssh = directory().sshAlias(forKey: alias) ?? alias
         let shell = makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell
-        let moved = directory().all.values.contains { $0.ssh == ssh }
         let keygen = keygen
         Task { @MainActor in
             let found = await scanKey(ssh, shell, keygen)
             scanning.remove(alias)
             guard let found, let box = box(alias), Self.newKeyLine(box.status) == line else { return }
+            let against = BoxHostKey.against(keysSeen(ssh), found.lines)
+            if against == .different {
+                HostLog.note(alias, "host key", "different: " + found.fingerprints.joined(separator: ", "))
+                update(alias) { $0.status = .failed(BoxHostKey.differentLine(ssh, found.fingerprints), .copy(BoxAddress(ssh)?.command() ?? "ssh " + ssh)) }
+                return
+            }
             let offer = BoxHostKey.Offer(
-                ssh: ssh, fingerprints: found.fingerprints, lines: found.lines, command: BoxAddress(ssh)?.command() ?? "ssh " + ssh, moved: moved,
+                ssh: ssh, fingerprints: found.fingerprints, lines: found.lines, command: BoxAddress(ssh)?.command() ?? "ssh " + ssh, moved: against == .same,
                 setUp: setUpStopped.contains(alias))
             HostLog.note(alias, "host key", "new: " + found.fingerprints.joined(separator: ", "))
             update(alias) { $0.status = .failed(offer.line, .trust(offer)) }
@@ -681,6 +710,7 @@ package final class BoxList {
         switch await BoxHostKey.trust(offer, shell: shell, file: file, keygen: keygen) {
         case nil:
             HostLog.note(alias, "host key", "trusted: " + offer.fingerprints.joined(separator: ", "))
+            defaults?.set(Array(keysSeen(offer.ssh).union(BoxHostKey.keys(offer.lines))), forKey: Self.keysKey + offer.ssh)
             setUpStopped.remove(alias)
             await act(offer.setUp ? .setUp : .checkAgain, on: alias)
         case .changed?:

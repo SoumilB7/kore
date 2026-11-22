@@ -159,12 +159,13 @@ struct BoxIdentityTests {
 
     /// A stand-in ssh: on a key scan it writes `key` for the host into the scratch known_hosts
     /// it's given, as accept-new does.
-    private func fakeSSH(_ folder: URL, key: String) throws -> String {
+    private func fakeSSH(_ folder: URL, key: String, hashed: Bool = false) throws -> String {
         let path = folder.appendingPathComponent("ssh-\(UUID().uuidString.prefix(6))").path
         let script = """
             #!/bin/sh
             for a in "$@"; do case "$a" in UserKnownHostsFile=*) f="${a#UserKnownHostsFile=}" ;; esac; done
             [ -n "$f" ] && echo "mybox-cf \(key)" >> "$f"
+            \(hashed ? "[ -n \"$f\" ] && /usr/bin/ssh-keygen -H -f \"$f\" >/dev/null 2>&1" : "")
             echo "Permission denied (none)." >&2
             exit 255
             """
@@ -197,6 +198,77 @@ struct BoxIdentityTests {
         #expect(BoxHostKey.knownHostsFile(config: "userknownhostsfile /etc/kh\n", home: "/h") == "/etc/kh")
         #expect(BoxHostKey.knownHostsFile(config: "", home: "/h") == "/h/.ssh/known_hosts")
         #expect(BoxHostKey.fingerprints("256 SHA256:abc mybox-cf (ED25519)\n3072 SHA256:def mybox-cf (RSA)\n") == ["ED25519 SHA256:abc", "RSA SHA256:def"])
+    }
+
+    /// `HashKnownHosts yes`: ssh writes the name under a new salt each time, and the same key is
+    /// still the same key; another one isn't.
+    @Test func hashedHostsAreTrustedByTheirKey() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("box-identity-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let shell = BoxShell(ssh: try fakeSSH(folder, key: Self.key1, hashed: true), scp: "/usr/bin/false")
+        let found = try #require(await BoxHostKey.scan("mybox-cf", shell: shell))
+        let again = try #require(await BoxHostKey.scan("mybox-cf", shell: shell))
+        #expect(found.lines.allSatisfy { $0.hasPrefix("|1|") } && found.lines != again.lines && found.fingerprints == [Self.print1])
+        #expect(BoxHostKey.keys(found.lines) == [Self.key1])
+        let offer = BoxHostKey.Offer(ssh: "mybox-cf", fingerprints: found.fingerprints, lines: found.lines, command: "ssh mybox-cf")
+        let file = folder.appendingPathComponent("known_hosts").path
+        let other = BoxShell(ssh: try fakeSSH(folder, key: Self.key2, hashed: true), scp: "/usr/bin/false")
+        #expect(await BoxHostKey.trust(offer, shell: other, file: file) == .changed)
+        #expect(!FileManager.default.fileExists(atPath: file))
+        #expect(await BoxHostKey.trust(offer, shell: shell, file: file) == nil)
+        // ssh finds it by the host's name, and Kore reads it back as the box's key.
+        let found1 = await BoxShell.process(BoxHostKey.keygen, ["-F", "mybox-cf", "-f", file])
+        #expect(found1.ok && BoxHostKey.keys(found1.output.split(separator: "\n").map(String.init)) == [Self.key1])
+        #expect(BoxHostKey.knownHostsName(config: "hostname a.example\nport 22\n") == "a.example")
+        #expect(BoxHostKey.knownHostsName(config: "hostname a.example\nport 2222\n") == "[a.example]:2222")
+        #expect(BoxHostKey.knownHostsName(config: "hostname a.example\nhostkeyalias mybox\nport 2222\n") == "mybox")
+        #expect(BoxHostKey.keys(["# Host a found: line 1", "@revoked a \(Self.key2)", "a \(Self.key1) me"]) == [Self.key1])
+    }
+
+    /// The key ssh has for an alias, read from a hashed file, through `ssh -G`'s host name.
+    @Test func theKeysABoxHasAreReadBackByItsHostName() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("box-identity-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let file = folder.appendingPathComponent("known_hosts").path
+        try "[a.example]:2222 \(Self.key1)\nb.example \(Self.key2)\n".write(toFile: file, atomically: true, encoding: .utf8)
+        #expect(await BoxShell.process(BoxHostKey.keygen, ["-H", "-f", file]).ok)
+        let ssh = folder.appendingPathComponent("ssh-g").path
+        try "#!/bin/sh\nprintf 'hostname a.example\\nport 2222\\nuserknownhostsfile \(file)\\n'\n".write(toFile: ssh, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh)
+        #expect(await BoxHostKey.known("mybox-cf", shell: BoxShell(ssh: ssh, scp: "/usr/bin/false")) == [Self.key1])
+    }
+
+    /// An alias set up before: the key its box had is a new address; another one is said to be
+    /// different, with no Trust; with no key kept, it's only new.
+    @Test(arguments: [0, 1, 2])
+    func aKnownAliasIsMovedOnlyWithTheKeyItsBoxHad(_ index: Int) async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent("box-identity-\(UUID().uuidString.prefix(8))")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let (directory, defaults) = try directory()
+        directory.upsert(.init(device: UUID(), name: "mybox", ssh: "mybox-cf", nodeKey: nil, identityKey: Data([1]), enrolled: true, rekeyed: true))
+        let ssh = try fakeSSH(folder, key: Self.key1)
+        let list = BoxList(
+            defaults: defaults, hosts: { [] }, cacheRoot: folder,
+            setup: { alias, grant in BoxSetup(alias: alias, grant: grant, shell: BoxShell(ssh: ssh, scp: "/usr/bin/false")) })
+        list.directory = { directory }
+        list.scanKey = { @Sendable alias, shell, keygen in await BoxHostKey.scan(alias, shell: shell, keygen: keygen) }
+        list.add("mybox-cf")
+        let before: [String] = [[], [Self.key1], [Self.key2]][index]
+        if !before.isEmpty { defaults.set(before, forKey: BoxList.keysKey + "mybox-cf") }
+        list.injectStatus("mybox-cf", .unreachable(BoxSetup.newKeyLine("mybox-cf", "ssh mybox-cf"), .copy("ssh mybox-cf")))
+        try await waitUntil { if case .failed? = list.box("mybox-cf")?.status { return true }; return false }
+        guard case .failed(let line, let fix)? = list.box("mybox-cf")?.status else { return }
+        switch index {
+        case 0: #expect(line == "mybox-cf's host key is new · " + Self.print1)
+        case 1: #expect(line == "mybox-cf now points at a new address · " + Self.print1)
+        default:
+            #expect(line == BoxHostKey.differentLine("mybox-cf", [Self.print1]) && !BoxSetup.isNewKey(line))
+            #expect(fix == .copy("ssh mybox-cf"))
+        }
+        if index < 2, case .trust? = fix {} else if index < 2 { Issue.record("no Trust: \(line)") }
     }
 
     /// The box list: a new key's line becomes its fingerprint and Trust; Trust writes the key and
