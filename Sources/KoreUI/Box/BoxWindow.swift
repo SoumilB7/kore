@@ -459,10 +459,22 @@ final class BoxChatServices: ChatServices {
         self.making = making
     }
 
-    func makeBackend(_ provider: ProviderDescriptor, _ options: BackendOptions) -> any ChatBackend {
+    /// What the box makes it with. Under a ceiling (a phone's fork): the mode it has now, not its
+    /// original's, and the box keeps the ceiling (`ModeCeilings`).
+    func made(with options: BackendOptions) -> LinkChatBackend.Making {
         var making = making ?? LinkChatBackend.Making(mode: options.mode, effort: options.effort)
         making.model = making.model ?? options.model
-        let backend = LinkChatBackend(connection: connection, provider: provider, folder: folder, chatId: chatId, making: making)
+        if let ceiling = options.modeCeiling {
+            making.mode = options.mode
+            making.settings = making.settings ?? ChatSettings()
+            making.settings?.mode = options.mode
+            making.settings?.modeCeiling = ceiling
+        }
+        return making
+    }
+
+    func makeBackend(_ provider: ProviderDescriptor, _ options: BackendOptions) -> any ChatBackend {
+        let backend = LinkChatBackend(connection: connection, provider: provider, folder: folder, chatId: chatId, making: made(with: options))
         backend.mirror = mirror
         // A rename on the box (from another Mac, or its CLI's own title) shows in this tab.
         backend.onTitle = { [weak self] title in

@@ -272,6 +272,98 @@ class NodeClientTest {
         assertEquals(0, link.sent.count { it.s("t") == "cmd" })
     }
 
+    private val copyOnce = dev.kore.link.node.Control.CopyEnd(null, "w_1", sessionId = "s1")
+    private fun copy(again: Boolean) = dev.kore.link.node.Control.copyVia("ask-1", copyOnce, dev.kore.link.node.Control.CopyEnd(null, "w_2"), "claude", "Repos", again)
+    private fun FakeLink.cmds() = sent.filter { it.s("t") == "cmd" }
+    private fun JsonObject.again() = ((this["cmd"] as JsonObject)["copy"] as JsonObject)["again"] != null
+
+    @Test fun aCopysLinkDropsAndTheNextOneAsksHowItEndedUnderTheSameId() = runTest {
+        val first = link()
+        val second = link()
+        val rig = Rig(this, listOf({ first }, { second }))
+        rig.client.start()
+        runCurrent()
+        val answer = async { rig.client.callAcross(copy(false), copy(true), 900_000) }
+        runCurrent()
+        val sent = first.cmds().single()
+        assertTrue(!sent.again())
+        first.drop(null)
+        advanceTimeBy(1_000)
+        runCurrent()
+        val asked = second.cmds().single()
+        assertEquals(sent.s("id"), asked.s("id"))
+        assertTrue(asked.again())
+        assertTrue(answer.isActive)
+        second.push(buildJsonObject { put("t", "result"); put("id", asked.s("id")!!); put("ok", true) })
+        runCurrent()
+        assertEquals("true", answer.await().s("ok"))
+        // Answered: a later link asks nothing.
+        assertEquals(1, first.cmds().size + second.cmds().size - 1)
+    }
+
+    @Test fun aCopyNeverSentGoesOnceTheNodeIsBackAndOnlyOnce() = runTest {
+        val link = link()
+        val rig = Rig(this, listOf({ NetFailure("timeout") }, { link }))
+        rig.client.start()
+        runCurrent()
+        val answer = async { rig.client.callAcross(copy(false), copy(true), 900_000) }
+        advanceTimeBy(1_000)
+        runCurrent()
+        val sent = link.cmds().single()
+        assertTrue(!sent.again())
+        link.push(buildJsonObject { put("t", "result"); put("id", sent.s("id")!!); put("ok", true) })
+        runCurrent()
+        assertEquals("true", answer.await().s("ok"))
+    }
+
+    @Test fun aCopyWhoseMacNeverComesBackEndsInOneTimeoutAndIsNotAskedLater() = runTest {
+        val first = link()
+        val late = link()
+        val clock = { testScheduler.currentTime }
+        val rig = Rig(this, listOf({ first }) + List(200) { { if (clock() > 900_000) late else PeerOffline() } })
+        rig.client.start()
+        runCurrent()
+        val answer = async { rig.client.callAcross(copy(false), copy(true), 900_000) }
+        runCurrent()
+        first.drop(null)
+        advanceTimeBy(900_001)
+        runCurrent()
+        assertEquals("timeout", answer.await().s("code"))
+        rig.client.reconnectNow()
+        advanceTimeBy(300_000)
+        runCurrent()
+        assertEquals(State.Up, rig.client.state.value)
+        assertEquals(0, late.cmds().size)
+    }
+
+    @Test fun aCopyWhoseMacStaysAwayEndsAfterAMinuteNotTheWholeWait() = runTest {
+        val first = link()
+        val rig = Rig(this, listOf<() -> Any>({ first }) + List(200) { { PeerOffline() } })
+        rig.client.start()
+        runCurrent()
+        val answer = async { rig.client.callAcross(copy(false), copy(true), 900_000, awayMs = 60_000) }
+        runCurrent()
+        first.drop(null)
+        advanceTimeBy(59_000)
+        runCurrent()
+        assertTrue(answer.isActive)
+        advanceTimeBy(2_000)
+        runCurrent()
+        assertEquals("timeout", answer.await().s("code"))
+        // A link that's up the whole while waits for the answer however long the copy takes.
+        val up = link()
+        val steady = Rig(this, listOf({ up }))
+        steady.client.start()
+        runCurrent()
+        val long = async { steady.client.callAcross(copy(false), copy(true), 900_000, awayMs = 60_000) }
+        advanceTimeBy(600_000)
+        runCurrent()
+        assertTrue(long.isActive)
+        up.push(buildJsonObject { put("t", "result"); put("id", up.cmds().single().s("id")!!); put("ok", true) })
+        runCurrent()
+        assertEquals("true", long.await().s("ok"))
+    }
+
     @Test fun queuedCommandsGoOutOnceTheNodeIsBack() = runTest {
         val link = link()
         val rig = Rig(this, listOf({ NetFailure("timeout") }, { link }))

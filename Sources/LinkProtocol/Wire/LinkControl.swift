@@ -155,7 +155,8 @@ package struct ChatPlace: Codable, Sendable, Equatable {
 
 /// `chat.copyVia` (cap "copyVia"): what a phone asks the Mac to copy, and where to. An end is a window on the
 /// Mac (no `device`) or on one of its boxes (the box's device id); the source names an open chat
-/// (`chatId`) or a past session in the window's History (`sessionId`).
+/// (`chatId`) or a past session in the window's History (`sessionId`). `id` is the ask's own: the
+/// Mac runs an id once, and a phone whose link went before the answer asks `again` by it.
 package struct CopyAsk: Codable, Sendable, Equatable {
     package struct End: Codable, Sendable, Equatable {
         package var device: String?
@@ -171,13 +172,17 @@ package struct CopyAsk: Codable, Sendable, Equatable {
         }
     }
 
+    package var id: String
+    package var again: Bool?
     package var from: End
     package var to: End
     /// The source's CLI and title, as the phone shows it (the Mac's own when it has the chat open).
     package var provider: String
     package var title: String
 
-    package init(from: End, to: End, provider: String, title: String) {
+    package init(id: String, again: Bool? = nil, from: End, to: End, provider: String, title: String) {
+        self.id = id
+        self.again = again
         self.from = from
         self.to = to
         self.provider = provider
@@ -283,6 +288,9 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     package var offset: Int64?
     /// `chat.copyVia` (cap "copyVia"): the copy asked for.
     package var copy: CopyAsk?
+    /// The phone a copy is made for (`chat.copy`, `chat.adoptCopy`; cap "copyFor"): the box takes
+    /// it only for a phone its own devices allow to ask.
+    package var phone: String?
     /// 1.16 (`LinkPipe`): the remote command rsync gave its remote shell (`pipe.open`,
     /// `pipe.expect`), a pipe's ticket (base64), and the other box's device id.
     package var argv: [String]?

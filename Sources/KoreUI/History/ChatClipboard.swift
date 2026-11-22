@@ -304,6 +304,7 @@ enum ChatPasting {
         var kept = ChatSettings()
         if let point = AutoCompactMemory.shared.point(chat: session) { kept.autoCompact = point ?? 0 }
         kept.planAllow = ModeMemory.shared.planAllow(chat: session)
+        kept.modeCeiling = ModeCeilings.at(session)
         kept.arsenal = ArsenalMemory.tier(key: ArsenalMemory.key(cli: provider, session: session))?.rawValue
         kept.draft = Workspace.local(URL(fileURLWithPath: folder))?.keptDraft(cli: provider, session: session) ?? ""
         return kept

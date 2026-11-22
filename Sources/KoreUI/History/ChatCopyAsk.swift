@@ -7,7 +7,9 @@ import src
 // A chat copied at a phone's ask (`chat.copyVia`, cap "copyVia", owner 2026-11-24): the phone names a
 // chat and a window, on this Mac or one of its boxes, and this Mac runs the copy with its own
 // grants, as its Paste Chat does (`ChatPasting`). Copy only: the source stays where it is. A copy
-// never has more than a phone's new chat (`ChatSettings.asked`: Manual at most, Arsenal off). One
+// never has more than a phone's new chat (`ChatSettings.asked`: Manual at most, Arsenal off), and
+// never reaches a box the phone isn't allowed on itself: this Mac's records say so first, then the
+// box's own (`ChatCopies.phone`). One
 // into a window here opens as a tab behind the one shown; into a box folder it is the box's chat,
 // and nothing opens on this Mac.
 
@@ -40,8 +42,22 @@ package enum ChatCopyAsk {
         }
     }
 
-    /// Runs the copy; the line says what failed, nothing having changed.
-    package static func run(from: From, to: To, provider said: String, title asked: String) async -> Result<Void, MoveFailure> {
+    /// Runs the copy; the line says what failed, nothing having changed. `refuses`: why the phone
+    /// that asked may not reach a box (by its device id, nil for one that isn't on KoreNet).
+    package static func run(
+        from: From, to: To, provider said: String, title asked: String, phone: UUID?, refuses: @escaping @MainActor (_ box: UUID?, _ name: String) -> String?
+    ) async -> Result<Void, MoveFailure> {
+        func refused(_ key: String) -> MoveFailure? {
+            refuses(directory().entry(forKey: key)?.device ?? UUID(uuidString: key), NodeNames.name(key)).map { MoveFailure($0) }
+        }
+        // Both ends first: a box the phone isn't allowed on is never dialled for it.
+        var named: [String] = []
+        if case .box(let device, _, _) = from { named.append(device) }
+        if case .box(let device, _) = to { named.append(device) }
+        for device in named {
+            guard let key = boxKey(device) else { return .failure(MoveFailure("That box isn't one of this Mac's")) }
+            if let failure = refused(key) { return .failure(failure) }
+        }
         let held = ChatPasting.Held()
         defer { held.release() }
         // Each end as a paste names it; a box's folder by its window, the box linked to say it.
@@ -56,6 +72,8 @@ package enum ChatCopyAsk {
             return .success((key, folder.path, link))
         }
         let source: ChatSpot, id: String
+        // Its transcript on this Mac, as a paste knows it (a chat from before its folder's rename).
+        var known: String?
         // What this Mac knows of the chat stands over what the phone said of it.
         var (provider, title) = (said, asked.trimmingCharacters(in: .whitespaces))
         switch from {
@@ -65,11 +83,11 @@ package enum ChatCopyAsk {
             // A box window's chat here is the box's: the phone copies it from the box's own list.
             guard case .mac = spot else { return .failure(MoveFailure("Copy it from \(spot.destination)'s list")) }
             (source, id) = (spot, session)
-            (provider, title) = (chat.provider.id, chat.title)
+            (provider, title, known) = (chat.provider.id, chat.title, chat.resumedFile)
         case .history(let window, let session):
-            guard window.chats.contains(where: { $0.id == session }) else { return .failure(MoveFailure("That chat isn't in this folder's history")) }
+            guard let row = window.chats.first(where: { $0.id == session }) else { return .failure(MoveFailure("That chat isn't in this folder's history")) }
             (source, id) = (window.spot(of: session), session)
-            if let row = window.chats.first(where: { $0.id == session }) { (provider, title) = (Registry.provider(for: row.agent).id, row.title) }
+            (provider, title, known) = (Registry.provider(for: row.agent).id, row.title, row.file?.path)
         case .box(let device, let windowId, let chat):
             switch await boxFolder(device, windowId) {
             case .failure(let failure): return .failure(failure)
@@ -88,8 +106,10 @@ package enum ChatCopyAsk {
             case .success(let (key, folder, _)): (target, window) = (.box(alias: key, folder: folder), nil)
             }
         }
+        // A box's folder window here is the box's too.
+        for case .box(let alias, _) in [source, target] { if let failure = refused(alias) { return .failure(failure) } }
         if title.isEmpty { title = "Untitled chat" }
-        let clip = ChatClipboard.Clip(spot: source, id: id, provider: provider, title: title, cut: false, known: nil)
+        let clip = ChatClipboard.Clip(spot: source, id: id, provider: provider, title: title, cut: false, known: known)
         let duplicate = source == target
         // The bar shows where the copy lands when a window here shows it (else on the source's).
         let shownIn = window ?? Workspace.all.allObjects.first { !$0.isClosed && $0.spot == target } ?? Workspace.all.allObjects.first { !$0.isClosed && $0.spot == source }
@@ -97,7 +117,8 @@ package enum ChatCopyAsk {
         let transfer = shownIn.map {
             TransferProgress.shared.begin(
                 "Copying chat to \(target.destination)", done: "Copied chat to \(target.destination)", window: $0.transferKey,
-                peer: ChatPasting.measuredPeer(from: source, to: target), cancel: { stopper.stop() })
+                peer: ChatPasting.measuredPeer(from: source, to: target), cancel: { stopper.stop() },
+                retry: { Task { _ = await run(from: from, to: to, provider: said, title: asked, phone: phone, refuses: refuses) } })
         }
         func failed(_ failure: MoveFailure) -> Result<Void, MoveFailure> {
             if let transfer { TransferProgress.shared.finish(transfer, failure: failure.line, cancelled: false) }
@@ -114,12 +135,13 @@ package enum ChatCopyAsk {
         var copies = ChatPasting.copies()
         copies.arsenalAllowed = Arsenal.shared.allowed
         copies.asked = true
+        copies.phone = phone
         copies.stopper = stopper
         if let transfer { copies.progress = { bytes, total in TransferProgress.shared.update(transfer, bytes: bytes, total: total) } }
         let newTitle = duplicate ? "\(title) (copy)" : title
         let mark = "Copied from “\(title)” · \(source.shown)"
         let made: ChatCopy
-        switch await copies.copy(CopySource(end: fromEnd, id: id, provider: provider, title: title, known: nil, settings: carried), to: toEnd, title: newTitle, line: mark) {
+        switch await copies.copy(CopySource(end: fromEnd, id: id, provider: provider, title: title, known: known, settings: carried), to: toEnd, title: newTitle, line: mark) {
         case .failure(let failure): return failed(failure)
         case .success(let copy): made = copy
         }

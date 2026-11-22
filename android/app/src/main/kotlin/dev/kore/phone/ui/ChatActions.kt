@@ -1262,7 +1262,10 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         val permission = card.str("kind") == "permission"
         val body = card.str("body")?.takeIf { it.isNotBlank() && it != title }
         body?.let {
-            val shown = activity.label(it.take(600))
+            // Whole: the card scrolls, and nothing is allowed or approved unread. A plan reads as
+            // the Mac shows it (its headings, lists and code), a command as it runs.
+            val whole = it.take(MAX_CARD_BODY)
+            val shown = activity.label(if (permission) whole else Doc.render(Markdown.parse(whole)))
             if (permission) cardKeep = shown
             sheet.addView(shown.apply {
                 if (permission) {
@@ -1554,6 +1557,8 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     }
 
     companion object {
+        /** A card's body past this is cut (a text view's own limit, far past any plan or command). */
+        const val MAX_CARD_BODY = 100_000
         /** The highest mode level a raise from the phone asks for (Auto); Bypass and Full access never. */
         const val RAISE_CAP = 3
         const val PICK = 41

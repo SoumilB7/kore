@@ -38,17 +38,31 @@ object ChatCopy {
     }
 
     /** The command for [clip] into [windowId] on [to], run by the Mac [mac]: an end on that Mac names no device. */
-    fun command(clip: Clip, to: String, windowId: String, mac: String) = Control.copyVia(
+    fun command(id: String, clip: Clip, to: String, windowId: String, mac: String, again: Boolean = false) = Control.copyVia(
+        id,
         Control.CopyEnd(clip.device.takeIf { it != mac }, clip.windowId, clip.chatId, clip.sessionId),
         Control.CopyEnd(to.takeIf { it != mac }, windowId),
-        clip.provider, clip.title,
+        clip.provider, clip.title, again,
     )
+
+    /** The one line a copy ends with, from its `result` ([ok], its code and the device's own words). */
+    fun line(ok: Boolean, code: String?, message: String?, title: String, where: String, mac: String): String = when {
+        ok -> "Copied “$title” to $where"
+        // Never sent: out of reach, queued and given up on, or the link going as it was.
+        code == "offline" || code == "expired" || (code == "busy" && message == null) -> "Not copied · $mac is out of reach"
+        // Sent, and the Mac never came back to say: it may have been made.
+        code == "timeout" -> "No word from $mac · look there before copying again"
+        else -> refusalWords(code, message)
+    }
 
     /** The Mac's word that it takes `chat.copyVia`. */
     const val CAP = "copyVia"
 
     /** How long a copy may take before the phone says it got no answer (a long chat to a slow box). */
     const val WAIT_MS = 15 * 60_000L
+
+    /** How long the Mac may be out of reach before the phone says it got no answer. */
+    const val AWAY_MS = 60_000L
 }
 
 /** [n] as a copy's route reads it. */
@@ -84,15 +98,11 @@ fun Activity.pasteChat(to: NodeClient, windowId: String, windowName: String) {
     val where = if (to.id == mac.id) windowName else to.name
     Quiet.say(this, "Copying “${clip.title}” to $where…", holdMs = ChatCopy.WAIT_MS)
     kore.scope.launch {
-        val r = mac.call(ChatCopy.command(clip, to.id.toString(), windowId, mac.id.toString()), timeoutMs = ChatCopy.WAIT_MS)
-        val line = when {
-            r.bool("ok") -> "Copied “${clip.title}” to $where"
-            // Never sent: out of reach, or queued and given up on.
-            r.str("code") == "offline" || r.str("code") == "expired" -> "Not copied · ${mac.name} is out of reach"
-            // Sent, but its answer never came (the link dropped): it may have been made.
-            r.str("code") == "timeout" -> "No word from ${mac.name} · look there before copying again"
-            else -> refusalWords(r.str("code"), r.str("message"))
-        }
+        // A link that goes meanwhile: the next one asks how this same copy ended, never for another.
+        val ask = java.util.UUID.randomUUID().toString()
+        fun command(again: Boolean) = ChatCopy.command(ask, clip, to.id.toString(), windowId, mac.id.toString(), again)
+        val r = mac.callAcross(command(false), command(true), ChatCopy.WAIT_MS, ChatCopy.AWAY_MS)
+        val line = ChatCopy.line(r.bool("ok"), r.str("code"), r.str("message"), clip.title, where, mac.name)
         // The line ends where it started, and the screen in front says it too if another took its place.
         runOnUiThread {
             Quiet.say(this@pasteChat, line)

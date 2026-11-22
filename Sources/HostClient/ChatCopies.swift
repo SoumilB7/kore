@@ -104,6 +104,8 @@ extension ChatSettings {
     func asked(provider: String) -> ChatSettings {
         var said = self
         said.mode = LinkPolicy.askedMode(mode, provider: provider)
+        // Its history may end higher: its CLI never goes there by itself.
+        said.modeCeiling = min(modeCeiling ?? .max, LinkPolicy.leavePlanMaxLevel.rawValue)
         said.arsenal = nil
         said.planAllow = false
         return said
@@ -127,11 +129,58 @@ package struct ChatCopies {
     package var arsenalAllowed = true
     /// A phone asked for it (`chat.copyVia`): the copy's settings are capped (`ChatSettings.asked`).
     package var asked = false
+    /// The phone that asked: each box says whether it's allowed there (`ControlArgs.phone`).
+    package var phone: UUID?
+    /// How long a copy waits for a box whose link went partway, before it says so.
+    package var patience: Duration = .seconds(60)
 
     package init(env: [String: String] = ProcessInfo.processInfo.environment, staging: URL, trash: URL) {
         self.env = env
         self.staging = staging
         self.trash = trash
+    }
+
+    /// `args` naming the phone a copy is made for.
+    func told(_ args: ControlArgs) -> ControlArgs {
+        var args = args
+        args.phone = phone?.uuidString.lowercased()
+        return args
+    }
+
+    /// A box that can't check the phone that asked is never copied to or from for it.
+    func unchecked(_ connection: HostConnection) -> MoveFailure? {
+        phone == nil || connection.caps.contains(LinkPolicy.copyForCap) ? nil : MoveFailure("Update kore-host on \(NodeNames.name(connection.alias)) to copy from a phone")
+    }
+
+    // MARK: A link that goes
+
+    /// The box is linked now, or comes back within `patience` (a stopped copy waits no longer).
+    func back(_ connection: HostConnection) async -> Bool {
+        let end = ContinuousClock.now + patience
+        while !connection.isOnline {
+            if case .refused = connection.phase { return false }
+            guard connection.inUse, stopper?.isStopped != true, ContinuousClock.now < end else { return false }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+        return true
+    }
+
+    /// The copy's last step on a box, never left waiting on a dead link and never run twice: one
+    /// whose answer was lost with the link is asked again once it's back, and the box says the
+    /// chat it made the first time.
+    func commit(_ args: ControlArgs, on connection: HostConnection) async -> MoveResult {
+        let box = NodeNames.name(connection.alias)
+        // A box drops a lost link's staging, so nothing was made there and nothing will be.
+        let nothing = "Lost \(box) partway · nothing changed"
+        let unsure = "Lost \(box) at the end · look there before copying again"
+        guard await back(connection) else { return .refused("", .unknown, nothing) }
+        var said = await connection.move(.chatAdoptCopy, args)
+        if !said.ok, said.message == connection.lostLine {
+            guard await back(connection) else { return .refused("", .unknown, unsure) }
+            said = await connection.move(.chatAdoptCopy, args)
+            if !said.ok, said.message == connection.lostLine { return .refused("", .unknown, unsure) }
+        }
+        return !said.ok && said.code == .goneSession ? .refused(said.id, .goneSession, nothing) : said
     }
 
     // MARK: Copy
@@ -165,7 +214,7 @@ package struct ChatCopies {
     ) async -> Result<ChatCopy, MoveFailure> {
         let title = title ?? source.title
         func carried(_ settings: ChatSettings?, _ provider: String) -> ChatSettings {
-            guard var settings = settings?.linkable else { return ChatSettings() }
+            var settings = settings?.linkable ?? ChatSettings()
             if asked { settings = settings.asked(provider: provider) }
             if !draft { settings.draft = nil }
             settings.at = nil
@@ -182,6 +231,8 @@ package struct ChatCopies {
             switch target {
             case .mac(let to):
                 let (env, provider, old) = (env, source.provider, source.id)
+                let settings = carried(source.settings, source.provider)
+                ModeCeilings.put(settings.modeCeiling, for: new)
                 let placed = await Task.detached(priority: .userInitiated) { () -> Result<SessionFiles.Found, MoveFailure> in
                     do {
                         return .success(
@@ -194,8 +245,9 @@ package struct ChatCopies {
                 if case .success = placed {
                     progress?(total, total)
                     Self.keepRollbackPoint(cut, provider: provider, session: new)
+                } else {
+                    ModeCeilings.put(nil, for: new)
                 }
-                let settings = carried(source.settings, source.provider)
                 return placed.map { _ in ChatCopy(provider: provider, session: new, title: title, settings: settings) }
             case .box(let moves, let folder):
                 return await push(
@@ -204,10 +256,12 @@ package struct ChatCopies {
             }
         case .box(let moves, let folder):
             guard moves.connection.copiesChats else { return .failure(MoveFailure("Update kore-host on \(NodeNames.name(moves.connection.alias)) to copy chats")) }
+            if let failure = unchecked(moves.connection) { return .failure(failure) }
+            if case .box(let other, _) = target, let failure = unchecked(other.connection) { return .failure(failure) }
             var cost = MoveCost()
             let said = await moves.connection.move(
                 .chatCopy,
-                ControlArgs(title: source.title, sourceId: source.id, provider: source.provider, folder: folder, phase: MovePhase.prepare.rawValue, stop: stop ? true : nil))
+                told(ControlArgs(title: source.title, sourceId: source.id, provider: source.provider, folder: folder, phase: MovePhase.prepare.rawValue, stop: stop ? true : nil)))
             cost.linkBytes += moves.connection.lastMoveBytes
             guard said.ok, let info = said.move else { return .failure(MoveFailure(said.message ?? "Couldn't copy it", said.code)) }
             let files = info.files.filter(SessionFiles.plain)
@@ -230,6 +284,7 @@ package struct ChatCopies {
             switch target {
             case .mac(let to):
                 let (env, old, folders) = (env, info.sessionId, info.folders)
+                ModeCeilings.put(settings.modeCeiling, for: new)
                 let placed = await Task.detached(priority: .userInitiated) { () -> Result<SessionFiles.Found, MoveFailure> in
                     do {
                         return .success(try SessionCopy.placed(found, provider: info.provider, folders: folders, session: old, to: to, as: new, whole: whole, env: env))
@@ -241,6 +296,8 @@ package struct ChatCopies {
                 if case .success = placed {
                     progress?(total, total)
                     Self.keepRollbackPoint(info.rollbackAt, provider: info.provider, session: new)
+                } else {
+                    ModeCeilings.put(nil, for: new)
                 }
                 return placed.map { _ in made }
             case .box(let other, let folder):
@@ -259,27 +316,29 @@ package struct ChatCopies {
     ) async -> Result<ChatCopy, MoveFailure> {
         let connection = moves.connection
         guard connection.copiesChats else { return .failure(MoveFailure("Update kore-host on \(NodeNames.name(connection.alias)) to copy chats")) }
+        if let failure = unchecked(connection) { return .failure(failure) }
         var made = settings
         let moveId = UUID().uuidString.lowercased()
-        let prepared = await connection.move(.chatAdoptCopy, ControlArgs(provider: provider, sessionId: new, phase: MovePhase.prepare.rawValue, moveId: moveId))
+        let prepared = await connection.move(.chatAdoptCopy, told(ControlArgs(provider: provider, sessionId: new, phase: MovePhase.prepare.rawValue, moveId: moveId)))
         made.cost.linkBytes += connection.lastMoveBytes
         guard prepared.ok, let info = prepared.move else { return .failure(MoveFailure(prepared.message ?? "Couldn't copy it there", prepared.code)) }
-        func abort(_ line: String) async -> Result<ChatCopy, MoveFailure> {
-            _ = await connection.move(.chatAdoptCopy, ControlArgs(phase: MovePhase.abort.rawValue, moveId: moveId))
+        // Told only while linked, and not waited for: a box whose link went clears its own staging.
+        func abort(_ line: String) -> Result<ChatCopy, MoveFailure> {
+            if connection.isOnline { Task { _ = await connection.move(.chatAdoptCopy, ControlArgs(phase: MovePhase.abort.rawValue, moveId: moveId)) } }
             return .failure(MoveFailure(line))
         }
         let pushed = await moves.rsync(files: found.files, from: found.root.path + "/", to: moves.box.spec(info.root + "/"))
         made.cost.rsyncSent += pushed.sent
         made.cost.rsyncReceived += pushed.received
         made.cost.files = found.files.count
-        guard pushed.ok else { return await abort("Couldn't copy the session: \(pushed.said)") }
+        guard pushed.ok else { return abort("Couldn't copy the session: \(pushed.said)") }
         made.settings = settings.settings.said(to: connection, provider: provider, arsenal: arsenalAllowed, notes: &made.notes).linkable
         var commit = ControlArgs(
             title: settings.title.map { String($0.prefix(LinkPolicy.maxTitle)) }, modelId: made.settings.modelId, level: made.settings.effort, sourceId: old,
             provider: provider, sessionId: new, mode: made.settings.mode, folder: folder, folders: folders, phase: MovePhase.commit.rawValue, moveId: moveId,
             copiedFrom: line, settings: made.settings)
         commit.rollbackAt = rollbackAt
-        let adopted = await connection.move(.chatAdoptCopy, commit)
+        let adopted = await self.commit(told(commit), on: connection)
         made.cost.linkBytes += connection.lastMoveBytes
         guard adopted.ok, let chatId = adopted.chatId else { return .failure(MoveFailure(adopted.message ?? "\(NodeNames.name(connection.alias)) didn't take it", adopted.code)) }
         made.chatId = chatId

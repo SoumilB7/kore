@@ -180,10 +180,15 @@ object Control {
      */
     data class CopyEnd(val device: String?, val windowId: String, val chatId: String? = null, val sessionId: String? = null)
 
-    /** Cap "copyVia": the Mac copies a chat (never a cut) from [from] into the window [to], with its own grants. */
-    fun copyVia(from: CopyEnd, to: CopyEnd, provider: String, title: String) = cmd("chat.copyVia") {
+    /**
+     * Cap "copyVia": the Mac copies a chat (never a cut) from [from] into the window [to], with its
+     * own grants, once per [id]; [again] asks how one whose answer was lost with its link ended.
+     */
+    fun copyVia(id: String, from: CopyEnd, to: CopyEnd, provider: String, title: String, again: Boolean = false) = cmd("chat.copyVia") {
         fun end(e: CopyEnd) = buildJsonObject { putOpt("device", e.device); put("windowId", e.windowId); putOpt("chatId", e.chatId); putOpt("sessionId", e.sessionId) }
         put("copy", buildJsonObject {
+            put("id", id)
+            if (again) put("again", true)
             put("from", end(from))
             put("to", end(CopyEnd(to.device, to.windowId)))
             put("provider", provider)

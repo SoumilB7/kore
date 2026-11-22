@@ -680,6 +680,8 @@ package final class Workspace {
 
     private func open(_ fork: Chat, of chat: Chat, text: String, arsenal: Bool = true) {
         fork.controls.mode = chat.controls.mode
+        // Its original's ceiling, whatever its CLI says the history ended in.
+        if let ceiling = chat.modeCeiling, fork.modeCeiling == nil { fork.setModeCeiling(ceiling) }
         fork.controls.planMode = chat.controls.planMode
         // Kept under its session once its CLI names one.
         fork.controls.planAllow = chat.controls.planAllow

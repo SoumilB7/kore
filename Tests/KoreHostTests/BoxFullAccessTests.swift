@@ -143,6 +143,12 @@ struct BoxFullAccessTests {
         let new = ControlArgs(provider: cli, mode: full)
         #expect(LinkPolicy.checkBox(.chatNew, new, nil, control: .full, levels: levels) != .allow)
         #expect(LinkPolicy.checkBox(.chatNew, new, nil, control: .full, levels: levels, fullAccess: true) == .allow)
+        // A fork of a session, whose history may end in Full access: held at what the link may give.
+        let forked = ControlArgs(entryId: "u1", provider: cli, sessionId: "s1", settings: ChatSettings(modeCeiling: 4))
+        #expect(LinkPolicy.forkHeld(forked, control: .standard, fullAccess: false).settings?.modeCeiling == 1)
+        #expect(LinkPolicy.forkHeld(forked, control: .full, fullAccess: false).settings?.modeCeiling == 3)
+        #expect(LinkPolicy.forkHeld(forked, control: .full, fullAccess: true).settings?.modeCeiling == 4)
+        #expect(LinkPolicy.forkHeld(new, control: .standard, fullAccess: false) == new)
         // A Mac with full control: in Full access, kept for the chat's next start.
         #expect(set(.full)?.ok == true)
         #expect(hc.record.mode == full && hc.live(services: rig.host.services).controls.mode == full)

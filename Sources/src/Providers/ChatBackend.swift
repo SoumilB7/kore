@@ -43,6 +43,8 @@ package protocol ChatBackend: AnyObject {
     var peerAddress: String? { get }
     /// Before `start()`, sets what the CLI launches with.
     func setMode(_ id: String) async throws
+    /// The owner moved the chat's ceiling (`ModeCeilings`); a box keeps its own chats'.
+    func setModeCeiling(_ level: Int?)
     /// A no-op for providers without a plan toggle.
     func setPlanMode(_ on: Bool) async
     func setModel(_ id: String) async throws
@@ -150,6 +152,8 @@ package struct BackendOptions {
     /// The provider's mode id to launch in.
     package var mode: String
     package var planMode = false
+    /// The highest mode level it may launch in or carry on from its history in (`ModeCeilings`).
+    package var modeCeiling: Int?
     /// Launch on this model and effort instead of the CLI's defaults (a fork keeps the
     /// original's; the dev hook's cheap test models).
     package var model: String?
@@ -307,6 +311,8 @@ extension ChatBackend {
 
     /// For a backend whose chat's settings are this Mac's.
     package func keepAutoCompact(_ point: Int?) {}
+    package func setModeCeiling(_ level: Int?) {}
+
     package var keepsPlanAllow: Bool { false }
     package var tellsAnnouncedName: Bool { true }
     package func keepPlanAllow(_ on: Bool) {}

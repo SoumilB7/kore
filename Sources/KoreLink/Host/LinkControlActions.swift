@@ -11,7 +11,7 @@ import src
 enum LinkControlActions {
     typealias Outcome = LinkActions.Outcome
 
-    static func apply(_ kind: ControlKind, _ args: ControlArgs, control: LinkControlLevel, files: [URL] = []) async -> Outcome {
+    static func apply(_ kind: ControlKind, _ args: ControlArgs, control: LinkControlLevel, files: [URL] = [], phone: UUID? = nil) async -> Outcome {
         let chats = LinkSnapshot.chatsByID()
         let chat = args.chatId.flatMap { chats[$0] }
         if case .deny(let code, let message) = LinkPolicy.check(.control(kind, args), chat.map(LinkSnapshot.facts), control: control) {
@@ -26,7 +26,7 @@ enum LinkControlActions {
             Arsenal.shared.stopAll()
             return .done
         }
-        return await onWindow(kind, args, files: files)
+        return await onWindow(kind, args, files: files, phone: phone)
     }
 
     // MARK: Chats
@@ -154,7 +154,7 @@ enum LinkControlActions {
         }
     }
 
-    private static func onWindow(_ kind: ControlKind, _ args: ControlArgs, files: [URL]) async -> Outcome {
+    private static func onWindow(_ kind: ControlKind, _ args: ControlArgs, files: [URL], phone: UUID?) async -> Outcome {
         switch kind {
         case .windowOpen:
             guard let id = args.recentId, let folder = LinkSnapshot.recent(id) else { return .failed(.goneFolder, "That folder isn't in Kore's recents.") }
@@ -168,7 +168,7 @@ enum LinkControlActions {
             return LinkAwake.choose(args.mode ?? "") ? .done : .failed(.invalid, "Stay awake has no such mode.")
         case .chatCopyVia:
             guard let ask = args.copy else { return .failed(.invalid, "Name the chat and where it goes.") }
-            return await LinkCopyVia.run(ask)
+            return await LinkCopyVia.run(ask, phone: phone)
         default: break
         }
         guard let workspace = LinkSnapshot.workspaces().first(where: { LinkSnapshot.windowID($0) == args.windowId }) else {

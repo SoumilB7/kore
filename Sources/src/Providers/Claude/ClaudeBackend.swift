@@ -130,6 +130,7 @@ package final class ClaudeBackend: ChatBackend {
     private func launch() async throws {
         try Task.checkCancellation()
         translator.launching()
+        options.mode = ProviderDescriptor.claude.held(options.mode, under: options.modeCeiling)
         // A resumed session's past is read while the CLI starts, and shown as soon as it's read
         // (a page takes a fraction of a second, the CLI a second or more).
         let folder = options.folder
@@ -189,7 +190,7 @@ package final class ClaudeBackend: ChatBackend {
             // Parsed into events off the main thread, on a translator of its own.
             let replayed = await ClaudeTranslator.replayed(first.messages, folder: folder, sessionId: translator.sessionId)
             var carried = replayed.carried
-            yield(.replayed(replayed.events))
+            yield(.replayed(replayed.events + hold(&carried.mode)))
             let shown = Self.ms(ContinuousClock.now - began)
             var corrected = false
             // A long transcript's page came from its end: the rest of the file is indexed now,
@@ -208,7 +209,7 @@ package final class ClaudeBackend: ChatBackend {
                     corrected = true
                     let again = await ClaudeTranslator.replayed(exact.messages, folder: folder, sessionId: translator.sessionId)
                     carried = again.carried
-                    yield(.historyReplaced(again.events))
+                    yield(.historyReplaced(again.events + hold(&carried.mode)))
                     lookup = await lookUpUnfinished(carried)
                 }
             }
@@ -287,6 +288,16 @@ package final class ClaudeBackend: ChatBackend {
         // The context's fill and window as soon as the CLI is up (a resumed chat's too).
         refreshContext()
     }
+
+    /// The mode its history ended in under the chat's ceiling, and the change that says so (the
+    /// replay's last word on it, for every store that follows).
+    private func hold(_ mode: inout String?) -> [ChatEvent] {
+        guard let ended = mode, case let held = ProviderDescriptor.claude.held(ended, under: options.modeCeiling), held != ended else { return [] }
+        mode = held
+        return [.modeChanged(ModeChange(mode: held, previous: ended, source: .session, at: .now))]
+    }
+
+    package func setModeCeiling(_ level: Int?) { options.modeCeiling = level }
 
     /// Through the running CLI; once it has exited, or before it starts, a short-lived one.
     package func usage() async throws -> PlanReading {
@@ -587,6 +598,10 @@ package final class ClaudeBackend: ChatBackend {
         switch event {
         case .sessionStarted(let info):
             KoreSessions.shared.record(cli: "claude", session: info.sessionId, folder: options.folder, launch: "started", account: planAccount)
+            // A CLI that says it runs above the chat's ceiling is put back under it.
+            if let mode = info.permissionMode, case let held = ProviderDescriptor.claude.held(mode, under: options.modeCeiling), held != mode {
+                Task { try? await setMode(held) }
+            }
         case .raw(let json) where json["type"]?.string == "rate_limit_event":
             // The plan's windows as this turn began: kept for usage attribution, and the usage mark.
             var snapshot = PlanSnapshot.claude(rateLimitEvent: json, account: planAccount)

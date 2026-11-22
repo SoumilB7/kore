@@ -362,9 +362,13 @@ struct LinkControlTests {
     static let chat = LinkPolicy.ChatFacts(level: .manual, modes: ["default": .manual])
 
     /// Every field any 1.2 command reads, filled in.
-    static let args = ControlArgs(
-        chatId: "x", windowId: "w", title: "A name", on: true, text: "hi", provider: "claude", login: "main", serial: 1,
-        input: "CODE-FROM-PAGE", tier: "own")
+    static let args: ControlArgs = {
+        var args = ControlArgs(
+            chatId: "x", windowId: "w", title: "A name", on: true, text: "hi", provider: "claude", login: "main", serial: 1,
+            input: "CODE-FROM-PAGE", tier: "own")
+        args.copy = CopyAsk(id: "ask", from: .init(windowId: "w", chatId: "x"), to: .init(windowId: "w"), provider: "claude", title: "A name")
+        return args
+    }()
 
     @Test(arguments: ControlKind.allCases)
     func refusedWithoutTheGrant(_ kind: ControlKind) {

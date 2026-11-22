@@ -94,7 +94,7 @@ package final class Chat: Identifiable {
     @ObservationIgnored private var importedEvents: [ChatEvent]?
     /// A past session's history hasn't been shown yet; messages sent meanwhile wait in `held`,
     /// so they come after it rather than above it.
-    @ObservationIgnored private var awaitingHistory: Bool
+    @ObservationIgnored package private(set) var awaitingHistory: Bool
     @ObservationIgnored private var held: [ChatEvent] = []
     /// Messages sent while a turn ran, by Kore's id, until the CLI takes or drops them.
     @ObservationIgnored private var waiting: [String: (text: String, files: [Attachment])] = [:]
@@ -210,6 +210,9 @@ package final class Chat: Identifiable {
             ownAutoCompact = true
         }
         if fork == nil, let id = session?.id { controls.restorePlanAllow(chat: id) }
+        // A fork starts under its original's, and keeps it under its own session once that comes.
+        modeCeiling = session.flatMap { ModeCeilings.at($0.id) }
+        controls.mode = provider.held(controls.mode, under: modeCeiling)
         status = ChatStatus(resume: fork == nil ? session : nil)
         if fork != nil { status.name = session?.title }
         transcriptView.providerName = provider.name
@@ -401,6 +404,8 @@ package final class Chat: Identifiable {
             approvals.apply(event)
         }
         controls.apply(event)
+        // Whatever its history ended in: the owner's to raise.
+        if case .replayed = event { controls.mode = provider.held(controls.mode, under: modeCeiling) }
         arsenalFollowMode()
         noteAgentModeChange(event)
         dropUnofferedMode(event)
@@ -411,6 +416,12 @@ package final class Chat: Identifiable {
         }
         if case .sessionIdentified(let id) = event, controls.planAllow, id != status.sessionId, !(backend?.keepsPlanAllow ?? false) {
             controls.keepPlanAllow(chat: id)
+        }
+        // Its ceiling goes with the chat to a session of its own (a fork's) or a new one (/clear).
+        switch event {
+        case .sessionIdentified(let id), .conversationReset(let id):
+            if let modeCeiling, id != status.sessionId { ModeCeilings.put(modeCeiling, for: id) }
+        default: break
         }
         if case .sessionIdentified(let id) = event, let record = imported?.record, record.target.session != id {
             Task.detached { HandoffRecords.alias(record, session: id) }
@@ -593,6 +604,7 @@ package final class Chat: Identifiable {
             var options = BackendOptions(
                 folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode,
                 model: launchModel, effort: launchEffort, fork: fork, forkTitle: fork == nil ? nil : status.name)
+            options.modeCeiling = modeCeiling
             options.fastMode = launchFastMode
             options.environment = launchEnvironment
             options.started = { [weak self] in self?.noteActive() }
@@ -2014,7 +2026,28 @@ package final class Chat: Identifiable {
     /// time, in order: one made while another is under way (Full access starting the CLI again)
     /// waits for it, and only the latest of those waiting goes. The pill and the remembered mode
     /// end on the mode the CLI is in.
-    package func setMode(_ id: String, remember: Bool = true) {
+    /// How high its mode may go without its owner (`ModeCeilings`); nil: no ceiling.
+    @ObservationIgnored package private(set) var modeCeiling: Int?
+
+    /// Moves its ceiling, for the CLI's next launch and replay too. `nil`: none.
+    package func setModeCeiling(_ level: Int?) {
+        modeCeiling = level
+        if let id = status.sessionId { ModeCeilings.put(level, for: id) }
+        backend?.setModeCeiling(level)
+    }
+
+    /// The owner picked `id` (here, or a phone's fingerprint): a ceiling below it comes up to it.
+    /// The ceiling before, to put back if the CLI doesn't take it.
+    package func raiseCeiling(to id: String) -> Int? {
+        let before = modeCeiling
+        if provider.held(id, under: before) != id { setModeCeiling(provider.ceiling(picking: id)) }
+        return before
+    }
+
+    /// `raises`: the owner's own pick, which lifts a ceiling below it; any other stays under it.
+    package func setMode(_ picked: String, remember: Bool = true, raises: Bool = true) {
+        let id = raises ? picked : provider.held(picked, under: modeCeiling)
+        let ceiling = raises ? raiseCeiling(to: id) : modeCeiling
         controls.changedBy = nil
         settingsChangedAt = Date()
         if modeInEffect == nil { modeInEffect = controls.mode }
@@ -2035,6 +2068,7 @@ package final class Chat: Identifiable {
                 if remember { self.controls.remember(id) }
             } catch {
                 if pick == self.modePicks, let back = self.modeInEffect { self.controls.mode = back }
+                if pick == self.modePicks, self.modeCeiling != ceiling { self.setModeCeiling(ceiling) }
                 self.fail("Couldn't switch mode: \(error)")
             }
             if pick == self.modePicks {
@@ -2202,6 +2236,8 @@ package final class Chat: Identifiable {
         // Allow dim with a reason (a call Auto never runs): nothing, and the card stays.
         if approval.allowNote != nil, !Self.denies(decision) { return }
         if case .allowAlways = decision { alwaysAllowed = true }
+        // The owner's (a phone's is refused before here): it raises as a pick does.
+        if case .approvePlan(autoAcceptEdits: true) = decision { _ = raiseCeiling(to: "acceptEdits") }
         approvals.remove(approval.id)
         transcriptView.approvalSettled(approval.id)
         if case .deny = decision { transcriptView.actionDenied() }

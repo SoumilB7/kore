@@ -178,8 +178,14 @@ extension Workspace {
         return tabs.filter { !before.contains($0.id) }
     }
 
-    /// A chat copied in at a phone's ask (`ChatCopyAsk`): its tab behind the one shown.
-    func linkLand(_ landing: ChatLanding) -> Chat? { keepingActive { land(landing) } }
+    /// A chat copied in at a phone's ask (`ChatCopyAsk`): its tab behind the one shown, a New tab
+    /// shown too (whoever is at the Mac may be about to use it).
+    func linkLand(_ landing: ChatLanding) -> Chat? {
+        keepingActive {
+            if activeTab.isEmpty { newTab() }
+            return land(landing)
+        }
+    }
 
     package func linkSelect(_ tab: ChatTab) { select(tab) }
 
@@ -232,13 +238,15 @@ extension Workspace {
     /// `startChatFromLink` starts one, whatever was picked last on this Mac.
     static func linkStarts(_ chat: Chat) {
         let first = chat.provider.modes[0].id
-        if chat.controls.mode != first { chat.setMode(first, remember: false) }
+        if chat.controls.mode != first { chat.setMode(first, remember: false, raises: false) }
     }
 
     /// A chat the link carried on from another (a fork): no higher than a link raises one.
     static func linkCaps(_ chat: Chat) {
         let capped = LinkPolicy.cappedMode(chat.controls.mode, provider: chat.provider.id)
-        if capped != chat.controls.mode { chat.setMode(capped, remember: false) }
+        // Its history may end higher: that stays the person's to give too.
+        chat.setModeCeiling(min(chat.modeCeiling ?? .max, LinkPolicy.raiseCap.rawValue))
+        if capped != chat.controls.mode { chat.setMode(capped, remember: false, raises: false) }
     }
 
     package func linkNewBoard() -> ChatTab? { newTabs { newBoard() }.first }

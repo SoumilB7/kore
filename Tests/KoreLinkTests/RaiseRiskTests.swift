@@ -110,14 +110,15 @@ struct RaiseRiskTests {
         // What the Mac takes of one: one chat or past session from a window, to a window, a CLI Kore
         // runs, a one-line title; a box's end by its device id.
         let box = UUID().uuidString
-        func ask(_ from: CopyAsk.End, _ to: CopyAsk.End = .init(windowId: "w_1"), provider: String = "claude", title: String = "Repos") -> LinkPolicy.Verdict {
+        func ask(_ from: CopyAsk.End, _ to: CopyAsk.End = .init(windowId: "w_1"), provider: String = "claude", title: String = "Repos", id: String = "ask-1") -> LinkPolicy.Verdict {
             var args = ControlArgs()
-            args.copy = CopyAsk(from: from, to: to, provider: provider, title: title)
+            args.copy = CopyAsk(id: id, from: from, to: to, provider: provider, title: title)
             return LinkAsk.check(.chatCopyVia, args, nil, arsenal: nil)
         }
         #expect(ask(.init(windowId: "w_1", chatId: "c1")) == .allow)
         #expect(ask(.init(device: box, windowId: "w_box", sessionId: "s1"), .init(device: box, windowId: "w_box2"), provider: "codex") == .allow)
         #expect(LinkAsk.check(.chatCopyVia, ControlArgs(), nil, arsenal: nil) == .deny(.invalid, "Name the chat and where it goes."))
+        #expect(ask(.init(windowId: "w_1", chatId: "c1"), id: "") == .deny(.invalid, "Name the ask."))
         #expect(ask(.init(windowId: "w_1")) == .deny(.invalid, "Name one chat to copy."))
         #expect(ask(.init(windowId: "w_1", chatId: "c1", sessionId: "s1")) == .deny(.invalid, "Name one chat to copy."))
         #expect(ask(.init(windowId: "w_1", chatId: "c1"), .init(windowId: "w_2", chatId: "c2")) == .deny(.invalid, "A copy goes to a window."))
@@ -127,7 +128,7 @@ struct RaiseRiskTests {
         #expect(ask(.init(windowId: "w_1", chatId: "c1"), title: "a\nb") == .deny(.invalid, "A title is one line, up to 200 characters."))
         // A box doesn't take it: the Mac runs copies.
         var boxArgs = ControlArgs()
-        boxArgs.copy = CopyAsk(from: .init(windowId: "w_1", chatId: "c1"), to: .init(windowId: "w_2"), provider: "claude", title: "Repos")
+        boxArgs.copy = CopyAsk(id: "ask-1", from: .init(windowId: "w_1", chatId: "c1"), to: .init(windowId: "w_2"), provider: "claude", title: "Repos")
         #expect(LinkPolicy.checkBox(.chatCopyVia, boxArgs, nil, control: .full) == .deny(.invalid, LinkPolicy.notTaken))
         #expect(LinkAsk.arsenalRaises(from: nil, to: "watch") && LinkAsk.arsenalRaises(from: "watch", to: "drive"))
         #expect(!LinkAsk.arsenalRaises(from: "drive", to: "own") && !LinkAsk.arsenalRaises(from: "own", to: "off"))

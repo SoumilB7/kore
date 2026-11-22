@@ -182,6 +182,8 @@ extension Workspace {
     /// can't have here gives way to this Mac's own, said once.
     @discardableResult
     func land(_ landing: ChatLanding, after anchor: ChatTab? = nil) -> Chat? {
+        // Its ceiling before its chat is made: the CLI's first launch is under it.
+        if let ceiling = landing.settings.modeCeiling { ModeCeilings.put(ceiling, for: landing.session.id) }
         open(landing.session, after: anchor)
         guard let chat = tabs.first(where: { $0.agent == nil && $0.chat?.status.sessionId == landing.session.id })?.chat else { return nil }
         let settings = landing.settings
@@ -197,7 +199,7 @@ extension Workspace {
         // one last picked on this Mac: a chat brought here isn't raised by coming.
         let known = settings.mode.flatMap { mode in chat.provider.modes.contains { $0.id == mode } ? mode : nil }
         let mode = known.map { landing.alias.isEmpty ? $0 : LinkPolicy.cappedMode($0, provider: chat.provider.id) } ?? chat.provider.modes[0].id
-        if mode != chat.controls.mode { chat.setMode(mode, remember: false) }
+        if mode != chat.controls.mode { chat.setMode(mode, remember: false, raises: false) }
         if let fast = settings.fast { chat.launchFastMode = fast }
         if chat.provider.planToggle != nil, let plan = settings.plan, plan != chat.controls.planMode { chat.setPlanMode(plan) }
         if let allow = settings.planAllow, allow != chat.controls.planAllow { chat.setPlanAllow(allow) }

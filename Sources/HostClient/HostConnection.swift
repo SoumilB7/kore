@@ -424,6 +424,8 @@ package final class HostConnection {
     package var name: String { NodeNames.name(alias) }
 
     package var isOnline: Bool { phase == .online && ready }
+    /// A command sent and never answered, the link gone: the box may or may not have run it.
+    package var lostLine: String { "Lost \(NodeNames.name(alias)) before it answered" }
     /// A dial is under way (a KoreNet dial that failed falls back to SSH at once, its phase still
     /// `.offline`): what waits for the link waits on, rather than taking it for an end.
     package var dialing: Bool { transport != nil && !ready }
@@ -856,12 +858,12 @@ package final class HostConnection {
         // Sent, never answered: the box may or may not have it. A forwarded call goes again (the box
         // runs it once); anything else says so.
         for id in inFlight.sorted() {
-            if let data = resend[id] { outbox.append((id, data)) } else { finish(id, ok: false, message: "Lost \(NodeNames.name(alias)) before it answered") }
+            if let data = resend[id] { outbox.append((id, data)) } else { finish(id, ok: false, message: lostLine) }
         }
         inFlight = []
         endUploads("Lost \(NodeNames.name(alias))")
         // A sign-in's end won't come over a link that's gone.
-        for id in waiting.keys where id.hasSuffix(HostWire.doneSuffix) { finish(id, ok: false, message: "Lost \(NodeNames.name(alias)) before it answered") }
+        for id in waiting.keys where id.hasSuffix(HostWire.doneSuffix) { finish(id, ok: false, message: lostLine) }
         if case .refused = phase { return }
         if let oldKey {
             phase = .refused(.oldKey(oldKey))

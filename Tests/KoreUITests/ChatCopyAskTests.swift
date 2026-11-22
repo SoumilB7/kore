@@ -44,14 +44,65 @@ struct ChatCopyAskTests {
         ChatCopyAsk.boxKeys = { [] }
         let window = Workspace(folder: URL(fileURLWithPath: "/tmp/kca-window"), restore: false)
         func line(_ from: ChatCopyAsk.From, _ to: ChatCopyAsk.To) async -> String? {
-            if case .failure(let failure) = await ChatCopyAsk.run(from: from, to: to, provider: "claude", title: "Repos") { return failure.line }
+            if case .failure(let failure) = await ChatCopyAsk.run(from: from, to: to, provider: "claude", title: "Repos", phone: UUID(), refuses: { _, _ in nil }) { return failure.line }
             return nil
         }
         #expect(await line(.box(device: UUID().uuidString, windowId: "w_1", id: "c1"), .mac(window)) == "That box isn't one of this Mac's")
-        #expect(await line(.history(window, session: Self.session), .box(device: UUID().uuidString, windowId: "w_1")) == "That chat isn't in this folder's history")
+        #expect(await line(.history(window, session: Self.session), .box(device: UUID().uuidString, windowId: "w_1")) == "That box isn't one of this Mac's")
+        #expect(await line(.history(window, session: Self.session), .mac(window)) == "That chat isn't in this folder's history")
         let fresh = Chat(provider: try #require(Registry.provider("claude")), folder: URL(fileURLWithPath: "/tmp/kca-window"))
         defer { fresh.close() }
         #expect(await line(.chat(fresh, in: window), .mac(window)) == "That chat has nothing to copy yet")
+    }
+
+    /// A box the phone isn't allowed on is refused before anything is dialled, whichever end it is
+    /// (box to Mac, Mac to box, box to box either way, and a box's folder window here).
+    @Test func aBoxThePhoneIsntAllowedOnIsRefusedUndialled() async throws {
+        let suite = "kca-\(UUID().uuidString.prefix(6))"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        let (keys, dir, connect) = (ChatCopyAsk.boxKeys, ChatCopyAsk.directory, ChatPasting.connection)
+        defer {
+            (ChatCopyAsk.boxKeys, ChatCopyAsk.directory, ChatPasting.connection) = (keys, dir, connect)
+            defaults.removePersistentDomain(forName: suite)
+        }
+        let directory = NodeDirectory(defaults: defaults)
+        let (allowed, refused) = (UUID(), UUID())
+        directory.upsert(NodeDirectory.Entry(device: allowed, name: "mybox", ssh: "kca-mybox", nodeKey: nil, identityKey: Data([1])))
+        directory.upsert(NodeDirectory.Entry(device: refused, name: "labbox", ssh: "kca-labbox", nodeKey: nil, identityKey: Data([2])))
+        ChatCopyAsk.boxKeys = { ["kca-mybox", "kca-labbox"] }
+        ChatCopyAsk.directory = { directory }
+        var dialled: [String] = []
+        ChatPasting.connection = { alias in
+            dialled.append(alias)
+            return HostConnection(alias: alias, cache: HostCache(alias: alias, root: URL(fileURLWithPath: "/tmp/kca-cache"))) { ClosedTransport("no") }
+        }
+        let window = Workspace(folder: URL(fileURLWithPath: "/tmp/kca-window"), restore: false)
+        var asked: [UUID?] = []
+        func line(_ from: ChatCopyAsk.From, _ to: ChatCopyAsk.To) async -> String? {
+            let result = await ChatCopyAsk.run(from: from, to: to, provider: "claude", title: "Repos", phone: UUID(), refuses: { box, name in
+                asked.append(box)
+                return box == allowed ? nil : "This phone isn't allowed on \(name)"
+            })
+            if case .failure(let failure) = result { return failure.line }
+            return nil
+        }
+        let (there, here) = (ChatCopyAsk.To.box(device: refused.uuidString, windowId: "w_1"), ChatCopyAsk.From.box(device: refused.uuidString, windowId: "w_1", id: "c1"))
+        let fine = ChatCopyAsk.From.box(device: allowed.uuidString, windowId: "w_1", id: "c1")
+        let no = "This phone isn't allowed on kca-labbox"
+        #expect(await line(here, .mac(window)) == no)
+        #expect(await line(.history(window, session: Self.session), there) == no)
+        #expect(await line(fine, there) == no)
+        #expect(await line(here, .box(device: allowed.uuidString, windowId: "w_1")) == no)
+        #expect(dialled.isEmpty && Set(asked) == [allowed, refused])
+        // A box's window on this Mac is that box's folder, whatever the phone calls it.
+        let binding = BoxBinding(alias: "kca-labbox", folder: "/srv/app")
+        let box = Workspace(folder: binding.folderURL, restore: false, box: binding)
+        dialled = []
+        window.open(SessionSummary(id: Self.session, agent: .claude, title: "Repos", updated: .now))
+        let chat = try #require(window.tabs.first { $0.chat?.status.sessionId == Self.session }?.chat)
+        defer { for tab in window.tabs { tab.chat?.close() } }
+        #expect(await line(.chat(chat, in: window), .mac(box)) == no)
+        #expect(await line(here, .mac(box)) == no && dialled.isEmpty)
     }
 
     /// A Codex rollout in `folder` for `session`.
@@ -94,12 +145,15 @@ struct ChatCopyAskTests {
         defer { for tab in home.tabs + window.tabs { tab.chat?.close() } }
         let shown = window.activeTab.id
         // The phone's CLI and title give way to this Mac's own.
-        let result = await ChatCopyAsk.run(from: .chat(chat, in: home), to: .mac(window), provider: "other", title: "wrong")
+        let result = await ChatCopyAsk.run(from: .chat(chat, in: home), to: .mac(window), provider: "other", title: "wrong", phone: UUID(), refuses: { _, _ in "never asked: no box" })
         if case .failure(let failure) = result { Issue.record("\(failure.line)") }
         let landed = try #require(window.tabs.compactMap(\.chat).first { $0.sessionId != nil && $0.sessionId != Self.session })
-        #expect(window.activeTab.id == shown)
+        // Behind the tab shown, whichever it is (a New tab too).
+        #expect(window.activeTab.id == shown && window.tabs.first { $0.chat === landed }?.id != shown)
         #expect(landed.provider.id == cli && landed.title == (sameFolder ? "Repos (copy)" : "Repos"))
         #expect(landed.controls.mode == provider.modes[0].id && landed.controls.mode != top)
+        #expect(landed.modeCeiling == 1 && ModeCeilings.at(landed.sessionId ?? "") == 1 && chat.modeCeiling == nil)
+        defer { ModeCeilings.put(nil, for: landed.sessionId ?? "") }
         let made = try #require(landed.sessionId)
         #expect(FileManager.default.fileExists(atPath: file(b.path, made).path))
         #expect(String(decoding: try Data(contentsOf: source), as: UTF8.self) == written && chat.controls.mode == top)

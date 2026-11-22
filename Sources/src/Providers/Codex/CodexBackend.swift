@@ -103,6 +103,7 @@ package final class CodexBackend: ChatBackend {
     private func launch() async throws {
         try Task.checkCancellation()
         launches += 1
+        options.mode = ProviderDescriptor.codex.held(options.mode, under: options.modeCeiling)
         // A relaunch may be on another login (a switch): unknown until it says.
         planAccount = nil
         // A thread with no rollout can't be resumed: a fresh one takes its place.
@@ -183,7 +184,13 @@ package final class CodexBackend: ChatBackend {
             replayPending = false
             earlierFrom = newest?.earlier
             rollout = await session.rolloutPath.map(CodexRolloutReader.init)
-            let replayed = await replay(newest?.turns ?? [], session)
+            var replayed = await replay(newest?.turns ?? [], session)
+            // Under the chat's ceiling (`ModeCeilings`), and the replay's last word says so.
+            var held: [ChatEvent] = []
+            if let ended = replayed.carried.mode, case let mode = ProviderDescriptor.codex.held(ended, under: options.modeCeiling), mode != ended {
+                replayed.carried.mode = mode
+                held = [.modeChanged(ModeChange(mode: mode, previous: ended, source: .session, at: .now))]
+            }
             translator.adopt(replayed.carried)
             // It carries on with the settings its history ended with (the pill shows them), not
             // the ones it launched with.
@@ -195,7 +202,7 @@ package final class CodexBackend: ChatBackend {
                 options.planMode = replayed.carried.planMode
                 await session.setPlanMode(replayed.carried.planMode)
             }
-            yield(.replayed(replayed.events))
+            yield(.replayed(replayed.events + held))
             yield(.earlierHistory(earlierFrom != nil))
             log.replayEnd(
                 "codex", chat: sessionId, read: "thread", lines: newest?.turns.count ?? 0, bytes: nil,
@@ -874,6 +881,8 @@ package final class CodexBackend: ChatBackend {
         // `thread/compact/start` takes no instructions: said, not dropped unseen.
         if !instructions.isEmpty { yield(.notice("Codex compacts without instructions, so yours weren't used")) }
     }
+
+    package func setModeCeiling(_ level: Int?) { options.modeCeiling = level }
 
     package func setMode(_ id: String) async throws {
         options.mode = id

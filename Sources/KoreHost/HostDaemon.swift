@@ -802,7 +802,7 @@ package final class HostDaemon {
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
             caps: ["tx", "attn", "commands", "control", "box", BoxTools.deviceCap] + (control != .watch ? ["history", "blob", "diff"] : [])
-                + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, LinkFiles.bytesCap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap, LinkPolicy.alwaysAllowCap, LinkPolicy.fullAccessCap] + (pipes.available ? [LinkPipe.cap] : []) : []))
+                + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, LinkFiles.bytesCap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap, LinkPolicy.alwaysAllowCap, LinkPolicy.fullAccessCap, LinkPolicy.copyForCap] + (pipes.available ? [LinkPipe.cap] : []) : []))
     }
 
     /// Whether a served folder's window is closed (`window.close`); one with a chat shows anyway.
@@ -976,7 +976,8 @@ package final class HostDaemon {
             if kind == .chatNew, let line = Self.rootRefusal(args.provider, args.mode) ?? Self.rootRefusal(args.provider, args.settings?.mode) {
                 return fail(.raiseMode, line)
             }
-            return self.control(kind, args, id: id, control: control, phone: phone, reply: reply)
+            let held = kind == .chatNew ? LinkPolicy.forkHeld(args, control: control == .full ? .full : .standard, fullAccess: fullAccess) : args
+            return self.control(kind, held, id: id, control: control, phone: phone, reply: reply)
         case .unknown:
             return fail(.invalid, LinkPolicy.unknownCommand)
         }

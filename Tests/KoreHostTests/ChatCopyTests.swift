@@ -1,5 +1,6 @@
 import Foundation
 import KoreCore
+import KoreTrust
 import Testing
 
 @testable import KoreHost
@@ -184,6 +185,10 @@ struct ChatCopyTests {
         #expect(made.record.transcript == placed.path && !FileManager.default.fileExists(atPath: staged.root))
         // The source chat is as it was.
         #expect(try read(rig.projects.appendingPathComponent("\(rig.session).jsonl")) == MoveTests.claudeRows(folder, session: rig.session))
+        // The commit asked again (its answer lost with the link): the chat it made, made once.
+        let before = rig.host.host.chats.count
+        let replayed = try await command(client, .chatAdoptCopy, commit)
+        #expect(replayed.ok && replayed.chatId == made.id && rig.host.host.chats.count == before)
         // The same id again is refused: never another chat's history.
         let again = UUID().uuidString.lowercased()
         let second = try #require(try await command(client, .chatAdoptCopy, ControlArgs(provider: "claude", sessionId: fresh, phase: "prepare", moveId: again)).move)
@@ -208,6 +213,61 @@ struct ChatCopyTests {
         #expect(FileManager.default.fileExists(atPath: rig.host.host.chatTrash.appendingPathComponent("\(trashed[0])/\(rig.session)/subagents/agent-a1.jsonl").path))
         // The copy is untouched.
         #expect(FileManager.default.fileExists(atPath: placed.path) && rig.host.host.chat(made.id) != nil)
+    }
+
+    /// A copy a Mac makes for a phone: the box's own devices decide, at every step. Allowed goes
+    /// through; one it doesn't know, paused, only watching, or that isn't a phone is refused, and
+    /// nothing is named, staged or made.
+    @Test func aPhonesCopyIsTakenOnlyForAPhoneTheBoxAllowsToAsk() async throws {
+        let rig = try MoveTests.Rig()
+        defer { rig.host.finish() }
+        let folder = SessionFiles.real(rig.host.folder.path)
+        try write(MoveTests.claudeRows(folder, session: rig.session), rig.projects.appendingPathComponent("\(rig.session).jsonl"))
+        let client = try await StreamClient(rig.host, grant: rig.grant)
+        func device(_ kind: NodeKind = .phone, _ abilities: Ability = [.read, .ask], paused: Bool? = nil) throws -> UUID {
+            let id = UUID()
+            var record = DeviceRecord(
+                id: id, name: "Pixel 9", kind: kind, abilities: abilities, identityKey: SoftwareIdentity().publicKey, nodeKeys: ["nodekey:\(id)"], userId: 7,
+                fqdn: "pixel.tail.ts.net.", added: Date())
+            record.paused = paused
+            try rig.host.host.devices.book.update { $0.append(record) }
+            return id
+        }
+        func copy(_ phone: UUID) async throws -> MoveResult {
+            var args = ControlArgs(sourceId: rig.hc.id, phase: "prepare")
+            args.phone = phone.uuidString.lowercased()
+            return try await command(client, .chatCopy, args)
+        }
+        func adopt(_ phone: UUID, _ phase: String, _ moveId: String) async throws -> MoveResult {
+            var args = ControlArgs(
+                title: "Repos", sourceId: rig.session, provider: "claude", sessionId: "9e0f1a2b-0000-4000-8000-00000000c0df", folder: rig.host.folder.path, folders: ["/Users/dev/app"],
+                phase: phase, moveId: moveId)
+            args.phone = phone.uuidString.lowercased()
+            return try await command(client, .chatAdoptCopy, args)
+        }
+        let line = "This phone isn't allowed on \(rig.host.host.deviceName)"
+        let before = rig.host.host.chats.count
+        for phone in [UUID(), try device(paused: true), try device(.phone, [.read]), try device(.mac, [.read, .ask, .run])] {
+            for said in [try await copy(phone), try await adopt(phone, "prepare", UUID().uuidString.lowercased())] {
+                #expect(!said.ok && said.code == .deniedControl && said.message == line && said.move == nil)
+            }
+        }
+        #expect(((try? FileManager.default.contentsOfDirectory(atPath: rig.host.host.staging.path)) ?? []).isEmpty)
+        // Allowed: both ways.
+        let phone = try device()
+        #expect(try await copy(phone).move?.files == ["\(rig.session).jsonl"])
+        let moveId = UUID().uuidString.lowercased()
+        let staged = try #require(try await adopt(phone, "prepare", moveId).move)
+        try write(MoveTests.claudeRows("/Users/dev/app", session: rig.session), URL(fileURLWithPath: staged.root).appendingPathComponent("\(rig.session).jsonl"))
+        // Removed on the box while the files crossed: the last step is refused, its staging gone.
+        try rig.host.host.devices.book.update { $0.removeAll { $0.id == phone } }
+        #expect(try await adopt(phone, "commit", moveId).message == line)
+        #expect(rig.host.host.chats.count == before && !FileManager.default.fileExists(atPath: staged.root))
+        // Allowed all through: it's made.
+        let again = try device(), second = UUID().uuidString.lowercased()
+        let stage = try #require(try await adopt(again, "prepare", second).move)
+        try write(MoveTests.claudeRows("/Users/dev/app", session: rig.session), URL(fileURLWithPath: stage.root).appendingPathComponent("\(rig.session).jsonl"))
+        #expect(try await adopt(again, "commit", second).chatId != nil && rig.host.host.chats.count == before + 1)
     }
 
     // MARK: The CLIs resume a copy (KORE_CLI_PROBES=1: no account, scratch homes)

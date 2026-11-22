@@ -227,8 +227,11 @@ package enum LinkPolicy {
         return .allow
     }
 
+    /// A box's cap: it checks the phone a copy is made for (`ControlArgs.phone`) against its own devices.
+    package static let copyForCap = "copyFor"
+
     /// `chat.copyVia` (cap "copyVia"), as the Mac takes it: a source that is one chat or one past session, a
-    /// target that is a window, plain ids, a CLI Kore runs, a one-line title. Where each end is,
+    /// target that is a window, plain ids (the ask's own too), a CLI Kore runs, a one-line title. Where each end is,
     /// and that the Mac knows it, the Mac checks as it runs it.
     package static func copyVia(_ ask: CopyAsk?) -> Verdict {
         guard let ask else { return .deny(.invalid, "Name the chat and where it goes.") }
@@ -236,6 +239,7 @@ package enum LinkPolicy {
             guard let id else { return true }
             return (1...128).contains(id.count) && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "-_.:".contains($0)) }
         }
+        guard plain(ask.id) else { return .deny(.invalid, "Name the ask.") }
         for end in [ask.from, ask.to] {
             guard plain(end.windowId), plain(end.device), end.device.map({ UUID(uuidString: $0) != nil }) ?? true else {
                 return .deny(.invalid, "Name the windows and devices.")
@@ -628,6 +632,17 @@ package enum LinkPolicy {
     /// full control of a box (`fullAccess`, owner 2026-11-22). Phones, act and standard grants and
     /// Arsenal stay at Auto.
     package static func raiseTop(_ fullAccess: Bool) -> ModeLevel { fullAccess ? .danger : raiseCap }
+    /// A new chat from a session's message (a fork), as a link may make it: its history may end
+    /// higher than it starts, so its ceiling (`ModeCeilings`) is what the link may start one at.
+    package static func forkHeld(_ args: ControlArgs, control: LinkControlLevel, fullAccess: Bool) -> ControlArgs {
+        let top = control == .full ? raiseTop(fullAccess) : leavePlanMaxLevel
+        guard args.sessionId != nil, top < .danger else { return args }
+        var held = args
+        var settings = args.settings ?? ChatSettings()
+        settings.modeCeiling = min(settings.modeCeiling ?? .max, top.rawValue)
+        held.settings = settings
+        return held
+    }
 
     /// What a box says in its welcome when a Mac with full control may put its chats in Full access.
     package static let fullAccessCap = "fullAccess"

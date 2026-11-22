@@ -34,7 +34,8 @@ import kotlinx.serialization.json.put
  *   adb shell run-as dev.kore.android touch files/demo     (off: rm files/demo; restart the app)
  *
  * A Mac ("MacBook") and a box ("mybox") answer from `assets/demo/<mac|box>/` (welcome, snapshot,
- * attn.state, and `tx-<chatId>.json` per chat); every command is answered ok.
+ * attn.state, and `tx-<chatId>.json` per chat); every command is answered ok, but a copy's
+ * (`chat.copyVia`) as [Demo]'s scenario says.
  */
 class DemoStart : ContentProvider() {
     override fun onCreate(): Boolean {
@@ -54,13 +55,17 @@ class DemoStart : ContentProvider() {
  * [scenario] (the text in files/demo): "" the normal demo; `waiting` the Mac never answers (no
  * snapshot); `no-windows` the Mac has none open; `no-devices` this phone knows none; `asleep` the
  * Mac says it's going to sleep; `cold` each dial takes 4 s (a tailnet starting cold); `usage-near` its logins past 80 % (amber), `usage-limit` at a
- * limit (red). Each device pushes its logins' usage (link 1.14) with resets from now.
+ * limit (red); `copy-slow` a copy takes 4 s, `copy-refused` the Mac refuses one, `copy-drop` the
+ * link goes as one is asked (once) and the next asks how it ended, `copy-lost` the link goes and
+ * Kore on the Mac doesn't know, `copy-away` the Mac answers no dial after the first, `no-copy` a
+ * Mac from before copies; `cards` long permission and plan cards. Each device pushes its logins' usage (link 1.14) with resets from now.
  */
 class Demo(private val context: Context, private val scenario: String = "") : StandIn {
+    private val studio = Device(UUID.fromString("5D1A0000-2B3C-4D5E-8F60-718293A4B5C6"), "Studio", NodeKind.MAC, ByteArray(91) { 3 }, listOf("nodekey:studio"), "studio.tail.ts.net.")
     private val mac = Device(UUID.fromString("B3D9E1F0-7A2C-4E6B-8D41-5C0F9A3E2B02"), "MacBook", NodeKind.MAC, ByteArray(91) { 1 }, listOf("nodekey:mac"), "macbook.tail.ts.net.")
     private val box = Device(UUID.fromString("0E4C2A91-5B7D-4F3E-9A61-2D8C7B5E1F04"), "mybox", NodeKind.BOX, ByteArray(91) { 2 }, listOf("nodekey:box"), "mybox.tail.ts.net.",
         via = setOf(UUID.fromString("B3D9E1F0-7A2C-4E6B-8D41-5C0F9A3E2B02")))
-    override val devices = if (scenario == "no-devices") emptyList() else listOf(mac, box)
+    override val devices = when { scenario == "no-devices" -> emptyList(); scenario.startsWith("copy") -> listOf(mac, box, studio); else -> listOf(mac, box) }
 
     override val tailnet: Tailnet = object : Tailnet {
         private fun node(name: String, os: String, key: String, ip: String) =
@@ -85,15 +90,19 @@ class Demo(private val context: Context, private val scenario: String = "") : St
         // `cold`: every dial takes as long as the phone's tailnet starting from cold.
         if (scenario == "cold") kotlinx.coroutines.delay(4_000)
         val dir = if (device.kind == NodeKind.MAC) "mac" else "box"
-        DemoLink(device, dir).also { links[dir] = it }
+        if (scenario == "copy-away" && dir == "mac" && links.containsKey(dir)) throw java.io.IOException("away")
+        DemoLink(device, dir).also { if (device !== studio) links[dir] = it }
     }
+
+    /** Copies asked and dropped so far (`copy-drop`, `copy-lost`). */
+    private val copied = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
 
     private fun asset(path: String): JsonObject? = runCatching {
         Json.parseToJsonElement(context.assets.open("demo/$path").bufferedReader().readText()).jsonObject
     }.getOrNull()
 
     /** One device's link: its welcome, snapshot and attention at once; a transcript when asked; every command ok. */
-    inner class DemoLink(device: Device, private val dir: String) : LinkSession {
+    inner class DemoLink(private val device: Device, private val dir: String) : LinkSession {
         private val channel = Channel<ByteArray>(Channel.UNLIMITED)
         private val end = CompletableDeferred<String>()
         override val incoming get() = channel
@@ -106,13 +115,16 @@ class Demo(private val context: Context, private val scenario: String = "") : St
         private var snapshot: JsonObject? = when (scenario) {
             "waiting" -> null
             "no-windows" -> buildJsonObject { put("t", "snapshot"); put("rev", 1); put("windows", kotlinx.serialization.json.JsonArray(emptyList())); put("chats", kotlinx.serialization.json.JsonArray(emptyList())) }
-            else -> asset("$dir/snapshot.json")?.let { withUsage(it, dir) }
+            else -> asset("$dir/snapshot.json")?.let { withUsage(it, dir) }?.let { if (scenario == "cards" && dir == "mac") withCards(it) else it }
         }
 
         init {
             // `asleep`: the Mac says it's going to sleep as soon as it's reached.
             if (scenario == "asleep" && dir == "mac") { end.complete("sleep"); channel.close() }
-            if (scenario != "waiting") asset("$dir/welcome.json")?.let(::push)
+            if (scenario != "waiting") asset("$dir/welcome.json")?.let { w ->
+                val named = if (device.id == studio.id) JsonObject(w + ("host" to buildJsonObject { put("name", "Studio"); put("koreVersion", "0.3.10") })) else w
+                push(if (scenario == "no-copy") JsonObject(named + ("caps" to kotlinx.serialization.json.JsonArray((named["caps"] as kotlinx.serialization.json.JsonArray).filter { it != JsonPrimitive("copyVia") }))) else named)
+            }
             snapshot?.let(::push)
             asset("$dir/attn.state.json")?.let(::push)
         }
@@ -175,6 +187,7 @@ class Demo(private val context: Context, private val scenario: String = "") : St
                     val cmd = m["cmd"] as? JsonObject
                     // Every command the phone sends, for the emulator's checks (`logcat -s KoreDemo`).
                     android.util.Log.i("KoreDemo", "$dir ${cmd ?: "{}"}")
+                    if ((cmd?.get("type") as? JsonPrimitive)?.content == "chat.copyVia") { copyVia(id, cmd); return true }
                     if ((cmd?.get("type") as? JsonPrimitive)?.content == "chat.send") queueIfWorking((cmd["chatId"] as? JsonPrimitive)?.content)
                     push((if (dir == "box") boxFolders(id, cmd) else null) ?: buildJsonObject { put("t", "result"); put("id", id); put("ok", true) })
                     cmd?.let(::closeIfAsked)
@@ -224,6 +237,43 @@ class Demo(private val context: Context, private val scenario: String = "") : St
                 "logs.chunk" -> logsRead = (m["total"] as? JsonPrimitive)?.content?.toIntOrNull() ?: -1
             }
             return true
+        }
+
+        /** A copy's answer, by scenario: done (after 4 s: `copy-slow`), refused, or the link going first. */
+        private fun copyVia(id: String, cmd: JsonObject) {
+            fun result(code: String? = null, message: String? = null) = push(buildJsonObject {
+                put("t", "result"); put("id", id); put("ok", code == null); code?.let { put("code", it) }; message?.let { put("message", it) }
+            })
+            val asked = cmd["copy"] as? JsonObject
+            val first = copied.add((asked?.get("id") as? JsonPrimitive)?.content ?: "")
+            when (scenario) {
+                "copy-slow" -> Thread { Thread.sleep(4_000); result() }.start()
+                "copy-refused" -> result("busy", "Can't reach mybox · nothing changed")
+                "copy-drop", "copy-away" -> if (first) Thread { Thread.sleep(1_500); close("gone") }.start() else result()
+                "copy-lost" -> if (first) Thread { Thread.sleep(1_500); close("gone") }.start()
+                else result("gone.session", "Kore doesn't know if that was copied · look there before copying again")
+                else -> result()
+            }
+        }
+
+        /** A permission whose command runs past the card, and a plan long enough to be cut. */
+        private fun withCards(snap: JsonObject): JsonObject {
+            fun actions(vararg a: Triple<String, String, String>) = kotlinx.serialization.json.JsonArray(a.map { (id, label, style) ->
+                buildJsonObject { put("id", id); put("label", label); put("style", style) } })
+            fun card(id: String, kind: String, title: String, detail: String, body: String, acts: kotlinx.serialization.json.JsonArray) = kotlinx.serialization.json.JsonArray(listOf(buildJsonObject {
+                put("id", id); put("kind", kind); put("title", title); put("detail", detail); put("body", body); put("digest", "ZGVtbw=="); put("actions", acts)
+            }))
+            val command = (1..40).joinToString(" && \\\n  ") { "npm test -- checkout/case-$it.spec.ts --runInBand" }
+            val plan = "## Round once, on the total\n\n" + (1..18).joinToString("\n") { "$it. Step $it: change `src/total$it.ts` so the line's price is kept exact, then check the cart it belongs to." }
+            val cards = mapOf(
+                "6E1F0C2A-0000-4000-8000-000000000001" to card("toolu_long", "permission", "Bash", "Run a command", command, actions(Triple("allow", "Allow", "primary"), Triple("deny", "Deny", "destructive"))),
+                "6E1F0C2A-0000-4000-8000-000000000004" to card("plan_01", "plan", "Ready to code?", "", plan, actions(Triple("approvePlan", "Approve", "primary"), Triple("keepPlanning", "Keep planning", "neutral"))),
+            )
+            val chats = (snap["chats"] as kotlinx.serialization.json.JsonArray).map { c ->
+                val chat = c as JsonObject
+                cards[(chat["id"] as? JsonPrimitive)?.content]?.let { JsonObject(chat + mapOf("cards" to it, "state" to JsonPrimitive("needsYou"))) } ?: chat
+            }
+            return JsonObject(snap + ("chats" to kotlinx.serialization.json.JsonArray(chats)))
         }
 
         /** The box's home as a phone browses it (`fs.list`, folders only), with what it serves and what's made here. */

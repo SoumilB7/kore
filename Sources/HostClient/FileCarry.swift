@@ -1042,6 +1042,8 @@ package final class Spawn: @unchecked Sendable {
     package var lastStatus: Int32 { lock.withLock { status } }
     package var lastErrors: String { lock.withLock { errorLines } }
 
+    package var isStopped: Bool { lock.withLock { stopped } }
+
     package func stop() {
         let running: [Process] = lock.withLock {
             stopped = true

@@ -38,11 +38,22 @@ class ChatCopyTest {
 
     @Test fun anEndOnTheRunningMacNamesNoDevice() {
         val clip = ChatCopy.Clip("b", "mybox", "w_box", "c1", null, "claude", "Repos")
-        val copy = ChatCopy.command(clip, "m", "w_1", "m")["copy"] as JsonObject
+        val copy = ChatCopy.command("a1", clip, "m", "w_1", "m")["copy"] as JsonObject
         assertEquals("""{"device":"b","windowId":"w_box","chatId":"c1"}""", copy["from"].toString())
         assertEquals("""{"windowId":"w_1"}""", copy["to"].toString())
-        val back = ChatCopy.command(ChatCopy.Clip("m", "MacBook", "w_1", null, "s1", "codex", "Repos"), "b", "w_box", "m")["copy"] as JsonObject
+        val back = ChatCopy.command("a1", ChatCopy.Clip("m", "MacBook", "w_1", null, "s1", "codex", "Repos"), "b", "w_box", "m")["copy"] as JsonObject
         assertEquals("""{"windowId":"w_1","sessionId":"s1"}""", back["from"].toString())
         assertEquals("""{"device":"b","windowId":"w_box"}""", back["to"].toString())
+    }
+
+    @Test fun everyEndIsOneLine() {
+        fun line(ok: Boolean, code: String? = null, message: String? = null) = ChatCopy.line(ok, code, message, "Repos", "kore", "MacBook")
+        assertEquals("Copied “Repos” to kore", line(true))
+        for (code in listOf("offline", "expired", "busy")) assertEquals("Not copied · MacBook is out of reach", line(false, code))
+        assertEquals("No word from MacBook · look there before copying again", line(false, "timeout"))
+        // The Mac's own words, as it says them.
+        assertEquals("Can't reach mybox · nothing changed", line(false, "busy", "Can't reach mybox · nothing changed"))
+        assertEquals("Lost mybox partway · nothing changed", line(false, "busy", "Lost mybox partway · nothing changed"))
+        assertEquals("That's no longer there.", line(false, "gone.window"))
     }
 }

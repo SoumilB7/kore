@@ -20,7 +20,10 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.onTimeout
 import kotlinx.coroutines.selects.select
@@ -358,6 +361,8 @@ class NodeClient(
         scope.launch { events.trySend(Internal.LinkDown(link, link.ended.await().removePrefix("bye ").takeIf { it != "closed" })) }
         link.send(Control.presence(onScreen, visibleChat).bytes())
         synchronized(following) { following.toMap() }.forEach { (chat, last) -> link.send(Control.txOpen(chat, last).bytes()) }
+        // Sent on a link that went before the answer: asked again, under the same id.
+        synchronized(across) { across.filterValues { it.sent }.mapValues { it.value.again } }.forEach { (id, again) -> link.send(Control.envelope(id, again).bytes()) }
         scope.launch { flush(link) }
     }
 
@@ -523,6 +528,45 @@ class NodeClient(
                 armExpiry()
             }
             failure(id, "timeout")
+        }
+    }
+
+    /** A command that outlives its link: [again] goes on the next one, once [sent] on the last. */
+    private class Across(val again: JsonObject) { var sent = false }
+    private val across = LinkedHashMap<String, Across>()
+
+    /**
+     * [call] for a command that takes a while and that the node runs once (`chat.copyVia`): when the
+     * link goes before its answer, the next link asks [again], which never runs it twice. Sent, and
+     * the node away for [awayMs] on end: a "timeout" then, as for one that never answers.
+     */
+    suspend fun callAcross(cmd: JsonObject, again: JsonObject, timeoutMs: Long, awayMs: Long = timeoutMs): JsonObject {
+        val id = UUID.randomUUID().toString()
+        val mine = Across(again)
+        synchronized(across) { across[id] = mine }
+        val answer = scope.async(start = CoroutineStart.UNDISPATCHED) { resultFlow.first { it.str("id") == id } }
+        val gone = CompletableDeferred<Unit>()
+        val watch = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+            stateFlow.map { it == NodeMachine.State.Up }.distinctUntilChanged().collectLatest { up ->
+                if (up) return@collectLatest
+                delay(awayMs)
+                if (synchronized(across) { mine.sent }) gone.complete(Unit)
+            }
+        }
+        try {
+            issue(id) { synchronized(across) { mine.sent = true }; cmd.toString() }
+            return withTimeoutOrNull(timeoutMs) { select { answer.onAwait { it }; gone.onAwait { null } } } ?: run {
+                val unsent = outbox.remove(id)
+                if (unsent) {
+                    queuedFlow.value = outbox.ids()
+                    armExpiry()
+                }
+                failure(id, if (unsent) "expired" else "timeout")
+            }
+        } finally {
+            answer.cancel()
+            watch.cancel()
+            synchronized(across) { across.remove(id) }
         }
     }
 

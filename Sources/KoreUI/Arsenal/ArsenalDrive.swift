@@ -140,7 +140,7 @@ extension Workspace {
         if wanted == nil, !cap(chat.controls.mode) {
             wanted = capped.max { Chat.modeLevel($0.id) < Chat.modeLevel($1.id) }
         }
-        if let wanted, wanted.id != chat.controls.mode { chat.setMode(wanted.id, remember: false) }
+        if let wanted, wanted.id != chat.controls.mode { chat.setMode(wanted.id, remember: false, raises: false) }
         if plan { chat.setPlanMode(true) }
         return .success(chat)
     }
@@ -226,7 +226,7 @@ extension Workspace {
         chat.arsenalByAgent = true
         let opened = chat.arsenalRank
         if !Chat.noFreer(opened.id, unreviewed: opened.unreviewed, than: rank.id, unreviewed: rank.unreviewed), let mode = capped.max(by: { Chat.modeLevel($0.id) < Chat.modeLevel($1.id) }) {
-            chat.setMode(mode.id, remember: false)
+            chat.setMode(mode.id, remember: false, raises: false)
         }
         return .success((chat, true))
     }

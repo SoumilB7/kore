@@ -248,8 +248,9 @@ final class LinkPeer {
             files = blobs.compactMap { self.blobs[$0]?.url }
             guard files.count == blobs.count else { return send(.result(.init(id: id, ok: false, code: .goneBlob, message: "A file wasn't uploaded, or expired."))) }
         }
+        let device = phone ? who.flatMap { UUID(uuidString: $0) } : nil
         Task { [weak self] in
-            let outcome = await LinkControlActions.apply(kind, args, control: control, files: files)
+            let outcome = await LinkControlActions.apply(kind, args, control: control, files: files, phone: device)
             guard let self else { return }
             if outcome.ok, kind == .chatSendAtReset { for blob in args.blobs ?? [] { self.blobs[blob] = nil } }
             // An account command logs its CLI and login id only: never an email, code or page.
