@@ -82,7 +82,7 @@ struct ChatMoveWindowTests {
             moves.env = macEnv
             return moves
         }
-        ChatMoving.pairs = { _, _ in pair }
+        ChatMoving.pairs = { alias, box in alias == pair.alias && box == pair.box ? pair : nil }
         ChatMoving.makeSync = { _, _ in nil }
         ChatMoving.openLocal = { openedLocal.append($0) }
         ChatMoving.openBox = { openedBox.append(($0, $1)) }
@@ -202,11 +202,13 @@ struct ChatMoveWindowTests {
             moves.env = ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("macclaude").path, "HOME": root.path]
             return moves
         }
-        ChatMoving.pairs = { _, _ in pair }
+        // Only this test's folders: the seams are the app's, and other suites' windows (the agent
+        // channel's, beside this one) would take the box chat as a mirror tab of theirs.
+        ChatMoving.pairs = { alias, box in alias == pair.alias && box == pair.box ? pair : nil }
         ChatMoving.makeSync = { _, _ in nil }
         ChatMoving.openLocal = { openedLocal.append($0) }
         let pairFor = PairedBox.pairFor
-        PairedBox.pairFor = { _ in pair }
+        PairedBox.pairFor = { $0.standardizedFileURL.path == mac.standardizedFileURL.path ? pair : nil }
         defer {
             ChatMoving.engine = { connection in SyncBox.ssh(connection.alias).map { ChatMoves(connection: connection, box: $0) } }
             ChatMoving.pairs = { alias, box in SyncPairList.shared.pair(alias: alias, box: box) ?? SyncPairList.shared.around(alias: alias, box: box) }

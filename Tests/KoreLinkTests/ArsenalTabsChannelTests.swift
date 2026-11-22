@@ -60,7 +60,7 @@ extension AgentChannelTests {
             #expect(rig.home.activeTab.chat.map { AgentReads.short($0.id.uuidString) } == made[1])
             let ungrouped = try await call(rig, "tabs.arrange", ["group": "Workers", "ungroup": true])
             #expect(ungrouped.ok && !ungrouped.message.contains("["), "\(ungrouped.message)")
-            #expect(rig.home.tabGroups.isEmpty && rig.home.tabs.count == 3)
+            #expect(rig.home.tabGroups.isEmpty && rig.home.tabs.count == 3, "groups empty \(rig.home.tabGroups.isEmpty), \(NewFolderSilentTests.state(rig.home, nil))")
         }
 
         @Test func arrangingIsActLimitedAndGroupingANewChatStaysActUnlimited() async throws {

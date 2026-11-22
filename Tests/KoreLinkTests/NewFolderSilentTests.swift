@@ -60,6 +60,12 @@ extension AgentChannelTests {
             return (object["ok"] as? Bool == true, object["code"] as? String, (data["message"] ?? object["message"]) as? String ?? "", data["chat"] as? String)
         }
 
+        /// A window's tabs and the opens seen, for a failure's message.
+        static func state(_ window: Workspace, _ seen: Seen?) -> String {
+            let tabs = window.tabs.map { $0.chat.map { "\($0.provider.id) \(AgentReads.short($0.id.uuidString))\($0.status.isRunning ? " running" : "") “\($0.title)” in \($0.folder.path)" } ?? "empty" }
+            return "tabs \(tabs), opened \(seen.map { "\($0.opened.map(\.0))" } ?? "-")"
+        }
+
         func chat(_ id: String?) -> Chat? { id.flatMap { AgentReads.chatsByID()[$0] } }
 
         func folder(_ rig: Rig, _ name: String) throws -> URL {
@@ -78,7 +84,7 @@ extension AgentChannelTests {
                 let said = try await call(rig, "chat.new", ["folder": other.folder.path])
                 #expect(!said.ok && said.code == "tier", "\(tier): \(said)")
                 #expect(said.message.hasPrefix("A chat in another folder needs Arsenal's Act device tier; this chat has \(AgentTools.tierName(tier.rawValue))."), "\(said.message)")
-                #expect(other.tabs.allSatisfy(\.isEmpty) && seen.opened.isEmpty)
+                #expect(other.tabs.allSatisfy(\.isEmpty) && seen.opened.isEmpty, "\(tier): \(Self.state(other, seen))")
             }
             for tier in [AgentTier.device, .full] {
                 let (rig, _, done) = try rig(cli, tier: tier)
@@ -143,7 +149,7 @@ extension AgentChannelTests {
             #expect(seen.fronted.count == 1)
             // A second for c: its window now, none opened.
             let again = try await call(rig, "chat.new", ["folder": c.path])
-            #expect(again.ok && seen.opened.count == 1 && window.tabs.count == 2)
+            #expect(again.ok && seen.opened.count == 1 && window.tabs.count == 2, "\(again) \(Self.state(window, seen))")
         }
 
         // MARK: The new chat
@@ -226,7 +232,7 @@ extension AgentChannelTests {
             print("silent opens (\(cli)): each \(each.map { String(format: "%.2f", Double($0.components.attoseconds) / 1e15 + Double($0.components.seconds) * 1e3) }) ms; main thread for five: \(total)")
             // Made, not started: no CLI runs for a tab no one has shown and nothing was sent to.
             let made = other.tabs.dropFirst().compactMap(\.chat)
-            #expect(made.count == 5 && made.allSatisfy { !$0.status.isRunning })
+            #expect(made.count == 5 && made.allSatisfy { !$0.status.isRunning }, "\(Self.state(other, nil))")
             #expect(total < .milliseconds(500), "\(total)")
         }
 
