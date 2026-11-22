@@ -223,6 +223,102 @@ struct TerminalTests {
         panel.shutdown()
     }
 
+    /// A command's whole output, opened while it runs: every line so far, then only new lines
+    /// appended (never cleared and fed again), its end line once it ends.
+    @Test(arguments: [false, true])
+    func aRunningCommandShowsAllItsOutputAndOnlyAppends(stream: Bool) async throws {
+        let folder = try temporary()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let chat = Chat(provider: stream ? .codex : .claude, folder: folder, modeMemory: ModeMemory(defaults: nil))
+        defer { chat.close() }
+        let file = folder.appendingPathComponent("task.output")
+        FileManager.default.createFile(atPath: file.path, contents: nil)
+        let lines = (0..<500).map { "line \($0)\n" }
+        func write(_ part: ArraySlice<String>) throws {
+            if stream { chat.commands.apply(.commandOutput(id: "big", part.joined())); return }
+            let handle = try FileHandle(forWritingTo: file)
+            try handle.seekToEnd()
+            try handle.write(contentsOf: Data(part.joined().utf8))
+            try handle.close()
+        }
+        chat.commands.apply(.commandStarted(ActiveCommand(id: "big", kind: .shell, title: "Count", command: "count 500", startedAt: .now,
+                                                          owner: .main, output: stream ? .stream : .file(file.path))))
+        try write(lines[0..<250])
+        let panel = TerminalPanel(folder: folder)
+        defer { panel.shutdown() }
+        panel.open(try #require(chat.commands.command("big")), from: chat)
+        let entry = try #require(panel.active)
+        await entry.refreshOutput()
+        for start in stride(from: 250, to: 500, by: 50) {
+            try write(lines[start..<(start + 50)])
+            await entry.refreshOutput()
+            await entry.refreshOutput()  // nothing new: nothing drawn again
+        }
+        chat.commands.apply(.commandEnded(id: "big", .completed, at: .now))
+        await entry.refreshOutput()
+        let text = String(decoding: entry.view.getBufferAsData(kind: .normal), as: UTF8.self)
+        #expect(entry.resets == 1)
+        #expect(text.contains("line 0\n") && text.contains("line 249\n") && text.contains("line 499\n"))
+        #expect(!text.contains("Earlier output cut"))
+        #expect(!entry.waiting)
+    }
+
+    /// A running command gone quiet: its one-second ticks (300 here, 3,600 an hour) redraw
+    /// nothing, feed nothing, tell no view anything, and cost well under a millisecond each.
+    @Test(arguments: [false, true])
+    func aQuietTailForAnHourCostsAlmostNothing(stream: Bool) async throws {
+        let folder = try temporary()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let chat = Chat(provider: stream ? .codex : .claude, folder: folder, modeMemory: ModeMemory(defaults: nil))
+        defer { chat.close() }
+        let file = folder.appendingPathComponent("quiet.output")
+        let output = (0..<2_000).map { "line \($0)\n" }.joined()
+        try Data(output.utf8).write(to: file)
+        chat.commands.apply(.commandStarted(ActiveCommand(id: "q", kind: .shell, title: "Serve", command: "serve", startedAt: .now,
+                                                          owner: .main, output: stream ? .stream : .file(file.path))))
+        if stream { chat.commands.apply(.commandOutput(id: "q", output)) }
+        let panel = TerminalPanel(folder: folder)
+        defer { panel.shutdown() }
+        panel.open(try #require(chat.commands.command("q")), from: chat)
+        let entry = try #require(panel.active)
+        await entry.refreshOutput()
+        let before = String(decoding: entry.view.getBufferAsData(kind: .normal), as: UTF8.self)
+        let told = Told()
+        withObservationTracking { _ = (entry.waiting, entry.truncated, entry.outputAvailable) } onChange: { told.set() }
+        let cpu = { () -> Double in
+            var usage = rusage()
+            getrusage(RUSAGE_SELF, &usage)
+            return Double(usage.ru_utime.tv_sec + usage.ru_stime.tv_sec) + Double(usage.ru_utime.tv_usec + usage.ru_stime.tv_usec) / 1e6
+        }
+        let start = cpu()
+        for _ in 0..<300 { await entry.refreshOutput() }
+        let perTick = (cpu() - start) / 300
+        print("quiet tail (\(stream ? "stream" : "file")): \(String(format: "%.1f", perTick * 1e6)) µs CPU per 1 s tick")
+        #expect(entry.resets == 1 && !told.value)
+        #expect(String(decoding: entry.view.getBufferAsData(kind: .normal), as: UTF8.self) == before)
+        #expect(perTick < 0.001)
+    }
+
+    @Test func aRunningCommandWithNoOutputYetSaysSo() async throws {
+        let folder = try temporary()
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let chat = Chat(provider: .claude, folder: folder, modeMemory: ModeMemory(defaults: nil))
+        defer { chat.close() }
+        let file = folder.appendingPathComponent("quiet.output")
+        FileManager.default.createFile(atPath: file.path, contents: nil)
+        chat.commands.apply(.commandStarted(ActiveCommand(id: "quiet", kind: .shell, title: "Quiet", command: "make release", startedAt: .now,
+                                                          owner: .main, output: .file(file.path))))
+        let panel = TerminalPanel(folder: folder)
+        defer { panel.shutdown() }
+        panel.open(try #require(chat.commands.command("quiet")), from: chat)
+        let entry = try #require(panel.active)
+        await entry.refreshOutput()
+        #expect(entry.waiting)
+        try Data("done\n".utf8).write(to: file)
+        await entry.refreshOutput()
+        #expect(!entry.waiting)
+    }
+
     @Test func customNamesStayWithTheirTerminalAndDefaultNamesKeepUpdating() throws {
         let folder = try temporary()
         defer { try? FileManager.default.removeItem(at: folder) }
@@ -290,7 +386,7 @@ struct TerminalTests {
         shell.start()
         #expect(await until { text(shell).contains("ready>") })
         let screen = text(shell)
-        let order = ["$ make site", "…", "one", "two", "exit 2 · 3s", "ready> make site"].map { screen.range(of: $0)?.lowerBound }
+        let order = ["$ make site", "Earlier output cut", "one", "two", "exit 2 · 3s", "ready> make site"].map { screen.range(of: $0)?.lowerBound }
         #expect(order.allSatisfy { $0 != nil } && zip(order, order.dropFirst()).allSatisfy { $0! < $1! }, "\(screen)")
         command.state = .running
         #expect(TerminalHistory.status(command) == nil)
@@ -349,4 +445,12 @@ struct TerminalTests {
         #expect(box.boxPath(box.standIn("/home/me/app/src/a.swift")) == "/home/me/app/src/a.swift")
         #expect(box.boxPath(URL(fileURLWithPath: "/Users/someone/elsewhere")) == "/home/me/app")
     }
+}
+
+/// Set once an observed value says it changed.
+private final class Told: @unchecked Sendable {
+    private let lock = NSLock()
+    private var told = false
+    func set() { lock.withLock { told = true } }
+    var value: Bool { lock.withLock { told } }
 }

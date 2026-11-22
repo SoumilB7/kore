@@ -18,7 +18,16 @@ final class TerminalEntry: Identifiable {
     @ObservationIgnored let output: TerminalView?
     private(set) var outputAvailable = true
     private(set) var truncated = false
+    /// Live, and its output has no byte yet (a command that writes only when it ends).
+    private(set) var waiting = false
     @ObservationIgnored private var lastText: String?
+    /// Where the command's output was read up to: each refresh appends only what's new.
+    @ObservationIgnored private var follower = OutputFollower(maxBytes: Layout.Terminal.historyBytes)
+    @ObservationIgnored private var followed = false
+    @ObservationIgnored private var statusShown = false
+    @ObservationIgnored private var endsInLine = true
+    /// Times the view was cleared and fed again (tests: a live tail only appends).
+    @ObservationIgnored private(set) var resets = 0
 
     init(shell: any TerminalSession) {
         id = shell.id
@@ -34,7 +43,7 @@ final class TerminalEntry: Identifiable {
         original = command
         let view = TerminalView(frame: CGRect(x: 0, y: 0, width: 760, height: 220),
                                 font: TerminalShell.font,
-                                options: TerminalOptions(cursorStyle: .steadyBar, scrollback: 1_000))
+                                options: TerminalOptions(cursorStyle: .steadyBar, scrollback: Layout.Terminal.historyLines))
         // No LocalProcess and no input delegate: keys and paste cannot reach the agent.
         output = view
         TerminalShell.style(view)
@@ -64,16 +73,63 @@ final class TerminalEntry: Identifiable {
 
     func refreshOutput() async {
         guard let chat, let command else { outputAvailable = false; return }
+        if let (next, step) = await chat.followCommand(command.id, follower) {
+            guard !Task.isCancelled else { return }
+            follow(next, step, chat.commands.command(command.id) ?? command)
+            return
+        }
+        guard !Task.isCancelled else { return }
+        // The CLI's own tail (no file or stream kept): shown whole again when it changes.
         let tail = await chat.commandTail(command.id, lines: Layout.Terminal.tailLines)
         guard !Task.isCancelled else { return }
-        outputAvailable = tail != nil
-        truncated = tail.map { $0.truncated || $0.lines.count >= Layout.Terminal.tailLines } ?? false
+        settle(available: tail != nil, waiting: false,
+               truncated: tail.map { $0.truncated || $0.lines.count >= Layout.Terminal.tailLines } ?? false)
         // Its prompt line, its output, and its exit line once it ends; the footer says the rest.
         let text = TerminalHistory.text(chat.commands.command(command.id) ?? command, tail: OutputTail(lines: tail?.lines ?? []))
         guard text != lastText else { return }
         lastText = text
+        followed = false
         output?.resetToInitialState()
+        resets += 1
         output?.feed(text: text)
+    }
+
+    /// All of the output once, then only what's new: never drawn again from the top.
+    private func follow(_ next: OutputFollower, _ step: OutputFollower.Step, _ command: ActiveCommand) {
+        follower = next
+        lastText = nil
+        switch step {
+        case .reset(let text, let cut):
+            output?.resetToInitialState()
+            resets += 1
+            statusShown = false
+            endsInLine = true
+            feed(TerminalHistory.head(command) + (cut ? TerminalHistory.cut : "") + text)
+        case .append(let text):
+            if !followed { output?.resetToInitialState(); resets += 1; endsInLine = true; feed(TerminalHistory.head(command)) }
+            feed(text)
+        case .none:
+            if !followed { output?.resetToInitialState(); resets += 1; endsInLine = true; feed(TerminalHistory.head(command)) }
+        }
+        followed = true
+        settle(available: true, waiting: command.isLive && next.empty, truncated: false)
+        if !statusShown, let status = TerminalHistory.statusLine(command) {
+            feed((endsInLine ? "" : "\r\n") + status)
+            statusShown = true
+        }
+    }
+
+    /// The footer's state, written only when it changes: a quiet tail's ticks redraw nothing.
+    private func settle(available: Bool, waiting: Bool, truncated: Bool) {
+        if outputAvailable != available { outputAvailable = available }
+        if self.waiting != waiting { self.waiting = waiting }
+        if self.truncated != truncated { self.truncated = truncated }
+    }
+
+    private func feed(_ text: String) {
+        guard !text.isEmpty else { return }
+        output?.feed(text: text)
+        endsInLine = text.hasSuffix("\n")
     }
 }
 
@@ -164,7 +220,9 @@ final class TerminalPanel {
         } else {
             Task { [weak self, weak chat] in
                 guard let chat else { return }
-                let tail = await chat.commandTail(command.id, lines: Layout.Terminal.tailLines)
+                // An ended command opens a shell with it drafted, its output above: as much as the
+                // shell's scrollback holds.
+                let tail = await chat.commandTail(command.id, lines: TerminalShell.scrollback, maxBytes: UInt64(Layout.Terminal.historyBytes))
                 guard let self else { return }
                 self.newShell(draft: command.command ?? command.title,
                               history: TerminalHistory.text(chat.commands.command(command.id) ?? command, tail: tail))
@@ -298,6 +356,9 @@ extension Layout {
         static let side = Space.xxxl
         static let top = Space.sm
         static let tailLines = 500
+        /// A command's whole output as the terminal keeps it: its lines, and the bytes read for them.
+        static let historyLines = 20_000
+        static let historyBytes = OutputFollower.defaultMaxBytes
 
         static func fitting(_ wanted: CGFloat, available: CGFloat, maximized: Bool) -> CGFloat {
             let maximum = max(0, available - chatMinimum)

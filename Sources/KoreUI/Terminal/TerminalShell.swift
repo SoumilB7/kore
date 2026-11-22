@@ -38,7 +38,7 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate, TerminalS
         title = URL(fileURLWithPath: self.executable).lastPathComponent
         view = LocalProcessTerminalView(frame: CGRect(x: 0, y: 0, width: 760, height: 220),
                                         font: Self.font,
-                                        options: TerminalOptions(scrollback: 5_000))
+                                        options: TerminalOptions(scrollback: Self.scrollback))
         super.init()
         if let draft {
             do {
@@ -130,6 +130,8 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate, TerminalS
         startup = nil
     }
 
+    /// Lines a shell keeps above its screen.
+    static let scrollback = 5_000
     /// The terminal's font at the window's zoom (`Zoom`): the same steps as the rest of the window.
     static var font: NSFont { font(Zoom.shared.scale) }
     nonisolated static func font(_ scale: CGFloat) -> NSFont {

@@ -1878,18 +1878,38 @@ package final class Chat: Identifiable {
     /// The end of a command's output, for its opened row: its file read from the end off the
     /// main thread, or what streamed, or the CLI's own tail when Kore can't read the file. Read
     /// only while the row is open.
-    package func commandTail(_ id: String, lines: Int = 40) async -> OutputTail? {
+    package func commandTail(_ id: String, lines: Int = 40, maxBytes: UInt64 = 256 * 1024) async -> OutputTail? {
         guard let command = commands.command(id) else { return nil }
         switch command.output {
         case .stream:
-            return OutputTail(lines: commands.streamedTail(id, lines: lines), modified: command.lastOutputAt)
+            return OutputTail(lines: commands.streamedTail(id, lines: lines, maxBytes: Int(clamping: maxBytes)), modified: command.lastOutputAt)
         case .file(let path):
             let file = URL(fileURLWithPath: path)
-            if let tail = await Task.detached(priority: .utility, operation: { OutputTail.read(file, lines: lines) }).value { return tail }
+            if let tail = await Task.detached(priority: .utility, operation: { OutputTail.read(file, lines: lines, maxBytes: maxBytes) }).value { return tail }
             fallthrough
         case .none:
             guard command.isLive, let text = await backend?.commandOutput(id) else { return nil }
             return OutputTail(lines: OutputTail.lines(of: text, count: lines))
+        }
+    }
+
+    /// A command's output since `follower` last read it (`OutputFollower`): a file read off the
+    /// main thread, a stream from what Kore kept of it. nil: neither (the CLI's own tail, or gone).
+    package func followCommand(_ id: String, _ follower: OutputFollower) async -> (OutputFollower, OutputFollower.Step)? {
+        guard let command = commands.command(id) else { return nil }
+        switch command.output {
+        case .stream:
+            var follower = follower
+            guard let step = commands.followStream(id, &follower) else { return (follower, .none) }
+            return (follower, step)
+        case .file(let path):
+            let file = URL(fileURLWithPath: path)
+            return await Task.detached(priority: .utility) {
+                var follower = follower
+                return follower.read(file).map { (follower, $0) }
+            }.value
+        case .none:
+            return nil
         }
     }
 

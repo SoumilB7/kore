@@ -52,6 +52,8 @@ private struct TerminalPanelView: View {
                             Text(failure).font(Chrome.label).foregroundStyle(Theme.warning).padding(Space.sm)
                         } else if !active.outputAvailable {
                             Text("Output is no longer available").font(Chrome.label).foregroundStyle(Theme.secondary).padding(Space.sm)
+                        } else if active.waiting {
+                            Text("No output yet — this command may print only when it ends").font(Chrome.label).foregroundStyle(Theme.tertiary).padding(Space.xs)
                         } else if active.truncated {
                             Text("Showing the latest output").font(Chrome.label).foregroundStyle(Theme.tertiary).padding(Space.xs)
                         }

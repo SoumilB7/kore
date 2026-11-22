@@ -64,8 +64,16 @@ package final class CommandsStore {
         return Array(commands.values)
     }
 
-    /// A streamed command's output, its last `lines` lines.
-    package func streamedTail(_ id: String, lines: Int) -> [String] { streams[id]?.lines(lines) ?? [] }
+    /// A streamed command's output, its last `lines` lines from at most its last `maxBytes`.
+    package func streamedTail(_ id: String, lines: Int, maxBytes: Int = 256 * 1024) -> [String] {
+        streams[id]?.lines(lines, maxBytes: maxBytes) ?? []
+    }
+
+    /// A streamed command's news for `follower` since its last read; nil when nothing was kept.
+    package func followStream(_ id: String, _ follower: inout OutputFollower) -> OutputFollower.Step? {
+        guard let buffer = streams[id] else { return nil }
+        return follower.read(stream: buffer.kept, base: buffer.base)
+    }
 
     package nonisolated static func ordered(_ rows: [ActiveCommand]) -> (live: [ActiveCommand], finished: [ActiveCommand]) {
         let live = rows.filter(\.isLive).sorted { ($0.startedAt ?? .distantPast, $0.id) > ($1.startedAt ?? .distantPast, $1.id) }
@@ -183,19 +191,34 @@ package final class CommandsStore {
     }
 }
 
-/// A command's streamed output, its last `limit` bytes.
+/// A command's streamed output, its last `limit` bytes, and how many bytes were trimmed from its
+/// front so far (`base`), so a reader can ask only for what came after what it has.
 package final class OutputBuffer {
-    private var text = ""
+    private var bytes: [UInt8] = []
     private let limit: Int
+    /// Bytes of the whole stream trimmed from the front.
+    package private(set) var base: UInt64 = 0
 
-    package init(limit: Int = 32 * 1024) { self.limit = limit }
+    package init(limit: Int = OutputFollower.defaultMaxBytes) { self.limit = limit }
 
     package func append(_ more: String) {
-        text += more
-        guard text.utf8.count > limit * 2 else { return }
+        bytes.append(contentsOf: more.utf8)
+        guard bytes.count > limit * 2 else { return }
         // Trimmed to the limit only when it's twice over: a long run isn't copied at each line.
-        text = String(decoding: text.utf8.suffix(limit), as: UTF8.self)
+        var drop = bytes.count - limit
+        while drop < bytes.count, bytes[drop] & 0xC0 == 0x80 { drop += 1 }
+        bytes.removeFirst(drop)
+        base += UInt64(drop)
     }
 
-    package func lines(_ count: Int) -> [String] { OutputTail.lines(of: text, count: count) }
+    /// The bytes kept, from `base`.
+    package var kept: ArraySlice<UInt8> { bytes[...] }
+
+    /// Its last `count` lines, from at most its last `maxBytes` (as a file's tail reads): a row's
+    /// few lines never decode megabytes.
+    package func lines(_ count: Int, maxBytes: Int = 256 * 1024) -> [String] {
+        var start = max(0, bytes.count - maxBytes)
+        while start < bytes.count, bytes[start] & 0xC0 == 0x80 { start += 1 }
+        return OutputTail.lines(of: String(decoding: bytes[start...], as: UTF8.self), count: count)
+    }
 }
