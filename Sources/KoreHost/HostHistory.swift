@@ -88,7 +88,10 @@ extension HostDaemon {
         let hc = boxChat(session)
         switch kind {
         case .historyOpen:
+            // A ceiling with it (Arsenal's open): only ever lowers one, and only that is taken.
+            let ceiling = args.settings?.modeCeiling.map { min(ModeCeilings.at(session) ?? .max, $0) }
             if let hc {
+                if let ceiling { hc.carry(ChatSettings(modeCeiling: min(hc.modeCeiling ?? .max, ceiling)), draft: false) }
                 // Opened, it's no longer archived.
                 hc.setArchived(false)
                 let open = chats.contains { $0 === hc } ? hc : reopen(hc.id)
@@ -102,7 +105,7 @@ extension HostDaemon {
                     return reply(fail(.goneSession, "That chat isn't in this folder's history."))
                 }
                 let title = args.title ?? kept.titles[session] ?? (listed.title.isEmpty ? nil : listed.title)
-                guard let made = newChat(folder: folder, provider: provider, modelId: nil, title: title, session: session) else {
+                guard let made = newChat(folder: folder, provider: provider, modelId: nil, title: title, session: session, settings: ceiling.map { ChatSettings(modeCeiling: $0) }) else {
                     return reply(fail(.goneFolder, "That folder isn't on this box."))
                 }
                 kept.titles[session] = nil

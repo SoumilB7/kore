@@ -227,6 +227,8 @@ struct BoxTabsUITests {
         try await answerHistory(script, [row])
         let ask = try #require(await script.command("history.open"))
         #expect((ask["cmd"] as? [String: Any])?["sessionId"] as? String == "5e55f00d-past")
+        // No freer than the caller (Manual) on the box from its first start.
+        #expect(((ask["cmd"] as? [String: Any])?["settings"] as? [String: Any])?["modeCeiling"] as? Int == 1)
         script.send(.result(.init(id: try #require(ask["id"] as? String), ok: true, chatId: "c2", windowId: Self.window)))
         guard case .success(let (opened, new)) = await opening.value else { Issue.record("not opened"); return }
         #expect(new && opened.arsenal == nil && opened.arsenalByAgent)

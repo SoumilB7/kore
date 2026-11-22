@@ -537,13 +537,14 @@ package final class Workspace {
     /// A box window's past chat in a tab, as History opens it: its tab in front when it's shown
     /// (`opened` false), else a closed chat back on the box, or a past session its CLI keeps, as a
     /// box chat (1.9). Nil when the box didn't open it (or this isn't a box's window).
-    func openBoxSession(_ session: SessionSummary, quiet: Bool = false) async -> (chat: Chat, opened: Bool)? {
+    /// `ceiling`: how high its mode may go before its owner raises it (`ModeCeilings`), kept on the box.
+    func openBoxSession(_ session: SessionSummary, quiet: Bool = false, ceiling: Int? = nil) async -> (chat: Chat, opened: Bool)? {
         guard let box else { return nil }
         if let shown = box.shownChat(session.id) {
             if !quiet, let tab = tab(showing: shown) { select(tab) }
             return (shown, false)
         }
-        guard let chat = await box.openSession(session) else { return nil }
+        guard let chat = await box.openSession(session, ceiling: ceiling) else { return nil }
         // The box answered with a chat a tab shows already (the session it holds): that tab.
         if let tab = tab(showing: chat) {
             if !quiet { select(tab) }

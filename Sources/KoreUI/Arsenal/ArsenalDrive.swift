@@ -208,18 +208,19 @@ extension Workspace {
         guard !capped.isEmpty else {
             return .failure(.init("Only you can open a \(provider.name) chat from this one: its lowest mode does more on its own than \(caller.controls.activeMode.label)."))
         }
+        // No freer than the caller from its first start: its history may end higher, and its
+        // replay never takes it there (`ModeCeilings`, here or on the box); the user's pick still can.
+        let ceiling = capped.map(\.level).max().map { max($0, 1) }
         let chat: Chat
         if let box {
             // On the box, as its History opens it (a closed chat back on the box, or a session its CLI keeps).
-            guard let shown = await openBoxSession(summary, quiet: quiet) else {
+            guard let shown = await openBoxSession(summary, quiet: quiet, ceiling: ceiling) else {
                 return .failure(.init("\(NodeNames.name(box.alias)) didn't open that chat."))
             }
             if !shown.opened { return .success((shown.chat, false)) }
             chat = shown.chat
         } else {
-            // No freer than the caller from its first start: its history may end higher, and
-            // its replay never takes it there (`ModeCeilings`); the user's pick still can.
-            if let top = capped.map(\.level).max() { ModeCeilings.put(min(ModeCeilings.at(summary.id) ?? .max, max(top, 1)), for: summary.id) }
+            if let ceiling { ModeCeilings.put(min(ModeCeilings.at(summary.id) ?? .max, ceiling), for: summary.id) }
             if quiet { openQuietly(summary) } else { open(summary) }
             guard let opened = tabs.first(where: { $0.chat?.sessionId == summary.id && $0.agent == nil })?.chat else {
                 return .failure(.init("Kore couldn't open that chat."))

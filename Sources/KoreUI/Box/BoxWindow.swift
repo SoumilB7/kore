@@ -373,11 +373,13 @@ final class BoxBinding {
     /// A past chat back as a box chat (a closed one, or a session its CLI keeps), for a tab here.
     /// One a tab here shows already (an open chat's row, or a session an open chat holds) is that
     /// tab's chat: never a second chat following the same box chat.
-    func openSession(_ session: SessionSummary) async -> Chat? {
+    /// `ceiling`: the box holds its mode under it from its CLI's first start (`ModeCeilings`).
+    func openSession(_ session: SessionSummary, ceiling: Int? = nil) async -> Chat? {
         if let shown = shownChat(session.id) { return shown }
         let provider = Registry.provider(for: session.agent)
         guard connection.keepsHistory else { return await reopen(session.id, provider: provider, title: session.title) }
-        let args = ControlArgs(windowId: windowId, title: session.title, provider: provider.id, sessionId: session.id)
+        let args = ControlArgs(
+            windowId: windowId, title: session.title, provider: provider.id, sessionId: session.id, settings: ceiling.map { ChatSettings(modeCeiling: $0) })
         guard case .success(let result) = await connection.history(.historyOpen, args), let chatId = result.chatId else { return nil }
         closedIds.remove(chatId)
         if let shown = shownChat(chatId) { return shown }
