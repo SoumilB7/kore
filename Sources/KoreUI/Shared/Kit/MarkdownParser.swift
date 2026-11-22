@@ -511,13 +511,44 @@ package enum MarkdownParser {
         return Marker(ordered: ordered, number: number, contentIndent: indent + width + pad, content: dedent(rest, pad))
     }
 
-    /// A line that ends a paragraph: any other block's first line. An ordered list interrupts
-    /// only from 1, and an empty item not at all (so "2024. was a year" stays text).
+    /// A line that ends a paragraph: any other block's first line. An empty item never does.
+    /// An ordered list from 1 does (CommonMark); from any other number, as writers number a list
+    /// on from an earlier one ("**B. The checker**" then "5."), only where it plainly is one:
+    /// under a lead (a line all in bold, or ending in a colon), or when the next line goes on
+    /// counting ("5." then "6."). A year or version that wraps to a line's start stays text.
     private static func startsBlock(_ lines: ArraySlice<Line>, _ i: Int) -> Bool {
         let s = lines[i].text
         if fence(s) != nil || heading(s) != nil || isRule(s) || isQuote(s) || isTableStart(lines, i) { return true }
-        guard let marker = listMarker(s) else { return false }
-        return !marker.content.isEmpty && (!marker.ordered || marker.number == 1)
+        guard let marker = listMarker(s), !marker.content.isEmpty else { return false }
+        guard marker.ordered, marker.number != 1 else { return true }
+        return leadsList(lines, i) || countsOn(lines, i, from: marker)
+    }
+
+    /// The line above `i` reads as a list's lead: wholly bold ("**B. The checker**"), or ending
+    /// in a colon ("Steps:").
+    private static func leadsList(_ lines: ArraySlice<Line>, _ i: Int) -> Bool {
+        guard i - 1 >= lines.startIndex else { return false }
+        let above = lines[i - 1].text.trimmingCharacters(in: .whitespaces)
+        if above.hasSuffix(":") { return true }
+        for mark in ["**", "__"] where above.hasPrefix(mark) && above.hasSuffix(mark) && above.count > mark.count * 2 {
+            // One bold run, not two ("**a** and **b**").
+            if !above.dropFirst(mark.count).dropLast(mark.count).contains(mark) { return true }
+        }
+        return false
+    }
+
+    /// The line after `i` is the next item of the same list: its number one more, its
+    /// delimiter the same.
+    private static func countsOn(_ lines: ArraySlice<Line>, _ i: Int, from marker: Marker) -> Bool {
+        guard i + 1 < lines.endIndex, let next = listMarker(lines[i + 1].text), next.ordered, !next.content.isEmpty,
+            next.number == marker.number + 1
+        else { return false }
+        return delimiter(lines[i].text) == delimiter(lines[i + 1].text)
+    }
+
+    /// An ordered marker's "." or ")".
+    private static func delimiter(_ s: Substring) -> Character? {
+        trimLeading(s).drop { $0.isASCII && $0.isNumber }.first
     }
 
     private static func isTableStart(_ lines: ArraySlice<Line>, _ i: Int) -> Bool {
