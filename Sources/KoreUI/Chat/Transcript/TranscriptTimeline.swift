@@ -535,8 +535,12 @@ struct TranscriptTimeline: View, Equatable {
                 if !following.value, restore.value == nil, restoreInRow.value == nil, pageKeep.value == nil,
                     !fetching.value, !widthHeld, offset < geometry.value.offset - 1, offset + insetTop.value < new[2], Date() >= landingUntil.value
                 {
-                    // The row kept is the one the reader has at the top now, after this move.
-                    geometry.value = (height, offset)
+                    // The row kept is the one the reader has at the top now, after this move. After a
+                    // jump past the rows built there's none on screen yet, and the one the reader had
+                    // before the move is kept.
+                    if let now = widthHold.anchor(at: offset + insetTop.value), now.y < new[2] - insetTop.value {
+                        geometry.value = (height, offset)
+                    }
                     if store.hiddenTurns > 0 {
                         loadEarlier(proxy)
                     } else if store.earlierAvailable, !store.loadingEarlier {
