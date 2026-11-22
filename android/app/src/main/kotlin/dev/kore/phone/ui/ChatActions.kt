@@ -40,16 +40,35 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
      */
     private val sheet = activity.column()
     private val cardButtons = LinearLayout(activity).apply { orientation = LinearLayout.HORIZONTAL }
-    private val sheetScroll = MaxHeightScroll(activity) { room ->
+    /** A question card's top line and tabs, which never scroll away (empty for other cards). */
+    private val cardHead = activity.column().apply { visibility = View.GONE }
+    /** The card shown asks questions: it's as tall as it holds, down to the transcript's peek. */
+    private var questionCard = false
+    private val sheetScroll = MaxHeightScroll(activity) { room, content ->
         val buttons = if (cardButtons.visibility == View.GONE) 0 else cardButtons.measuredHeight.takeIf { it > 0 } ?: activity.dp(60)
-        // Never more than leaves the composer its whole height (landscape, a keyboard, large text).
-        val left = room - composerHeight() - buttons - activity.dp(32 + 10 + 8)
-        maxOf(0, minOf(maxOf(activity.dp(64), cardMax(room) - buttons - activity.dp(32)), left))
+        if (questionCard) {
+            // [room] is already less the column's and the card's padding, the card's margin and its
+            // top line: what's still to come below are the card's button, the status line and the composer.
+            val unbounded = View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+            val below = if (cardButtons.visibility == View.GONE) 0 else { cardButtons.measure(unbounded, unbounded); cardButtons.measuredHeight + activity.dp(10) }
+            QuestionLook.bodyCap(room, composerHeight(), below + statusHeight(), content(), QuestionLook.peek(keyboardUp(), activity.dp(QuestionLook.PEEK)))
+        } else {
+            // Never more than leaves the composer its whole height (landscape, a keyboard, large text).
+            val left = room - composerHeight() - buttons - activity.dp(32 + 10 + 8)
+            maxOf(0, minOf(maxOf(activity.dp(64), cardMax(room) - buttons - activity.dp(32)), left))
+        }
     }.apply {
         addView(sheet)
-        // More above or below fades out at the edge, so a cut card says it scrolls.
-        isVerticalFadingEdgeEnabled = true
-        setFadingEdgeLength(activity.dp(24))
+        // No soft edges (owner: "blur is bad"): a cut card keeps its scrollbar and a hairline at
+        // each edge with more past it.
+        isVerticalFadingEdgeEnabled = QuestionLook.EDGE_FADE > 0
+        setFadingEdgeLength(activity.dp(QuestionLook.EDGE_FADE))
+        isVerticalScrollBarEnabled = true
+        isScrollbarFadingEnabled = false
+        // Thin, in the card's own margin: never over a row.
+        scrollBarSize = activity.dp(3)
+        scrollBarStyle = View.SCROLLBARS_OUTSIDE_OVERLAY
+        setPadding(0, 0, activity.dp(10), 0)
         // Each time its height changes (the keyboard, a rotation), a cut permission card scrolls
         // so what it would run stays in view; the overline and title give way first.
         addOnLayoutChangeListener { v, _, top, _, bottom, _, oldTop, _, oldBottom ->
@@ -65,7 +84,10 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         background = activity.shape(Tone.l1, Radius.card, Tone.warnCard)
         setPadding(activity.dp(16), activity.dp(16), activity.dp(16), activity.dp(16))
         visibility = View.GONE
-        addView(sheetScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        // The scroll's thin bar sits in the card's margin.
+        clipToPadding = false
+        addView(cardHead, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        addView(sheetScroll, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = -activity.dp(10) })
         addView(cardButtons, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
     }
     private val status = activity.label("").apply {
@@ -211,7 +233,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         visibility = View.GONE
     }
     private val slashList = activity.column().apply { background = activity.shape(Tone.l1, Radius.menu, Tone.hair2) }
-    private val slashScroll = MaxHeightScroll(activity) { minOf(activity.dp(220), maxOf(activity.dp(96), it - composerHeight())) }.apply {
+    private val slashScroll = MaxHeightScroll(activity) { room, _ -> minOf(activity.dp(220), maxOf(activity.dp(96), room - composerHeight())) }.apply {
         addView(slashList)
         visibility = View.GONE
     }
@@ -307,6 +329,11 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
 
     /** The composer's height as last laid out (before its first layout: a one-line field and the bar). */
     private fun composerHeight(): Int = box.measuredHeight.takeIf { it > 0 } ?: activity.dp(96)
+
+    private fun statusHeight(): Int = if (status.visibility == View.GONE) 0 else status.measuredHeight
+
+    /** The keyboard is up: the question card's transcript peek gives way to it. */
+    private fun keyboardUp(): Boolean = activity.window?.decorView?.rootWindowInsets?.isVisible(android.view.WindowInsets.Type.ime()) == true
 
     /**
      * The card takes at most half the space above the composer (spec §5, §7), out of [room]: what
@@ -1196,18 +1223,23 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
 
     /**
      * The need-you card (spec §5): "Needs you" over its title (Headline). A permission shows what it
-     * runs in a mono block (the owner never allows without seeing it), then Deny and Allow. A
-     * question lists its options as rows; with one single-choice question a tap answers, else
-     * rows toggle and Submit sends them. "Something else…" opens a field for the CLI's free answer.
+     * runs in a mono block (the owner never allows without seeing it), then Deny and Allow. Questions
+     * are [showQuestions]'.
      */
     private fun showCard(card: JsonObject?) {
         sheet.removeAllViews()
+        cardHead.removeAllViews()
+        cardHead.visibility = View.GONE
+        questionCard = false
         cardKeep = null
         cardButtons.removeAllViews()
         cardButtons.visibility = View.GONE
+        cardButtons.gravity = Gravity.NO_GRAVITY
         if (card == null) { cardBox.visibility = View.GONE; return }
         cardBox.visibility = View.VISIBLE
         val cardId = card.str("id") ?: return
+        val questions = card.objs("questions")
+        if (questions.isNotEmpty() && card.str("kind") != "signIn") return showQuestions(card, cardId, questions)
         val dp = activity::dp
         fun lp(top: Int = 0) = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(top) }
         sheet.addView(LinearLayout(activity).apply {
@@ -1246,136 +1278,262 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             sheet.addView(activity.label("Answer this on the Mac.").apply { type(Type.Callout); setTextColor(Tone.faint) }, lp(10))
             return
         }
-        val actions = card.objs("actions").filter { a ->
+        val shown = card.objs("actions").filter { a ->
             // Only what the phone may do: the Mac refuses the rest anyway.
             val id = a.str("id")
             id != null && !a.bool("refused") && id != "allowAlways" && id != "approvePlanAcceptEdits"
         }
-        val questions = card.objs("questions")
-        val canSubmit = actions.any { it.str("id") == "submitAnswers" }
-        // One single-choice question: a tap on an option is the answer.
-        val tapAnswers = canSubmit && questions.size == 1 && !questions[0].bool("multiple")
-        val picks = CardPicks()
-        val others = LinkedHashMap<String, EditText>()
-        for (q in questions) {
-            val qid = q.str("id") ?: q.str("text") ?: continue
-            val multiple = q.bool("multiple")
-            q.str("text")?.takeIf { it.isNotBlank() && it != title }?.let {
-                sheet.addView(activity.label(it).apply { type(Type.Body); setTextColor(Tone.text) }, lp(if (sheet.childCount > 2) 14 else 8))
-            }
-            val rows = ArrayList<Pair<String, LinearLayout>>()
-            // A one-of's option picked over Other gives Other's row back, its words kept.
-            var closeOther: () -> Unit = {}
-            fun mark() = rows.forEach { (label, row) ->
-                val on = picks.on(qid, label)
-                row.pressFill(if (on) Tone.accentFill else Tone.l2, Tone.l3, Radius.row, if (on) Tone.b200 else null)
-                (row.getChildAt(1) as ImageView).visibility = if (on || tapAnswers) View.VISIBLE else View.INVISIBLE
-            }
-            for (o in q.objs("options")) {
-                val label = o.str("label") ?: continue
-                val row = optionRow(label, o.str("description"), if (tapAnswers) dev.kore.phone.R.drawable.i_chevron else dev.kore.phone.R.drawable.i_check)
-                row.setOnClickListener {
-                    if (tapAnswers) return@setOnClickListener answer(cardId, "submitAnswers", mapOf(qid to listOf(label)))
-                    picks.pick(qid, label, multiple)
-                    if (!multiple) closeOther()
-                    mark()
-                }
-                rows += label to row
-                sheet.addView(row, lp(8))
-            }
-            mark()
-            if (q.bool("other")) {
-                val secret = q.bool("secret")
-                lateinit var other: View
-                other = activity.label("Something else…").apply {
-                    type(Type.Body)
-                    setTextColor(Tone.faint)
-                    setPadding(dp(14), dp(12), dp(14), dp(12))
-                    pressFill(null, Tone.l2, Radius.row, Tone.hair2)
-                    setOnClickListener {
-                        // The field takes its place (the one typed in before, if Other was picked
-                        // and an option took it); with a single question, Send answers with it.
-                        val at = sheet.indexOfChild(other)
-                        sheet.removeView(other)
-                        val made = others[qid]
-                        val input = made ?: EditText(activity).apply {
-                            type(Type.Body)
-                            setTextColor(Tone.text)
-                            setHintTextColor(Tone.faint)
-                            hint = "Your answer"
-                            inputType = if (secret) android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD else ComposerKeys.INPUT_TYPE
-                            background = activity.shape(Tone.bg, Radius.row, Tone.focus)
-                            setPadding(dp(14), dp(12), dp(14), dp(12))
-                            minLines = 1
-                            maxLines = 4
-                        }
-                        others[qid] = input
-                        sheet.addView(input, at, lp(8))
-                        picks.pickOther(qid, multiple)
-                        mark()
-                        // Send joins the card's pinned buttons, beside Skip, so the keyboard never hides it.
-                        if (tapAnswers && made == null) {
-                            cardButtons.visibility = View.VISIBLE
-                            (cardButtons.layoutParams as LinearLayout.LayoutParams).topMargin = dp(12)
-                            cardButtons.addView(activity.button("Send", Btn.Primary) {
-                                val text = input.text.toString().trim()
-                                if (text.isNotEmpty()) answer(cardId, "submitAnswers", mapOf(qid to listOf(text)))
-                            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (cardButtons.childCount > 0) marginStart = dp(10) })
-                        }
-                        input.requestFocus()
-                        activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)?.showSoftInput(input, 0)
-                    }
-                }
-                closeOther = {
-                    others[qid]?.takeIf { it.parent === sheet }?.let { input ->
-                        activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)?.hideSoftInputFromWindow(input.windowToken, 0)
-                        val at = sheet.indexOfChild(input)
-                        sheet.removeView(input)
-                        sheet.addView(other, at, lp(8))
-                    }
-                }
-                sheet.addView(other, lp(8))
-            }
-        }
-        // The card's buttons, side by side (Deny secondary, Allow primary); a tap-answered question keeps only Skip, quiet.
-        val shown = if (tapAnswers) actions.filter { it.str("id") != "submitAnswers" } else actions
         if (shown.isEmpty()) return
         val row = cardButtons
         // Primary last (at the thumb's side), as the spec's Deny · Allow.
         shown.sortedBy { if (it.str("style") == "primary") 1 else 0 }.forEachIndexed { i, a ->
             val id = a.str("id")!!
             // Spec §5: Deny is secondary beside Allow, even where the Mac calls it destructive.
-            val role = when {
-                a.str("style") == "primary" -> Btn.Primary
-                tapAnswers -> Btn.Quiet
-                else -> Btn.Secondary
-            }
-            row.addView(activity.button(a.str("label") ?: id, role) {
-                val answers = if (id != "submitAnswers") null else picks.answers(others.mapValues { it.value.text.toString() })
-                answer(cardId, id, answers)
-            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(10) })
+            val role = if (a.str("style") == "primary") Btn.Primary else Btn.Secondary
+            row.addView(activity.button(a.str("label") ?: id, role) { answer(cardId, id, null) },
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { if (i > 0) marginStart = dp(10) })
         }
         row.visibility = View.VISIBLE
         (row.layoutParams as LinearLayout.LayoutParams).topMargin = dp(if (permission) 14 else 12)
     }
 
-    /** A question's option (spec §5): `l2`, radius 14, padding 12 × 14; its label (Body medium), one Callout line, then [end]. */
-    private fun optionRow(label: String, description: String?, end: Int) = LinearLayout(activity).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        setPadding(activity.dp(14), activity.dp(12), activity.dp(14), activity.dp(12))
-        contentDescription = if (description.isNullOrBlank()) label else "$label. $description"
-        addView(LinearLayout(activity).apply {
-            orientation = LinearLayout.VERTICAL
-            addView(activity.label(label).apply { type(Type.BodyMedium); setTextColor(Tone.text) })
-            if (!description.isNullOrBlank()) addView(activity.label(description).apply {
-                type(Type.Callout); setTextColor(Tone.dim); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END
+    /**
+     * The CLI's questions (phone-question-card.html), the Mac card's parts: a top line, "Needs you"
+     * with Skip at its right; tabs when there are several questions, one shown at a time in a body
+     * as tall as the tallest; each question in full, then its options as one group of rows (a
+     * radio or checkbox, the label on one line, the description in full, "Preview · hold to see
+     * it" where there's one), then "Type an answer". One single-choice question answers on a tap;
+     * otherwise Submit (Next while another is unanswered) sends every answer. A hold on an option
+     * shows it in a sheet without choosing it.
+     */
+    private fun showQuestions(card: JsonObject, cardId: String, questions: List<JsonObject>) {
+        questionCard = true
+        val dp = activity::dp
+        val actions = card.objs("actions").filter { a -> a.str("id") != null && !a.bool("refused") }
+        val canSubmit = actions.any { it.str("id") == "submitAnswers" }
+        val skip = actions.firstOrNull { it.str("id") != "submitAnswers" }
+        val tabs = questions.size > 1
+        val tap = QuestionLook.tapAnswers(questions.size, questions[0].bool("multiple"), canSubmit)
+        val qids = questions.mapIndexed { i, q -> q.str("id") ?: q.str("text") ?: "q$i" }
+        val picks = CardPicks()
+        val fields = LinkedHashMap<String, EditText>()
+        var shown = 0
+        val refreshers = ArrayList<() -> Unit>()
+        val keys = activity.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+        fun typed(qid: String) = fields[qid]?.text?.toString()
+        fun answered() = qids.map { picks.answered(it, typed(it)) }
+        fun send() = answer(cardId, "submitAnswers", picks.answers(fields.mapValues { it.value.text.toString() }))
+        fun refresh() = refreshers.forEach { it() }
+
+        // The top line: never scrolls, Skip at its right as quiet words.
+        cardHead.visibility = View.VISIBLE
+        cardHead.addView(LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            addView(activity.point(Tone.warn, 6))
+            addView(activity.label(QuestionLook.overline(questions[0].str("header"), tabs)).apply {
+                type(Type.Caption)
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, 500, false)
+                setTextColor(Tone.warn)
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setPadding(dp(6), 0, dp(8), 0)
+            }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            if (skip != null) addView(activity.label(skip.str("label") ?: "Skip").apply {
+                type(Type.Label)
+                setTextColor(Tone.dim)
+                setPadding(dp(8), dp(4), dp(8), dp(4))
+                pressFill(null, Tone.l2, 10)
+                contentDescription = skip.str("label") ?: "Skip"
+                setOnClickListener { answer(cardId, skip.str("id")!!, null) }
             })
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        addView(ImageView(activity).apply {
-            setImageResource(end)
-            imageTintList = android.content.res.ColorStateList.valueOf(if (end == dev.kore.phone.R.drawable.i_check) Tone.accent else Tone.faint)
-        }, LinearLayout.LayoutParams(activity.dp(18), activity.dp(18)).apply { marginStart = activity.dp(12) })
+        })
+        // Tabs past the card's width scroll sideways (no fade); the shown one is brought in view.
+        val strip = HorizontalScrollView(activity).apply { isHorizontalScrollBarEnabled = false; isHorizontalFadingEdgeEnabled = false }
+        if (tabs) strip.addView(LinearLayout(activity).apply {
+            orientation = LinearLayout.HORIZONTAL
+            questions.forEachIndexed { i, q ->
+                val name = QuestionLook.tabName(q.str("header"), i)
+                val tab = activity.label(name).apply {
+                    type(Type.Label)
+                    maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                    gravity = Gravity.CENTER_VERTICAL
+                    minHeight = dp(28)
+                    setPadding(dp(12), 0, dp(12), 0)
+                    setOnClickListener { shown = i; refresh() }
+                }
+                refreshers += {
+                    val done = picks.answered(qids[i], typed(qids[i]))
+                    tab.text = if (done) android.text.SpannableString("✓ $name").apply {
+                        setSpan(android.text.style.ForegroundColorSpan(Tone.accent), 0, 1, 0)
+                    } else name
+                    tab.setTextColor(if (i == shown) Tone.text else Tone.dim)
+                    tab.pressFill(if (i == shown) Tone.l3 else null, Tone.l3, 14)
+                    tab.contentDescription = if (done) "$name, answered" else name
+                    if (i == shown) strip.post { tab.requestRectangleOnScreen(android.graphics.Rect(0, 0, tab.width, tab.height), false) }
+                }
+                addView(tab, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { if (i > 0) marginStart = dp(4) })
+            }
+        })
+        if (tabs) cardHead.addView(strip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+
+        // The questions, stacked in one frame: those not shown are invisible, not gone, so the
+        // body is as tall as the tallest and a tab change moves nothing.
+        val pages = android.widget.FrameLayout(activity)
+        questions.forEachIndexed { i, q ->
+            val qid = qids[i]
+            val multiple = q.bool("multiple")
+            val page = activity.column()
+            q.str("text")?.takeIf { it.isNotBlank() }?.let {
+                page.addView(activity.label(it).apply { type(Type.BodyMedium); setTextColor(Tone.text); setTextIsSelectable(true) },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8); bottomMargin = dp(10) })
+            }
+            val group = activity.column().apply { background = activity.shape(Tone.l2, Radius.row); clipToOutline = true }
+            val options = q.objs("options").map { QuestionLook.Row(it.str("label") ?: "", it.str("description"), it.str("preview")?.takeIf { p -> p.isNotBlank() }) }
+            QuestionLook.rows(options, q.bool("other")).forEachIndexed { k, r ->
+                val glyph = PickGlyph(activity, multiple)
+                val words = activity.column()
+                val row = LinearLayout(activity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(dp(12), dp(9), dp(12), dp(9))
+                    addView(glyph, LinearLayout.LayoutParams(dp(16), dp(16)).apply { topMargin = dp(2); marginEnd = dp(10) })
+                    addView(words, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                }
+                words.addView(activity.label(r.label).apply {
+                    type(if (r.typed) Type.Body else Type.BodyMedium)
+                    setTextColor(if (r.typed) Tone.faint else Tone.text)
+                    maxLines = QuestionLook.LABEL_LINES
+                    ellipsize = android.text.TextUtils.TruncateAt.END
+                })
+                r.description?.takeIf { it.isNotBlank() }?.let {
+                    words.addView(activity.label(it).apply { type(Type.Caption); setTextColor(Tone.dim); maxLines = QuestionLook.DESCRIPTION_LINES })
+                }
+                if (r.preview != null) words.addView(activity.label(QuestionLook.PREVIEW_CUE).apply { type(Type.Caption); setTextColor(Tone.accent) },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(3) })
+                row.contentDescription = listOfNotNull(r.label, r.description?.takeIf { it.isNotBlank() }).joinToString(". ")
+                if (k > 0) group.addView(View(activity).apply { setBackgroundColor(Tone.hair) },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, maxOf(1, dp(1) / 2)).apply { marginStart = dp(38) })
+                group.addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+                // Set only when it changes: a fill set again drops the press it's answering.
+                var was: Boolean? = null
+                fun lit(on: Boolean) {
+                    if (was == on) return
+                    was = on
+                    glyph.on = on
+                    row.pressFill(if (on) Tone.accentFill else null, Tone.l3, 0)
+                    row.stateDescription = if (on) "Selected" else "Not selected"
+                }
+                if (r.typed) {
+                    row.setOnClickListener {
+                        val field = fields[qid] ?: EditText(activity).apply {
+                            type(Type.Body)
+                            setTextColor(Tone.text)
+                            setHintTextColor(Tone.faint)
+                            hint = QuestionLook.TYPE_HINT
+                            inputType = if (q.bool("secret")) android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD else ComposerKeys.INPUT_TYPE
+                            background = activity.shape(Tone.bg, 10, Tone.focus)
+                            setPadding(dp(10), dp(7), dp(10), dp(7))
+                            minLines = 1
+                            maxLines = 4
+                            addTextChangedListener(object : android.text.TextWatcher {
+                                override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
+                                override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) = Unit
+                                override fun afterTextChanged(s: android.text.Editable?) = refresh()
+                            })
+                            fields[qid] = this
+                            words.addView(this, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(4) })
+                        }
+                        if (multiple && qid in picks.other) picks.unpickOther(qid) else picks.pickOther(qid, multiple)
+                        refresh()
+                        if (qid in picks.other) {
+                            field.requestFocus()
+                            keys?.showSoftInput(field, 0)
+                        }
+                    }
+                    // The field shows only while it's the answer (its words are kept), so what's typed is what's sent.
+                    refreshers += {
+                        val on = qid in picks.other
+                        lit(on)
+                        fields[qid]?.let { f ->
+                            if (!on && f.hasFocus()) keys?.hideSoftInputFromWindow(f.windowToken, 0)
+                            f.visibility = if (on) View.VISIBLE else View.GONE
+                        }
+                    }
+                } else {
+                    val choose = {
+                        if (tap) answer(cardId, "submitAnswers", mapOf(qid to listOf(r.label)))
+                        else { picks.pick(qid, r.label, multiple); refresh() }
+                    }
+                    row.setOnClickListener { choose() }
+                    // A hold reads the option in full, its preview too, without choosing it.
+                    row.setOnLongClickListener { showOption(r, choose); true }
+                    row.accessibilityDelegate = object : View.AccessibilityDelegate() {
+                        override fun onInitializeAccessibilityNodeInfo(host: View, info: android.view.accessibility.AccessibilityNodeInfo) {
+                            super.onInitializeAccessibilityNodeInfo(host, info)
+                            info.addAction(android.view.accessibility.AccessibilityNodeInfo.AccessibilityAction(
+                                android.view.accessibility.AccessibilityNodeInfo.ACTION_LONG_CLICK, QuestionLook.DETAILS_ACTION))
+                        }
+                    }
+                    refreshers += { lit(picks.on(qid, r.label)) }
+                }
+            }
+            page.addView(group, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            refreshers += { page.visibility = if (i == shown) View.VISIBLE else View.INVISIBLE }
+            pages.addView(page, android.widget.FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        sheet.addView(pages, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        // The bottom line, right-aligned: Send for a typed answer to a tap-answered question, else
+        // Submit (Next while another question is unanswered), dim until a press would do something.
+        if (canSubmit) {
+            val go = activity.label("").apply {
+                type(Type.Body)
+                typeface = android.graphics.Typeface.create(android.graphics.Typeface.DEFAULT, 500, false)
+                gravity = Gravity.CENTER
+                minHeight = dp(36)
+                setPadding(dp(18), 0, dp(18), 0)
+            }
+            cardButtons.gravity = Gravity.END
+            cardButtons.addView(go, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            (cardButtons.layoutParams as LinearLayout.LayoutParams).topMargin = dp(10)
+            refreshers += {
+                val footer = if (tap) QuestionLook.Footer("Send", null, live = !typed(qids[0]).isNullOrBlank())
+                    else QuestionLook.footer(shown, answered())
+                // A tap-answered question shows its bottom line only while its typed answer is picked.
+                cardButtons.visibility = if (tap && qids[0] !in picks.other) View.GONE else View.VISIBLE
+                go.text = footer.label
+                go.contentDescription = footer.label
+                go.isEnabled = footer.live
+                go.setTextColor(if (footer.live) Tone.onAccent else Tone.faint)
+                go.pressFill(if (footer.live) Tone.accent else Tone.l2, if (footer.live) Tone.b400 else Tone.l2, 18)
+                go.setOnClickListener {
+                    when {
+                        !footer.live -> Unit
+                        footer.goTo != null -> { shown = footer.goTo; refresh() }
+                        else -> send()
+                    }
+                }
+            }
+        }
+        refresh()
+    }
+
+    /** An option read in full in a sheet: its label, description and preview; Choose picks it. */
+    private fun showOption(row: QuestionLook.Row, choose: () -> Unit) {
+        Sheet(activity).show {
+            title(row.label, row.description?.takeIf { it.isNotBlank() })
+            row.preview?.let { p ->
+                custom(activity.label(p).apply {
+                    type(Type.Mono)
+                    setTextColor(Tone.text)
+                    background = activity.shape(Tone.well, 12, Tone.hair)
+                    setPadding(activity.dp(12), activity.dp(10), activity.dp(12), activity.dp(10))
+                    setTextIsSelectable(true)
+                })
+            }
+            buttons("Choose", cancel = "Close") { dismiss(); choose() }
+        }
     }
 
     private fun answer(cardId: String, action: String, answers: Map<String, List<String>>?) {
@@ -1410,12 +1568,32 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             "retry", "continue", "cancelContinue", "sendAtReset", "arsenal", "arsenalStop", "revert")
     }
 
-    /** A scroll that grows with its content up to a cap, so a long card never pushes the composer away. */
-    private class MaxHeightScroll(context: android.content.Context, private val max: (Int) -> Int) : ScrollView(context) {
-        /** [max] gets the height its parent offers (all of it when unbounded). */
+    /**
+     * A scroll that grows with its content up to a cap, so a long card never pushes the composer
+     * away. Cut, it draws a hairline at each edge with more past it (never a fade).
+     */
+    private class MaxHeightScroll(context: android.content.Context, private val max: (Int, () -> Int) -> Int) : ScrollView(context) {
+        private val hair = android.graphics.Paint().apply { color = Tone.hair2; strokeWidth = maxOf(1f, context.resources.displayMetrics.density) }
+
+        /** [max] gets the height its parent offers (all of it when unbounded), and its content's whole height. */
         override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
             val room = if (MeasureSpec.getMode(heightMeasureSpec) == MeasureSpec.UNSPECIFIED) Int.MAX_VALUE / 2 else MeasureSpec.getSize(heightMeasureSpec)
-            super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(max(room), MeasureSpec.AT_MOST))
+            super.onMeasure(widthMeasureSpec, MeasureSpec.makeMeasureSpec(max(room) { contentHeight(widthMeasureSpec) }, MeasureSpec.AT_MOST))
+        }
+
+        private fun contentHeight(widthMeasureSpec: Int): Int {
+            val child = getChildAt(0) ?: return 0
+            child.measure(
+                MeasureSpec.makeMeasureSpec(maxOf(0, MeasureSpec.getSize(widthMeasureSpec) - paddingLeft - paddingRight), MeasureSpec.EXACTLY),
+                MeasureSpec.makeMeasureSpec(0, MeasureSpec.UNSPECIFIED))
+            return child.measuredHeight
+        }
+
+        override fun draw(canvas: android.graphics.Canvas) {
+            super.draw(canvas)
+            val y0 = scrollY.toFloat()
+            if (canScrollVertically(-1)) canvas.drawLine(0f, y0, width.toFloat(), y0, hair)
+            if (canScrollVertically(1)) (y0 + height - hair.strokeWidth).let { canvas.drawLine(0f, it, width.toFloat(), it, hair) }
         }
     }
 }
@@ -1439,3 +1617,35 @@ fun arsenalTint(tier: String?): Int = when (tier) {
 fun revertLine(prompt: Boolean): String =
     if (prompt) "The chat goes back to before this message. Its text returns to the field."
     else "The chat goes back to this answer; what came after it leaves."
+
+/**
+ * A question row's pick, as the Mac's: a radio (one of) or a checkbox (any of), 16 dp, faint at
+ * rest, accent and filled when picked.
+ */
+private class PickGlyph(context: android.content.Context, private val multiple: Boolean) : View(context) {
+    var on = false
+        set(v) { if (field != v) { field = v; invalidate() } }
+    private val d = context.resources.displayMetrics.density
+    private val ring = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { style = android.graphics.Paint.Style.STROKE; strokeWidth = 1.4f * d }
+    private val fill = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply { color = Tone.accent }
+    private val tick = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
+        style = android.graphics.Paint.Style.STROKE; strokeWidth = 1.8f * d; strokeCap = android.graphics.Paint.Cap.ROUND
+        strokeJoin = android.graphics.Paint.Join.ROUND; color = Tone.onAccent
+    }
+
+    init { importantForAccessibility = IMPORTANT_FOR_ACCESSIBILITY_NO }
+
+    override fun onDraw(c: android.graphics.Canvas) {
+        val s = minOf(width, height) / 16f
+        ring.color = if (on) Tone.accent else Tone.faint
+        if (multiple) {
+            val r = android.graphics.RectF(1.5f * s, 1.5f * s, 14.5f * s, 14.5f * s)
+            if (on) c.drawRoundRect(r, 3.5f * s, 3.5f * s, fill)
+            c.drawRoundRect(r, 3.5f * s, 3.5f * s, ring)
+            if (on) c.drawPath(android.graphics.Path().apply { moveTo(4.6f * s, 8.2f * s); lineTo(6.9f * s, 10.5f * s); lineTo(11.4f * s, 5.7f * s) }, tick)
+        } else {
+            c.drawCircle(8 * s, 8 * s, 6.5f * s, ring)
+            if (on) c.drawCircle(8 * s, 8 * s, 3.4f * s, fill)
+        }
+    }
+}

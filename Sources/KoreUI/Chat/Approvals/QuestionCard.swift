@@ -6,10 +6,10 @@ import SwiftUI
 /// CLI's short headers with a tick on each answered one. A single question has no tabs; a card
 /// too narrow for them steps through them, "2/4 ‹ ›". The body is as tall as the tallest
 /// question, so a switch never moves the card or the composer; past half the window it scrolls
-/// under soft edges. A pick is its radio or checkbox and a thin accent line round its row; Other
-/// is the last row, the row its field. Nothing goes until Submit, which waits for every answer;
-/// until then, an answered question's button is Next, to the next one unanswered. Skip, beside
-/// it, turns the questions down unanswered.
+/// with its scrollbar, never a fade. A pick is its radio or checkbox and a thin accent line round
+/// its row; Other is the last row, the row its field. Nothing goes until Submit, which waits for
+/// every answer; until then, an answered question's button is Next, to the next one unanswered.
+/// Skip, beside it, turns the questions down unanswered.
 ///
 /// The card has the keys as it arrives over an empty composer, and once clicked (its corner
 /// marks say so): ↑ ↓ move the current row, as the pointer does; Space picks; ↩ picks and goes
@@ -34,7 +34,6 @@ struct QuestionCard: View {
     /// The card has the keys.
     @StateObject private var holding = Local(false)
     @StateObject private var width = Local<CGFloat>(0)
-    @StateObject private var edges = Local(ScrollEdges())
     /// A row the keys moved to, scrolled into view.
     @StateObject private var reveal = Local<String?>(nil)
     @StateObject private var frame = Held(CGRect.zero)
@@ -60,9 +59,7 @@ struct QuestionCard: View {
                     .scrollBounceBehavior(.basedOnSize)
                     .frame(maxHeight: max(maxHeight - Self.chrome(tabs: questions.count > 1), Size.Question.row * 2))
                     .fixedSize(horizontal: false, vertical: true)
-                    .onScrollGeometryChange(for: ScrollEdges.self) { ScrollEdges($0) } action: { _, now in edges.value = now }
-                    .overlay(alignment: .top) { fade(edges.value.top, top: true) }
-                    .overlay(alignment: .bottom) { fade(edges.value.bottom, top: false) }
+                    .scrollIndicators(.visible)
                     .onChange(of: reveal.value) { _, id in
                         guard let id else { return }
                         proxy.scrollTo(id)
@@ -353,13 +350,6 @@ struct QuestionCard: View {
         return question.options.first { labels.contains($0.label) && $0.preview != nil }?.label
     }
 
-    private func fade(_ shown: Bool, top: Bool) -> some View {
-        LinearGradient(colors: [Theme.surface, Theme.surface.opacity(0)], startPoint: top ? .top : .bottom, endPoint: top ? .bottom : .top)
-            .frame(height: Size.tabFade)
-            .opacity(shown ? 1 : 0)
-            .allowsHitTesting(false)
-    }
-
     /// Skip, then Next while the shown question is answered and another isn't (it goes there, as ↩
     /// does); else Submit, an outline with tertiary words until a press would send.
     private var footer: some View {
@@ -596,21 +586,6 @@ struct QuestionPicks: Equatable {
     }
 
     func complete(_ questions: [Approval.Question]) -> Bool { questions.allSatisfy(answered) }
-}
-
-/// Whether there's more of the questions past the top or the bottom of their scroll.
-private struct ScrollEdges: Equatable {
-    var top = false
-    var bottom = false
-
-    init() {}
-
-    init(_ geometry: ScrollGeometry) {
-        let offset = geometry.contentOffset.y + geometry.contentInsets.top
-        top = offset > 1
-        bottom = offset + geometry.containerSize.height < geometry.contentSize.height + geometry.contentInsets.top
-            + geometry.contentInsets.bottom - 1
-    }
 }
 
 /// Other's field: bare in its row at the label's size (the caret shows focus), or in a well.
