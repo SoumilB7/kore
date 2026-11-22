@@ -149,6 +149,8 @@ final class TerminalPanel {
     @ObservationIgnored weak var window: NSWindow?
     @ObservationIgnored private weak var returnResponder: NSResponder?
     @ObservationIgnored var environment = ProcessInfo.processInfo.environment
+    /// A plain shell's program (storylines: zsh or bash); nil, the login shell.
+    @ObservationIgnored var shellPath: String?
     /// Where this window's shells run when not on this Mac (a box window's): a session for a
     /// folder (nil: the window's), a command to prepare, and what to show first.
     @ObservationIgnored var remote: (@MainActor (_ folder: URL?, _ draft: String?, _ history: String?) -> any TerminalSession)?
@@ -190,7 +192,7 @@ final class TerminalPanel {
     /// A new shell, in the window's folder or in `in` (the explorer's Open in Terminal).
     @discardableResult func newShell(draft: String? = nil, history: String? = nil, folder start: URL? = nil) -> TerminalEntry {
         let session: any TerminalSession =
-            remote?(start, draft, history) ?? TerminalShell(folder: start ?? folder, draft: draft, history: history, environment: environment)
+            remote?(start, draft, history) ?? TerminalShell(folder: start ?? folder, draft: draft, history: history, executable: shellPath, environment: environment)
         let entry = TerminalEntry(shell: session)
         entry.view.suspendsRenderingWhenNotVisible = suspendsRenderingWhenNotVisible
         entries.append(entry)

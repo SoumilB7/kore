@@ -15,10 +15,16 @@ final class BoxTerminalShell: NSObject, TerminalSession, TerminalViewDelegate {
     private(set) var title: String
     private(set) var ended = false
     private(set) var failure: String?
-    @ObservationIgnored let view: TerminalView
+    @ObservationIgnored let view: KoreBoxTerminalView
     @ObservationIgnored let pty: BoxPty
     @ObservationIgnored private var history: String?
     @ObservationIgnored private var draft: String?
+    /// The box's shell's line editor is up, as its output last said (bracketed paste on).
+    @ObservationIgnored private var editorUp = false
+    /// It has said so at least once: a shell that never does is taken as ready once it's quiet.
+    @ObservationIgnored private var editorSays = false
+    @ObservationIgnored private var lastOutput: ContinuousClock.Instant?
+    @ObservationIgnored private var typeAhead: TerminalTypeAhead?
     @ObservationIgnored private var started = false
     @ObservationIgnored private var closed = false
     /// The shell set its own title: the box's name for it doesn't replace it.
@@ -35,10 +41,17 @@ final class BoxTerminalShell: NSObject, TerminalSession, TerminalViewDelegate {
         // Typed into the fresh prompt, never run: one line only (a newline would run it).
         self.draft = draft.flatMap { $0.contains(where: \.isNewline) ? nil : $0 }
         title = Self.names[connection.alias] ?? "shell"
-        view = TerminalView(frame: .zero, font: TerminalShell.font, options: start)
+        view = KoreBoxTerminalView(frame: .zero, font: TerminalShell.font, options: start)
         super.init()
         view.terminalDelegate = self
+        let typeAhead = TerminalTypeAhead(
+            ready: { [weak self] in self?.ready ?? true }, deliver: { [weak self] in self?.view.pasteText($0) },
+            send: { [weak self] in self?.input(Data($0)) })
+        self.typeAhead = typeAhead
+        view.typeAhead = typeAhead
+        view.editorSays = { [weak self] in self?.ready ?? false }
         TerminalShell.style(view)
+        ShellKeys.prepare(view)
         let alias = connection.alias
         pty.opened = { [weak self] shell in
             Self.names[alias] = shell
@@ -77,15 +90,47 @@ final class BoxTerminalShell: NSObject, TerminalSession, TerminalViewDelegate {
         UILog.event("terminal-stop", ["id": id.uuidString, "box": "true"])
         pty.close()
         draft = nil
+        typeAhead?.cancel()
+    }
+
+    /// Typed text reaches the editor, not the tty's echo: it said it's up, or (a shell that never
+    /// says) its output has been quiet a moment.
+    private var ready: Bool {
+        if editorSays { return editorUp }
+        guard let lastOutput else { return false }
+        return ContinuousClock.now - lastOutput > .milliseconds(500)
+    }
+
+    /// Bracketed paste on (`ESC[?2004h`) as a line editor starts, off as a command runs.
+    private static let editorOn = Array("\u{1B}[?2004h".utf8), editorOff = Array("\u{1B}[?2004l".utf8)
+
+    private func noteEditor(_ bytes: Data) {
+        lastOutput = .now
+        let on = Self.last(Self.editorOn, in: bytes), off = Self.last(Self.editorOff, in: bytes)
+        guard on != nil || off != nil else { return }
+        editorSays = true
+        editorUp = (on ?? -1) > (off ?? -1)
+        if editorUp { typeAhead?.flush() }
+    }
+
+    private static func last(_ needle: [UInt8], in bytes: Data) -> Int? {
+        let hay = [UInt8](bytes)
+        guard hay.count >= needle.count else { return nil }
+        for start in stride(from: hay.count - needle.count, through: 0, by: -1) where hay[start..<start + needle.count].elementsEqual(needle) {
+            return start
+        }
+        return nil
     }
 
     private func show(_ bytes: Data, reset: Bool) {
         if reset { view.resetToInitialState() }
         bytes.withUnsafeBytes { raw in view.feed(byteArray: ArraySlice(raw.bindMemory(to: UInt8.self))) }
-        // The prompt is up: a prepared command goes in, unrun.
+        noteEditor(bytes)
+        // A prepared command goes in unrun, as a paste, once the shell's editor is up: typed while
+        // it started, the tty echoed it raw above the prompt and the shell showed it again.
         if let draft {
             self.draft = nil
-            pty.input(Data(draft.utf8))
+            typeAhead?.paste(draft)
         }
     }
 
@@ -103,19 +148,28 @@ final class BoxTerminalShell: NSObject, TerminalSession, TerminalViewDelegate {
 
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
 
-    func send(source: TerminalView, data: ArraySlice<UInt8>) { pty.input(Data(data)) }
+    /// Tests: where typed and pasted bytes go in place of the box's pty.
+    @ObservationIgnored var typed: ((Data) -> Void)?
+
+    func send(source: TerminalView, data: ArraySlice<UInt8>) {
+        if let typeAhead { typeAhead.keys(Array(data)) } else { input(Data(data)) }
+    }
+
+    private func input(_ bytes: Data) {
+        if let typed { typed(bytes) } else { pty.input(bytes) }
+    }
+
+    /// Bytes from the box's shell, as its pty gives them (tests).
+    func received(_ bytes: Data) { show(bytes, reset: false) }
 
     func scrolled(source: TerminalView, position: Double) {}
 
     func rangeChanged(source: TerminalView, startY: Int, endY: Int) {}
 
-    func clipboardCopy(source: TerminalView, content: Data) {
-        guard let text = String(data: content, encoding: .utf8) else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-    }
+    func clipboardCopy(source: TerminalView, content: Data) { TerminalClipboard.write(content) }
 
-    func clipboardRead(source: TerminalView) -> Data? { NSPasteboard.general.string(forType: .string).map { Data($0.utf8) } }
+    /// A program on the box never reads this Mac's clipboard (an OSC 52 query): refused.
+    func clipboardRead(source: TerminalView) -> Data? { nil }
 
     func kittyClipboardCapabilities(source: TerminalView) -> KittyClipboardCapabilities { [] }
 

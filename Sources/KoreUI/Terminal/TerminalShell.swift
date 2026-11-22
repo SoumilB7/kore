@@ -13,7 +13,7 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate, TerminalS
     private(set) var title: String
     private(set) var ended = false
     private(set) var failure: String?
-    @ObservationIgnored let view: LocalProcessTerminalView
+    @ObservationIgnored let view: KoreLocalTerminalView
     @ObservationIgnored private(set) var child: ProcessChild?
     @ObservationIgnored let folder: URL
     @ObservationIgnored private let executable: String
@@ -36,7 +36,7 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate, TerminalS
         self.arguments = arguments
         self.environment = environment
         title = URL(fileURLWithPath: self.executable).lastPathComponent
-        view = LocalProcessTerminalView(frame: CGRect(x: 0, y: 0, width: 760, height: 220),
+        view = KoreLocalTerminalView(frame: CGRect(x: 0, y: 0, width: 760, height: 220),
                                         font: Self.font,
                                         options: TerminalOptions(scrollback: Self.scrollback))
         super.init()
@@ -58,6 +58,8 @@ final class TerminalShell: NSObject, LocalProcessTerminalViewDelegate, TerminalS
         environment["CODEX_THREAD_ID"] = nil
         self.environment = environment
         view.processDelegate = self
+        view.guardClipboard()
+        ShellKeys.prepare(view)
         Self.style(view)
     }
 
