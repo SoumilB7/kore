@@ -21,7 +21,7 @@ import kotlinx.serialization.json.longOrNull
 /**
  * A window's history, as the Mac's panel (L7–L9): search, newest first under day headers, ▣
  * for the archived ones. A tap opens the chat in this window (a background tab on a Mac) and
- * here; a long-press offers Open here, Rename and Archive. Read a page at a time with `history.list`.
+ * here; a long-press offers Open here, Pin, Rename and Archive. Read a page at a time with `history.list`.
  */
 class HistoryActivity : NodeActivity() {
     private val windowId by lazy { intent.getStringExtra("window") ?: "" }
@@ -144,11 +144,15 @@ class HistoryActivity : NodeActivity() {
         val title = s.str("title")?.ifBlank { null } ?: "Untitled chat"
         addView(label(title).apply { type(Type.Body); setTextColor(Tone.text); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END },
             LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+        val pinned = s.str("id")?.let { kore.pins.pinned(host, listOf(DeviceList.historyPinKey(it))) } == true
+        if (pinned) addView(android.widget.ImageView(context).apply {
+            setImageResource(dev.kore.phone.R.drawable.i_pin); imageTintList = android.content.res.ColorStateList.valueOf(Tone.faint)
+        }, LinearLayout.LayoutParams(dp(12), dp(12)).apply { marginStart = dp(8) })
         if (s.bool("archived")) addView(android.widget.ImageView(context).apply {
             setImageResource(dev.kore.phone.R.drawable.i_archive); imageTintList = android.content.res.ColorStateList.valueOf(Tone.faint)
         }, LinearLayout.LayoutParams(dp(15), dp(15)).apply { marginStart = dp(8) })
         addView(label(time).apply { type(Type.Caption); setTextColor(Tone.faint); setPadding(dp(10), 0, 0, 0) })
-        contentDescription = listOfNotNull(title, if (s.bool("archived")) "archived" else null, time).joinToString(", ")
+        contentDescription = listOfNotNull(title, if (pinned) "pinned" else null, if (s.bool("archived")) "archived" else null, time).joinToString(", ")
         setOnClickListener { open(s) }
         pressFill(null, Tone.l2, 0)
     }
@@ -173,8 +177,12 @@ class HistoryActivity : NodeActivity() {
     private fun menu(anchor: View, s: JsonObject) {
         val id = s.str("id") ?: return
         val isArchived = s.bool("archived")
-        PopMenu(this).show(anchor, listOf(
+        val keys = listOf(DeviceList.historyPinKey(id))
+        val device = host
+        PopMenu(this).show(anchor, listOfNotNull(
             PopMenu.Item("Open here") { open(s) },
+            // This phone's own pin; History keeps its order by date (it reads a page at a time).
+            device?.let { d -> PopMenu.Item(kore.pins.word(d, keys)) { kore.pins.set(d, keys, !kore.pins.pinned(d, keys)); draw() } },
             PopMenu.Item("Rename…") { renameSheet(s.str("title").orEmpty()) { t -> act(Control.historyRename(windowId, id, t)) { load(reset = true) } } },
             PopMenu.Item(if (isArchived) "Unarchive" else "Archive") { act(Control.historyArchive(windowId, id, !isArchived)) { load(reset = true) } },
         ))

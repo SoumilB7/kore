@@ -24,6 +24,8 @@ class KoreApp : Application() {
     val log by lazy { dev.kore.link.log.PhoneLog(java.io.File(noBackupFilesDir, "logs")) }
     /** Which chats this phone has shown since they last did something (the lists' unread). */
     val seen by lazy { dev.kore.phone.ui.SeenBook(getSharedPreferences("seen", MODE_PRIVATE)) }
+    /** The chats this phone pinned, per device (the lists' top). */
+    val pins by lazy { dev.kore.phone.ui.PinBook(getSharedPreferences("pins", MODE_PRIVATE)) }
 
     /** A debug build (installed over adb), never a release one. */
     val debuggable get() = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0

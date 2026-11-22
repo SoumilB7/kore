@@ -287,6 +287,19 @@ struct BoxStateTests {
         try await until { hc.record.title == "Device" }
     }
 
+    /// A box chat's meta says its session once it has one (a phone pins by it), asleep too.
+    @Test func theMetaCarriesTheSession() async throws {
+        let (rig, hc, _) = try rig()
+        defer { rig.finish() }
+        #expect(HostMeta.meta(hc).sessionId == nil)
+        let chat = try #require(rig.host.live(hc))
+        await chat.startOnce()
+        try await until { hc.record.session == "s1" }
+        #expect(HostMeta.meta(hc).sessionId == "s1")
+        rig.host.sleep(hc)
+        #expect(HostMeta.meta(hc).sessionId == "s1")
+    }
+
     /// A box chat kept with a session and an empty title (as the phone's untitled row) wakes
     /// with a title: its first words, or its CLI's name.
     @Test func aBoxChatKeptWithAnEmptyTitleShowsOne() async throws {

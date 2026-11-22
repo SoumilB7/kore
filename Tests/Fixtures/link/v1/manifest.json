@@ -192,6 +192,10 @@
       "type": "delta"
     },
     {
+      "file": "delta.session.json",
+      "type": "delta"
+    },
+    {
       "file": "tx.page.attachments.json",
       "type": "tx.page"
     },

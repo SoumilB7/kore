@@ -157,7 +157,7 @@ class DeviceActivity : NodeActivity() {
             windowLine.setOnClickListener { startActivity(Intent(this, WindowActivity::class.java).putExtra("window", w.str("id"))) }
             if (link.hasControl(snapshot)) windowLine.setOnLongClickListener { v -> windowMenu(v, w); true }
         }
-        val made = DeviceList.rows(snapshot, filter, System.currentTimeMillis(), kore.seen)
+        val made = DeviceList.rows(snapshot, filter, System.currentTimeMillis(), kore.seen, kore.pins.of(host))
         rows.submitList(made)
         val usage = UsageMeters.rows(snapshot, System.currentTimeMillis())
         accounts.submitList(if (usage.isEmpty()) emptyList() else listOf(usage))
@@ -603,13 +603,23 @@ class DeviceActivity : NodeActivity() {
     /** A window's past chats; a tap there opens one here, in that window. */
     private fun history(windowId: String) = startActivity(Intent(this, HistoryActivity::class.java).putExtra("window", windowId))
 
-    /** A chat's row held: Show on the Mac (a Mac's), then Close tab, refused while it would lose work. */
-    private fun rowMenu(anchor: View, chatId: String) {
+    /**
+     * A chat's row held: Pin or Unpin (this phone's own, any grant), then with control Show on the
+     * Mac (a Mac's) and Close tab, refused while it would lose work.
+     */
+    private fun rowMenu(anchor: View, row: DeviceList.Row) {
+        val chatId = row.chatId ?: return
         val chat = last?.chatsById()?.get(chatId) ?: return
-        if (!link.hasControl(last)) return
         val items = ArrayList<PopMenu.Item>()
-        if (!isBox) items += PopMenu.Item("Show on the Mac") { act(dev.kore.link.node.Control.select(chatId)) { Quiet.say(this, "Shown on $macName") } }
-        if (CloseHold.offered(chat, isBox)) items += PopMenu.Item("Close tab", danger = true, rule = items.isNotEmpty()) { closeChat(chat) }
+        val device = host
+        if (device != null && row.pinKeys.isNotEmpty()) items += PopMenu.Item(kore.pins.word(device, row.pinKeys)) {
+            kore.pins.set(device, row.pinKeys, !row.pinned)
+            draw()
+        }
+        if (link.hasControl(last)) {
+            if (!isBox) items += PopMenu.Item("Show on the Mac") { act(dev.kore.link.node.Control.select(chatId)) { Quiet.say(this, "Shown on $macName") } }
+            if (CloseHold.offered(chat, isBox)) items += PopMenu.Item("Close tab", danger = true, rule = items.isNotEmpty()) { closeChat(chat) }
+        }
         if (items.isNotEmpty()) PopMenu(this).show(anchor, items)
     }
 
@@ -648,7 +658,7 @@ class DeviceActivity : NodeActivity() {
         override fun onBindViewHolder(holder: RecyclerView.ViewHolder, position: Int) {
             val row = getItem(position)
             bindChatCard(holder.itemView as LinearLayout, row)
-            holder.itemView.setOnLongClickListener(row.chatId?.let { id -> View.OnLongClickListener { v -> rowMenu(v, id); true } })
+            holder.itemView.setOnLongClickListener(row.chatId?.let { View.OnLongClickListener { v -> rowMenu(v, row); true } })
         }
     }
 }

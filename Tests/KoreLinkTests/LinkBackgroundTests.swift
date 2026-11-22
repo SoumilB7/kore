@@ -43,4 +43,19 @@ struct LinkBackgroundTests {
         let json = String(decoding: try JSONEncoder().encode(LinkSnapshot.meta(chat)), as: UTF8.self)
         #expect(!json.contains("background"))
     }
+
+    /// A chat's session goes with its meta once it has one (a phone pins by it: a Mac's chat ids
+    /// are new each launch), and is left out before that.
+    @Test(arguments: ["claude", "codex"])
+    func theMetaCarriesTheSessionOnceThereIsOne(_ provider: String) throws {
+        let fresh = Chat(provider: try #require(Registry.provider(provider)), folder: Self.folder)
+        defer { fresh.close() }
+        #expect(LinkSnapshot.meta(fresh).sessionId == nil)
+        #expect(!String(decoding: try JSONEncoder().encode(LinkSnapshot.meta(fresh)), as: UTF8.self).contains("sessionId"))
+        let past = SessionSummary(id: "0b4f6a2e-7c1d-4e8a-9f3b-5d2c1a0e9b77", agent: provider == "codex" ? .codex : .claude, title: "Pinned", updated: Date(timeIntervalSince1970: 1_790_000_000))
+        let resumed = Chat(provider: try #require(Registry.provider(provider)), folder: Self.folder, resume: past)
+        defer { resumed.close() }
+        #expect(LinkSnapshot.meta(resumed).sessionId == past.id)
+        #expect(LinkSnapshot.meta(resumed, view: .full).sessionId == past.id)
+    }
 }

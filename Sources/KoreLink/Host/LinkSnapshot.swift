@@ -253,6 +253,7 @@ enum LinkSnapshot {
             model: chat.controls.currentModel?.name, queued: chat.queuedCount, running: chat.isBusy, cards: cards(chat),
             can: .init(send: sendable && !chat.accountRestartPending, stop: chat.isWorking), commands: commands(chat))
         made.background = background(chat)
+        made.sessionId = chat.sessionId
         return made
     }
 
