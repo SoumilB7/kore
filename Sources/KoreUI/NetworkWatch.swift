@@ -1,5 +1,6 @@
 import Foundation
 import HostClient
+import KoreCore
 import Network
 import Observation
 
@@ -18,6 +19,10 @@ package final class NetworkWatch {
     @ObservationIgnored package let paths = PathChanges()
 
     private init() {
+        // A test process: the Mac's real network never drives what a test runs. `swift test`
+        // runs every suite in one process, and a real Wi-Fi drop once made every live link
+        // there (the KoreNet scenarios' too) dial again mid-run. Tests pin it instead.
+        guard !KoreLog.isTestProcess else { return }
         monitor.pathUpdateHandler = { path in
             let online = path.status == .satisfied
             let seen = PathChanges.Path(
@@ -39,7 +44,7 @@ package final class NetworkWatch {
     /// the monitor say again.
     package func pin(_ online: Bool?) {
         pinned = online
-        if let online { set(online) } else { set(monitor.currentPath.status == .satisfied) }
+        if let online { set(online) } else { set(KoreLog.isTestProcess || monitor.currentPath.status == .satisfied) }
     }
 
     private func set(_ online: Bool) {

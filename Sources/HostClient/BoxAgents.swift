@@ -22,43 +22,69 @@ package enum BoxAgent: String, CaseIterable, Sendable, Codable {
                 message: "\(tool) isn't on \(name) · \(rawValue)'s install needs it",
                 fix: command.map { machine.installsWithoutPassword(tool) ? .install(tool) : .copy($0) })
         }
-        let start = "set -e\nmkdir -p \"$HOME/.local/bin\"\nt=$(mktemp -d)\ntrap 'rm -rf \"$t\"' EXIT\n"
+        let base = "set -e\nmkdir -p \"$HOME/.local/bin\"\nt=$(mktemp -d)\ntrap 'rm -rf \"$t\"' EXIT\n"
+        let start = base + Self.fetch
         switch self {
         case .claude:
             guard machine.has("curl") else { return .failure(need("curl")) }
             guard machine.has("bash") else { return .failure(need("bash")) }
-            return .success(start + "curl -fsSL https://claude.ai/install.sh -o \"$t/install.sh\"\nbash \"$t/install.sh\"\n")
+            return .success(start + "get https://claude.ai/install.sh \"$t/install.sh\" \(Self.small) claude.ai\nbash \"$t/install.sh\"\n")
         case .codex:
             if machine.has("npm") {
-                return .success(start + "npm install -g --prefix \"$HOME/.npm-global\" @openai/codex\n")
+                // npm's own bound on each fetch (5 min), tried once more at most.
+                return .success(base + "npm install -g --prefix \"$HOME/.npm-global\" --fetch-timeout=300000 --fetch-retries=1 @openai/codex\n")
             }
             guard let target = Self.codexTarget(machine.platform) else { return .failure(BoxSetup.Failure(message: "codex has no build for \(machine.kind)")) }
             guard machine.has("curl") else { return .failure(need("curl")) }
             guard machine.has("tar") else { return .failure(need("tar")) }
             return .success(
-                start + "curl -fsSL https://github.com/openai/codex/releases/latest/download/codex-\(target).tar.gz | tar -xz -C \"$t\"\n"
-                    + "mv -f \"$t/codex-\(target)\" \"$HOME/.local/bin/codex\"\nchmod 755 \"$HOME/.local/bin/codex\"\n")
+                start + "get https://github.com/openai/codex/releases/latest/download/codex-\(target).tar.gz \"$t/codex.tgz\" \(Self.large) github.com\n"
+                    + "tar -xzf \"$t/codex.tgz\" -C \"$t\"\nmv -f \"$t/codex-\(target)\" \"$HOME/.local/bin/codex\"\nchmod 755 \"$HOME/.local/bin/codex\"\n")
         case .gh:
             guard machine.has("curl") else { return .failure(need("curl")) }
-            let latest = #"v=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' | head -n 1)"#
+            let latest = "get https://api.github.com/repos/cli/cli/releases/latest \"$t/latest.json\" \(Self.small) api.github.com\n"
+                + #"v=$(sed -n 's/.*"tag_name": *"v\([^"]*\)".*/\1/p' "$t/latest.json" | head -n 1)"#
                 + "\n[ -n \"$v\" ] || { echo \"couldn't read gh's latest release\" >&2; exit 1; }\n"
             switch machine.platform {
             case "linux-x86_64"?, "linux-aarch64"?:
                 guard machine.has("tar") else { return .failure(need("tar")) }
                 let arch = machine.platform == "linux-x86_64" ? "amd64" : "arm64"
                 return .success(
-                    start + latest + "curl -fsSL \"https://github.com/cli/cli/releases/download/v$v/gh_${v}_linux_\(arch).tar.gz\" | tar -xz -C \"$t\"\n"
-                        + "mv -f \"$t/gh_${v}_linux_\(arch)/bin/gh\" \"$HOME/.local/bin/gh\"\n")
+                    start + latest + "get \"https://github.com/cli/cli/releases/download/v$v/gh_${v}_linux_\(arch).tar.gz\" \"$t/gh.tgz\" \(Self.large) github.com\n"
+                        + "tar -xzf \"$t/gh.tgz\" -C \"$t\"\nmv -f \"$t/gh_${v}_linux_\(arch)/bin/gh\" \"$HOME/.local/bin/gh\"\n")
             case "macos-arm64"?, "macos-x86_64"?:
                 guard machine.has("unzip") else { return .failure(need("unzip")) }
                 return .success(
-                    start + latest + "curl -fsSL -o \"$t/gh.zip\" \"https://github.com/cli/cli/releases/download/v$v/gh_${v}_macOS_universal.zip\"\n"
+                    start + latest + "get \"https://github.com/cli/cli/releases/download/v$v/gh_${v}_macOS_universal.zip\" \"$t/gh.zip\" \(Self.large) github.com\n"
                         + "unzip -q \"$t/gh.zip\" -d \"$t\"\nmv -f \"$t/gh_${v}_macOS_universal/bin/gh\" \"$HOME/.local/bin/gh\"\n")
             default:
                 return .failure(BoxSetup.Failure(message: "gh has no build for \(machine.kind)"))
             }
         }
     }
+
+    /// The longest a small download (an installer script, a release's name) may take, in seconds.
+    package static let small = 60
+    /// The longest a CLI's archive may take, in seconds.
+    package static let large = 300
+
+    /// `get <url> <file> <seconds> <site>`: one download with a bound on connecting and on the
+    /// whole, its failure one line the card shows ("the download from github.com timed out after
+    /// 300 s"), never a hang.
+    static let fetch = #"""
+        get() {
+          curl -fsSL --connect-timeout 20 --max-time "$3" -o "$2" "$1" && return 0
+          s=$?
+          case $s in
+            28) echo "the download from $4 timed out after $3 s" >&2 ;;
+            6|7) echo "couldn't reach $4" >&2 ;;
+            22) echo "$4 refused the download" >&2 ;;
+            *) echo "the download from $4 failed (curl $s)" >&2 ;;
+          esac
+          exit 1
+        }
+
+        """#
 
     /// codex's standalone build for a platform.
     static func codexTarget(_ platform: String?) -> String? {
@@ -124,11 +150,28 @@ package struct BoxParity: Equatable, Sendable {
         }
     }
 
+    /// What Fix does: each line has a fix Kore runs itself (install or update a CLI that's older
+    /// there, sign one in, set the git identity, a tool that needs no password). The count.
     package var differences: [Difference] = []
+    /// Quiet lines, not counted: a newer CLI there, a tool Kore can't update (git, node), a
+    /// command only the user runs (Copy), and the setup that's listed, never copied (MCP servers,
+    /// skills, plugins, agents, default models).
+    package var notes: [Difference] = []
 
-    package init(differences: [Difference] = []) { self.differences = differences }
+    package init(differences: [Difference] = [], notes: [Difference] = []) {
+        self.differences = differences
+        self.notes = notes
+    }
 
     package var isEmpty: Bool { differences.isEmpty }
+
+    /// A fix Kore runs itself, so a difference Fix counts.
+    package static func counts(_ fix: Fix?) -> Bool {
+        switch fix {
+        case .install?, .signIn?, .gitIdentity?, .tool?: true
+        case .copy?, nil: false
+        }
+    }
 
     /// The box against this Mac. `logins` are each side's by CLI (`claude`, `codex`, `gh`), when
     /// known; a side that hasn't said is left out of that compare.
@@ -136,7 +179,11 @@ package struct BoxParity: Equatable, Sendable {
         mac: BoxMachine, box: BoxMachine, name: String, macLogins: [String: BoxLogin] = [:], boxLogins: [String: BoxLogin] = [:]
     ) -> BoxParity {
         var out: [Difference] = []
-        func add(_ id: String, _ line: String, _ fix: Fix? = nil) { out.append(Difference(id: id, line: line, fix: fix)) }
+        var notes: [Difference] = []
+        func add(_ id: String, _ line: String, _ fix: Fix? = nil) {
+            let difference = Difference(id: id, line: line, fix: fix)
+            if counts(fix) { out.append(difference) } else { notes.append(difference) }
+        }
 
         for tool in BoxMachine.compared {
             let here = mac.versions[tool] ?? mac.tools[tool]
@@ -150,10 +197,12 @@ package struct BoxParity: Equatable, Sendable {
                 continue
             }
             // rsync's builds differ by kind (openrsync on a Mac): there only presence counts.
-            guard tool != "rsync", let mine = mac.versions[tool].flatMap(BoxMachine.majorMinor),
-                let theirs = box.versions[tool].flatMap(BoxMachine.majorMinor), mine != theirs
+            guard tool != "rsync", let macLine = mac.versions[tool], let boxLine = box.versions[tool],
+                let mine = BoxMachine.majorMinor(macLine), let theirs = BoxMachine.majorMinor(boxLine), mine != theirs
             else { continue }
-            add("version." + tool, "\(tool) \(theirs) on \(name), \(mine) here", agent.map { .install($0) })
+            // Only an older CLI there is Kore's to update; the same or newer is said, not fixed.
+            let older = BoxMachine.older(boxLine, than: macLine)
+            add("version." + tool, "\(tool) \(theirs) on \(name), \(mine) here", older ? agent.map { .install($0) } : nil)
         }
 
         for agent in BoxAgent.allCases {
@@ -190,7 +239,7 @@ package struct BoxParity: Equatable, Sendable {
                 add(cli + ".model", "\(cli)'s default model is \(b ?? "its own") on \(name), \(a) here")
             }
         }
-        return BoxParity(differences: out)
+        return BoxParity(differences: out, notes: notes)
     }
 
     /// The git identity set on the box: `git config --global` for each, quoted.

@@ -89,15 +89,11 @@ extension Color {
     }
 }
 
-/// A working chat tab's spinner, in its CLI's colour: Claude's orange, the others plain; Arsenal's
-/// one colour while the chat has it at any tier, as its logo.
+/// A working chat tab's spinner, in its CLI's colour: Claude's orange, the others plain.
 enum WorkingSpinner {
     static let claude = Color(hex: 0xF59A55)
 
-    static func tint(_ provider: Provider, arsenal: ArsenalTier? = nil) -> Color {
-        if arsenal != nil { return Theme.Arsenal.mark }
-        return provider.id == "claude" ? claude : .white
-    }
+    static func tint(_ provider: Provider) -> Color { provider.id == "claude" ? claude : .white }
 }
 
 

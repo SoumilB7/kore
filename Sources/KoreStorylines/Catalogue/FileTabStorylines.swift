@@ -257,7 +257,8 @@ final class MarkdownPreviewSelects: ChatStoryline {
             Key(.escape),
             CopySelectionNothing(),
             ClickPreview(path: [1], offset: 10, count: 2),
-            CopySelection("**config**"),
+            // One word of one paragraph: its visible text, no Markdown.
+            CopySelection("config"),
         ]
     }
 }

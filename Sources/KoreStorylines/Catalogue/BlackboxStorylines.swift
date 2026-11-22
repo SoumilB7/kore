@@ -154,12 +154,16 @@ final class RenameEmptyKeepsCommand: ChatStoryline {
 
 /// Copy shows by the table's top-right corner, outside it: beside it in the margin when there's
 /// room, else just over its top edge. It never covers the table's text (a header-only table's
-/// second cell was under it), the table is no taller for it, and it copies what a drag across the
-/// table copies.
+/// second cell was under it), and the table is no taller for it. It copies tabbed rows; a drag
+/// across the table copies it as Markdown, as written. Links are their text in both.
 class TableCopyCorner: ChatStoryline {
     override class var isFamily: Bool { self == TableCopyCorner.self }
     override class var tags: Set<Tag> { [.chat, .gate] }
     class var table: String { "" }
+    /// The table as a drag across it copies it (as written, links as their text).
+    class var written: String { table }
+    /// The table as its Copy takes it.
+    class var tabbed: String { "" }
     class var size: CGSize { CGSize(width: 1000, height: 760) }
     override class var needs: Needs { Needs(window: size) }
     override class var script: CLIScript { CLIScript(turns: [CLIScript.reply("Before table.\n\n" + table + "\n\nAfter table.")]) }
@@ -206,13 +210,13 @@ class TableCopyCorner: ChatStoryline {
             Click(.id(id.part(.copy))),
             Expect("the button copied something") { _ in StoryTranscript.copied != nil },
             Do("keep it") { s in s.stash(Copies.self) { Copies() }.button = StoryTranscript.copied },
-            Expect("selection = “ table.⏎⏎” + button copy + “⏎⏎After”", found: { s in
+            Expect("selection = “ table.⏎⏎” + the table as written + “⏎⏎After”, Copy its tabbed rows", found: { s in
                 let c = s.stash(Copies.self) { Copies() }
                 return "selection \(c.selection.debugDescription) button \(c.button.debugDescription)"
             }) { s in
                 let c = s.stash(Copies.self) { Copies() }
                 guard let sel = c.selection, let b = c.button else { return false }
-                return sel == " table.\n\n" + b + "\n\nAfter"
+                return sel == " table.\n\n" + Self.written + "\n\nAfter" && b == Self.tabbed
             },
         ]
     }
@@ -221,10 +225,12 @@ class TableCopyCorner: ChatStoryline {
 /// A header and no rows: the chip covered its second cell.
 final class TableCopyHeaderOnly: TableCopyCorner {
     override class var table: String { "| Name | Qty |\n|---|--:|" }
+    override class var tabbed: String { "Name\tQty" }
 }
 
 final class TableCopyNarrowWindow: TableCopyCorner {
     override class var table: String { "| Only |\n|---|\n| a |\n| b |" }
+    override class var tabbed: String { "Only\na\nb" }
     override class var size: CGSize { CGSize(width: 520, height: 700) }
 }
 
@@ -237,12 +243,21 @@ final class TableCopyWide: TableCopyCorner {
         let rows = (1...3).map { r in "| " + (1...12).map { "row \(r) cell \($0) with some longer text" }.joined(separator: " | ") + " |" }
         return ([head, rule] + rows).joined(separator: "\n")
     }
+    override class var tabbed: String {
+        let head = (1...12).map { "Column number \($0)" }.joined(separator: "\t")
+        let rows = (1...3).map { r in (1...12).map { "row \(r) cell \($0) with some longer text" }.joined(separator: "\t") }
+        return ([head] + rows).joined(separator: "\n")
+    }
 }
 
 final class TableCopyFancy: TableCopyCorner {
     override class var table: String {
-        "| Key | Value |\n|:--|:-:|\n| `code` | **bold** and *it* |\n| a \\| b | 名前 🚀 |\n|  | empty left |"
+        "| Key | Value |\n|:--|:-:|\n| `code` | **bold** and *it* |\n| a \\| b | 名前 🚀 |\n|  | empty left |\n| [docs](https://example.com/docs) | link |"
     }
+    override class var written: String {
+        "| Key | Value |\n|:--|:-:|\n| `code` | **bold** and *it* |\n| a \\| b | 名前 🚀 |\n|  | empty left |\n| docs | link |"
+    }
+    override class var tabbed: String { "Key\tValue\ncode\tbold and it\na | b\t名前 🚀\n\tempty left\ndocs\tlink" }
 }
 
 // MARK: Eight tabs in view

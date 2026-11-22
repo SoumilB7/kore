@@ -85,7 +85,9 @@ package struct NetEnvironment: @unchecked Sendable {
                 guard let helper = NetSidecar.helper() else {
                     throw TailnetError.sidecar(NetEnvironment.noHelper)
                 }
-                let sidecar = try NetSidecar.start(helper: helper, folder: support.appendingPathComponent("net/tailnet", isDirectory: true), key: key)
+                let sidecar = try NetSidecar.start(
+                    helper: helper, folder: support.appendingPathComponent("net/tailnet", isDirectory: true), key: key,
+                    arguments: ["-hostname", NetSidecar.nodeName(ProcessInfo.processInfo.hostName)])
                 return (sidecar.tailnet, { sidecar.stop() })
             },
             secrets: FileSecrets(folder: FileSecrets.folder(support: support)), defaults: defaults, support: support,
@@ -187,6 +189,30 @@ package final class KoreNetSwitch: NetRouter {
     /// What phones are told of the boxes changed (a box enrolled, gained a tailnet node key, was
     /// renamed, taken offline or removed): the phones' listener sends them the directory.
     @ObservationIgnored package var directoryChanged: (@MainActor () -> Void)?
+    /// Work off the main actor, told as it begins (true) and ends (false): the KoreNet system
+    /// tests' world doesn't move its clock on while any is under way (a sidecar's start, a status
+    /// read). Kore: nothing listens.
+    @ObservationIgnored package var counting: @Sendable (Bool) -> Void = { _ in }
+
+    /// `work` off the main actor, counted while it runs.
+    private func offMain(_ work: @escaping @Sendable () async -> Void) {
+        let counting = counting
+        counting(true)
+        Task.detached {
+            await work()
+            counting(false)
+        }
+    }
+
+    /// A value worked out off the main actor, counted while it's worked out.
+    nonisolated private static func offMain<T: Sendable>(_ counting: @Sendable (Bool) -> Void, _ work: @escaping @Sendable () -> T) async -> T {
+        counting(true)
+        defer { counting(false) }
+        return await Task.detached { work() }.value
+    }
+    /// Bumped when a box says something its row or card shows (Kore's tailnet there): what
+    /// draws them reads it, so the change shows the moment `net.node` comes.
+    package private(set) var nodeRevision = 0
     /// This Mac's book lost a record it issued to the boxes (a box it allowed from a pending
     /// row, forgotten): the boxes hear the change (`devices.set{merge}`).
     @ObservationIgnored package var issuedChanged: (@MainActor () -> Void)?
@@ -240,8 +266,10 @@ package final class KoreNetSwitch: NetRouter {
 
     /// Discovery and the choice off the main actor (Kore's own tailnet started when chosen),
     /// then `chose` on it.
-    private func choose(_ env: NetEnvironment, _ mine: Int) {
-        Task.detached {
+    private func choose(_ env: NetEnvironment, _ mine: Int, stopFirst: (@Sendable () -> Void)? = nil) {
+        offMain {
+            // Kore's own signing in while Tailscale ran: stopped before it starts as the Mac's node.
+            stopFirst?()
             let (installed, local) = env.installed()
             var choice = TailnetChooser.chooseBeside(installed)
             var sidecar: (tailnet: any Tailnet, stop: @Sendable () -> Void)?
@@ -318,9 +346,98 @@ package final class KoreNetSwitch: NetRouter {
         return Self.signInAgainLine
     }
 
+    /// The sign-in line's words when Kore's own lost its sign-in with the key change (as the
+    /// Mac's node, or signing in while Tailscale runs).
+    package var signInAgainNote: String? {
+        guard tailnetSignInAgain, state == .sidecar || state == .installed else { return nil }
+        return Self.signInAgainLine
+    }
+
     /// Signed in again: the line goes for good.
     private func signedInAgain() {
-        if state == .sidecar, status?.backendState == .running, tailnetSignInAgain { tailnetSignInAgain = false }
+        noteOwn()
+        guard state == .sidecar, status?.backendState == .running else { return }
+        if tailnetSignInAgain { tailnetSignInAgain = false }
+        if !ownReady { ownReady = true }
+    }
+
+    // MARK: Kore's own on this Mac, as its row says it
+
+    nonisolated package static let ownKey = "koreNetOwnTailnet"
+    nonisolated package static let ownExpiryKey = "koreNetOwnTailnetExpiry"
+
+    /// Kore's own as last heard while it ran: signed in as whom, or signed out and why. Kept
+    /// across launches, so it's known while Tailscale overrides.
+    package var ownHeard: NetNodeWire.Own? {
+        get {
+            access(keyPath: \.ownHeard)
+            return defaults.data(forKey: Self.ownKey).flatMap { try? JSONDecoder().decode(NetNodeWire.Own.self, from: $0) }
+        }
+        set {
+            guard newValue != ownHeard else { return }
+            withMutation(keyPath: \.ownHeard) { defaults.set(newValue.flatMap { try? JSONEncoder().encode($0) }, forKey: Self.ownKey) }
+        }
+    }
+
+    /// Kore's own on this Mac now (nil while KoreNet is off).
+    package var own: NetNodeWire.Own? {
+        guard env != nil else { return nil }
+        switch state {
+        case .sidecar:
+            return ownHeard
+        case .installed:
+            // Overriding: Kore's own as it was left, or its sign-in waiting.
+            if ownReady { return ownHeard ?? .signedIn(nil) }
+            let why: NetNodeWire.Own.Why = tailnetSignInAgain ? .unreadable : (ownHeard?.why ?? .never)
+            return .signedOut(why, page: ownSignIn)
+        default:
+            return ownHeard
+        }
+    }
+
+    @ObservationIgnored private var ownExpiry: DispatchWorkItem?
+
+    /// What Kore's own node's status says, while it's this Mac's node.
+    private func noteOwn() {
+        guard state == .sidecar, let status else { return }
+        let page = status.authURL.flatMap { $0.hasPrefix("https://") ? $0 : nil }
+        guard var next = NetNodeWire.Own.heard(
+            running: status.backendState == .running, needsLogin: status.backendState == .needsLogin, login: status.login, page: page,
+            keyExpiry: status.selfNode?.keyExpiry, before: ownHeard, now: Date()) else { return }
+        if !next.signedIn, tailnetSignInAgain { next.why = .unreadable }
+        ownSaid(next, expiry: next.signedIn ? status.selfNode?.keyExpiry : nil)
+    }
+
+    /// Kore's own changed: kept, and a signed-in node's key running out is a sign-out at that
+    /// moment (no polling).
+    private func ownSaid(_ next: NetNodeWire.Own, expiry: Date? = nil) {
+        if next != ownHeard {
+            HostLog.note("korenet", "own tailnet", next.line)
+            ownHeard = next
+        }
+        if !next.signedIn, next.why != .never, ownReady { ownReady = false }
+        if next.signedIn, let expiry { defaults.set(expiry.timeIntervalSince1970, forKey: Self.ownExpiryKey) }
+        if !next.signedIn { defaults.removeObject(forKey: Self.ownExpiryKey) }
+        armOwnExpiry()
+    }
+
+    private func armOwnExpiry() {
+        ownExpiry?.cancel()
+        ownExpiry = nil
+        let at = defaults.double(forKey: Self.ownExpiryKey)
+        guard at > 0, ownHeard?.signedIn == true else { return }
+        let wait = at - Date().timeIntervalSince1970
+        guard wait > 0 else { return ownSaid(.signedOut(.expired)) }
+        let item = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.ownHeard?.signedIn == true else { return }
+                self.ownSaid(.signedOut(.expired))
+                // Overriding: Kore's own signs in again beside Tailscale.
+                if self.state == .installed, let env = self.env { self.prepareOwn(env) }
+            }
+        }
+        ownExpiry = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + min(wait, 400 * 86400), execute: item)
     }
 
     private func chose(_ choice: TailnetChooser.Choice, local: (any Tailnet)?, sidecar: (tailnet: any Tailnet, stop: @Sendable () -> Void)?, problem: String?) {
@@ -362,6 +479,10 @@ package final class KoreNetSwitch: NetRouter {
         if state.reaches { for connection in connections() { connection.peerOnline() } }
         // U-b: every SSH box not on KoreNet yet upgrades now, with no window.
         if state.reaches { upgrades?.switchedOn() }
+        // Tailscale runs: Kore's own signs in now if it never has, then stops (its state kept),
+        // so the Mac moves to it with no sign-in the moment Tailscale stops.
+        armOwnExpiry()
+        if state == .installed, let env { prepareOwn(env) }
         settled?("chose")
     }
 
@@ -386,6 +507,94 @@ package final class KoreNetSwitch: NetRouter {
 
     /// What was chosen last (Kore's own beside the app reads `.sidecar` in `state`).
     @ObservationIgnored private var chosen: TailnetChooser.Choice?
+
+    // MARK: Kore's own, signed in while Tailscale runs
+
+    /// Kore's own tailnet signed in once on this Mac (its state sealed in its folder): moving to
+    /// it needs no sign-in. Kept across launches.
+    nonisolated package static let ownReadyKey = "koreNetOwnTailnetReady"
+    package var ownReady: Bool {
+        get { defaults.bool(forKey: Self.ownReadyKey) }
+        set { defaults.set(newValue, forKey: Self.ownReadyKey) }
+    }
+    /// While Tailscale runs and Kore's own has never signed in: its sign-in page (Devices' line).
+    package private(set) var ownSignIn: String?
+    @ObservationIgnored private var standby: (tailnet: any Tailnet, stop: @Sendable () -> Void)?
+    @ObservationIgnored private var standbyWatch: Task<Void, Never>?
+    @ObservationIgnored private var preparing = false
+
+    /// Starts Kore's own while Tailscale runs, only to sign it in: once its node runs, it stops,
+    /// its state kept. One node of the Mac's carries traffic all along (Tailscale's): Kore's own
+    /// listens for nothing meanwhile.
+    private func prepareOwn(_ env: NetEnvironment) {
+        guard state == .installed, !ownReady, standby == nil, !preparing else { return }
+        preparing = true
+        let mine = generation
+        offMain {
+            let started = try? Self.startSidecar(env)
+            await MainActor.run {
+                self.preparing = false
+                guard let started else { return }
+                // Its sealed state couldn't be opened (the key changed): the line says so.
+                if started.resealed { self.tailnetSignInAgain = true }
+                guard self.generation == mine, self.state == .installed, self.standby == nil else {
+                    self.offMain { started.sidecar.stop() }
+                    return
+                }
+                self.standby = started.sidecar
+                self.watchStandby(started.sidecar.tailnet, mine)
+            }
+        }
+    }
+
+    private func watchStandby(_ tailnet: any Tailnet, _ mine: Int) {
+        let events = tailnet.events()
+        let counting = counting
+        standbyWatch = Task { [weak self] in
+            let first = await Self.offMain(counting) { try? tailnet.status() }
+            guard let self, !Task.isCancelled, self.generation == mine else { return }
+            if self.standbyHeard(first) { return }
+            for await event in events {
+                guard !Task.isCancelled, self.generation == mine else { return }
+                switch event {
+                case .status(let status): if self.standbyHeard(status) { return }
+                case .state:
+                    let read = await Self.offMain(counting) { try? tailnet.status() }
+                    if self.standbyHeard(read) { return }
+                default: break
+                }
+            }
+        }
+    }
+
+    /// True once it's signed in (and stopped); else its page is kept for the line.
+    private func standbyHeard(_ status: TailnetStatus?) -> Bool {
+        guard let status else { return false }
+        if status.backendState == .running {
+            ownSignedIn(status)
+            return true
+        }
+        if let page = status.authURL, !page.isEmpty, page != ownSignIn { ownSignIn = page }
+        return false
+    }
+
+    private func ownSignedIn(_ status: TailnetStatus? = nil) {
+        ownSaid(.signedIn(status?.login ?? ownHeard?.login), expiry: status?.selfNode?.keyExpiry)
+        ownReady = true
+        tailnetSignInAgain = false
+        HostLog.note("korenet", "own tailnet", "signed in · stopped while Tailscale runs")
+        if let stop = stopStandby() { offMain { stop() } }
+        settled?("own signed in")
+    }
+
+    /// Stops watching Kore's own signing in; how it stops (run it off the main actor).
+    private func stopStandby() -> (@Sendable () -> Void)? {
+        standbyWatch?.cancel()
+        standbyWatch = nil
+        ownSignIn = nil
+        defer { standby = nil }
+        return standby?.stop
+    }
 
     // MARK: Kore's own beside a quit or signed-out app
 
@@ -459,7 +668,7 @@ package final class KoreNetSwitch: NetRouter {
     package func rechoose(_ why: String) {
         guard on, let env, state != .choosing else { return }
         let mine = generation
-        Task.detached {
+        offMain {
             let (installed, local) = env.installed()
             let next = TailnetChooser.chooseBeside(installed)
             await MainActor.run {
@@ -485,10 +694,11 @@ package final class KoreNetSwitch: NetRouter {
                 self.status = nil
                 if let stop = self.stopSidecar {
                     self.stopSidecar = nil
-                    Task.detached { stop() }
+                    self.offMain { stop() }
                 }
+                let standby = self.stopStandby()
                 self.state = .choosing
-                self.choose(env, self.generation)
+                self.choose(env, self.generation, stopFirst: standby)
             }
         }
     }
@@ -503,6 +713,8 @@ package final class KoreNetSwitch: NetRouter {
     }
 
     private func end() {
+        let standby = stopStandby()
+        if let standby { offMain { standby() } }
         watchApp(nil)
         watchRunning(nil)
         watchBeside(nil, beside: false)
@@ -518,7 +730,7 @@ package final class KoreNetSwitch: NetRouter {
         upgrading = []
         if let stop = stopSidecar {
             stopSidecar = nil
-            Task.detached { stop() }
+            offMain { stop() }
         }
         state = .off
     }
@@ -613,7 +825,7 @@ package final class KoreNetSwitch: NetRouter {
         }
         reading = true
         let mine = generation
-        Task.detached {
+        offMain {
             let read = try? tailnet.status()
             await MainActor.run {
                 self.reading = false
@@ -864,6 +1076,8 @@ package final class KoreNetSwitch: NetRouter {
         let heard = NodeDirectory.heard(
             node, before: directory.entry(forKey: connection.alias), own: directory.all[node.device.uuidString.lowercased()], ssh: connection.sshAlias)
         let entry = heard.entry
+        let ownBefore = directory.entry(forKey: connection.alias)?.own
+        defer { if entry.own != ownBefore { nodeRevision += 1 } }
         if heard.refused {
             // Its row says so (Forget and set up again); nothing else is taken from it.
             if directory.all[entry.id.raw] != entry { directory.upsert(entry) }
@@ -898,7 +1112,7 @@ package final class KoreNetSwitch: NetRouter {
         let identities = identities
         let command = connection.sshCommand
         let key = connection.alias
-        Task.detached {
+        offMain {
             let outcome = await Self.enroll(env: env, identities: identities, book: book, node: node, alias: alias, grant: grant, command: command)
             await MainActor.run {
                 self.upgraded(key, connection: connection, device: node.device, outcome: outcome)
@@ -924,6 +1138,8 @@ package final class KoreNetSwitch: NetRouter {
         if outcome == .enrolled || outcome == .already {
             directory.update { $0[device.uuidString.lowercased()]?.enrolled = true }
             directoryChanged?()
+            // Its enroll over `attach --proto 2` proved this Mac's key there (taken, or re-keyed).
+            connection.keyTaken()
             if outcome == .enrolled { connection.ownRouteCameUp() }
             if directory.all[device.uuidString.lowercased()]?.nodeKey != nil {
                 connection.preferNet()

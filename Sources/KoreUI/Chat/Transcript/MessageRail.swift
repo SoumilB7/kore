@@ -1,10 +1,9 @@
 import SwiftUI
 
-/// The chat's user messages as ticks on its right edge, the chat from its first message at the
-/// rail's top to its last at its bottom: bright for the one being read, plain for those loaded,
-/// dim for those not yet. The pointer over the rail shows the message at its place; a click goes
+/// The chat's user messages as ticks on its right edge: bright for the one being read, plain for
+/// those loaded, dim for those not yet. The pointer over a tick shows its message; a click goes
 /// there, loading it first if it has to. Plain shapes, at most `Size.railMost`, drawn again only
-/// when a message crosses the top, a list changes or the pointer moves to another message. Not a
+/// when a message crosses the top, a list changes or the pointer moves to another tick. Not a
 /// Canvas: its renderer holds about 50 MB of graphics memory while anything draws, whatever the
 /// size of the canvas.
 struct MessageRail: View {
@@ -20,6 +19,9 @@ struct MessageRail: View {
     @StateObject private var height = Local<CGFloat>(0)
     @StateObject private var hovered = Local<Int?>(nil)
     @StateObject private var cardHeight = Local<CGFloat>(0)
+    /// What the run of ticks is centred on: it holds still under the pointer, so one tick up is
+    /// one tick up, and catches up when the pointer leaves.
+    @StateObject private var runAround = Held<Int?>(nil)
     /// The rail last drawn and the message it lit, for a storyline.
     @StateObject private var drawn = Held<(layout: Layout, current: Int?)?>(nil)
     /// The last jump's second aim, which the next jump replaces.
@@ -30,14 +32,15 @@ struct MessageRail: View {
     var body: some View {
         Color.clear
             .allowsHitTesting(false)
-            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height.value = $0 }
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: {
+                height.value = $0
+                reading.height = $0
+            }
             .overlay(alignment: .trailing) {
                 let marks = store.messageMarks
                 if marks.count > 1, height.value > 0 {
-                    let reading = current(marks)
-                    let lit = [reading, hovered.value, loading.value].compactMap { $0 }
-                    let layout = Layout(count: marks.count, room: height.value - 2 * Size.railMargin, lit: lit)
-                    rail(marks, layout, reading).offset(y: Self.drop(growth: store.composerGrowth, room: height.value, rail: layout.height))
+                    let layout = Layout(count: marks.count, room: height.value - 2 * Size.railMargin, around: around(marks))
+                    rail(marks, layout).offset(y: Self.drop(growth: store.composerGrowth, room: height.value, rail: layout.height))
                 }
             }
             .onChange(of: SectionsKey(store), initial: true) {
@@ -57,60 +60,52 @@ struct MessageRail: View {
         return min(growth / 2, max(0, (room - rail) / 2 - Size.railMargin))
     }
 
-    /// Where each message's tick is: in order down the rail, one step apart, so the rail is the
-    /// chat from its first message to its last and a tick's place says where its message is. The
-    /// rail grows with the chat until it fills its room. Drawn: every tick while they're
-    /// `Size.railSpacing` apart and no more than `Size.railMost`; past that every so many, evenly,
-    /// the first and last always, and each lit one (being read, under the pointer, on its way in)
-    /// at its own place, in place of the picked one nearest it. The pointer finds any message,
-    /// drawn or not, so what lights under it is what a click opens.
+    /// Which ticks show and where: all of them up to `Size.railMost`. Past that, the chat's first
+    /// and last and a run around the message being read, so either end is a click away and each
+    /// click on the run's end moves it on.
     struct Layout {
-        let count: Int
-        /// From one message's tick to the next's.
-        let step: CGFloat
         let shown: [Int]
+        let spacing: CGFloat
 
-        init(count: Int, room: CGFloat, lit: [Int] = []) {
-            self.count = count
-            let gaps = CGFloat(max(count - 1, 1))
-            step = max(0, min(Size.railStepMost, room / gaps))
-            let fit = Int(step * gaps / Size.railSpacing) + 1
-            let most = min(count, max(min(Size.railMost, fit), 2))
-            var shown = Array(0..<count)
-            if most < count {
-                // Every `every`th, so they're evenly apart; the last's own, with the one before it
-                // left out when that's under half the way.
-                let every = Int((Double(count - 1) / Double(most - 1)).rounded(.up))
-                shown = Array(stride(from: 0, to: count - 1, by: every))
-                if shown.count > 1, (count - 1 - shown[shown.count - 1]) * 2 < every { shown.removeLast() }
-                shown.append(count - 1)
+        init(count: Int, room: CGFloat, around: Int?) {
+            if count <= Size.railMost {
+                shown = Array(0..<count)
+            } else {
+                let run = Size.railMost - 2
+                let start = min(max((around ?? count - 1) - run / 2, 1), count - 1 - run)
+                shown = [0] + Array(start..<(start + run)) + [count - 1]
             }
-            let lit = Set(lit.filter { (0..<count).contains($0) })
-            for index in lit.sorted() where !shown.contains(index) {
-                let picked = shown.indices.filter { $0 > 0 && $0 < shown.count - 1 && !lit.contains(shown[$0]) }
-                if let nearest = picked.min(by: { abs(shown[$0] - index) < abs(shown[$1] - index) }) { shown[nearest] = index } else { shown.append(index) }
-            }
-            self.shown = shown.sorted()
+            spacing = shown.count > 1 ? min(Size.railSpacing, room / CGFloat(shown.count - 1)) : Size.railSpacing
         }
 
         /// The rail's height: the ticks, and room for the pointer past each end. `y` and
         /// `index(atY:)` are both from its top, so a tick lights where it's drawn.
-        var height: CGFloat { CGFloat(max(count - 1, 0)) * step + Size.railStroke + 2 * Size.railSpacing }
+        var height: CGFloat { CGFloat(max(shown.count - 1, 0)) * spacing + Size.railStroke + 2 * Size.railSpacing }
 
-        /// A message's tick, drawn or not.
-        func y(_ index: Int) -> CGFloat { CGFloat(index) * step + Size.railStroke / 2 + Size.railSpacing }
+        func y(_ place: Int) -> CGFloat { CGFloat(place) * spacing + Size.railStroke / 2 + Size.railSpacing }
 
-        /// Where a message is among the drawn ticks, when it's drawn.
+        /// Where a message is among the ticks, when it's shown.
         func place(of index: Int) -> Int? { shown.firstIndex(of: index) }
 
-        /// The message whose place is nearest.
         func index(atY y: CGFloat) -> Int {
-            guard count > 1, step > 0 else { return 0 }
-            return min(max(Int(((y - self.y(0)) / step).rounded()), 0), count - 1)
+            let nearest = Int(((y - self.y(0)) / spacing).rounded())
+            return shown[min(max(nearest, 0), shown.count - 1)]
+        }
+
+        /// A tick next to a gap in the list fades, saying there's more between.
+        func fade(_ place: Int) -> Double {
+            func gap(_ a: Int, _ b: Int) -> Bool { shown.indices.contains(a) && shown.indices.contains(b) && shown[b] - shown[a] > 1 }
+            var nearest = Size.railFade
+            for distance in 0..<Size.railFade where gap(place - distance - 1, place - distance) || gap(place + distance, place + distance + 1) {
+                nearest = distance
+                break
+            }
+            return min(Double(nearest + 1) / Double(Size.railFade), 1)
         }
     }
 
-    private func rail(_ marks: [TranscriptStore.MessageMark], _ layout: Layout, _ reading: Int?) -> some View {
+    private func rail(_ marks: [TranscriptStore.MessageMark], _ layout: Layout) -> some View {
+        let reading = current(marks)
         drawn.value = (layout, reading)
         let pointed = hovered.value
         let coming = loading.value
@@ -120,10 +115,13 @@ struct MessageRail: View {
                 Self.tick
                     .fill(Self.color(marks[index], lit: index == reading || index == pointed || index == coming))
                     .frame(width: Self.length(place, index, layout, current: reading, hover: pointed) + Size.railStroke / 2, height: Size.railStroke)
-                    .offset(y: layout.y(index) - Size.railStroke / 2)
+                    .opacity(layout.fade(place))
+                    .offset(y: layout.y(place) - Size.railStroke / 2)
             }
         }
         .frame(width: Size.railWidth, height: layout.height, alignment: .topTrailing)
+        // Its column clear of what runs under it (a wide box, the page pinched in).
+        .background(Self.backing)
         .contentShape(Rectangle())
         .onContinuousHover { phase in
             switch phase {
@@ -136,7 +134,7 @@ struct MessageRail: View {
             if let pointed, marks.indices.contains(pointed), let preview = preview(marks[pointed]) {
                 RailCard(message: preview.message, answer: preview.answer, back: marks.count - pointed)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight.value = $0 }
-                    .offset(x: -(Size.railWidth + Size.railCardGap), y: cardTop(at: layout.y(pointed), layout))
+                    .offset(x: -(Size.railWidth + Size.railCardGap), y: cardTop(at: layout.y(layout.place(of: pointed) ?? 0), layout))
                     .allowsHitTesting(false)
             }
         }
@@ -151,7 +149,7 @@ struct MessageRail: View {
             store.storyRail = (
                 jump: { [self] in jump($0, store.messageMarks) }, hover: { hovered.value = $0 },
                 current: { drawn.value?.current },
-                ticks: { drawn.value.map { rail in rail.layout.shown.map { ($0, rail.layout.y($0)) } } ?? [] },
+                ticks: { drawn.value.map { rail in rail.layout.shown.enumerated().map { ($1, rail.layout.y($0)) } } ?? [] },
                 room: { height.value - 2 * Size.railMargin },
                 click: { [self] y in if let layout = drawn.value?.layout { jump(layout.index(atY: y), store.messageMarks) } }
             )
@@ -165,6 +163,11 @@ struct MessageRail: View {
         let lowest = max(height.value - cardHeight.value - Size.railMargin, Size.railMargin)
         return min(max(railTop + y - cardHeight.value / 2, Size.railMargin), lowest) - railTop
     }
+
+    /// The transcript's own background, fading in from the rail's inner edge.
+    private static let backing = LinearGradient(
+        stops: [.init(color: Theme.background.opacity(0), location: 0), .init(color: Theme.background, location: 0.3)],
+        startPoint: .leading, endPoint: .trailing)
 
     /// Round towards the transcript, square at the rail's edge.
     private static let tick = UnevenRoundedRectangle(topLeadingRadius: Size.railStroke / 2, bottomLeadingRadius: Size.railStroke / 2)
@@ -185,10 +188,19 @@ struct MessageRail: View {
         if hovered.value != index { hovered.value = index }
     }
 
-    /// The message being read: where the rows are says (`MessageReading`), or the end's.
+    /// The message being read: where the rows are says (`MessageReading`), or the end's. The
+    /// end's only while the last message's row is on screen too: the view's following flag is
+    /// also set by what pins the end (a send's glide, a view built again, a pinch ending, a long
+    /// message closing) before the rows get there, and alone it lit the last message mid-chat.
     private func current(_ marks: [TranscriptStore.MessageMark]) -> Int? {
-        if atEnd || reading.index == nil { return marks.isEmpty ? nil : marks.count - 1 }
-        return reading.index
+        guard !marks.isEmpty else { return nil }
+        guard let index = reading.index else { return marks.count - 1 }
+        return atEnd && reading.lastShown ? marks.count - 1 : index
+    }
+
+    private func around(_ marks: [TranscriptStore.MessageMark]) -> Int? {
+        if hovered.value == nil { runAround.value = current(marks) }
+        return runAround.value
     }
 
     private func preview(_ mark: TranscriptStore.MessageMark) -> (message: String, answer: String?)? {
@@ -225,11 +237,19 @@ struct MessageRail: View {
             let turns = store.earlierMarks[at].turns
             loading.value = index
             store.showAll()
+            // The one asked for is the same message counted from the end once it's in: a page
+            // can bring more before it (all a compaction left on disk, say).
+            let fromEnd = marks.count - 1 - index
             Task {
                 await actions.loadEarlierTurns(turns)
                 loading.value = nil
-                // The page's first message is the one asked for.
-                if let first = store.firstUserMessage { afterLayout(first.uuidString) }
+                let now = store.messageMarks
+                let asked = now.count - 1 - fromEnd
+                guard now.indices.contains(asked), case .built(let section) = now[asked].place else {
+                    if let first = store.firstUserMessage { afterLayout(first.uuidString) }
+                    return
+                }
+                afterLayout(String(section.dropFirst(2)))
             }
         }
     }
@@ -265,19 +285,24 @@ struct MessageRail: View {
     }
 
     /// To the message's row. A far jump lands by estimated heights, and rows measured on the way
-    /// shift it, so it's aimed once more when they've been.
+    /// shift it (all the more while an answer streams in), so it's aimed again once they've been,
+    /// until the row's top is at the top.
     private func go(_ row: String) {
         scrollTo(row)
         aiming.value?.cancel()
         aiming.value = Task {
-            try? await Task.sleep(for: Self.settle)
-            guard !Task.isCancelled else { return }
-            scrollTo(row)
+            for _ in 0..<Self.aims {
+                try? await Task.sleep(for: Self.settle)
+                guard !Task.isCancelled else { return }
+                scrollTo(row)
+                if reading.landed(row) { break }
+            }
             tracker.landed()
         }
     }
 
     private static let settle: Duration = .milliseconds(120)
+    private static let aims = 8
     private static let pagePoll: Duration = .milliseconds(30)
 }
 
@@ -290,6 +315,13 @@ struct MessageRail: View {
 @MainActor
 final class MessageReading: ObservableObject {
     @Published private(set) var index: Int?
+    /// The reader is at the last message: its row is on screen, or it left the list off the top,
+    /// or, never seen, no other message's row is on screen.
+    @Published private(set) var lastShown = false
+    /// The view's height.
+    var height: CGFloat = 0 {
+        didSet { if height != oldValue { update() } }
+    }
     private var tops: [String: CGFloat] = [:]
     /// Each message row's place among the scroller's marks once its top reaches the top (the
     /// user's own, or a peer's: the user's last before it), and its turn's above it.
@@ -298,11 +330,16 @@ final class MessageReading: ObservableObject {
     private var marks: [TranscriptStore.MessageMark] = []
     /// The message being read, by what it is.
     private var read: TranscriptStore.MessageMark.Place?
+    /// The last mark's row, when it's built, and whether it last left the list off the top.
+    private var lastRow: String?
+    private var lastLeftAbove: Bool?
 
     /// The marks, and the built sections' ids in order (`s-<row>`): a section with no mark of its
     /// own (a peer's message) reads as the last mark before it.
     func list(_ marks: [TranscriptStore.MessageMark], sections: [String] = []) {
         self.marks = marks
+        let end: String? = if case .built(let section) = marks.last?.place { String(section.dropFirst(2)) } else { nil }
+        if end != lastRow { (lastRow, lastLeftAbove) = (end, nil) }
         at = [:]
         before = [:]
         var built: [String: Int] = [:]
@@ -327,21 +364,36 @@ final class MessageReading: ObservableObject {
         update()
     }
 
+    /// A message row is at the top of the view, where a jump puts it.
+    func landed(_ row: String) -> Bool { tops[row].map { abs($0) <= Size.railReadLine } ?? false }
+
     /// A message row's top in the view; nil once it's gone from the list.
     func moved(_ row: String, _ top: CGFloat?) {
+        if row == lastRow, top == nil, let was = tops[row] { lastLeftAbove = was < 0 }
         tops[row] = top
         update()
     }
 
     private func update() {
-        var above: Int?
+        // Another message's row on screen and the last's not drawn: the reader isn't at the
+        // last, whichever way it left (a jump up from the end left it "above" for good). With
+        // none on screen after that, which side it's on is unknown again: the end's following
+        // says (a long last answer read at the end).
+        let otherShown = tops.contains { $0.key != lastRow && $0.value >= 0 && $0.value < height }
+        if otherShown, lastRow.flatMap({ tops[$0] }) == nil { lastLeftAbove = nil }
+        let shown =
+            if let top = lastRow.flatMap({ tops[$0] }) { top < height } else if let lastLeftAbove { lastLeftAbove } else { !otherShown }
+        if shown != lastShown { lastShown = shown }
+        // The row past the read line nearest it: the same as the latest one past it while the
+        // tops are the rows' own, and not one whose top is left from a list built again since.
+        var above: (place: Int, top: CGFloat)?
         var first: (top: CGFloat, row: String)?
         for (row, top) in tops {
             guard let place = at[row] else { continue }
             if first.map({ top < $0.top }) ?? true { first = (top, row) }
-            if top <= Size.railReadLine, above.map({ place > $0 }) ?? true { above = place }
+            if top <= Size.railReadLine, above.map({ top > $0.top || top == $0.top && place > $0.place }) ?? true { above = (place, top) }
         }
-        guard let first, let now = above ?? before[first.row] else { return }
+        guard let first, let now = above?.place ?? before[first.row] else { return }
         if now != index { index = now }
         if marks.indices.contains(now) { read = marks[now].place }
     }

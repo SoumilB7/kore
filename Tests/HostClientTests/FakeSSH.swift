@@ -111,6 +111,8 @@ struct FakeSSH {
               "sh -s") case "$script" in *"# kore: detect"*) cat '\(root.path)/detection' ;; esac ;;
               *".new --version") echo 'kore-host 0.2.3 (link 1.4)' ;;
               *install-service) echo '\(installed)' ;;
+              *"tailnet --until-in"*) cat '\(root.path)/tailnet-after' 2>/dev/null ;;
+              *"tailnet --within"*) cat '\(root.path)/tailnet-first' 2>/dev/null ;;
             esac
             exit 0
             """

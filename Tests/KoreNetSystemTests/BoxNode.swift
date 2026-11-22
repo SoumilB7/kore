@@ -34,8 +34,12 @@ final class BoxNode {
     /// Its kore-host is running (a link to it that's dialing is real work under way, not a box
     /// that will never answer).
     private(set) var up = false
+    /// No Tailscale on it: Kore's own tailnet (`kore-tailnet`) is its node, `tailscale` its state
+    /// (`.needsLogin`: never signed in).
+    let own: Bool
 
-    init(alias: String, root: URL, ip: String, net: SharedTailnet, pulse: Pulse, tailscale: BackendState = .running) throws {
+    init(alias: String, root: URL, ip: String, net: SharedTailnet, pulse: Pulse, tailscale: BackendState = .running, own: Bool = false) throws {
+        self.own = own
         self.alias = alias
         self.root = root
         self.ip = ip
@@ -51,6 +55,7 @@ final class BoxNode {
         try HostConfig(folders: [work.path]).save(paths.config)
         var node = SharedTailnet.Node(name: alias, kind: .box, ip: ip, nodeKey: nodeKey, bindIP: "127.0.0.1")
         node.state = tailscale
+        node.userspace = own
         let me = WeakRef(self)
         let state = paths.netState
         node.greet = { fd, remote in
@@ -77,7 +82,14 @@ final class BoxNode {
     private func start() throws {
         let host = HostDaemon(paths: paths)
         let tailnet = NodeNet(net, ip: ip)
-        host.makeTailnet = { tailnet }
+        if own {
+            // Kore's own, as the daemon starts it: absent Tailscale, the helper beside kore-host.
+            host.boxTailnet = BoxTailnet(
+                installed: { (.missing(.absent), nil) }, helper: { URL(fileURLWithPath: "/opt/kore/kore-tailnet") },
+                start: { _, _ in (tailnet, { true }, {}) }, key: { Data(repeating: 7, count: 32) })
+        } else {
+            host.makeTailnet = { tailnet }
+        }
         host.netPort = 0
         try host.start()
         self.host = host
@@ -85,6 +97,15 @@ final class BoxNode {
         up = true
         pulse.beat()
     }
+
+    /// Kore's own tailnet there signs in (the page the Mac opened, finished in the browser).
+    func signInOwn() { net.setState(ip, .running) }
+
+    /// Signed out there (logged out, removed in the admin console): its node waits for a sign-in.
+    func signOutOwn() { net.setState(ip, .needsLogin) }
+
+    /// Kore's own tailnet there, as the box has it.
+    var ownTailnet: NetNodeWire.Own? { host.ownTailnet }
 
     /// `kore-host net on|off` on the box itself.
     func setNet(_ on: Bool) throws { try host.setNet(on) }

@@ -81,12 +81,12 @@ final class ArsenalButton: ChatStoryline {
         }
     }
 
-    /// `role`'s tab logo in Arsenal's colour (`on`), or in its CLI's own: the logo's `.arsenal` part
-    /// is drawn only while the logo takes the tint (ArsenalLogoTintTests checks the colour).
-    private struct LogoTint: Step {
+    /// `role`'s tab with Arsenal's corner marks (`on`), or without: the tab's `.arsenal` part is
+    /// drawn only with the marks (ArsenalTabCornersTests checks the colour and fit).
+    private struct TabCorners: Step {
         let role: String
         let on: Bool
-        var label: String { "\(role)'s tab logo \(on ? "in Arsenal's colour" : "in its own")" }
+        var label: String { "\(role)'s tab \(on ? "with" : "without") Arsenal's corners" }
 
         @MainActor func run(_ story: StoryContext) async throws {
             let part = StoryID.Tabs.tab(try ArsenalButton.tab(role, story)).part(.arsenal)
@@ -174,7 +174,7 @@ final class ArsenalButton: ChatStoryline {
             Expect.rows("the chat says so once") { rows in rows.filter { $0.kind == "notice" && $0.text == "Chats can use Arsenal now" }.count == 1 },
             open,
             icon,
-            LogoTint(role: "a", on: true),
+            TabCorners(role: "a", on: true),
             Snapshot("titlebar-arsenal-watch"),
             KoreAs(["whoami"], a, "whoami names the chat", expect: ["{a}", "· Read"]),
             KoreAs(["ls"], a, "ls lists it", expect: ["{a}"]),
@@ -185,7 +185,7 @@ final class ArsenalButton: ChatStoryline {
             tier("a", nil, "right-click again"),
             Followed("f", "the follow ended", timeout: .seconds(5)) { _, status, _ in status != nil },
             closed("off"),
-            LogoTint(role: "a", on: false),
+            TabCorners(role: "a", on: false),
             KoreAs(["ls"], a, "off: nothing to reach", status: 5, says: "agent control is off"),
 
             // ⌥⌘K: the chat in front, on and off; the icon's Off turns it off too.

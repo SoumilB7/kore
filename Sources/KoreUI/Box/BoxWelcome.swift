@@ -38,6 +38,8 @@ struct WelcomeItem: Identifiable {
     var missing = false
     var story: StoryID
     let open: @MainActor () -> Void
+    /// Remove from Recent: forgets the row only.
+    var forget: (@MainActor () -> Void)?
 }
 
 /// The Welcome's switcher, at its top: This Mac | each box | +. A box's right-click: Set up
@@ -106,7 +108,7 @@ struct WelcomeSwitcher: View {
                     NetPopupHost.shared.close()
                     NetPopupHost.shared.show("newbox", NewBoxPopup(ready: ready), in: window, under: bar ?? anchor, edge: .center)
                 }, ready: ready),
-            in: window, under: anchor, edge: .leading)
+            in: window, under: anchor, below: bar, edge: .leading)
     }
 
     private func segment(_ title: String, key: String, on: Bool, dot: StatusDot.State?, action: @escaping @MainActor () -> Void) -> some View {
@@ -185,36 +187,20 @@ struct BoxWelcomeLine: View {
 }
 
 extension BoxList.Box {
-    /// The Welcome's rows for this box: its folders, then the chats open in them (each opens its
-    /// folder's window there, the chat in front).
+    /// The Welcome's rows for this box, as on this Mac: one per folder, the folders last opened
+    /// first, then the rest as the box lists them; a folder taken off Recent stays off until it's
+    /// opened again. Opening one opens its window, where its chats are (History).
     @MainActor func welcomeItems(open: @escaping @MainActor (BoxPlace, String?) -> Void) -> [WelcomeItem] {
-        let connection = BoxList.shared.link(alias)
-        // The folders last opened first, then the rest as the box lists them.
-        let recent = BoxBinding.recents(alias)
-        let ordered = folders.enumerated().sorted { a, b in
-            let (x, y) = (recent.firstIndex(of: a.element.path) ?? Int.max, recent.firstIndex(of: b.element.path) ?? Int.max)
-            return x != y ? x < y : a.offset < b.offset
-        }.map(\.element)
-        var items = ordered.map { folder in
+        let byPath = Dictionary(folders.map { ($0.path, $0) }, uniquingKeysWith: { first, _ in first })
+        return BoxBinding.recentFolders(alias, folders: folders.map(\.path)).compactMap { path in
+            guard let folder = byPath[path] else { return nil }
             let place = BoxPlace(alias: alias, folder: folder.path)
-            let window = connection.windows.first { $0.id == folder.windowId }?.path ?? folder.path
-            let parent = (window as NSString).deletingLastPathComponent
             return WelcomeItem(
-                id: "folder:" + folder.path, symbol: "folder", title: folder.name, detail: parent,
+                id: "folder:" + folder.path, symbol: "folder", title: folder.name, detail: (folder.path as NSString).deletingLastPathComponent,
                 help: folder.missing == true ? "Missing on \(NodeNames.name(alias)): \(folder.path)" : folder.path, missing: folder.missing == true,
                 story: StoryID.Boxes.folder(folder.path)
             ) { open(place, nil) }
         }
-        for folder in folders where folder.missing != true {
-            for chat in connection.chats(in: folder.path).prefix(Layout.Welcome.recentsShown) {
-                let place = BoxPlace(alias: alias, folder: folder.path)
-                items.append(WelcomeItem(
-                    id: "chat:" + chat.id, symbol: "bubble.left", title: chat.title.isEmpty ? "New chat" : chat.title, detail: folder.name,
-                    help: chat.title, story: StoryID.Boxes.chat(chat.id)
-                ) { open(place, chat.id) })
-            }
-        }
-        return items
     }
 }
 
@@ -224,9 +210,46 @@ extension BoxBinding {
         defaults.stringArray(forKey: "boxRecents." + alias) ?? []
     }
 
+    /// Folders taken off a box's Recent (Remove from Recent), until opened again.
+    static func forgotten(_ alias: String, defaults: UserDefaults = .standard) -> [String] {
+        defaults.stringArray(forKey: "boxRecentsForgotten." + alias) ?? []
+    }
+
     static func opened(alias: String, folder: String, defaults: UserDefaults = .standard) {
         let list = [folder] + recents(alias, defaults: defaults).filter { $0 != folder }
         defaults.set(Array(list.prefix(20)), forKey: "boxRecents." + alias)
+        let forgotten = forgotten(alias, defaults: defaults)
+        if forgotten.contains(folder) { defaults.set(forgotten.filter { $0 != folder }, forKey: "boxRecentsForgotten." + alias) }
+    }
+
+    /// Remove from Recent on a box: the row is forgotten here; nothing on the box changes.
+    static func forget(alias: String, folder: String, defaults: UserDefaults = .standard) {
+        defaults.set(recents(alias, defaults: defaults).filter { $0 != folder }, forKey: "boxRecents." + alias)
+        let forgotten = forgotten(alias, defaults: defaults)
+        if !forgotten.contains(folder) { defaults.set(forgotten + [folder], forKey: "boxRecentsForgotten." + alias) }
+    }
+
+    /// The box's Recent, one path per folder: what was recorded (older Kore kept places inside a
+    /// folder too) moved into the folder holding it, deduplicated, newest first; then the folders
+    /// never opened here; less those taken off. The tidied list is written back once it differs.
+    static func recentFolders(_ alias: String, folders: [String], defaults: UserDefaults = .standard) -> [String] {
+        let stored = recents(alias, defaults: defaults)
+        let migrated = migrated(stored, into: folders)
+        if migrated != stored, !folders.isEmpty { defaults.set(migrated, forKey: "boxRecents." + alias) }
+        let off = Set(forgotten(alias, defaults: defaults))
+        var seen = Set(migrated)
+        let rest = folders.filter { seen.insert($0).inserted }
+        return (migrated + rest).filter { !off.contains($0) }
+    }
+
+    /// Each recorded path as the box folder that holds it (the deepest), once, in order; paths in
+    /// no folder are dropped.
+    static func migrated(_ recents: [String], into folders: [String]) -> [String] {
+        let deepest = folders.sorted { $0.count > $1.count }
+        var seen = Set<String>()
+        return recents.compactMap { path in
+            deepest.first { path == $0 || path.hasPrefix($0.hasSuffix("/") ? $0 : $0 + "/") }
+        }.filter { seen.insert($0).inserted }
     }
 
     /// Chats to put in front once their box window opens, by its key.

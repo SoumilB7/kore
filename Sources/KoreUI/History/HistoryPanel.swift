@@ -96,8 +96,6 @@ struct HistoryPanel: View {
                                 },
                                 locked: workspace.historyLocked(chat),
                                 elsewhere: workspace.boxRowPlace(chat.id),
-                                // Hidden, the panel reads no tabs: it stays mounted while closed.
-                                live: isOpen ? workspace.openChat(chat) : nil,
                                 clip: { cut in ChatPasting.clip(chat, in: workspace, cut: cut) },
                                 paste: ChatClipboard.shared.clip == nil ? nil : { paste() })
                             .highlightRow(StoryID.History.row(chat.id), lit: (lit.value ?? 0) == index) { lit.value = index }
@@ -308,8 +306,6 @@ private struct HistoryRow: View {
     var locked: String? = nil
     /// A paired box's chat: the box it's on.
     var elsewhere: String? = nil
-    /// Its chat while a tab has it open: the logo shows its Arsenal.
-    var live: Chat? = nil
     /// Copy (false) or Cut (true) the row's chat; Paste the held one into this window.
     var clip: (Bool) -> Void = { _ in }
     var paste: (() -> Void)? = nil
@@ -339,14 +335,10 @@ private struct HistoryRow: View {
         .accessibilityAction(named: session.archived ? "Unarchive" : "Archive", toggleArchive)
     }
 
-    @ViewBuilder private var logo: some View {
-        if let live { ChatLogo(chat: live, size: Size.logoRow) } else { ProviderLogo(provider: Registry.provider(for: session.agent), size: Size.logoRow) }
-    }
-
     private var title: some View {
         Button(action: open) {
             HStack(spacing: Space.md) {
-                logo
+                ProviderLogo(provider: Registry.provider(for: session.agent), size: Size.logoRow)
                 VStack(alignment: .leading, spacing: Space.xxs) {
                     titleLine
                     if let hit { snippet(hit) }
@@ -402,7 +394,7 @@ private struct HistoryRow: View {
 
     private var renameField: some View {
         HStack(spacing: Space.md) {
-            logo
+            ProviderLogo(provider: Registry.provider(for: session.agent), size: Size.logoRow)
             TextField("Name", text: $draft.value)
                 .textFieldStyle(.plain)
                 .font(Chrome.body)

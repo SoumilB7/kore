@@ -21,6 +21,8 @@ struct WelcomeView: View {
     @StateObject private var browser = Local<BoxFolderBrowserModel?>(nil)
     /// The box whose link the Welcome holds while it shows it.
     @StateObject private var held = Held<HostConnection?>(nil)
+    /// Bumped as a box folder leaves Recent (its list lives in the defaults).
+    @StateObject private var forgets = Local(0)
 
     private var place: String? { switcher.value.place }
 
@@ -77,6 +79,7 @@ struct WelcomeView: View {
                                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
                                     WelcomeRow(item: item, lit: lit.value == index)
                                         .highlightRow(item.story, lit: lit.value == index) { lit.value = index }
+                                        .koreContextMenu("welcome-recent") { Self.menu(item) }
                                         .id(index)
                                 }
                             }
@@ -140,7 +143,7 @@ struct WelcomeView: View {
         .onAppear {
             // Peers coming and going on the tailnet reach the switcher while it shows.
             Devices.shared.net?.hold("welcome", true)
-            sshHosts.value = !BoxList.shared.suggestions().isEmpty
+            sshHosts.value = StorylineSeams.sshHosts?() ?? !BoxList.shared.suggestions().isEmpty
             if monitor.value == nil { monitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { key($0) } }
             app.welcomeTakesKeys = true
         }
@@ -158,20 +161,37 @@ struct WelcomeView: View {
         }
     }
 
-    /// The rows: this Mac's recent folders, or the box's folders and chats.
+    /// The rows: this Mac's recent folders, or the box's, one per folder.
     private var items: [WelcomeItem] {
         if let place {
+            _ = forgets.value
             return BoxList.shared.box(place)?.welcomeItems { box, chat in
                 BoxBinding.open(box, chat: chat, openWindow: openWindow)
                 dismissWindow(id: KoreApp.welcomeID)
+            }.map { item in
+                var item = item
+                let folder = String(item.id.dropFirst("folder:".count))
+                item.forget = { [forgets] in
+                    BoxBinding.forget(alias: place, folder: folder)
+                    forgets.value += 1
+                }
+                return item
             } ?? []
         }
         return app.recents.map { folder in
-            WelcomeItem(
+            var item = WelcomeItem(
                 id: folder.path, symbol: "folder", title: folder.lastPathComponent, detail: folder.deletingLastPathComponent().abbreviatedPath,
                 help: folder.path, story: StoryID.Welcome.recent(folder.path)
             ) { open(folder) }
+            item.forget = { [app] in app.forgetRecent(folder) }
+            return item
         }
+    }
+
+    /// A Recent row's right-click: Remove from Recent (the row only; the folder stays as it is).
+    static func menu(_ item: WelcomeItem) -> [OptionItem] {
+        guard let forget = item.forget else { return [] }
+        return [OptionItem("Remove from Recent") { MainActor.assumeIsolated(forget) }]
     }
 
     /// The box shown keeps its link while the Welcome shows it (its folders, chats, GitHub's
@@ -243,6 +263,10 @@ struct WelcomeView: View {
 private struct WelcomeRow: View {
     let item: WelcomeItem
     let lit: Bool
+    /// The name's width on one line, and as drawn: cut short, its tooltip is the full path (else
+    /// none, the row says it all).
+    @StateObject private var full = Local<CGFloat>(0)
+    @StateObject private var shown = Local<CGFloat>(0)
 
     var body: some View {
         Button(action: item.open) {
@@ -254,6 +278,11 @@ private struct WelcomeRow: View {
                     .font(Chrome.bodyMedium)
                     .foregroundStyle(item.missing ? Theme.tertiary : Theme.text)
                     .lineLimit(1)
+                    .background(alignment: .leading) {
+                        Text(item.title).font(Chrome.bodyMedium).fixedSize().hidden()
+                            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { [full] in full.value = $0 }
+                    }
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { [shown] in shown.value = $0 }
                 Spacer(minLength: Space.xl)
                 Text(item.detail)
                     .font(Chrome.caption)
@@ -261,13 +290,16 @@ private struct WelcomeRow: View {
                     .lineLimit(1)
                     .truncationMode(.head)
             }
-            .padding(Inset.row)
+            .padding(.horizontal, Inset.row.leading)
+            // One pitch exactly (less the gap): the list's height counts on it, so five rows
+            // never scroll a few points and clip the first.
+            .frame(height: Layout.Welcome.recentPitch - Space.xs)
             .hoverFill(lit, Theme.Row.selected(.window))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(item.missing)
-        .help(item.help)
+        .help(item.missing || full.value > shown.value + 0.5 ? item.help : "")
         .storyID(item.story, press: item.open)
     }
 }

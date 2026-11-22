@@ -133,10 +133,10 @@ struct BoxMachineTests {
     @Test func eachAgentInstallsUnderTheHomeWithoutSudo() throws {
         let debian = try machine(.linuxSystemd)
         let claude = try BoxAgent.claude.install(on: debian, name: "mybox").get()
-        #expect(claude.contains("curl -fsSL https://claude.ai/install.sh"))
+        #expect(claude.contains("get https://claude.ai/install.sh \"$t/install.sh\" 60 claude.ai"))
         // npm's there: the package under a user prefix. Without it: codex's own binary.
         let pi = try machine(.aarch64)
-        #expect(try BoxAgent.codex.install(on: pi, name: "pi").get().contains("npm install -g --prefix \"$HOME/.npm-global\" @openai/codex"))
+        #expect(try BoxAgent.codex.install(on: pi, name: "pi").get().contains("npm install -g --prefix \"$HOME/.npm-global\" --fetch-timeout=300000 --fetch-retries=1 @openai/codex"))
         let codex = try BoxAgent.codex.install(on: debian, name: "mybox").get()
         #expect(codex.contains("codex-x86_64-unknown-linux-musl.tar.gz"))
         #expect(codex.contains("\"$HOME/.local/bin/codex\""))
@@ -169,7 +169,7 @@ struct BoxMachineTests {
         #expect(await list.install(.codex, on: "pi") == nil)
         #expect(await list.setGitIdentity(name: "Me Two", email: "me'2@example.com", on: "pi") == nil)
         #expect(fake.calls == [
-            "ssh pi sh -s: # kore: detect", "ssh pi sh -s: npm install -g --prefix \"$HOME/.npm-global\" @openai/codex", "ssh pi sh -s: # kore: detect",
+            "ssh pi sh -s: # kore: detect", "ssh pi sh -s: npm install -g --prefix \"$HOME/.npm-global\" --fetch-timeout=300000 --fetch-retries=1 @openai/codex", "ssh pi sh -s: # kore: detect",
             "ssh pi sh -s: git config --global user.name 'Me Two'", "ssh pi sh -s: # kore: detect",
         ])
         #expect(BoxParity.gitScript(name: nil, email: "me'2@example.com") == "set -e\ngit config --global user.email 'me'\\''2@example.com'\n")
@@ -218,13 +218,13 @@ struct BoxMachineTests {
         }()
         let parity = BoxParity.compare(
             mac: mac, box: box, name: "mybox", macLogins: ["claude": BoxLogin(signedIn: true, who: "a@b.c")], boxLogins: ["claude": BoxLogin(signedIn: false)])
-        let lines = parity.differences.map(\.line)
-        #expect(lines == [
+        #expect(parity.differences.map(\.line) == [
             "claude 2.0 on mybox, 2.1 here", "codex isn't on mybox", "gh isn't on mybox", "claude isn't signed in on mybox",
             "git on mybox has no name · Me <me@example.com> here",
-            "claude MCP not on mybox: linear, notion, slack +1", "codex MCP not on mybox: linear",
         ])
-        let fixes = Dictionary(uniqueKeysWithValues: parity.differences.map { ($0.id, $0.fix) })
+        // Listed, never copied, and not counted.
+        #expect(parity.notes.map(\.line) == ["claude MCP not on mybox: linear, notion, slack +1", "codex MCP not on mybox: linear"])
+        let fixes = Dictionary(uniqueKeysWithValues: (parity.differences + parity.notes).map { ($0.id, $0.fix) })
         #expect(fixes["version.claude"] == .install(.claude))
         #expect(fixes["tool.codex"] == .install(.codex))
         #expect(fixes["login.claude"] == .signIn(.claude))

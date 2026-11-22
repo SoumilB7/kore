@@ -227,6 +227,20 @@ package struct BoxMachine: Codable, Equatable, Sendable {
     }
 
     /// The major and minor of a `--version` line ("2.1.322" → "2.1").
+    /// A version line's first dotted number, as numbers ("codex-cli 0.171.0" → [0, 171, 0]).
+    package static func versionParts(_ line: String) -> [Int] {
+        guard let start = line.firstIndex(where: \.isNumber) else { return [] }
+        let digits = line[start...].prefix { $0.isNumber || $0 == "." }
+        return digits.split(separator: ".").compactMap { Int($0) }
+    }
+
+    /// `line`'s version is older than `other`'s (unknown counts as not older).
+    package static func older(_ line: String, than other: String) -> Bool {
+        let (a, b) = (versionParts(line), versionParts(other))
+        guard !a.isEmpty, !b.isEmpty else { return false }
+        return a.lexicographicallyPrecedes(b)
+    }
+
     package static func majorMinor(_ line: String) -> String? {
         let scalars = Array(line)
         var i = 0

@@ -2,6 +2,7 @@ import CryptoKit
 import Foundation
 import HostClient
 import KoreCore
+import LinkProtocol
 import Synchronization
 import Testing
 
@@ -32,6 +33,33 @@ struct BoxTailnetBinaryTests {
         #expect(calls[at + 2] == "ssh mybox .local/bin/kore-host install-service")
         let said = await MainActor.run { steps.all }
         #expect(said.contains("Copying kore-tailnet to mybox…"))
+    }
+
+    /// Set up's last step (KoreNet on here): Kore's tailnet there on and signed in. Its page
+    /// opens here once, the step waits for the sign-in, and the result is said with Ready.
+    @Test func setUpSignsInKoresTailnetLast() async throws {
+        let fake = try FakeSSH()
+        defer { fake.finish() }
+        try Data("own: out\nwhy: never\npage: https://login.tailscale.com/a/box\n".utf8).write(to: fake.root.appendingPathComponent("tailnet-first"))
+        try Data("own: in\nlogin: me@example.com\n".utf8).write(to: fake.root.appendingPathComponent("tailnet-after"))
+        var setup = BoxSetup(alias: "mybox", grant: "Soumils-Mac", shell: fake.shell, binary: fake.binary()) { _ in nil }
+        setup.signInOwn = true
+        let opened = Opened()
+        setup.openURL = { url in opened.urls.withLock { $0.append(url) } }
+        let steps = Steps()
+        let done = try await setup.run(allow: true) { steps.add($0) }
+        #expect(done.own == .signedIn("me@example.com"))
+        #expect(opened.urls.withLock { $0 } == [URL(string: "https://login.tailscale.com/a/box")!])
+        let calls = fake.calls
+        #expect(calls.contains("ssh mybox .local/bin/kore-host net on >/dev/null && .local/bin/kore-host tailnet --within 25"))
+        #expect(calls.last == "ssh mybox .local/bin/kore-host tailnet --until-in --within 300")
+        let said = await MainActor.run { steps.all }
+        #expect(said.contains("Kore's tailnet on mybox…") && said.contains("Kore's tailnet on mybox · finish signing in, it's open in your browser"))
+        // Signed in already: no page, no wait.
+        try Data("own: in\nlogin: me@example.com\n".utf8).write(to: fake.root.appendingPathComponent("tailnet-first"))
+        opened.urls.withLock { $0 = [] }
+        let again = try await setup.run(allow: false) { _ in }
+        #expect(again.own == .signedIn("me@example.com") && opened.urls.withLock { $0 }.isEmpty)
     }
 
     @Test func withoutOneSetUpGoesOnAsBefore() async throws {
@@ -137,4 +165,9 @@ struct BoxTailnetBinaryTests {
         try Data("dev's".utf8).write(to: dev.appendingPathComponent("kore-tailnet-macos-arm64"))
         #expect(await BoxTailnetBinary.local("macos-arm64", override: dev.path, helper: helper, build: build, fetch: none)?.url.lastPathComponent == "kore-tailnet-macos-arm64")
     }
+}
+
+/// Pages Set up opened.
+final class Opened: Sendable {
+    let urls = Mutex<[URL]>([])
 }

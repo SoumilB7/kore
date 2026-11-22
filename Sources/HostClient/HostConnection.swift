@@ -152,6 +152,14 @@ package final class HostConnection {
     @ObservationIgnored private var netFailures = 0
     @ObservationIgnored private var netRetry: Task<Void, Never>?
     @ObservationIgnored private var netHeldOff = false
+    /// The box turned this Mac's proof away over KoreNet (`bye unknown`: it holds an older key)
+    /// while SSH reaches it: the link stays on SSH, where its key is taken (`rekey`), and only a
+    /// session that proves the key it has now (`attach --proto 2`) lets KoreNet be tried again.
+    @ObservationIgnored private var refusedOnNet = false
+    /// The order this link last came up on KoreNet in (every link's ups counted): an upgrade
+    /// that gave up before it ("Can't reach Tailscale") has nothing left to say.
+    @ObservationIgnored package private(set) var netUpAt: Int?
+    package private(set) static var netUps = 0
     @ObservationIgnored package var netRetryAfter: Duration = .seconds(30)
     @ObservationIgnored private var redialNow = false
     /// Done backing off (`triesAtLongest` at the longest wait): only an event dials again.
@@ -379,6 +387,9 @@ package final class HostConnection {
     package var name: String { NodeNames.name(alias) }
 
     package var isOnline: Bool { phase == .online && ready }
+    /// A dial is under way (a KoreNet dial that failed falls back to SSH at once, its phase still
+    /// `.offline`): what waits for the link waits on, rather than taking it for an end.
+    package var dialing: Bool { transport != nil && !ready }
 
     /// The box as this link's KoreNet session proved it (tailnet, or SSH `attach --proto 2`): its
     /// record and its book's rev; nil on a plain SSH grant link or while down.
@@ -747,6 +758,10 @@ package final class HostConnection {
         if reason == "bye unknown", case .ssh? = route, let router = sshRouter { forgot = router.forgotten(self) } else { forgot = false }
         // Over KoreNet to a box with no SSH: no way round it from here (the row says what to run there).
         let oldKey = reason == "bye unknown" && route == .net ? sshRouter?.oldKeyOnNet(self) : nil
+        if reason == "bye unknown", route == .net, oldKey == nil, !refusedOnNet {
+            refusedOnNet = true
+            HostLog.note(alias, "korenet", "refused this Mac's key · staying on SSH to re-key")
+        }
         // KoreNet that never came up: SSH at once (`NetPaths`: tailnet, then SSH). A switch of
         // route, or a stale route's `replaced`, dials again at once too. A tailnet dial this Mac
         // ended itself (a relink, a switch) didn't fail: it isn't held off.
@@ -989,7 +1004,18 @@ package final class HostConnection {
         guard !ready else { return }
         ready = true
         (linkId, linkUp) = (LogTurns.make(), Date())
-        if route == .net { clearNetHold() }
+        if route == .net {
+            clearNetHold()
+            Self.netUps += 1
+            netUpAt = Self.netUps
+        }
+        // Over SSH with this Mac's identity proof (the box took its key, or re-keyed it): KoreNet
+        // may be tried again.
+        if refusedOnNet, case .ssh? = route, transport is NetTransport {
+            refusedOnNet = false
+            HostLog.note(alias, "korenet", "re-keyed over SSH")
+            Task { @MainActor [weak self] in self?.preferNet() }
+        }
         phase = .online
         lastHeard = nil
         lateHello = false
@@ -1114,7 +1140,7 @@ package final class HostConnection {
     /// link moves to KoreNet once nothing is in flight. A failed KoreNet dial falls back to SSH
     /// at once.
     package func preferNet() {
-        guard users > 0, ready, case .ssh? = route, activeRouter != nil, !netHeldOff else { return }
+        guard users > 0, ready, case .ssh? = route, activeRouter != nil, !netHeldOff, !refusedOnNet else { return }
         // A `net.set` waiting on its answer counts as in flight: the box's node key can come just
         // ahead of it (Join), and dropping the link would lose the answer.
         guard inFlight.isEmpty, outbox.isEmpty, uploadWaits.isEmpty, netSwitchWaits.isEmpty else {
@@ -1314,6 +1340,13 @@ package final class HostConnection {
         }
         redialNow = true
         drop(why)
+    }
+
+    /// The box took this Mac's key (an enroll over `attach --proto 2`): KoreNet may be tried again.
+    package func keyTaken() {
+        guard refusedOnNet else { return }
+        refusedOnNet = false
+        HostLog.note(alias, "korenet", "re-keyed over SSH")
     }
 
     private func clearNetHold() {

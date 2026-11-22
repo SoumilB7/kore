@@ -85,7 +85,7 @@ struct DevicesUITests {
         let waiting = TailnetStatus(backendState: .needsLogin, selfNode: nil)
         let sides = Sides(ScriptedNet(on: true, state: .sidecar, status: waiting, authURL: nil))
         let devices = devices(sides)
-        #expect(devices.look().line == "Sign in to use KoreNet without the Tailscale app")
+        #expect(devices.look().line == "Sign in to Kore's tailnet")
         devices.signIn()
         devices.signIn()
         #expect(sides.opened.isEmpty && devices.signingIn && sides.net.reads == 1)

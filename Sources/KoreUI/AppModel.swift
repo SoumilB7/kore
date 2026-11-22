@@ -106,6 +106,20 @@ package final class AppModel {
     /// The recent folders, newest first (storylines).
     package var storyRecents: [URL] { recents }
 
+    /// Remove from Recent: the row is forgotten; the folder itself is left as it is.
+    func forgetRecent(_ folder: URL) {
+        let next = Self.forgetting(folder, in: recents)
+        guard next != recents else { return }
+        recents = next
+        UserDefaults.standard.set(recents.map(\.path), forKey: Self.recentsKey)
+    }
+
+    /// `recents` without `folder` (however its path is written).
+    static func forgetting(_ folder: URL, in recents: [URL]) -> [URL] {
+        let gone = folder.standardizedFileURL.path
+        return recents.filter { $0.standardizedFileURL.path != gone }
+    }
+
     /// Welcome's keys' monitor is in (storylines wait for it before a key).
     @ObservationIgnored package internal(set) var welcomeTakesKeys = false
 

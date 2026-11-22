@@ -28,4 +28,6 @@ package enum StorylineSeams {
     /// A session's history file, by provider id and session id, in place of the CLI's (a scripted
     /// Codex has no `thread/read`); nil, the CLI's own.
     package static var historyFile: ((_ provider: String, _ id: String) -> URL?)?
+    /// Whether the SSH config names a host (the Welcome shows its switcher), in place of reading it.
+    package static var sshHosts: (() -> Bool)?
 }

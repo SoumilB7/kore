@@ -1,5 +1,6 @@
 import Foundation
 import HostClient
+import LinkProtocol
 import KoreTrust
 import Synchronization
 import Tailnet
@@ -63,14 +64,46 @@ struct TailscaleQuitTests {
         var stops: Int { calls.held.withLock { $0.stops } }
     }
 
-    func start(_ mac: Mac) async -> (KoreNetSwitch, Feed<String>, URL) {
+    func start(_ mac: Mac, ownSignedIn: Bool = true) async -> (KoreNetSwitch, Feed<String>, URL) {
         let root = netScratch()
-        let defaults = suite()
+        let defaults = suite(ownSignedIn: ownSignedIn)
         let (net, settled) = netSwitch(defaults, root: root) { mac.env(root: root, defaults: defaults) }
         net.schedule = { _, _ in {} }
         net.set(true)
         await settled.next { $0 == "chose" }
         return (net, settled, root)
+    }
+
+    /// Kore's own is the default (2026-11-23): Tailscale running and Kore's own never signed in,
+    /// it starts only to sign in (its page on the Devices line, "using Tailscale"), and stops
+    /// once its node runs (one node at a time); quit, the Mac moves to it with no sign-in.
+    @Test func koresOwnSignsInOnceWhileTailscaleRuns() async {
+        let mac = Mac(.state(.running))
+        let page = "https://login.tailscale.com/a/own"
+        mac.own.held.withLock {
+            $0.status = TailnetStatus(backendState: .needsLogin, selfNode: nil, authURL: page)
+        }
+        let (net, settled, root) = await start(mac, ownSignedIn: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        await Observed.until { net.ownSignIn == page }
+        #expect(net.state == .installed && mac.sidecars == 1 && !net.ownReady)
+        #expect(net.facts.ownSignIn == page && net.own == .signedOut(.never, page: page))
+        // The browser's sign-in finished: its node runs, signed in as the owner; it stops.
+        var signedIn = TailnetStatus(backendState: .running, selfNode: .init(publicKey: "nodekey:own", tailscaleIPs: ["100.64.0.9"], userID: 7))
+        signedIn.logins[7] = "me@example.com"
+        mac.own.held.withLock { $0.status = signedIn }
+        mac.own.push(.status(signedIn))
+        await settled.next { $0 == "own signed in" }
+        await mac.calls.stopped.next()
+        #expect(net.ownReady && net.ownSignIn == nil && mac.stops == 1 && net.state == .installed)
+        #expect(net.own == .signedIn("me@example.com"))
+        // Quit (a window open, the app's bus heard): Kore's own carries the Mac, already signed in.
+        net.hold("mybox", true)
+        mac.set(.state(.stopped))
+        mac.local.push(.state(.stopped))
+        await settled.next { $0 == "chose" }
+        #expect(net.state == .sidecar && mac.sidecars == 2)
+        net.set(false)
     }
 
     /// Running Tailscale quit with a window open (its bus heard): Kore's own starts beside it. The

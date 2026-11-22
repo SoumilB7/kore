@@ -33,8 +33,6 @@ object DeviceList {
         val waiting: Waiting? = null,
         /** Only background commands run, the model idle or waiting on you: ">_" leads (bg-command-cue C). */
         val prompt: Boolean = false,
-        /** It has Arsenal on, at any tier: its logo, spinner and ">_" in the Arsenal mark's blue. */
-        val arsenal: Boolean = false,
     )
 
     /** Which chats moved since this phone last showed them: unread (its own record, nothing on the wire). */
@@ -131,7 +129,6 @@ object DeviceList {
             // The ">_" lead says the command itself, so its symbol isn't repeated on the line.
             waiting = if (Waiting.promptOnly(chat)) waiting?.let { w -> Waiting(w.agents, 0).takeIf { it.agents > 0 } } else waiting,
             prompt = Waiting.promptOnly(chat),
-            arsenal = arsenalOn(chat.str("arsenal")),
         )
         return row
     }
@@ -177,13 +174,3 @@ object DeviceList {
 
     private fun boardsIn(w: JsonObject) = w.objs("tabs").filter { it.str("kind") == "board" }
 }
-
-/** Whether a chat's meta says it has Arsenal on, at any tier. */
-fun arsenalOn(tier: String?): Boolean = tier != null && tier != "off"
-
-/** A chat's logo while it has Arsenal at any tier: the Arsenal mark's blue (the Mac's `Theme.Arsenal.mark`, b300); null keeps the logo's own colours. */
-fun logoTint(arsenal: Boolean): Int? = if (arsenal) Tone.accent else null
-
-/** A chat's working spinner and ">_": its CLI's colour, or the Arsenal mark's blue while it has Arsenal. */
-fun workTint(provider: String?, arsenal: Boolean): Int =
-    if (arsenal) Tone.accent else if (provider == "codex") Tone.spinCodex else Tone.spinClaude

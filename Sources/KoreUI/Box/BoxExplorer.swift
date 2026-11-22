@@ -914,11 +914,19 @@ private struct BoxSearchView: View {
 // MARK: - The window's box files
 
 extension FileDocument {
-    /// A box file, read and saved through `source`.
-    convenience init(box path: String, source: any BoxFileSource, standIn: URL) {
+    /// A box file, read and saved through `source`; one a renderer needs whole comes to `cache`
+    /// for the box window `window`.
+    convenience init(box path: String, source: any BoxFileSource, standIn: URL, window: String? = nil, cache: BoxFileCache = .shared) {
+        var copy: (@MainActor (String) async -> Result<BoxFileCache.Copy, BoxFetchFailure>)?
+        if let window {
+            copy = { [weak cache] (path: String) async -> Result<BoxFileCache.Copy, BoxFetchFailure> in
+                guard let cache else { return .failure(.refused("")) }
+                return await cache.copy(path, from: source, window: window)
+            }
+        }
         self.init(
             box: path, alias: source.alias, standIn: standIn, read: { await source.read($0, max: nil, base: $1) },
-            write: { await source.write($0, $1, base: $2) })
+            write: { await source.write($0, $1, base: $2) }, copy: copy)
     }
 }
 
@@ -935,7 +943,7 @@ extension Workspace {
             select(tab)
             return
         }
-        let document = FileDocument(box: path, source: box.connection, standIn: standIn)
+        let document = FileDocument(box: path, source: box.connection, standIn: standIn, window: box.key)
         if preview, let tab = tabs.first(where: { $0.isPreview && $0.file?.isDirty != true }) {
             tab.file = document
             select(tab)

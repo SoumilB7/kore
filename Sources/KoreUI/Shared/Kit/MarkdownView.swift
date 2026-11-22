@@ -328,8 +328,8 @@ private struct VisibleRightEdge: NSViewRepresentable {
 }
 
 extension MarkdownTable {
-    /// The whole table as the transcript's selection copies it (cells split by tabs, a row a
-    /// line), or as Markdown.
+    /// The whole table as its Copy takes it: cells split by tabs, a row a line, or as Markdown;
+    /// links as their text either way.
     func copyText(markdown: Bool) -> String {
         Clip(lo: nil, hi: nil, plainText: !markdown).block(MarkdownBlock(id: 0, kind: .table(self), isOpen: false), [0]) ?? ""
     }
@@ -414,8 +414,8 @@ private struct MarkdownListView: View {
 
 /// A table: 1pt rules around every cell (the grid's spacing over a rule-coloured ground), bold
 /// centred header, and sideways scrolling when wider than the column. Copy by its top-right
-/// corner on hover (`CopyByCorner`, outside it, no room kept) takes exactly what a drag across all of it copies
-/// (its cells split by tabs, a row a line).
+/// corner on hover (`CopyByCorner`, outside it, no room kept) takes its cells split by tabs, a row a
+/// line, links as their text.
 private struct MarkdownTableView: View {
     let table: MarkdownTable
     let path: [Int]

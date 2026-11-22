@@ -103,18 +103,47 @@ package struct HostFiles: Sendable {
         let limit = Swift.min(Swift.max(max ?? LinkFiles.readMax, 0), LinkFiles.readMax)
         let cut = size > Int64(limit)
         if Self.isImage(place.path) {
-            guard !cut, let bytes = FileManager.default.contents(atPath: place.real) else {
-                return FilesResult(id: id, ok: true, path: place.path, kind: .image, size: size, truncated: true)
+            // Past a frame's worth: the Mac copies it (`bytes`), as a box before 1.15 would have
+            // dropped the link sending it.
+            guard !cut, size <= Int64(LinkFiles.pieceMax), let bytes = FileManager.default.contents(atPath: place.real) else {
+                return FilesResult(id: id, ok: true, path: place.path, kind: .image, size: size, truncated: true, mtime: found.mtime)
             }
             return FilesResult(id: id, ok: true, path: place.path, kind: .image, size: size, data: bytes.base64EncodedString(), mtime: found.mtime)
         }
         guard let handle = FileHandle(forReadingAtPath: place.real) else { return .refused(id, .deniedPath, "Can't read that file on this box.") }
         defer { try? handle.close() }
         let bytes = (try? handle.read(upToCount: limit)) ?? Data()
-        if bytes.prefix(8192).contains(0) { return FilesResult(id: id, ok: true, path: place.path, kind: .binary, size: size) }
+        if bytes.prefix(8192).contains(0) { return FilesResult(id: id, ok: true, path: place.path, kind: .binary, size: size, mtime: found.mtime) }
         return FilesResult(
             id: id, ok: true, path: place.path, kind: .text, size: size, text: Self.text(bytes, cut: cut), truncated: cut ? true : nil,
             mtime: found.mtime)
+    }
+
+    /// 1.15: the file's bytes from `offset`, of any kind, at most `max` (`LinkFiles.pieceMax`), with its
+    /// size and time: the Mac puts a file a preview needs there (a workbook, a PDF) together from
+    /// these. `base`: as `read`, only `unchanged` when the file is still that.
+    package func bytes(id: String, path: String, offset: Int64, max: Int?, base: FileStamp? = nil) -> FilesResult {
+        let place: (path: String, real: String)
+        switch self.place(path, .served) {
+        case .failure(let refusal): return .refused(id, refusal.code, refusal.message)
+        case .success(let found): place = found
+        }
+        guard let found = Self.look(place.real), found.kind == .file, let size = found.size else {
+            return .refused(id, .invalid, "Not a file.")
+        }
+        if let base, base == FileStamp(size: size, mtime: found.mtime) {
+            return FilesResult(id: id, ok: true, path: place.path, size: size, mtime: found.mtime, unchanged: true)
+        }
+        guard offset >= 0, offset <= size else { return .refused(id, .invalid, "Past the end of the file.") }
+        let limit = Swift.min(Swift.max(max ?? LinkFiles.pieceMax, 0), LinkFiles.pieceMax)
+        guard let handle = FileHandle(forReadingAtPath: place.real) else { return .refused(id, .deniedPath, "Can't read that file on this box.") }
+        defer { try? handle.close() }
+        guard (try? handle.seek(toOffset: UInt64(offset))) != nil else { return .refused(id, .deniedPath, "Can't read that file on this box.") }
+        let bytes = (try? handle.read(upToCount: limit)) ?? Data()
+        let kind: FileReadKind = Self.isImage(place.path) ? .image : .binary
+        return FilesResult(
+            id: id, ok: true, path: place.path, kind: kind, size: size, data: bytes.base64EncodedString(),
+            truncated: offset + Int64(bytes.count) < size ? true : nil, mtime: found.mtime)
     }
 
     package func mkdir(id: String, path: String) -> FilesResult {

@@ -1,5 +1,6 @@
 import AppKit
 import HostClient
+import LinkProtocol
 import src
 import SwiftUI
 
@@ -93,10 +94,14 @@ struct BoxAgentsView: View {
             // The one essential line: what the machine is.
             Text(machine?.kind ?? NodeNames.name(alias)).font(Chrome.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
             ForEach(BoxAgent.allCases, id: \.self) { agent in agentLine(agent, machine: machine) }
-            let rest = differences(box?.parity)
-            if !rest.isEmpty {
+            ownLine()
+            let rest = differences(box?.parity?.differences)
+            let notes = differences(box?.parity?.notes)
+            if !rest.isEmpty || !notes.isEmpty {
                 Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
                 ForEach(rest) { difference in differenceLine(difference) }
+                // Said, not counted: what Fix doesn't change (a newer CLI there, setup listed only).
+                ForEach(notes) { note in differenceLine(note, quiet: true) }
             }
             HStack {
                 Spacer(minLength: 0)
@@ -120,6 +125,33 @@ struct BoxAgentsView: View {
             connection.value?.release()
             connection.value = nil
         }
+    }
+
+    // MARK: Kore's tailnet
+
+    /// Kore's own tailnet there, as the box last said: signed in as whom, or signed out · Sign in.
+    @ViewBuilder private func ownLine() -> some View {
+        let _ = KoreNetSwitch.shared?.nodeRevision
+        if let own = NodeDirectory.shared.entry(forKey: alias)?.own {
+            HStack(spacing: Space.sm) {
+                Text("Kore's tailnet").font(TextStyle.labelMedium).foregroundStyle(Theme.text)
+                Text(own.signedIn ? own.login.map { "signed in as \($0)" } ?? "signed in" : own.why == .never ? "not signed in" : "signed out")
+                    .font(TextStyle.caption).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.middle)
+                    .help(own.line)
+                Spacer(minLength: Space.sm)
+                if !own.signedIn {
+                    Button("Sign in ↗") { signInOwn(own) }.smallButton()
+                        .storyID(StoryID.Net.row(alias).part(.signIn), press: { signInOwn(own) })
+                }
+            }
+        }
+    }
+
+    /// Its page when the box has one (opened here, for this Mac's account), else Kore's own there
+    /// signs in afresh and its page opens.
+    private func signInOwn(_ own: NetNodeWire.Own) {
+        if let page = own.page, let url = URL(string: page) { return Devices.shared.openURL(url) }
+        BoxUpgrades.shared.relogin(alias)
     }
 
     // MARK: Agents
@@ -155,23 +187,25 @@ struct BoxAgentsView: View {
             let why = await list.install(agent, on: alias)
             working.value[key] = nil
             failed.value[key] = why
-            if why == nil { await readLogins() }
+            // Failed or not, the card says what's there now: the logins read again, and compared.
+            await readLogins()
         }
     }
 
     // MARK: Differences
 
-    /// The differences the agent lines don't already say (a missing CLI, a login).
-    private func differences(_ parity: BoxParity?) -> [BoxParity.Difference] {
-        (parity?.differences ?? []).filter { difference in
+    /// The lines the agent lines don't already say (a missing CLI, a login).
+    private func differences(_ lines: [BoxParity.Difference]?) -> [BoxParity.Difference] {
+        (lines ?? []).filter { difference in
             !(difference.id.hasPrefix("login.") || BoxAgent.allCases.contains { difference.id == "tool." + $0.rawValue })
         }
     }
 
-    private func differenceLine(_ difference: BoxParity.Difference) -> some View {
+    private func differenceLine(_ difference: BoxParity.Difference, quiet: Bool = false) -> some View {
         HStack(spacing: Space.sm) {
             Text(failed.value[difference.id]?.message ?? difference.line)
-                .font(TextStyle.caption).foregroundStyle(failed.value[difference.id] == nil ? Theme.secondary : Theme.danger).lineLimit(2)
+                .font(TextStyle.caption)
+                .foregroundStyle(failed.value[difference.id] != nil ? Theme.danger : quiet ? Theme.tertiary : Theme.secondary).lineLimit(2)
             Spacer(minLength: Space.sm)
             if let busy = working.value[difference.id] {
                 Text(busy).font(TextStyle.caption).foregroundStyle(Theme.tertiary)

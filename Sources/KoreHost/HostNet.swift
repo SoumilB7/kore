@@ -259,13 +259,20 @@ package final class HostNet {
     /// Looks at Tailscale again and binds what it says (or closes, when it's stopped). The status
     /// read (a LocalAPI round trip, up to its 5 s timeout) runs off the main thread; what it says
     /// is applied back on it. A look asked for while one runs takes another after it.
+    /// Work off the main thread, told as it begins (true) and ends (false): the KoreNet system
+    /// tests' world doesn't move its clock on while any is under way. kore-host: nothing listens.
+    nonisolated(unsafe) package static var counting: @Sendable (Bool) -> Void = { _ in }
+
     package func rebind() {
         guard let tailnet else { return closeListeners() }
         guard !reading else { return readAgain = true }
         reading = true
         let mine = joins
         let (userspace, had, listening, port) = (self.userspace, bound, !handoffs.isEmpty, self.port)
+        let counting = Self.counting
+        counting(true)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            defer { DispatchQueue.main.async { counting(false) } }
             let read = Result { try tailnet.status() }
             // Kore's own: its listen is a request on its socket, made here off the main thread.
             var made: Result<[TailnetListenSocket], any Error>?
@@ -316,9 +323,16 @@ package final class HostNet {
             closeListeners()
             selfNode = nil
             noteProblem("Tailscale isn't answering (\(error))")
-            // Not there yet (kore-host up before tailscaled at boot): its bus says when it is.
+            // It was up and its daemon went (`systemctl stop tailscaled`): as a stop, Kore's own
+            // takes over beside it. Never at boot (not up yet): its bus says when it is.
+            if !userspace, choice == .installed, host.installedTailscaleWentDown() {
+                choice = .stopped
+                return
+            }
             return waitForTailnet()
         }
+        // Kore's own: signed in as whom, or signed out (said to the owner's Macs at once).
+        if userspace { host.ownStatus(status) }
         let before = selfNode?.publicKey
         selfNode = status.selfNode
         // Macs linked now hear this box's node key once it's listening (below), or here when the
@@ -580,7 +594,10 @@ package final class HostNet {
         guard let tailnet else { return Sockets.closeFD(fd) }
         whoising += 1
         let mine = joins
+        let counting = Self.counting
+        counting(true)
         DispatchQueue.global(qos: .userInitiated).async {
+            defer { DispatchQueue.main.async { counting(false) } }
             let who = try? tailnet.whois(remote)
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {

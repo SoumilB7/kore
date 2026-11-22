@@ -236,6 +236,9 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     /// A new chat's settings, all of them (`chat.new` for a fork, `chat.adopt` and
     /// `chat.adoptCopy` commits); the fields above say the four a box from before them reads.
     package var settings: ChatSettings?
+    /// 1.15 (`LinkFiles.bytesCap`): `fs.read` from this byte: the file's own bytes (`data`), of any
+    /// kind, at most `max` (`LinkFiles.readMax`), for a preview that needs the file on the Mac.
+    package var offset: Int64?
 
     package init(
         chatId: String? = nil, windowId: String? = nil, title: String? = nil, force: Bool? = nil, modelId: String? = nil,

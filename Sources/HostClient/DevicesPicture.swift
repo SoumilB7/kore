@@ -1,5 +1,6 @@
 import Foundation
 import KoreTrust
+import LinkProtocol
 import Observation
 import Tailnet
 
@@ -49,6 +50,12 @@ package struct DevicesPicture: Equatable, Sendable {
     package var refusals: [DeviceRefusal] = []
     /// Kore's own tailnet waits for the browser's sign-in.
     package var signingIn = false
+    /// Kore's own tailnet waits for its sign-in while Tailscale carries the Mac's links.
+    package var ownSignIn = false
+    /// Tailscale carries the Mac's links now (it runs): said after the connected line.
+    package var usingTailscale = false
+    /// Kore's own tailnet on this Mac: the row's hover, and its detail while signed out.
+    package var own: NetNodeWire.Own?
     /// Just joined Kore's own tailnet: the empty line offers "Add a device" this once.
     package var nudge = false
 
@@ -120,6 +127,10 @@ package struct DeviceRow: Identifiable, Equatable, Sendable {
     package var joinedAt: Date?
     /// Its kore-host update from this Mac: "Updating mybox…", then "updated to 0.3.1".
     package var update: String?
+    /// Kore's own tailnet there, as the box last said (`net.node`).
+    package var own: NetNodeWire.Own?
+    /// Its sign-in page while Kore's own there is signed out (the row's "Sign in ↗").
+    package var ownPage: String? { own.flatMap { $0.signedIn ? nil : $0.page } }
 
     package init(id: String, kind: Kind, name: String, status: Status, route: Route? = nil) {
         self.id = id
@@ -232,11 +243,17 @@ package struct NetFacts: Equatable, Sendable {
     package var on: Bool
     package var state: NetState
     package var status: TailnetStatus?
+    /// Tailscale runs and Kore's own tailnet hasn't signed in yet: its sign-in page.
+    package var ownSignIn: String?
+    /// Kore's own tailnet on this Mac (signed in as whom, or out and why).
+    package var own: NetNodeWire.Own?
 
-    package init(on: Bool, state: NetState, status: TailnetStatus?) {
+    package init(on: Bool, state: NetState, status: TailnetStatus?, ownSignIn: String? = nil, own: NetNodeWire.Own? = nil) {
         self.on = on
         self.state = state
         self.status = status
+        self.ownSignIn = ownSignIn
+        self.own = own
     }
 }
 
@@ -269,7 +286,10 @@ extension DevicesPicture {
         picture.tailnetName = status?.selfNode?.hostName.flatMap { $0.isEmpty ? nil : $0 }
         picture.macKeyExpiry = status?.selfNode?.keyExpiry
         picture.lockedOut = status?.lockedOut ?? false
-        picture.signingIn = signingIn && picture.net == .notJoined
+        picture.ownSignIn = net.on && net.ownSignIn != nil
+        picture.usingTailscale = net.on && net.state == .installed
+        picture.own = net.own
+        picture.signingIn = signingIn && (picture.net == .notJoined || picture.ownSignIn)
         picture.nudge = nudge && picture.net == .running
         if net.on, picture.net.adds {
             picture.addUntil = addUntil.flatMap { now < $0 ? $0 : nil }
@@ -299,6 +319,7 @@ extension DevicesPicture {
             // box's owner opens Tailscale there; Kore's own tailnet waits for its sign-in.
             row.macOS = box.entry?.macOS ?? false
             row.koreTailnet = box.entry?.tailnet == "kore"
+            row.own = box.entry?.own
             if row.tailscaleOff, row.upgradeFix == nil, !row.macOS, !row.koreTailnet { row.upgradeFix = .copy(BoxNetJoin.sudoLine) }
             if box.online {
                 switch box.route {
@@ -421,7 +442,7 @@ extension DevicesPicture {
 /// The popup's and the icon's words, and the offline one-liners.
 package enum DevicesWords {
     /// Kore's own tailnet before its one sign-in: why it asks, in its own words.
-    package static let signIn = "Sign in to use KoreNet without the Tailscale app"
+    package static let signIn = "Sign in to Kore's tailnet"
     /// After the browser opened, until the node runs.
     package static let finishSignIn = "Finish signing in — it's open in your browser"
 
@@ -459,6 +480,8 @@ package enum DevicesWords {
         if let upgrading = row.upgrading { return upgrading }
         if let update = row.update { return update }
         if let at = row.joinedAt, now.timeIntervalSince(at) < Double(BoxUpgrades.shownFor.components.seconds) { return "on KoreNet" }
+        // Kore's own tailnet there signed out: said until it's signed in (its hover has why).
+        if let own = row.own, !own.signedIn, row.status != .offline { return ownOut }
         if let note = row.upgradeNote { return note }
         switch row.status {
         case .needsAllow: return "hasn't allowed this Mac"
@@ -482,10 +505,25 @@ package enum DevicesWords {
         return row.presence.map { "in " + $0 }
     }
 
-    /// A row's hover, where its detail has more to say.
+    /// A row's hover, where its detail has more to say; Kore's tailnet there, as it last said.
     package static func help(_ row: DeviceRow) -> String? {
-        if row.route == .relayed, row.status == .connected { return "UDP is blocked there, so syncs run slower" }
-        return nil
+        var lines: [String] = []
+        if row.route == .relayed, row.status == .connected { lines.append("UDP is blocked there, so syncs run slower") }
+        if let own = row.own { lines.append(own.line) }
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+
+    /// A row's detail while Kore's own tailnet there (or here) is signed out.
+    package static let ownOut = "Kore's tailnet signed out · Sign in"
+
+    /// This Mac's row: its detail ("this Mac", or signed out) and its hover.
+    package static func macDetail(_ picture: DevicesPicture) -> String {
+        if let own = picture.own, !own.signedIn, !picture.ownSignIn, picture.net == .running || picture.net.tailscaleOff { return ownOut }
+        return "this Mac"
+    }
+
+    package static func macHelp(_ picture: DevicesPicture) -> String {
+        [picture.tailnetName.map { "On your tailnet as \($0)" }, picture.own?.line].compactMap { $0 }.joined(separator: "\n")
     }
 
     /// The one line a down device gets (the icon's hover, a box window's offline line).
@@ -562,6 +600,7 @@ package struct NetIconLook: Equatable, Sendable {
         case .notJoined: return NetIconLook(dimmed: true, dot: nil, line: picture.signingIn ? DevicesWords.finishSignIn : DevicesWords.signIn)
         default: break
         }
+        if picture.ownSignIn { return NetIconLook(dimmed: false, dot: nil, line: picture.signingIn ? DevicesWords.finishSignIn : DevicesWords.signIn) }
         if picture.lockedOut { return NetIconLook(dimmed: false, dot: .ring, line: "This Mac waits for a Tailnet Lock signature") }
         if let expiry = picture.macKeyExpiry, expiry.timeIntervalSince(now) < 86400 {
             return NetIconLook(dimmed: false, dot: .ring, line: "This Mac's Tailscale key expires " + DevicesWords.expiresIn(expiry, now: now))
@@ -571,7 +610,7 @@ package struct NetIconLook: Equatable, Sendable {
         if down.count > 1 { return NetIconLook(dimmed: false, dot: .dim, line: DevicesWords.list(down.map(\.name)) + " are offline") }
         let connected = picture.devices.filter { $0.status == .connected && !$0.paused }.map(\.name)
         if connected.isEmpty { return NetIconLook(dimmed: false, dot: nil, line: "No other devices yet") }
-        return NetIconLook(dimmed: false, dot: nil, line: DevicesWords.list([picture.macName] + connected) + " connected")
+        return NetIconLook(dimmed: false, dot: nil, line: DevicesWords.list([picture.macName] + connected) + " connected" + (picture.usingTailscale ? " · using Tailscale" : ""))
     }
 }
 

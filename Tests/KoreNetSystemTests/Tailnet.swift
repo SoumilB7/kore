@@ -37,6 +37,9 @@ final class SharedTailnet: Sendable {
         /// an address).
         var listens = 0
         var refuseListens = 0
+        /// A box on Kore's own tailnet: its listen is a handoff socket, as `kore-tailnet` gives
+        /// (connections still reach it through `greet`).
+        var userspace = false
         var os: String { kind == .mac ? "macOS" : kind == .box ? "linux" : "android" }
         var online: Bool { state == .running }
     }
@@ -94,7 +97,9 @@ final class SharedTailnet: Sendable {
             let peers = me.state == .running ? s.nodes.values.filter { $0.ip != ip }.sorted { $0.ip < $1.ip }.map(Self.peer) : []
             // Waiting for its sign-in: the page, as tsnet's status carries it.
             let page = me.state == .needsLogin ? "https://login.example/a/\(me.name)" : nil
-            return TailnetStatus(backendState: me.state, selfNode: selfNode, peers: peers, authURL: page)
+            var status = TailnetStatus(backendState: me.state, selfNode: selfNode, peers: peers, authURL: page)
+            if me.state == .running { status.logins[me.user] = "me@example.com" }
+            return status
         }
     }
 
@@ -149,7 +154,7 @@ final class SharedTailnet: Sendable {
     /// A Mac's bind. The port is one per address, as a real one: while an earlier listener still
     /// holds its end (not closed yet), a second bind is refused (`EADDRINUSE`).
     func listen(_ ip: String) throws -> [TailnetListenSocket] {
-        guard let me = node(ip), me.kind == .mac else { return [] }
+        guard let me = node(ip), me.kind == .mac || me.userspace else { return [] }
         guard me.state == .running else { throw TailnetError.notRunning(me.state) }
         let refused = state.withLock { s -> Int32? in
             s.nodes[ip]?.listens += 1

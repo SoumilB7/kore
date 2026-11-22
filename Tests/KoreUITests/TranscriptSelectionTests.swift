@@ -6,7 +6,8 @@ import Testing
 @testable import KoreUI
 
 /// The transcript's selection: a text laid out again with TextKit 2 lands where SwiftUI drew it,
-/// and a selection copies back as plain text, tagged by who said it when it spans messages.
+/// and a selection copies what it shows inside one text, Markdown across blocks, tagged by who said
+/// it when it spans messages.
 @MainActor
 @Suite("Transcript selection")
 struct TranscriptSelectionTests {
@@ -168,60 +169,106 @@ struct TranscriptSelectionTests {
         ```
         """
 
-    private func copy(from lo: TextPoint?, to hi: TextPoint?) -> String {
-        let blocks = MarkdownParser.parse(Self.reply[...], base: 0, zoom: 1)
-        let clip = Clip(lo: lo, hi: hi, plainText: true)
-        return blocks.enumerated().compactMap { i, block in clip.block(block, [i]) }.joined(separator: "\n\n")
+    private func copy(_ source: String = reply, from lo: TextPoint?, to hi: TextPoint?) -> String {
+        SelectionCopy.markdownText(source[...], Clip(lo: lo, hi: hi))
     }
 
     private let id = UUID()
     private func at(_ path: [Int], _ offset: Int) -> TextPoint { TextPoint(entry: id, path: path, offset: offset) }
 
-    @Test func partOfAParagraphDropsItsInlineMarkup() {
-        // "with bold, code and a link."
+    /// The owner's case: a numbered point that starts in bold, with a command in inline code.
+    private static let steps = """
+        1. **Install the CLI**: run `curl -fsSL https://example.com/install.sh | bash` once.
+        2. Then sign in.
+        """
+    private static let command = "curl -fsSL https://example.com/install.sh | bash"
+    private static let point = "Install the CLI: run \(command) once."
+
+    @Test func inlineCodeInsideAListPointIsTheBareCode() {
+        let from = Self.point.utf16.count - " once.".utf16.count - Self.command.utf16.count
+        let copied = copy(Self.steps, from: at([0, 0, 0], from), to: at([0, 0, 0], from + Self.command.utf16.count))
+        #expect(copied == Self.command)
+    }
+
+    @Test func aWholeListPointIsItsTextWithNoMarker() {
+        #expect(copy(Self.steps, from: at([0, 0, 0], 0), to: at([0, 0, 0], Self.point.utf16.count)) == Self.point)
+        #expect(copy(Self.steps, from: at([0, 0, 0], 0), to: at([0, 0, 0], .max)) == Self.point)
+    }
+
+    @Test func partsOfTwoPointsAreNumberedLines() {
+        #expect(copy(Self.steps, from: at([0, 0, 0], 8), to: at([0, 1, 0], 4))
+            == "1. **the CLI**: run `\(Self.command)` once.\n2. Then")
+        #expect(copy(from: at([2, 1, 0], 7), to: at([2, 2, 0], 5)) == "- item\n  - nested one\n- third")
+    }
+
+    @Test func partOfABoldPhraseIsTheBareText() {
+        // "A paragraph with bold, code and a link."
+        #expect(copy(from: at([1], 18), to: at([1], 20)) == "ol")
         #expect(copy(from: at([1], 12), to: at([1], 33)) == "with bold, code and a")
-        #expect(copy(from: at([1], 34), to: nil).hasPrefix("link.\n\n"))
+        #expect(copy(from: at([1], 0), to: at([1], .max)) == "A paragraph with bold, code and a link.")
     }
 
-    @Test func partOfAListKeepsSimpleMarkersAndNesting() {
-        #expect(copy(from: at([2, 1, 0], 7), to: at([2, 2, 0], 5)) == "• item\n  • nested one\n• third")
+    @Test func twoParagraphsAreMarkdownWithLinksAsText() {
+        let source = "Some **bold** words.\n\nA [second](https://example.com/x) `para`."
+        #expect(copy(source, from: at([0], 5), to: at([1], .max)) == "**bold** words.\n\nA second `para`.")
+        #expect(copy(source, from: at([0], 0), to: nil) == "Some **bold** words.\n\nA second `para`.")
+        #expect(copy(source, from: nil, to: nil) == "Some **bold** words.\n\nA second `para`.")
+        #expect(copy(from: at([1], 34), to: nil).hasPrefix("link.\n\n- first item\n"))
     }
 
-    @Test func aHeadingIsAPlainLine() {
-        #expect(copy(from: at([0], 2), to: at([1], 1)) == "tle\n\nA")
+    @Test func aHeadingKeepsItsMarkInMarkdown() {
+        #expect(copy(from: at([0], 2), to: at([1], 1)) == "# tle\n\nA")
+        #expect(copy(from: at([0], 0), to: at([0], .max)) == "Title")
     }
 
-    @Test func aQuoteIsItsText() {
+    @Test func aQuoteLineIsItsText() {
         #expect(copy(from: at([3, 0], 2), to: at([3, 0], 13)) == "quoted line")
     }
 
-    @Test func partOfATableIsTabbedRowsWithItsHeader() {
-        #expect(copy(from: at([4, 2, 0], 0), to: at([4, 2, 1], 3)) == "Name\tKind\nbeta\ttwo")
+    @Test func partOfACodeBlockIsTheBareCode() {
+        #expect(copy(from: at([5], 4), to: at([5], 9)) == "fence")
+        #expect(copy(from: at([5], 0), to: at([5], .max)) == "let fence = \"```\"")
+        // Across blocks, part of it is still its lines; all of it is fenced.
+        #expect(copy(from: at([5], 4), to: nil) == "fence = \"```\"")
+        #expect(copy(from: at([4, 2, 1], 0), to: at([5], 3)).hasSuffix("|  | two |\n\nlet"))
+        #expect(copy(from: at([4, 2, 1], 0), to: nil).hasSuffix("\n\n```swift\nlet fence = \"```\"\n```"))
     }
 
-    /// A table's Copy is, byte for byte, what dragging across all of it copies: the transcript's
-    /// own selection path (`SelectionCopy.markdownText`, plain text) on a rich table.
-    @Test func aTablesCopyIsWhatDraggingAcrossItCopies() throws {
-        let source = "Before.\n\n| Key | `code` | Link |\n|---|---|---|\n| **bold** | *it* | [site](https://example.com) |\n| x |  | ~~old~~ |\n\nAfter."
-        let blocks = MarkdownParser.parse(source[...], base: 0, zoom: 1)
+    @Test func partOfATableIsMarkdownRowsWithItsHeader() {
+        #expect(copy(from: at([4, 2, 0], 0), to: at([4, 2, 1], 3)) == "| Name | Kind |\n|---|---|\n| beta | two |")
+    }
+
+    private static let linked = "Before.\n\n| Key | `code` | Link |\n|---|---|---|\n| **bold** | *it* | [site](https://example.com) |\n| x |  | ~~old~~ |\n\nAfter."
+
+    @Test func aLinkCellIsItsVisibleText() {
+        #expect(copy(Self.linked, from: at([1, 1, 2], 0), to: at([1, 1, 2], .max)) == "site")
+        #expect(copy(Self.linked, from: at([1, 1, 2], 1), to: at([1, 1, 2], 3)) == "it")
+        #expect(copy(Self.linked, from: at([1, 1, 1], 0), to: at([1, 1, 2], .max))
+            == "| Key | `code` | Link |\n|---|---|---|\n|  | *it* | site |")
+    }
+
+    /// A table's Copy is tabbed rows; a drag across all of it is its Markdown as written. Links
+    /// are their text in both.
+    @Test func aWholeTableWithALinkCopiesItsText() throws {
+        let blocks = MarkdownParser.parse(Self.linked[...], base: 0, zoom: 1)
         guard case .table(let table) = blocks[1].kind else { Issue.record("no table"); return }
-        // A drag from the table's first cell to the start of the next block, as the transcript copies it.
-        let dragged = SelectionCopy.markdownText(source[...], Clip(lo: at([1, 0, 0], 0), hi: at([2], 0), plainText: true))
-        #expect(table.copyText(markdown: false) == dragged)
-        #expect(dragged.contains("\t"))
+        #expect(table.copyText(markdown: false) == "Key\tcode\tLink\nbold\tit\tsite\nx\t\told")
+        #expect(table.copyText(markdown: true) == "| Key | `code` | Link |\n|---|---|---|\n| **bold** | *it* | site |\n| x |  | ~~old~~ |")
+        let dragged = copy(Self.linked, from: at([1, 0, 0], 0), to: at([2], 0))
+        #expect(dragged == "| Key | `code` | Link |\n|---|---|---|\n| **bold** | *it* | site |\n| x |  | ~~old~~ |")
     }
 
-    /// A table's Copy takes what selecting all of it copies (tabbed rows).
-    @Test func aTablesCopyIsItsWholeSelection() throws {
+    @Test func aTablesCopyIsTabbedAndItsSelectionMarkdown() throws {
         let blocks = MarkdownParser.parse(Self.reply[...], base: 0, zoom: 1)
         guard case .table(let table) = blocks[4].kind else { Issue.record("no table"); return }
         #expect(table.copyText(markdown: false) == "Name\tKind\nalpha\tone\nbeta\ttwo")
-        #expect(table.copyText(markdown: false) == copy(from: at([4, 0, 0], 0), to: at([5], 0)))
         #expect(table.copyText(markdown: true) == "| Name | Kind |\n|---|---|\n| alpha | one |\n| beta | two |")
+        #expect(table.copyText(markdown: true) == copy(from: at([4, 0, 0], 0), to: at([5], 0)))
     }
 
-    @Test func aCodeBlockIsItsLines() {
-        #expect(copy(from: at([5], 4), to: nil) == "fence = \"```\"")
+    @Test func linksInSourceAreTheirText() {
+        #expect(MarkdownLinks.unlinked("See [the **guide**](https://x.y/a_(b)) and <https://x.y>.") == "See the **guide** and https://x.y.")
+        #expect(MarkdownLinks.unlinked("Keep `[a](b)`, ![img](p.png), \\[no](link) and a < b > c.") == "Keep `[a](b)`, ![img](p.png), \\[no](link) and a < b > c.")
     }
 
     @Test func blocksSelectedWholeAreTheirSource() {
@@ -286,7 +333,7 @@ struct TranscriptSelectionTests {
         let answer = try #require(rows.first { $0.entry.kind == .answer }?.entry)
         let both = SelectionCopy.text(script.store,
             from: TextPoint(entry: user.id, path: [0], offset: 3), to: TextPoint(entry: answer.id, path: [1], offset: .max))
-        #expect(both == "You:\nthere\n\nClaude:\nPlan\n\nUse bold code.")
+        #expect(both == "You:\nthere\n\nClaude:\n# Plan\n\nUse **bold** `code`.")
         let one = SelectionCopy.text(script.store,
             from: TextPoint(entry: answer.id, path: [1], offset: 4), to: TextPoint(entry: answer.id, path: [1], offset: 8))
         #expect(one == "bold")

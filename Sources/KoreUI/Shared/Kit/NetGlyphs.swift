@@ -160,11 +160,15 @@ struct NetSpinner: View {
             Circle().stroke(Theme.Net.spinnerTrack, lineWidth: Size.Net.spinnerLine)
             Circle().trim(from: 0, to: 0.25).stroke(Theme.secondary, style: StrokeStyle(lineWidth: Size.Net.spinnerLine, lineCap: .round))
                 .rotationEffect(.degrees(turned.value ? 360 : 0))
+                // The endless turn is the arc's alone: started in a transaction of its own
+                // (`withAnimation`), it took the layout changes made with it too, and the rows of
+                // the Welcome's "+" list slid back and forth for as long as the list was open.
+                .animation(turned.value ? .linear(duration: 1).repeatForever(autoreverses: false) : nil, value: turned.value)
         }
         .frame(width: Size.Net.spinner, height: Size.Net.spinner)
         .onAppear {
             guard !reduceMotion else { return }
-            withAnimation(.linear(duration: 1).repeatForever(autoreverses: false)) { turned.value = true }
+            turned.value = true
         }
         .accessibilityLabel(Text("Waiting"))
     }

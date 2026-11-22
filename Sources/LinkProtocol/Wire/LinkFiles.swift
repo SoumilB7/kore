@@ -164,6 +164,11 @@ package enum LinkFiles {
     package static let listMax = 5000
     /// `fs.read` reads at most this much.
     package static let readMax = 2 * 1024 * 1024
+    /// 1.15: the welcome's cap a box says when `fs.read {offset}` sends a file's bytes, of any kind.
+    package static let bytesCap = "fsBytes"
+    /// 1.15: the bytes one `fs.read` carries in base64 (an image's, or a piece's): its frame stays
+    /// under what the Mac takes in one (`LinkFrame.outboundMax`).
+    package static let pieceMax = 512 * 1024
     /// `fs.search`: results and seconds at most; `fs.watch`: folders at most per connection.
     package static let searchMax = 1000
     package static let searchSeconds: TimeInterval = 3

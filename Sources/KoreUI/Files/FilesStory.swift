@@ -1,3 +1,4 @@
+import Quartz
 import AppKit
 import KoreCore
 
@@ -141,6 +142,30 @@ extension Workspace {
         tabs.compactMap { tab in
             tab.file.map { StoryFileTab(path: relativePath($0.path), preview: tab.isPreview, active: tab.id == activeID) }
         }
+    }
+
+    /// A box file opened as the explorer opens one.
+    package func storyOpenBoxFile(_ path: String) { openBoxFile(path, preview: false) }
+
+    /// The active box file: the renderer showing it from its copy on this Mac ("quicklook"),
+    /// else the editor's state ("loading", "too large", "binary", "text", or why it didn't come).
+    package var storyBoxFileState: String? {
+        guard let file = activeFile, file.box != nil, file.loaded else { return nil }
+        if let preview = file.preview, file.rendering.resolved == preview, file.rendering.showsRenderer, let id = file.rendering.renderer?.id {
+            return id
+        }
+        switch file.boxCopy {
+        case .loading: return "loading"
+        case .tooLarge: return "too large"
+        case .failed(let why): return why
+        case nil: return file.isText ? "text" : "binary"
+        }
+    }
+
+    /// A Quick Look preview is in the window's views.
+    package var storyShowsQuickLook: Bool {
+        func has(_ view: NSView) -> Bool { view is QLPreviewView || view.subviews.contains(where: has) }
+        return window?.contentView.map(has) ?? false
     }
 
     /// The renderer showing the active file ("html", "markdown"…); nil for the editor.

@@ -112,6 +112,33 @@ struct FilesTests {
         #expect(rig.files.read(id: "8", path: rig.away + "/../../secret/key.txt", max: nil).code == .deniedPath)
     }
 
+    @Test func aFilesBytesComeInPiecesOfAnyKindWithItsStamp() throws {
+        let rig = try Rig()
+        defer { rig.finish() }
+        // A workbook is a zip: binary, so `read` sends none of it, but says its time.
+        let sheet = Data([0x50, 0x4B, 3, 4, 0, 0, 7, 8, 9, 10])
+        try sheet.write(to: URL(fileURLWithPath: rig.work + "/t.xlsx"))
+        let read = rig.files.read(id: "1", path: rig.work + "/t.xlsx", max: nil)
+        #expect(read.kind == .binary && read.data == nil && read.mtime != nil)
+        let first = rig.files.bytes(id: "2", path: rig.work + "/t.xlsx", offset: 0, max: 4)
+        #expect(first.data.flatMap { Data(base64Encoded: $0) } == sheet.prefix(4))
+        #expect(first.size == 10 && first.truncated == true && first.mtime == read.mtime)
+        let last = rig.files.bytes(id: "3", path: rig.work + "/t.xlsx", offset: 8, max: 4)
+        #expect(last.data.flatMap { Data(base64Encoded: $0) } == sheet.suffix(2))
+        #expect(last.truncated == nil)
+        // Still the stamp held: nothing else comes.
+        let same = rig.files.bytes(id: "4", path: rig.work + "/t.xlsx", offset: 0, max: nil, base: FileStamp(size: 10, mtime: read.mtime ?? 0))
+        #expect(same.unchanged == true && same.data == nil)
+        #expect(rig.files.bytes(id: "5", path: rig.work + "/t.xlsx", offset: 11, max: nil).code == .invalid)
+        // An image past a frame's worth comes as bytes too, never in one read.
+        try Data(count: LinkFiles.pieceMax + 1).write(to: URL(fileURLWithPath: rig.work + "/big.png"))
+        let big = rig.files.read(id: "7", path: rig.work + "/big.png", max: nil)
+        #expect(big.kind == .image && big.data == nil && big.truncated == true && big.mtime != nil)
+        #expect(rig.files.bytes(id: "8", path: rig.work + "/big.png", offset: 0, max: nil).data.flatMap { Data(base64Encoded: $0) }?.count == LinkFiles.pieceMax)
+        // Only in served folders, as a read.
+        #expect(rig.files.bytes(id: "6", path: rig.outside + "/key.txt", offset: 0, max: nil).code == .deniedPath)
+    }
+
     @Test func mkdirMakesOneFolderInTheHomeOrAServedFolder() throws {
         let rig = try Rig()
         defer { rig.finish() }
@@ -154,15 +181,20 @@ struct FilesTests {
             try await until { client.got.count >= 3 }
             client.socket.send(.cmd(id: "l", .control(.fsList, ControlArgs(path: rig.folder.path))))
             client.socket.send(.cmd(id: "r", .control(.fsRead, ControlArgs(path: rig.folder.path + "/a.txt"))))
-            try await until { client.raws.compactMap(Self.result).count >= 2 }
+            var piece = ControlArgs(path: rig.folder.path + "/a.txt")
+            piece.offset = 1
+            client.socket.send(.cmd(id: "b", .control(.fsRead, piece)))
+            try await until { client.raws.compactMap(Self.result).count >= 3 }
             let results = Dictionary(client.raws.compactMap(Self.result).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
             if control == .full {
                 #expect(results["l"]?.entries?.map(\.name) == ["src", "a.txt"])
                 #expect(results["r"]?.text == "hi")
+                #expect(results["b"]?.data == Data("i".utf8).base64EncodedString() && results["b"]?.size == 2)
             } else {
                 // A phone's folder browser: subfolders only, never a file's bytes.
                 #expect(results["l"]?.entries?.map(\.name) == ["src"])
                 #expect(results["r"]?.code == .deniedControl)
+                #expect(results["b"]?.code == .deniedControl)
             }
             client.socket.close()
         }

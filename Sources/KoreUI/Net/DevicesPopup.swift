@@ -196,10 +196,10 @@ struct DevicesPopup: View {
         NetRowFrame(lit: false) {
             NetGlyph(kind: .mac).foregroundStyle(Theme.Net.glyph)
             Text(picture.macName).font(Theme.Net.name).foregroundStyle(Theme.text).lineLimit(1)
-            Text("this Mac").font(Theme.Net.detail).foregroundStyle(Theme.tertiary).lineLimit(1)
+            Text(DevicesWords.macDetail(picture)).font(Theme.Net.detail).foregroundStyle(Theme.tertiary).lineLimit(1)
             Spacer(minLength: 0)
         }
-        .help(picture.tailnetName.map { "On your tailnet as \($0)" } ?? "")
+        .help(DevicesWords.macHelp(picture))
         .storyID(StoryID.Net.row("this-mac"))
     }
 
@@ -252,12 +252,14 @@ struct DevicesPopup: View {
             Color.clear.storyAction(StoryID.Net.row(row.id).part(.reload)) { devices.setPaused(row, false) }
             Color.clear.storyAction(StoryID.Net.row(row.id).part(.close)) { devices.remove(row) }
             if row.canJoin { Color.clear.storyAction(StoryID.Net.row(row.id).part(.use)) { join(row) } }
+            if let page = row.ownPage, let url = URL(string: page) { Color.clear.storyAction(StoryID.Net.row(row.id).part(.signIn)) { devices.openURL(url) } }
         }
     }
 
     private func rowDot(_ row: DeviceRow) -> NetDot.Fill? {
         if row.needsTailscale { return nil }
         if row.paused { return .offline }
+        if let own = row.own, !own.signedIn, row.status != .offline { return .needsYou }
         switch row.status {
         case .connected: return .connected
         case .offline: return .offline
@@ -281,6 +283,12 @@ struct DevicesPopup: View {
         // A linked phone's own log, to debug it without a cable.
         if row.kind == .phone, row.status == .connected { items.append(OptionItem("Get logs") { devices.fetchLogs(row) }) }
         if row.canJoin { items.append(OptionItem(row.upgradeNote == nil ? "Join KoreNet" : "Try again") { join(row) }) }
+        // Kore's tailnet there signed out: its page opens here (the box's own, for this account).
+        if let page = row.ownPage, let url = URL(string: page) {
+            items.append(OptionItem("Sign in ↗") { devices.openURL(url) })
+        } else if let own = row.own, !own.signedIn, row.koreTailnet, row.upgradeFix != .relogin {
+            items.append(OptionItem("Sign in ↗") { devices.relogin(row) })
+        }
         // A stopped upgrade's one action (its line is the row's detail).
         switch row.upgradeFix {
         case .copy(let line)?:
@@ -335,27 +343,18 @@ struct DevicesPopup: View {
             ForEach(picture.pending) { row in pendingRow(row, now: now) }
             ForEach(signatures) { row in signatureRow(row) }
         }
+        // Tailscale carries the links now and Kore's own hasn't signed in: one line until it has.
+        if picture.ownSignIn, picture.net == .running {
+            NetRule()
+            signInLine(picture)
+        }
         switch picture.net {
         case .off:
             NetLine { Text("KoreNet is off") }
         case .starting:
             NetLine { NetSpinner(); Text("Starting KoreNet") }
         case .notJoined:
-            if picture.signingIn {
-                NetLine {
-                    NetSpinner()
-                    Text("Finish signing in in the browser")
-                    Text("·")
-                    Button("Cancel") { devices.cancelSignIn() }.buttonStyle(.plain).foregroundStyle(Theme.accent).netHit()
-                        .storyID(StoryID.Net.lineAction, press: { devices.cancelSignIn() })
-                }
-                .storyID(StoryID.Net.line)
-            } else {
-                // Its sign-in went with the key change (0.3.7): that's the line until it's signed in again.
-                NetAction(title: KoreNetSwitch.shared?.tailnetNote ?? DevicesWords.signIn, glyph: .external, trailing: true) { devices.signIn() }
-                    .help("Kore runs Tailscale inside the app")
-                    .storyID(StoryID.Net.lineAction, press: { devices.signIn() })
-            }
+            signInLine(picture)
         case .stopped, .signedOut:
             NetRule()
             NetLine {
@@ -481,6 +480,25 @@ struct DevicesPopup: View {
         addingBox.value = nil
     }
 
+    /// Kore's own tailnet's sign-in: its page, or "finish in the browser" while it's open.
+    @ViewBuilder private func signInLine(_ picture: DevicesPicture) -> some View {
+        if picture.signingIn {
+            NetLine {
+                NetSpinner()
+                Text("Finish signing in in the browser")
+                Text("·")
+                Button("Cancel") { devices.cancelSignIn() }.buttonStyle(.plain).foregroundStyle(Theme.accent).netHit()
+                    .storyID(StoryID.Net.lineAction, press: { devices.cancelSignIn() })
+            }
+            .storyID(StoryID.Net.line)
+        } else {
+            // Its sign-in went with the key change (0.3.7): that's the line until it's signed in again.
+            NetAction(title: KoreNetSwitch.shared?.signInAgainNote ?? DevicesWords.signIn, glyph: .external, trailing: true) { devices.signIn() }
+                .help("Kore's own tailnet, inside the app")
+                .storyID(StoryID.Net.lineAction, press: { devices.signIn() })
+        }
+    }
+
     private func pendingRow(_ row: PendingRow, now: Date) -> some View {
         let lit = hoveredRow.value == "pending:" + row.id
         return Button { devices.ask(row) } label: {
@@ -588,7 +606,7 @@ private struct NetLine<Content: View>: View {
     }
 }
 
-/// An accent action row ("Get the phone app ↗", "Sign in to use KoreNet without the Tailscale app ↗").
+/// An accent action row ("Get the phone app ↗", "Sign in to Kore's tailnet ↗").
 private struct NetAction: View {
     let title: String
     let glyph: NetGlyph.Kind

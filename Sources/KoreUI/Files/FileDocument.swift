@@ -97,12 +97,25 @@ final class FileDocument: Identifiable {
     var renderURL: URL { preview ?? url }
     /// The box sent only the first part of the file: its whole size.
     private(set) var boxCut: Int64?
+    /// A box file whose renderer needs it on this Mac (`BoxFileCache`): its copy coming, too
+    /// large for one, or why it didn't come. Nil once `preview` is the copy, or for any other file.
+    private(set) var boxCopy: BoxCopyState?
+    @ObservationIgnored private var copying = false
+    @ObservationIgnored private var copyAgain = false
+
+    enum BoxCopyState: Equatable {
+        case loading
+        case tooLarge(Int64)
+        case failed(String)
+    }
 
     struct BoxFile {
         var path: String
         let alias: String
         let read: @MainActor (String, FileStamp?) async -> Result<BoxFileRead, HostRefusal>
         let write: @MainActor (String, Data, FileStamp?) async -> Result<FileStamp, BoxWriteFailure>
+        /// The file's bytes to this Mac for a renderer (`BoxFileCache.copy`); nil: never.
+        var copy: (@MainActor (String) async -> Result<BoxFileCache.Copy, BoxFetchFailure>)?
         var reading = false
         var saving = false
         /// The file as last read or written: what a save checks against.
@@ -113,11 +126,12 @@ final class FileDocument: Identifiable {
 
     init(
         box path: String, alias: String, standIn: URL, read: @escaping @MainActor (String, FileStamp?) async -> Result<BoxFileRead, HostRefusal>,
-        write: @escaping @MainActor (String, Data, FileStamp?) async -> Result<FileStamp, BoxWriteFailure>
+        write: @escaping @MainActor (String, Data, FileStamp?) async -> Result<FileStamp, BoxWriteFailure>,
+        copy: (@MainActor (String) async -> Result<BoxFileCache.Copy, BoxFetchFailure>)? = nil
     ) {
         autoSave = .shared
         url = standIn
-        box = BoxFile(path: path, alias: alias, read: read, write: write)
+        box = BoxFile(path: path, alias: alias, read: read, write: write, copy: copy)
         let language = Language.of(standIn)
         self.language = language
         wrap = Self.wraps(language)
@@ -199,9 +213,16 @@ final class FileDocument: Identifiable {
     /// The box says the file changed (its folder's watch, or a turn's end): read again. Without
     /// edits the text changes in place, the caret kept; with edits, the notice asks.
     func reloadFromBox() {
-        guard box != nil, loaded, isText else { return }
+        guard box != nil, loaded, isText || boxCopied else { return }
+        if copying {
+            copyAgain = true
+            return
+        }
         loadFromBox(again: true)
     }
+
+    /// `preview` is a copy of the whole file (`BoxFileCache`), read again when the box says it changed.
+    private var boxCopied: Bool { box?.copy != nil && preview != nil && !isText }
 
     private func loadFromBox(again: Bool = false, discard: Bool = false) {
         guard var box, !box.reading else { return }
@@ -214,6 +235,8 @@ final class FileDocument: Identifiable {
             self.box?.reading = false
             self.loaded = true
             if case .success(let read) = result, read.unchanged { return }
+            // A workbook, a PDF, a film: the whole file to this Mac for its renderer.
+            if case .success(let read) = result, self.copyFromBox(read, again: again) { return }
             switch result {
             case .failure(let why):
                 // Read again and couldn't: what's shown stays (a save says if it's gone).
@@ -259,6 +282,60 @@ final class FileDocument: Identifiable {
                 }
             }
         }
+    }
+
+    /// A box file a renderer needs on this Mac (`BoxFileCache.wants`) that the read didn't bring
+    /// whole (binary, an image past what the box sends, cut text): its copy comes, "Loading…"
+    /// until it does; a copy shown stays until the new one is in. False: not such a file.
+    private func copyFromBox(_ read: BoxFileRead, again: Bool) -> Bool {
+        guard let box, let copy = box.copy, BoxFileCache.wants(name) else { return false }
+        switch read.kind {
+        case .binary, .unknown: break
+        case .image: if read.image != nil { return false }
+        // Bytes that came as text: whole, and not a binary file read as best it could be (a PDF
+        // with no NUL near its start).
+        case .text: if !read.truncated, !(read.text ?? "").contains("\u{FFFD}") { return false }
+        }
+        if again, let stamp = read.stamp, stamp == box.stamp, preview != nil { return true }
+        copying = true
+        if preview == nil { boxCopy = .loading }
+        file = TextFile(content: .binary)
+        boxImage = nil
+        boxCut = nil
+        readOnly = true
+        let path = box.path
+        Task { [weak self] in
+            let result = await copy(path)
+            guard let self else { return }
+            copying = false
+            switch result {
+            case .success(let copied):
+                self.box?.stamp = copied.stamp ?? read.stamp
+                boxCopy = nil
+                if preview != copied.url { preview = copied.url }
+                // Changed on the box: the renderer reads the new bytes where the old ones were.
+                if copied.fresh, again { revision += 1 }
+            case .failure(.tooLarge(let size)):
+                preview = nil
+                boxCopy = .tooLarge(size)
+            case .failure(.refused(let why)):
+                if preview == nil { boxCopy = .failed(why) }
+            }
+            if copyAgain {
+                copyAgain = false
+                reloadFromBox()
+            }
+        }
+        return true
+    }
+
+    /// A box file too large to preview here, to this Mac's Downloads: the explorer's copy, its
+    /// progress and its word when done.
+    func downloadFromBox() {
+        guard let box else { return }
+        let downloads = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads", isDirectory: true)
+        FilePaste.carry([.box(alias: box.alias, path: box.path)], into: .mac(downloads.path), move: false) { _ in }
     }
 
     /// The bytes the renderers read, in this document's own temporary folder.

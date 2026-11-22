@@ -273,3 +273,70 @@ final class ManyTabsGroupedCost: Storyline {
         ]
     }
 }
+
+/// Two groups, one folded, through the window's own close and an open of the folder again (as
+/// the Welcome's recents or `kore open` open it, from what the close saved), in a Kore its
+/// installer started: names, colours, fold and tabs come back as they were.
+final class TabGroupWindowReopen: TabGroupStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+
+    private struct Shape: Equatable {
+        var name: String
+        var color: TabGroupColor
+        var folded: Bool
+        var members: [Int]
+    }
+
+    @MainActor private static func shape(_ story: StoryContext) throws -> [Shape] {
+        let workspace = try TabGroupProbe.workspace(story)
+        return workspace.tabGroups.groups.map { group in
+            Shape(
+                name: group.name, color: group.color, folded: group.folded,
+                members: workspace.tabs.indices.filter { workspace.tabGroups.member[workspace.tabs[$0].id] == group.id })
+        }
+    }
+
+    private static let wanted = [
+        Shape(name: "Docs", color: .violet, folded: false, members: [0, 1]),
+        Shape(name: "Release", color: .rose, folded: true, members: [2, 3]),
+    ]
+
+    override func steps() -> [any Step] {
+        // Kore as install.sh starts it after an install or update: its build settings passed on.
+        [
+            Do("Kore started by its installer") { _ in
+                Workspace.storyLaunch = ["KORE_BUILD_SHA": "6d23295", "KORE_RELEASE_TAG": "v0.3.7", "KORE_SIGN_IDENTITY": "Kore"]
+            }
+        ] + super.steps() + [
+            TabGroupProbe.make(1, onto: 0),
+            TabGroupProbe.make(3, onto: 2),
+            Do("Name, colour and fold them") { story in
+                let workspace = try TabGroupProbe.workspace(story)
+                let groups = workspace.tabGroups.groups
+                guard groups.count == 2 else { throw StoryFailure.modelMissing("two groups") }
+                workspace.rename(group: groups[0].id, to: "Docs")
+                workspace.recolor(group: groups[0].id, .violet)
+                workspace.rename(group: groups[1].id, to: "Release")
+                workspace.recolor(group: groups[1].id, .rose)
+                workspace.linkSelect(workspace.tabs[0])
+                workspace.toggleFold(groups[1].id)
+            },
+            Expect("two groups as wanted", found: { story in (try? Self.shape(story)).map { "\($0)" } }) { story in
+                try Self.shape(story) == Self.wanted
+            },
+            Do("Close the window") { story in story.window?.close() },
+            Expect("the window closed") { story in story.app.workspace?.window?.isVisible != true },
+            OpenFolder(),
+            Expect("both groups back: names, colours, fold and tabs", found: { story in (try? Self.shape(story)).map { "\($0)" } }) { story in
+                guard story.app.workspace?.window?.isVisible == true else { return false }
+                return try Self.shape(story) == Self.wanted && story.app.workspace?.tabs.count == 4
+            },
+            Expect("the open group's chip and line, the folded one's chip") { story in
+                let groups = try TabGroupProbe.workspace(story).tabGroups.groups
+                return TabGroupProbe.shown(StoryID.TabGroups.chip(groups[0].id)) && TabGroupProbe.shown(StoryID.TabGroups.line(groups[0].id))
+                    && TabGroupProbe.shown(StoryID.TabGroups.chip(groups[1].id))
+            },
+            Snapshot("groups-reopened"),
+        ]
+    }
+}

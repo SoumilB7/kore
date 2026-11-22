@@ -157,7 +157,9 @@ status=${PIPESTATUS[0]}
 set -eo pipefail
 (( status == 0 )) || fail "Kore didn't install (see $DIR/install.log). Nothing was changed if it's still running."
 
-[[ -n "${KORE_NO_OPEN:-}" ]] || open /Applications/Kore.app
+# Started without this script's KORE_ settings: `open` passes them on, and a KORE_ variable
+# makes a dev run, which saves no window's tabs.
+[[ -n "${KORE_NO_OPEN:-}" ]] || env $(env | sed -n 's/^\(KORE_[A-Za-z0-9_]*\)=.*/-u \1/p') open /Applications/Kore.app
 cat <<DONE
 
 ✅ Kore is installed. Update any time with \`kore update\`, or by running this command again.

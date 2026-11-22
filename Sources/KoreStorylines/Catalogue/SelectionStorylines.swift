@@ -2,12 +2,13 @@ import AppKit
 import KoreUI
 
 // The transcript's one text selection (z-docs/research/transcript-selection.md): a press and a
-// drag from any text to any other, across blocks, rows and turns; ⌘C copies plain text built from
-// the model, each message tagged by who said it when it spans several. Copies go to the storylines' own pasteboard, never the owner's clipboard.
+// drag from any text to any other, across blocks, rows and turns; ⌘C copies from the model what
+// is seen inside one text, Markdown across blocks, each message tagged by who said it when it
+// spans several. Copies go to the storylines' own pasteboard, never the owner's clipboard.
 
 /// From the middle of turn 1's paragraph into turn 2's code block: the list, the second message
 /// and turn 2's first line between are selected, both answers draw their part, and ⌘C gives
-/// plain text: list markers, each message under its tag, a partial code block as its lines. A third turn streaming in afterwards leaves the selection as it was.
+/// Markdown: the list as written, each message under its tag, a partial code block as its lines. A third turn streaming in afterwards leaves the selection as it was.
 final class SelectAcrossTurns: ChatStoryline {
     static let first = """
         ## Plan
@@ -30,10 +31,10 @@ final class SelectAcrossTurns: ChatStoryline {
     static func expected(_ agent: String) -> String {
         """
         \(agent):
-        check port values before anything else runs.
+        check `port` values before anything else runs.
 
-        • one item
-        • and another
+        - one item
+        - and `another`
 
         You:
         Tell me more
@@ -97,15 +98,16 @@ final class SelectWordsAndParagraphs: ChatStoryline {
             ClickText(.answer(1, [0], at: Self.first, "words"), count: 3),
             CopySelection("Some bold words and code here."),
             DragSelect(from: .answer(1, [0], at: Self.first, "ords"), to: .answer(1, [1], at: Self.second, "aragraph"), clicks: 2),
-            CopySelection("words and code here.\n\nA second paragraph"),
+            // Across two paragraphs: Markdown.
+            CopySelection("words and `code` here.\n\nA second paragraph"),
             Key(.escape),
             Expect("Escape to let the selection go") { try !$0.activeChat().storyTranscript.hasSelection },
         ]
     }
 }
 
-/// A table copies whole by a drag across it, as tabbed rows under its header; its Copy, beside its
-/// top-right corner on hover and taking no room, copies the same.
+/// A drag across a table copies it as Markdown, as written, a link as its text; its Copy, beside
+/// its top-right corner on hover and taking no room, copies tabbed rows under its header.
 final class TableCopy: ChatStoryline {
     static let reply = """
         Totals so far:
@@ -113,11 +115,12 @@ final class TableCopy: ChatStoryline {
         | Name | Qty |
         |---|--:|
         | alpha | 3 |
-        | beta | 12 |
+        | [beta](https://example.com/beta) | 12 |
 
         Done counting.
         """
     static let tabbed = "Name\tQty\nalpha\t3\nbeta\t12"
+    static let markdown = "| Name | Qty |\n|---|--:|\n| alpha | 3 |\n| beta | 12 |"
     static let table = StoryID.Transcript.table([1])
     /// The table's height before its Copy shows: the same after (it takes no room).
     nonisolated(unsafe) static var resting: CGFloat = 0
@@ -129,7 +132,7 @@ final class TableCopy: ChatStoryline {
         super.steps() + [
             Send("Count them"), TurnFinished(1), WaitIdle(),
             DragSelect(from: .answer(1, [0], at: "Totals so far:", "so far"), to: .answer(1, [2], at: "Done counting.", " counting")),
-            CopySelection("so far:\n\n" + Self.tabbed + "\n\nDone"),
+            CopySelection("so far:\n\n" + Self.markdown + "\n\nDone"),
             Key(.escape),
             WaitForElement(.id(Self.table)),
             Expect("the table at rest, Copy not shown") { _ in
@@ -148,12 +151,15 @@ final class TableCopy: ChatStoryline {
             Snapshot("table-copy"),
             Do("clear the pasteboard") { _ in StoryTranscript.clearCopied() },
             Click(.id(Self.table.part(.copy))),
-            Expect("Copy to take the whole table, as a drag across it copies", found: { _ in StoryTranscript.copied }) { _ in
+            Expect("Copy to take the whole table as tabbed rows, the link as its text", found: { _ in StoryTranscript.copied }) { _ in
                 StoryTranscript.copied == Self.tabbed
             },
             // With Copy showing, the last row's text still selects.
             DragSelect(from: .answer(1, [1, 2, 0], at: "beta", "beta"), to: .answer(1, [1, 2, 1], at: "12", "12").shifted(2)),
-            CopySelection("Name\tQty\nbeta\t12"),
+            CopySelection("| Name | Qty |\n|---|---|\n| beta | 12 |"),
+            // One cell, its link: the visible text.
+            ClickText(.answer(1, [1, 2, 0], at: "beta", "beta"), count: 2),
+            CopySelection("beta"),
         ]
     }
 }
@@ -188,7 +194,7 @@ final class SelectAllLongChat: ChatStoryline {
     override class var tags: Set<Tag> { [.chat] }
 
     static func whole(_ range: ClosedRange<Int>, _ agent: String) -> String {
-        range.map { "You:\nQuestion \($0)\n\n\(agent):\n" + paragraph($0) + "\n\n• point one of \($0)\n• point two of \($0)" }
+        range.map { "You:\nQuestion \($0)\n\n\(agent):\n" + answer($0) }
             .joined(separator: "\n\n")
     }
 
@@ -228,7 +234,7 @@ final class SelectAllLongChat: ChatStoryline {
             }) { story in
                 let t = try story.activeChat().storyTranscript
                 let first = try Spot.answer(1).entry(story)
-                return t.selectionMarkdown.hasPrefix("\(t.agentName):\nwith bold") && t.highlightRects(first) > 0
+                return t.selectionMarkdown.hasPrefix("\(t.agentName):\nwith **bold**") && t.highlightRects(first) > 0
             },
             Scroll(.answer(turn: Self.turns), to: .bottom),
             DragPastTop(from: .answer(Self.turns, [0], at: Self.paragraph(Self.turns), "paragraph")),
@@ -361,7 +367,8 @@ final class ChatFileLink: ChatStoryline {
 /// A bullet whose second line, after a line break, is a long file path in inline code, at 110%
 /// zoom (Menlo at 13.2 pt, which once wrapped the selection's copy of it): a drag over that line and past its end, a
 /// double- and a triple-click on it, and a drag across both lines highlight their glyphs and
-/// nothing under them, in a wide window and a narrow one, and copy what they cover.
+/// nothing under them, in a wide window and a narrow one, and copy what they cover: one point's
+/// text, with no bullet.
 final class SelectCodeLineInBullet: ChatStoryline {
     static let path = "file:///Users/soumil/Code/Projects/kore/z-docs/design/chat-handoff.html"
     static let reply = "- The design doc is here: [chat-handoff.html](\(path))  \n  `\(path)`"
@@ -379,7 +386,7 @@ final class SelectCodeLineInBullet: ChatStoryline {
                 DragSelect(from: code, to: last, past: CGVector(dx: 60, dy: 0)),
                 Snapshot(name),
                 Self.onlyGlyphs("the code line's highlight on its glyphs only"),
-                CopySelection("• \(Self.path)"),
+                CopySelection(Self.path),
             ]
         }
         return super.steps() + [
@@ -388,14 +395,14 @@ final class SelectCodeLineInBullet: ChatStoryline {
         ] + line("code-line-wide") + [
             ClickText(.answer(1, Self.item, at: Self.shown, "soumil"), count: 2),
             Self.onlyGlyphs("a double-click's word highlighted on its glyphs only"),
-            CopySelection("• soumil"),
+            CopySelection("soumil"),
             ClickText(.answer(1, Self.item, at: Self.shown, "Projects"), count: 3),
             Self.onlyGlyphs("a triple-click's line highlighted on its glyphs only"),
-            CopySelection("• \(Self.path)"),
+            CopySelection(Self.path),
             DragSelect(from: .answer(1, Self.item, at: Self.shown, "design doc"), to: last, past: CGVector(dx: 60, dy: 0)),
             Snapshot("both-lines-wide"),
             Self.onlyGlyphs("both lines highlighted on their glyphs only"),
-            CopySelection("• design doc is here: chat-handoff.html\n  \(Self.path)"),
+            CopySelection("design doc is here: chat-handoff.html\n\(Self.path)"),
             SizeWindow(width: 620), WaitIdle(),
         ] + line("code-line-narrow") + [
             Key(KeyChord(.character("0"), .command)), WaitIdle(),
@@ -411,6 +418,33 @@ final class SelectCodeLineInBullet: ChatStoryline {
             let id = try Spot.answer(1).entry(story)
             return t.highlightRects(id) > 0 && t.strayHighlights(id).isEmpty
         }
+    }
+}
+
+/// The owner's case: a numbered point that starts in bold, with an install command in inline
+/// code. A drag across just the command copies the bare command (no "1.", no backticks, no bold,
+/// nothing before it); a triple-click takes the point's text with no number; a drag from it into
+/// the next point copies numbered Markdown lines.
+final class SelectCodeInNumberedPoint: ChatStoryline {
+    static let command = "curl -fsSL https://example.com/install.sh | bash"
+    static let reply = "1. **Install the CLI**: run `\(command)` once.\n2. Then sign in."
+    static let point = "Install the CLI: run \(command) once."
+    static let next = "Then sign in."
+
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var script: CLIScript { CLIScript(turns: [CLIScript.reply(reply)]) }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("How do I install it?"), TurnFinished(1),
+            DragSelect(from: .answer(1, [0, 0, 0], at: Self.point, "curl"), to: .answer(1, [0, 0, 0], at: Self.point, " once")),
+            Snapshot("command-selected"),
+            CopySelection(Self.command),
+            ClickText(.answer(1, [0, 0, 0], at: Self.point, "CLI"), count: 3),
+            CopySelection(Self.point),
+            DragSelect(from: .answer(1, [0, 0, 0], at: Self.point, "the CLI"), to: .answer(1, [0, 1, 0], at: Self.next, " sign")),
+            CopySelection("1. **the CLI**: run `\(Self.command)` once.\n2. Then"),
+        ]
     }
 }
 

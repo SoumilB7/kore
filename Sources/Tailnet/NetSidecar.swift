@@ -45,6 +45,16 @@ package final class NetSidecar: @unchecked Sendable {
     /// Runs the helper with its socket and state under `folder` (0700), waits for its `ready`,
     /// and brings the node up with `key`. Blocks up to `within`: call it off the main actor.
     /// `arguments` go after the socket and state (`-hostname`, `-ephemeral`: the e2e run's node).
+    /// Kore's own node's name on the tailnet: this machine's name and "-kore" ("mybox-kore"), so
+    /// beside the Tailscale app's node it reads as the same device's. The same node every time:
+    /// its state is kept in its folder.
+    package static func nodeName(_ host: String) -> String {
+        let first = host.split(separator: ".").first.map(String.init) ?? host
+        let plain = String(first.lowercased().map { $0.isASCII && ($0.isLetter || $0.isNumber) ? $0 : "-" })
+        let trimmed = plain.split(separator: "-").joined(separator: "-")
+        return String((trimmed.isEmpty ? "device" : trimmed).prefix(58)) + "-kore"
+    }
+
     package static func start(helper: URL, folder: URL, key: Data, arguments: [String] = [], within: TimeInterval = 10) throws -> NetSidecar {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         // A Unix socket's path is at most 104 bytes.

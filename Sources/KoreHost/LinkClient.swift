@@ -720,7 +720,9 @@ final class LinkClient {
             let result = await Task.detached(priority: .userInitiated) { () -> FilesResult in
                 switch kind {
                 case .fsList: return files.list(id: id, path: args.path, hidden: args.hidden == true)
-                case .fsRead: return files.read(id: id, path: args.path ?? "", max: args.max, base: args.base)
+                case .fsRead:
+                    if let offset = args.offset { return files.bytes(id: id, path: args.path ?? "", offset: offset, max: args.max, base: args.base) }
+                    return files.read(id: id, path: args.path ?? "", max: args.max, base: args.base)
                 case .fsMkdir: return files.mkdir(id: id, path: args.path ?? "")
                 case .fsWrite:
                     let bytes: Data? =

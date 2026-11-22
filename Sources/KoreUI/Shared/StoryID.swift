@@ -60,7 +60,7 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case title
         /// A tab picked with others (⇧ or ⌘-click): its quiet highlight.
         case selected
-        /// A chat's logo in Arsenal's colour: it has Arsenal on.
+        /// A chat tab's corner marks in Arsenal's colour: its chat has Arsenal on.
         case arsenal
     }
 }

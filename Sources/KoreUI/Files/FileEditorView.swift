@@ -94,7 +94,20 @@ struct FileEditorView: View {
                         .padding(Space.xl)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-            case .image where document.box != nil, .binary where document.box != nil:
+            // A box file a renderer needs here: its copy coming, or why it can't.
+            case .binary where document.boxCopy == .loading:
+                RendererLoading()
+            case .binary where document.box != nil:
+                if case .tooLarge(let bytes) = document.boxCopy {
+                    FileState(
+                        symbol: "doc", title: "\(document.name) is \(Self.size(Int(bytes))).", line: "Too large to preview here.",
+                        buttons: [("Download", document.downloadFromBox)])
+                } else if case .failed(let why) = document.boxCopy {
+                    FileState(symbol: "doc", title: "Kore can't preview this file.", line: why, buttons: [("Try Again", document.load)])
+                } else {
+                    FileState(symbol: "doc", title: "This file is binary.", line: "Kore shows text files and images.", buttons: [])
+                }
+            case .image where document.box != nil:
                 FileState(symbol: "doc", title: "This file is binary.", line: "Kore shows text files and images.", buttons: [])
             // Images and binary files go to their renderers; this shows only if one can't take them.
             case .image, .binary:

@@ -111,10 +111,18 @@ public enum KoreReach {
     /// On a box, the chat's id goes with its pass.
     public static let chatVariable = "KORE_AGENT_CHAT"
 
+    /// install.sh's and build-app.sh's own settings: the `open` that starts Kore after an install
+    /// or an update passes them on, and Kore reads none of them.
+    public static let installVariables: Set<String> = [
+        "KORE_BUILD_SHA", "KORE_SOURCE_COMMIT", "KORE_RELEASE_TAG", "KORE_SIGN_IDENTITY", "KORE_RELEASES",
+        "KORE_RELEASE_KEY", "KORE_REPO", "KORE_DIR", "KORE_APP", "KORE_FORCE", "KORE_NO_BUILD", "KORE_NO_OPEN",
+    ]
+
     /// A dev run has a `KORE_` hook in its environment. The agent channel's variables aren't
-    /// hooks: every chat's shell has them, so a Kore started from one is still the owner's.
+    /// hooks: every chat's shell has them, so a Kore started from one is still the owner's. Nor
+    /// are the installer's: a Kore it started saves its windows as any other.
     public static func isDevRun(_ environment: [String: String]) -> Bool {
-        environment.keys.contains { $0.hasPrefix("KORE_") && !forwarded.contains($0) && $0 != chatVariable }
+        environment.keys.contains { $0.hasPrefix("KORE_") && !forwarded.contains($0) && $0 != chatVariable && !installVariables.contains($0) }
     }
 
     /// `codex app-server`'s: config overrides for this process only.

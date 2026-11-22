@@ -14,6 +14,8 @@ package struct BoxRan: Sendable, Equatable {
     }
 
     package var ok: Bool { status == 0 }
+    /// What a run that ran past its bound ends with (`timeout`'s status), its last line saying so.
+    package static let timedOut: Int32 = 124
     package var lastLine: String {
         output.split(whereSeparator: \.isNewline).last.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
     }
@@ -40,9 +42,10 @@ package struct BoxShell: Sendable {
     }
 
     /// An sh script run on the box (`sh -s`, the script on stdin): the same whatever the login
-    /// shell is.
-    package func script(_ alias: String, _ script: String) async -> BoxRan {
-        await run(alias, "sh -s", input: script)
+    /// shell is. `limit` ends a run that takes longer (an install whose download hangs).
+    package func script(_ alias: String, _ script: String, limit: Duration? = nil) async -> BoxRan {
+        let address = BoxAddress(alias)
+        return await Self.process(ssh, Self.options + (address?.options ?? []) + ["--", address?.host ?? alias, "sh -s"], input: script, limit: limit)
     }
 
     /// Copies a file to a path under the box's home.
@@ -54,8 +57,17 @@ package struct BoxShell: Sendable {
     /// Runs `ssh` (whatever program it names) with `arguments`.
     func process(_ arguments: [String], input: String?) async -> BoxRan { await Self.process(ssh, arguments, input: input) }
 
-    static func process(_ executable: String, _ arguments: [String], input: String? = nil) async -> BoxRan {
-        await withCheckedContinuation { continuation in
+    static func process(_ executable: String, _ arguments: [String], input: String? = nil, limit: Duration? = nil) async -> BoxRan {
+        final class Ended: @unchecked Sendable {
+            private let lock = NSLock()
+            private var late = false
+            var timedOut: Bool {
+                get { lock.withLock { late } }
+                set { lock.withLock { late = newValue } }
+            }
+        }
+        let ended = Ended()
+        return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: executable)
@@ -68,6 +80,15 @@ package struct BoxShell: Sendable {
                 do { try process.run() } catch {
                     return continuation.resume(returning: BoxRan(status: 127, output: error.localizedDescription))
                 }
+                if let limit {
+                    let (seconds, attoseconds) = limit.components
+                    let wait = Double(seconds) + Double(attoseconds) / 1e18
+                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + wait) {
+                        guard process.isRunning else { return }
+                        ended.timedOut = true
+                        process.terminate()
+                    }
+                }
                 if let stdin, let input {
                     _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
                     try? stdin.fileHandleForWriting.write(contentsOf: Data(input.utf8))
@@ -75,7 +96,13 @@ package struct BoxShell: Sendable {
                 }
                 let data = out.fileHandleForReading.readDataToEndOfFile()
                 process.waitUntilExit()
-                continuation.resume(returning: BoxRan(status: process.terminationStatus, output: String(decoding: data, as: UTF8.self)))
+                let output = String(decoding: data, as: UTF8.self)
+                if ended.timedOut, let limit {
+                    let minutes = Int(limit.components.seconds) / 60
+                    let took = minutes >= 1 ? "\(minutes) min" : "\(Int(limit.components.seconds)) s"
+                    return continuation.resume(returning: BoxRan(status: BoxRan.timedOut, output: output + "\nit took longer than \(took), so Kore stopped it"))
+                }
+                continuation.resume(returning: BoxRan(status: process.terminationStatus, output: output))
             }
         }
     }
@@ -147,6 +174,12 @@ package struct BoxSetup: Sendable {
     /// `kore-tailnet` for a platform (Kore's own tailnet on a box without a usable Tailscale), and
     /// whether it's a temp file; nil when there's none (the box offers Tailscale's lines then).
     package var tailnet: @Sendable (_ platform: String) async -> (url: URL, temporary: Bool)?
+    /// Kore's tailnet there is signed in as the last step (this Mac's KoreNet is on): its page
+    /// opens here (Set up was asked for), and the step waits for the sign-in.
+    package var signInOwn = false
+    package var openURL: @MainActor @Sendable (URL) -> Void = { _ in }
+    /// How long that step waits for the sign-in in the browser.
+    package var signInWait: TimeInterval = 300
 
     package init(
         alias: String, grant: String, shell: BoxShell = BoxShell(),
@@ -182,6 +215,14 @@ package struct BoxSetup: Sendable {
     package struct Done: Sendable, Equatable {
         package var machine: BoxMachine
         package var warning: String?
+        /// Kore's tailnet there after its step: signed in as whom, or not and why.
+        package var own: NetNodeWire.Own?
+
+        package init(machine: BoxMachine, warning: String? = nil, own: NetNodeWire.Own? = nil) {
+            self.machine = machine
+            self.warning = warning
+            self.own = own
+        }
     }
 
     /// What the box is, over one ssh session; `deep` runs the CLIs' `--version` too.
@@ -246,7 +287,25 @@ package struct BoxSetup: Sendable {
         var found = machine
         found.koreHost = checked.output.split(whereSeparator: \.isNewline).first { $0.hasPrefix("kore-host ") }.map(String.init)
         let warning = installed.output.contains("linger is off") ? "\(NodeNames.name(alias)) stops kore-host when you log out · sudo loginctl enable-linger" : nil
-        return Done(machine: found, warning: warning)
+        let own = signInOwn ? await ownStep(step: step) : nil
+        return Done(machine: found, warning: warning, own: own)
+    }
+
+    /// Set up's last step: Kore's tailnet there on, and signed in (the default way this Mac
+    /// reaches the box, with or without Tailscale). Never a failure of Set up: its result is said,
+    /// and the card's "Kore's tailnet" line signs in later.
+    private func ownStep(step: @escaping @MainActor @Sendable (String) -> Void) async -> NetNodeWire.Own? {
+        let name = NodeNames.name(alias)
+        await step("Kore's tailnet on \(name)…")
+        let first = await shell.run(alias, "\(Self.target) net on >/dev/null && \(Self.target) tailnet --within 25")
+        guard first.ok, var own = NetNodeWire.Own.parse(report: first.output) else { return nil }
+        if !own.signedIn, let page = own.page, let url = URL(string: page) {
+            await openURL(url)
+            await step("Kore's tailnet on \(name) · finish signing in, it's open in your browser")
+            let second = await shell.run(alias, "\(Self.target) tailnet --until-in --within \(Int(signInWait))")
+            if second.ok, let after = NetNodeWire.Own.parse(report: second.output) { own = after }
+        }
+        return own
     }
 
     /// `kore-tailnet` beside kore-host, unless the same one is there already: copied beside it,

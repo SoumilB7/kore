@@ -257,10 +257,18 @@ package final class Devices {
         changed()
     }
 
-    /// "Sign in to use KoreNet without the Tailscale app": Kore's own tailnet's page in the
+    /// "Sign in to Kore's tailnet": Kore's own tailnet's page in the
     /// browser, opened once per press (the page may come a moment after the node asks for a
     /// login: it opens when it comes); the line waits until the tailnet runs (closing the popup
     /// doesn't cancel). A second press while it waits opens nothing more: never a loop of tabs.
+    /// Kore's own tailnet signed in: as the Mac's node it runs; signing in while Tailscale runs,
+    /// its page is gone (it signed in and stopped).
+    private var signInDone: Bool {
+        guard let facts = net?.facts, facts.on else { return true }
+        if facts.state == .sidecar { return facts.status?.backendState == .running }
+        return facts.ownSignIn == nil
+    }
+
     package func signIn() {
         guard let net, !signingIn else { return }
         signingIn = true
@@ -279,7 +287,7 @@ package final class Devices {
                     self.signInOpened = true
                     self.openURL(page)
                 }
-                return self.net?.facts.status?.backendState == .running
+                return self.signInDone
             }
             guard signingIn else { return }
             signingIn = false

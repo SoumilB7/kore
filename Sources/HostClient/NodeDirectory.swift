@@ -37,6 +37,8 @@ package final class NodeDirectory: Sendable {
         package var os: String?
         /// Its tailnet as it last said: `tailscale` or `kore` (Kore's own).
         package var tailnet: String?
+        /// Kore's own tailnet there as it last said: signed in as whom, or signed out and why.
+        package var own: NetNodeWire.Own?
         /// A Mac box: its owner opens Tailscale there, never a Linux line.
         package var macOS: Bool { os == "macos" }
 
@@ -71,6 +73,7 @@ package final class NodeDirectory: Sendable {
             pending = try c.decodeIfPresent([PendingDevice].self, forKey: .pending)
             os = try c.decodeIfPresent(String.self, forKey: .os)
             tailnet = try c.decodeIfPresent(String.self, forKey: .tailnet)
+            own = try? c.decodeIfPresent(NetNodeWire.Own.self, forKey: .own)
         }
 
         package var id: NodeID { NodeID(device.uuidString.lowercased()) }
@@ -273,6 +276,7 @@ extension NodeDirectory.Entry {
         if let key = entry.nodeKey { entry.lastNodeKey = key }
         if let os = node.os { entry.os = os }
         if let tailnet = node.tailnet { entry.tailnet = tailnet }
+        entry.own = node.own
         return entry
     }
 }

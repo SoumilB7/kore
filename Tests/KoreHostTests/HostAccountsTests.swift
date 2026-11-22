@@ -290,3 +290,20 @@ struct HostAccountsTests {
         }
     }
 }
+
+/// A box's codex account that can't be read says why, in one line: the CLI being updated (not
+/// found), never a bare "Couldn't read".
+@Suite struct BoxAccountReadTests {
+    @Test @MainActor func anAccountReadThatFailsSaysWhy() async {
+        let missing = await HostDaemon.readAccount { throw CLIExecutable.Failure.notFound(name: "codex", searched: ["/usr/bin"]) }
+        #expect(missing.reply == nil)
+        let line = HostDaemon.told(id: "a1", provider: "codex", reading: nil, why: missing.why).message
+        #expect(line == "Couldn't read codex's account: the codex CLI wasn't found (not installed, or being updated)")
+        let ended = await HostDaemon.readAccount { throw CLIExecutable.ExitedAtStart(name: "codex", status: 1, output: "Error: missing optional dependency @openai/codex-linux-x64\n") }
+        #expect(HostDaemon.told(id: "a2", provider: "codex", reading: nil, why: ended.why).message?.hasPrefix("Couldn't read codex's account: the codex CLI exited as it started") == true)
+        // Read: signed in, as the box's line has it.
+        let read = await HostDaemon.readAccount { ["account": ["type": "chatgpt", "email": "me@example.com"]] }
+        #expect(read.why == nil && read.reply != nil)
+        #expect(HostDaemon.told(id: "a3", provider: "codex", reading: .signedIn(AccountIdentity(email: "me@example.com", method: "ChatGPT", changeable: true)), why: nil).message == "Signed in as me@example.com.")
+    }
+}

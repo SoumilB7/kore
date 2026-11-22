@@ -375,10 +375,8 @@ class ChatActivity : NodeActivity() {
         barAfter.showWaiting(if (prompt) waiting?.let { w -> Waiting(w.agents, 0).takeIf { it.agents > 0 } } else waiting)
         leadPrompt.visibility = if (prompt) View.VISIBLE else View.GONE
         leadPrompt.needsYou = prompt && chat?.str("state") == "needsYou"
-        val arsenal = arsenalOn(chat?.str("arsenal"))
         provider?.let { leadLogo.setImageResource(providerLogo(it)) }
-        leadLogo.imageTintList = logoTint(arsenal)?.let { android.content.res.ColorStateList.valueOf(it) }
-        leadSpin.tint = workTint(provider, arsenal)
+        leadSpin.tint = if (provider == "codex") Tone.spinCodex else Tone.spinClaude
         leadPrompt.tint = leadSpin.tint
         leadPrompt.ring = Tone.bg
         leadLogo.visibility = if (working || prompt) View.INVISIBLE else View.VISIBLE

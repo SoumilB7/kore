@@ -18,12 +18,10 @@ extension Size {
     static let railTickHover: CGFloat = 22
     static let railTickHoverStep: CGFloat = 4
     static let railStroke: CGFloat = 2
-    /// The most ticks drawn at once, however long the chat.
+    /// The most ticks shown at once, however long the chat.
     static let railMost = 20
-    /// The least between two drawn ticks, and the pointer's room past the rail's ends.
+    /// Between ticks, closer in a window too short for them.
     static let railSpacing: CGFloat = 8
-    /// The most from one message's tick to the next: a short chat's rail is short.
-    static let railStepMost: CGFloat = 24
     /// A message's row this near the top of the view is the one being read.
     static let railReadLine: CGFloat = 40
     /// What takes the pointer, from the scroll bar's edge in.
@@ -33,4 +31,6 @@ extension Size {
     static let railMargin: CGFloat = 16
     static let railCard: CGFloat = 300
     static let railCardGap: CGFloat = 10
+    /// Ticks beside a gap in the list fade over this many.
+    static let railFade = 4
 }

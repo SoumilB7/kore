@@ -73,7 +73,7 @@ final class DevicesAddPhone: ChatStoryline {
             // × ends the window.
             Press(.id(StoryID.Net.closeAdd)),
             Expect("the window over, the icon quiet") { _ in
-                !Devices.shared.picture().addOpen(at: Date()) && Devices.shared.look() == NetIconLook(dimmed: false, dot: nil, line: "\(DevicesStory.mac) and Pixel 9 connected")
+                !Devices.shared.picture().addOpen(at: Date()) && Devices.shared.look() == NetIconLook(dimmed: false, dot: nil, line: "\(DevicesStory.mac) and Pixel 9 connected · using Tailscale")
             },
             ExpectElement(.id(StoryID.Net.countdown), .absent),
             // Off again: the icon shows Off, the switch held nothing.
@@ -169,7 +169,7 @@ final class DevicesJoinKoreNet: ChatStoryline {
             Self.rows(["✓ kore-host 0.31 · over SSH", "✓ Tailscale on mybox · running", "… Reaching mybox on the tailnet…", "– Allowed by SSH"]),
             Snapshot("devices-join-reaching"),
             Do("on the tailnet, allowed by SSH") { _ in Self.advance() },
-            Expect("done: SSH stays as a backup") { _ in Devices.shared.joining?.ending == .done },
+            Expect("done: SSH still works too") { _ in Devices.shared.joining?.ending == .done },
             ExpectElement(sheet, .absent, timeout: .seconds(4)),
             // No sudo: Kore's tailnet and a sign-in on this Mac instead.
             Do("join again; mybox's Tailscale is down") { story in

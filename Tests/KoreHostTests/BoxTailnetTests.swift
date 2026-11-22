@@ -132,7 +132,8 @@ struct BoxTailnetTests {
         FileManager.default.createFile(atPath: beside.path, contents: Data(), attributes: [.posixPermissions: 0o755])
         #expect(BoxTailnet.helper(executable: host, environment: ["KORE_TAILNET_BIN": named.path])?.lastPathComponent == "kore-tailnet")
         #expect(BoxTailnet.arguments(["KORE_HOST_TAILNET_NAME": "kore-test-1731", "KORE_HOST_TAILNET_EPHEMERAL": "1"]) == ["-hostname", "kore-test-1731", "-ephemeral"])
-        #expect(BoxTailnet.arguments(["KORE_HOST_TAILNET_NAME": "bad name;rm"]) == [])
+        #expect(BoxTailnet.arguments(["KORE_HOST_TAILNET_NAME": "bad name;rm"], host: "mybox.lan") == ["-hostname", "mybox-kore"])
+        #expect(BoxTailnet.arguments([:], host: "Soumil's MacBook Air.local") == ["-hostname", "soumil-s-macbook-air-kore"])
         #expect(BoxTailnet.forced(["KORE_HOST_TAILNET": "kore"]) && !BoxTailnet.forced([:]))
     }
 

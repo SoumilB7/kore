@@ -47,3 +47,34 @@ update would replace the owner's Kore). The `Kore` binary run as built (`swift r
 `.build/release/Kore`) is Kore Dev too; renamed binaries (KoreBench, KoreLaunch, kore-storylines-N)
 keep `Kore-<name>` as before. Releases (`install.sh`, `release.sh`, plain `build-app.sh`) stay
 Kore (`dev.kore.Kore`), the only one that keeps `~/Library/Application Support/Kore`.
+
+## Live check
+
+`scripts/live-check.sh [--bin <release bin dir>] [--tests <test scratch> | --no-relay] [--devices [--switch]]` checks Kore as a person
+would, on top of the gate: real frames of the windows, read automatically. The gate's fakes and
+element checks miss what only shows on screen (a flickering popup, a rail stretched to the window,
+a stale card, groups gone after a window reopens).
+
+- **tour** (budget 3 min): the `livecheck` storylines (`Catalogue/LiveCheckStorylines.swift`), one
+  per area. Each walks the area's own storyline, then looks at it: once its frames settle, three
+  frames 300 ms apart must neither keep changing nor change back (flicker; overlay scrollers,
+  which flash and fade on their own, are left out of every comparison), the text read off the frame (Vision) holds no work word left over ("Installing…")
+  and no clipped label ("This Ma"), the message rail measures the same at two heights, nothing
+  covers text, controls at the edges are whole in narrow and wide windows, and clicks settle under
+  `KORE_LIVE_SETTLE_MS` (800 ms). Claude and Codex run side by side, each in one off-screen
+  kore-storylines app with input in process; areas that don't depend on the CLI run in one of them.
+- **net** (budget 2 min, beside the tour): KoreNet, boxes, the tailnet switch, the link and remote
+  control on their fakes, and the phone relay and KoreNet system tests (Mac, kore-host and an
+  emulated phone on an in-memory tailnet). Those run from `--tests` (the gate's test build), else
+  this tree's `.build-test`, built once if missing: SwiftPM links every test target into one
+  bundle, so there's no smaller build of them. `--no-relay` leaves them out.
+- **--devices**: mybox over `ssh mybox`: kore-host's version and daemon, the link over SSH and over
+  the tailnet, and whether the Mac and the box say the same tailnet. **--switch** (about 6 min,
+  never by default) stops tailscaled on the box after arming two root restore timers (300 s, 600 s)
+  and reads the box's journal for the move to Kore's tailnet and back.
+
+The output is one ✔/✘ per area, a ✘ with a short reason and the frame that shows it (relative to
+the run's folder), a part over its budget as `✘ <part>: slow`, and the total with each part's time.
+Detail (every read text, settle time and size) goes to `<out>/live-check.log` and
+`<out>/<shard>/live-notes.txt`; the run's folder is under `$TMPDIR/kore-live-check`. Without
+`--bin` it builds once in release first; the gate passes its own build.

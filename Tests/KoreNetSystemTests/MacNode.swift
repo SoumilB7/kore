@@ -34,7 +34,7 @@ final class MacNode {
     /// node key and address for the same Mac, signed in as the same user.
     let installedIP = "100.64.0.1"
     let installedKey = "nodekey:mac"
-    let ownIP = "100.64.0.11"
+    let ownIP = "100.64.0.250"
     let ownKey = "nodekey:mac-kore"
     /// The node this Mac is on now.
     var ip: String { switcher?.state == .sidecar ? ownIP : installedIP }
@@ -128,6 +128,8 @@ final class MacNode {
         HostConnection.sshNet = switcher
         let pulse = pulse
         switcher.settled = { _ in pulse.beat() }
+        // Its work off the main actor (a sidecar's start, a status read), counted while under way.
+        switcher.counting = { $0 ? pulse.began() : pulse.ended() }
         // The box list's copies, rekey journals and book are this world's, never Kore's real
         // Application Support (a Remove deletes them).
         BoxList.shared.cacheRoot = support.appendingPathComponent("hosts", isDirectory: true)
@@ -258,6 +260,15 @@ final class MacNode {
     /// absent, and the app's watch fires.
     func uninstallTailscale() { app.uninstall() }
 
+    /// Kore 0.3.7's update: the identity key read from the Keychain before is gone, a new one is
+    /// made in its file (same device id); with `losePins`, the boxes' pins left this Mac's book
+    /// too (as found on the owner's Mac, 2026-11-23).
+    func newIdentityKey(losePins: Bool) {
+        try? secrets.write(SoftwareIdentity().raw, MacIdentity.identityAccount)
+        guard losePins else { return }
+        _ = try? DeviceBook(url: support.appendingPathComponent("net/devices.json")).update { $0.removeAll { $0.kind == .box } }
+    }
+
     /// The one browser sign-in of Kore's own tailnet.
     func signInOwnTailnet() {
         app.ownSignedIn = true
@@ -305,7 +316,10 @@ final class MacNode {
         }
         upgradeRuns[alias, default: 0] += 1
         let paths = box.paths
-        let tailscale: HostUpgrade.Tailscale = net.node(box.ip)?.state == .running ? .running(node: box.nodeKey) : .stopped(.stopped, login: nil)
+        let up = net.node(box.ip)?.state == .running
+        let tailscale: HostUpgrade.Tailscale = box.own
+            ? .kore(up ? .running(node: box.nodeKey, account: "me@example.com") : .signIn("https://login.example/a/\(alias)"))
+            : up ? .running(node: box.nodeKey) : .stopped(.stopped, login: nil)
         let report = HostUpgrade(
             paths: paths, update: { nil }, service: { .running }, installService: { [] }, startDaemon: { true }, linger: { true },
             tailscale: { _ in tailscale }, reload: { MainActor.assumeIsolated { host.reloadNet() } }, listen: { _ in nil }

@@ -79,6 +79,77 @@ package struct TabGroups: Equatable {
     }
 }
 
+/// A box window's groups, kept on this Mac: the box keeps its folder's tabs, so its chats are
+/// matched by their box ids, as they come (with the window, or listed later).
+struct KeptTabGroups: Codable, Equatable {
+    struct Member: Codable, Equatable {
+        var chat: String
+        var group: UUID
+    }
+
+    var groups: [TabGroup] = []
+    /// In the strip's order.
+    var members: [Member] = []
+
+    var isEmpty: Bool { members.isEmpty }
+
+    /// The window's groups now, plus those kept for chats it doesn't show yet (`waiting`).
+    init(_ tabGroups: TabGroups, tabs: [(id: UUID, chat: String?)], waiting: [Member] = [], waitingGroups: [TabGroup] = []) {
+        for tab in tabs {
+            guard let chat = tab.chat, let group = tabGroups.member[tab.id] else { continue }
+            members.append(Member(chat: chat, group: group))
+        }
+        let shown = Set(tabs.compactMap(\.chat))
+        members += waiting.filter { !shown.contains($0.chat) }
+        let used = Set(members.map(\.group))
+        groups = tabGroups.groups.filter { used.contains($0.id) }
+        for group in waitingGroups where used.contains(group.id) && !groups.contains(where: { $0.id == group.id }) { groups.append(group) }
+    }
+
+    init(groups: [TabGroup], members: [Member]) {
+        self.groups = groups
+        self.members = members
+    }
+}
+
+extension TabGroups {
+    /// Kept groups taken up by the tabs whose chats they name, once each (`taken`): the group
+    /// comes back if it's gone, and its tabs sit together where its first one is, in their kept
+    /// order. The tabs' new order when it changes.
+    mutating func adopt(_ kept: KeptTabGroups, tabs: [(id: UUID, chat: String?)], taken: inout Set<String>) -> [UUID]? {
+        var rank: [String: Int] = [:]
+        for (index, member) in kept.members.enumerated() where rank[member.chat] == nil { rank[member.chat] = index }
+        var changed = false
+        for tab in tabs where member[tab.id] == nil {
+            guard let chat = tab.chat, !taken.contains(chat), let index = rank[chat] else { continue }
+            taken.insert(chat)
+            let id = kept.members[index].group
+            if group(id) == nil, let saved = kept.groups.first(where: { $0.id == id }) { add(saved) }
+            guard group(id) != nil else { continue }
+            set(tab.id, to: id)
+            changed = true
+        }
+        guard changed else { return nil }
+        let chats = Dictionary(tabs.compactMap { tab in tab.chat.map { (tab.id, $0) } }, uniquingKeysWith: { first, _ in first })
+        let place = Dictionary(tabs.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { first, _ in first })
+        func key(_ id: UUID) -> (Int, Int) { (chats[id].flatMap { rank[$0] } ?? Int.max, place[id] ?? 0) }
+        var order: [UUID] = []
+        var placed: Set<UUID> = []
+        for tab in tabs where !placed.contains(tab.id) {
+            guard let group = member[tab.id] else {
+                order.append(tab.id)
+                placed.insert(tab.id)
+                continue
+            }
+            let run = tabs.map(\.id).filter { member[$0] == group }.sorted { key($0) < key($1) }
+            order += run
+            placed.formUnion(run)
+        }
+        normalize(order: order)
+        return order == tabs.map(\.id) ? nil : order
+    }
+}
+
 /// A group's popup, open: which group, and whether its name field takes the keys (a group just
 /// made opens it to be named; a right-click on the chip, to be changed).
 package struct TabGroupEdit: Equatable, Hashable {

@@ -907,3 +907,20 @@ no timer.
 A client off screen (`onScreen: false`) is sent attention only: no `delta`, `tx.delta` or
 `tx.reset`. When it's back on screen and missed any, the box sends a fresh `snapshot` and a page of
 each chat it follows. A client that never says (the Mac) is on screen.
+
+## Link 1.15: a file's bytes for a preview
+
+A box file whose renderer reads the file itself (a workbook or document through Quick Look, a PDF,
+a film, an image past one frame) comes to the Mac whole. The welcome's `caps` say `fsBytes` to a
+full grant. `fs.read` with `offset` sends the file's own bytes from there, of any kind: `data` (at
+most 512 KiB, base64, so the frame stays under the Mac's 1 MiB), `size`, `mtime`, and
+`truncated: true` while more follows; `base` answers `unchanged` as in 1.8. A binary `fs.read`
+result carries `mtime` too, and an image past 512 KiB comes without `data` (a frame of more ended
+the link). Nothing is written on the box.
+
+The Mac puts the pieces together into a part file under its caches (`box-files/<box>/<path
+hash>/<name>`), moved over the copy at the end; a file that changes on the way is read again from
+the start, once. At most 50 MB a file (past it the tab says so, with Download to this Mac's
+Downloads by the explorer's copy) and 500 MB in all, the least lately used going first; a box
+window's copies go when it closes. The copy is read again when the box says the file changed, in
+the same place, and the renderer reloads it. A box without `fsBytes` shows the file as before.

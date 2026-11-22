@@ -133,6 +133,7 @@ final class BoxBinding {
     }
 
     func windowClosed() {
+        BoxFileCache.shared.windowClosed(key)
         connection.onTabs(key, nil)
         connection.onChatMeta(key, nil)
         if filesMade { files.stop() }

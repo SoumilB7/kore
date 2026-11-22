@@ -106,7 +106,17 @@ package struct BoxTailnet: Sendable {
             installed: { TailnetChooser.installed(LocalAPIClient()) },
             helper: { helper(executable: URL(fileURLWithPath: HostService.executable()), environment: environment) },
             start: { helper, key in
-                let sidecar = try NetSidecar.start(helper: helper, folder: paths.tailnetFolder, key: key, arguments: extra)
+                let sidecar: NetSidecar
+                do {
+                    sidecar = try NetSidecar.start(helper: helper, folder: paths.tailnetFolder, key: key, arguments: extra)
+                } catch let error as TailnetError where error.wrongKey {
+                    // Sealed under a key this box no longer has: started afresh, its sign-in gone
+                    // (the owner is told: "its saved sign-in couldn't be opened").
+                    HostJournal.note("korenet own", ["state": "unreadable", "action": "started afresh"])
+                    try? FileManager.default.removeItem(at: paths.tailnetFolder.appendingPathComponent("state"))
+                    BoxOwnRecord.unreadable(paths)
+                    sidecar = try NetSidecar.start(helper: helper, folder: paths.tailnetFolder, key: key, arguments: extra)
+                }
                 return (sidecar.tailnet, { sidecar.running }, { sidecar.stop() })
             },
             key: { try key(paths) },
@@ -125,12 +135,15 @@ package struct BoxTailnet: Sendable {
     /// `KORE_HOST_TAILNET=kore`: Kore's own tailnet even where Tailscale is installed.
     package static func forced(_ environment: [String: String]) -> Bool { environment["KORE_HOST_TAILNET"] == "kore" }
 
-    /// The node's name and lifetime when set (`KORE_HOST_TAILNET_NAME`, `KORE_HOST_TAILNET_EPHEMERAL=1`).
-    package static func arguments(_ environment: [String: String]) -> [String] {
+    /// The node's name ("<host>-kore", or `KORE_HOST_TAILNET_NAME`) and lifetime
+    /// (`KORE_HOST_TAILNET_EPHEMERAL=1`).
+    package static func arguments(_ environment: [String: String], host: String = ProcessInfo.processInfo.hostName) -> [String] {
         var out: [String] = []
         if let name = environment["KORE_HOST_TAILNET_NAME"], !name.isEmpty, name.count <= 63,
            name.allSatisfy({ $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-") }) {
             out += ["-hostname", name]
+        } else {
+            out += ["-hostname", NetSidecar.nodeName(host)]
         }
         if environment["KORE_HOST_TAILNET_EPHEMERAL"] == "1" { out.append("-ephemeral") }
         return out

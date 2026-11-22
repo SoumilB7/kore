@@ -8,14 +8,18 @@ import SwiftUI
 /// it (a sheet only by its buttons); a click on its own anchor is left to the anchor, which
 /// toggles it.
 @MainActor @Observable
-final class NetPopupHost {
-    static let shared = NetPopupHost()
+package final class NetPopupHost {
+    package static let shared = NetPopupHost()
 
     enum Edge { case leading, trailing, center }
 
     @ObservationIgnored private var host: NSView?
     @ObservationIgnored private weak var owner: NSWindow?
     @ObservationIgnored private weak var anchor: NSView?
+    /// What it hangs below when that isn't its anchor (the Welcome's "+" list: below the whole bar).
+    @ObservationIgnored private weak var below: NSView?
+    /// Times its frame was set (tests: a still popup is placed once).
+    @ObservationIgnored package private(set) var placements = 0
     @ObservationIgnored private var monitor: Any?
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     @ObservationIgnored private var point = CGPoint.zero
@@ -25,21 +29,18 @@ final class NetPopupHost {
     private(set) var showing: String?
 
     /// Shows `view` under `anchor` (or at the content's top right with none) in `window`.
-    func show(_ id: String, _ view: some View, in window: NSWindow, under anchor: NSView?, edge: Edge = .trailing, modal: Bool = false, onClose: (() -> Void)? = nil) {
+    func show(_ id: String, _ view: some View, in window: NSWindow, under anchor: NSView?, below: NSView? = nil, edge: Edge = .trailing, modal: Bool = false, onClose: (() -> Void)? = nil) {
         close()
         OptionsMenu.shared.close()
         guard let content = window.contentView else { return }
         owner = window
         self.anchor = anchor
+        self.below = below
         self.edge = edge
         self.onClose = onClose
         showing = id
-        if let anchor, anchor.window === window {
-            let bounds = anchor.bounds
-            let x = edge == .leading ? bounds.minX : edge == .center ? bounds.midX : bounds.maxX
-            let below = anchor.convert(CGPoint(x: x, y: anchor.isFlipped ? bounds.maxY : bounds.minY), to: nil)
-            let inContent = content.convert(below, from: nil)
-            point = CGPoint(x: inContent.x, y: inContent.y + (content.isFlipped ? Space.xs : -Space.xs))
+        if let hung = hangPoint(in: content) {
+            point = hung
         } else {
             let top = content.isFlipped ? Size.titleRow + Space.xs : content.bounds.maxY - Size.titleRow - Space.xs
             point = edge == .center ? CGPoint(x: content.bounds.midX, y: top) : CGPoint(x: content.bounds.maxX - Space.xl, y: top)
@@ -75,35 +76,50 @@ final class NetPopupHost {
         })
     }
 
+    /// The window resized: hung again only if its anchor really moved.
     private func replace() {
-        guard let host, let anchor, anchor.window === owner, let content = owner?.contentView else { return close() }
-        let bounds = anchor.bounds
-        let x = edge == .leading ? bounds.minX : edge == .center ? bounds.midX : bounds.maxX
-        let below = content.convert(anchor.convert(CGPoint(x: x, y: anchor.isFlipped ? bounds.maxY : bounds.minY), to: nil), from: nil)
-        point = CGPoint(x: below.x, y: below.y + (content.isFlipped ? Space.xs : -Space.xs))
+        guard let host, anchor?.window === owner, let content = owner?.contentView, let hung = hangPoint(in: content) else { return close() }
+        guard hung != point else { return }
+        point = hung
         NetPopupRoom.shared.measure(below: point, in: content)
         place(host.frame.size)
     }
 
+    /// The point it hangs from, in `content`: the anchor's edge across, and down a gap from the
+    /// bottom of `below` (or the anchor's own), whole points so a re-read never nudges it.
+    private func hangPoint(in content: NSView) -> CGPoint? {
+        guard let anchor, anchor.window === content.window else { return nil }
+        let bounds = content.convert(anchor.convert(anchor.bounds, to: nil), from: nil)
+        let under = below.flatMap { $0.window === content.window ? content.convert($0.convert($0.bounds, to: nil), from: nil) : nil } ?? bounds
+        let x = edge == .leading ? bounds.minX : edge == .center ? bounds.midX : bounds.maxX
+        let y = content.isFlipped ? under.maxY + Space.xs : under.minY - Space.xs
+        return CGPoint(x: x.rounded(), y: y.rounded())
+    }
+
     private func place(_ size: CGSize) {
         guard let host, let content = owner?.contentView else { return }
-        let size = CGSize(width: max(size.width, 1), height: max(size.height, 1))
+        let size = CGSize(width: max(size.width, 1).rounded(.up), height: max(size.height, 1).rounded(.up))
         let x = switch edge {
         case .leading: point.x
         case .trailing: point.x - size.width
         case .center: point.x - size.width / 2
         }
-        let origin = CGPoint(x: x, y: content.isFlipped ? point.y : point.y)
+        let origin = CGPoint(x: x, y: point.y)
         // `fitting` takes the top-left point (flipped) or top point, and keeps it on screen.
-        host.frame = OptionsMenu.fitting(point: origin, size: size, bounds: content.bounds, flipped: content.isFlipped)
+        let frame = OptionsMenu.fitting(point: origin, size: size, bounds: content.bounds, flipped: content.isFlipped)
+        if host.frame != frame {
+            host.frame = frame
+            placements += 1
+        }
     }
 
-    func close() {
+    package func close() {
         guard host != nil || monitor != nil else { return }
         host?.removeFromSuperview()
         host = nil
         owner = nil
         anchor = nil
+        below = nil
         showing = nil
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
@@ -125,7 +141,7 @@ final class NetPopupHost {
     /// The window it shows in.
     var window: NSWindow? { owner }
     /// Where it shows, in its window's content view.
-    var frame: CGRect? { host?.frame }
+    package var frame: CGRect? { host?.frame }
 }
 
 /// How tall a popup may grow under its anchor before it scrolls (Devices, as "Add a box" opens

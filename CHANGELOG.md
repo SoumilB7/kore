@@ -2,6 +2,46 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
+## [0.3.8] - 2026-11-23
+
+### Added
+- Right-click a Recent folder on the Welcome screen: Remove from Recent (this Mac and boxes).
+- `scripts/live-check.sh`: a short look at every screen, the network paths and a box, one line each.
+
+### Changed
+- Kore's own tailnet is the main connection on your Mac and boxes; Tailscale takes over only while
+  it runs. Kore's tailnet signs in once (during box setup, or "Sign in to Kore's tailnet" on the
+  Mac), then waits stopped while Tailscale runs, so a quit switches with no sign-in. One node each,
+  named "<host>-kore".
+- Kore's tailnet shows its state everywhere: a box's row, its card and this Mac's row say "signed
+  in as …", or "signed out · Sign in" the moment it signs out or its key expires.
+- Arsenal on marks the tab with blue corners, like option popups; the logo, spinner and `>_` keep
+  their own colours.
+- The message rail is 0.3.6's again: a short run of ticks around the message you read, the same
+  size in any window, never lighting the last message while you read further up; a tick for
+  earlier history lands on that message.
+- Copying part of one paragraph, point or cell gives just the text you selected: no list number,
+  no `**`, backticks or link address. Across two or more points or blocks it's Markdown. Links copy
+  as their text everywhere, tables included.
+- A box's Recent lists its folders, one row each, like this Mac's.
+- A box's card counts only what Fix does; a newer CLI on the box, skills, MCP servers and default
+  models are quiet notes. Downloads time out with one line saying why.
+
+### Fixed
+- Files on a box open like files here: spreadsheets, documents, slides, PDFs, video and large
+  images preview instead of "This file is binary" (a box needs kore-host 0.3.8). Over 50 MB, the
+  tab offers Download. Box images near 1 MB no longer drop the link.
+- A message rail click no longer snaps back to the end while an answer streams after a send, and
+  a jump to a far message lands on it instead of short of it.
+- A box whose Tailscale stops moves to Kore's tailnet instead of waiting.
+- After a key change, a box that doesn't know this Mac's new key keeps the link on SSH, takes the
+  key there, then moves back to the tailnet, instead of dropping it.
+- Tabs, tab groups and some settings weren't saved after Kore was installed or updated (it took
+  itself for a dev build); groups on box windows are kept too.
+- Adding a box over SSH no longer says "try again" once before it goes through.
+- A box's card checks again after an install, and says why it couldn't read a CLI's account.
+- The Welcome "+" list no longer flickers or covers "This Mac"; the first Recent row isn't cut off.
+
 ## [0.3.7] - 2026-11-22
 
 ### Added

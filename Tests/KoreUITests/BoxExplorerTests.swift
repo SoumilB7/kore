@@ -36,6 +36,26 @@ struct BoxExplorerTests {
 
         func makeFolder(_ path: String) async -> Result<String, HostRefusal> { .success(path) }
 
+        // 1.15: a file's bytes (`raw`, else its text), in pieces of `piece`, with its read's stamp.
+        var raw: [String: Data] = [:]
+        var piece = LinkFiles.pieceMax
+        var bytesAsked: [String] = []
+        var saysBytes = true
+        /// Pieces wait for this (a copy on its way).
+        var gate: Task<Void, Never>?
+
+        func bytes(_ path: String, offset: Int64, base: FileStamp?) async -> Result<BoxBytes, HostRefusal> {
+            guard saysBytes else { return .failure(HostRefusal(message: "fakebox needs an update to preview this")) }
+            bytesAsked.append("\(path)@\(offset)")
+            await gate?.value
+            guard let file = files[path], let data = raw[path] ?? file.text.map({ Data($0.utf8) }) else {
+                return .failure(HostRefusal(message: "Not there on this box."))
+            }
+            if let base, base == file.stamp { return .success(BoxBytes(data: Data(), size: base.size, stamp: base, unchanged: true)) }
+            let start = Int(offset)
+            return .success(BoxBytes(data: data.subdata(in: start..<min(data.count, start + piece)), size: Int64(data.count), stamp: file.stamp))
+        }
+
         // 1.8: an in-memory box folder.
         var trashed: [String] = []
         var watched: [String: Set<String>] = [:]

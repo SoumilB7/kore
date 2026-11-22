@@ -1,14 +1,17 @@
 import Foundation
 import KoreCore
 
-/// The selection as plain text, the way a person would paste it into a note (owner,
-/// 2026-10-30), built from the model, never from glyphs: answers as their visible text with no
-/// markdown syntax (headings as lines, lists with "• " / "1. " and their indentation, code as its
-/// lines, a table's cells split by tabs, links as their text), a tool row only when it's open on
-/// screen (its command and output as lines), and nothing from a folded turn's steps. When the
-/// selection spans more than one message, each starts with who said it on its own line ("You:",
-/// the agent's name, a peer's name). The first and last rows are clipped where the selection ends;
-/// a clipped table keeps its header row.
+/// The selection as text for the pasteboard, built from the model, never from glyphs. Copy what
+/// is seen; Markdown only when the selection crosses a line break between blocks (owner,
+/// 2026-11-22): both ends in one text (a paragraph, a list point, a heading, a table cell, a code
+/// block, a quote line), whole or part, copy exactly its selected characters, with no list marker,
+/// no markup and no link target. A selection across two or more blocks copies Markdown: blocks
+/// selected whole as written, the end blocks rebuilt from what's selected (a list's markers, a
+/// heading's #, a table with its header row, a code block fenced only when all of it is in).
+/// Links are their visible text everywhere. A tool row copies only when it's open on screen (its
+/// command and output as lines), nothing from a folded turn's steps. When the selection spans more
+/// than one message, each starts with who said it on its own line ("You:", the agent's name, a
+/// peer's name).
 @MainActor
 enum SelectionCopy {
     /// A row the timeline shows, by its entry, as copy reads it.
@@ -119,27 +122,52 @@ enum SelectionCopy {
         markdownText(e.done ? Substring(e.text) : MarkdownParser.settled(e.text), clip, settled: e.done)
     }
 
-    /// A markdown text as `MarkdownView` shows it, clipped: as markdown, blocks selected whole
-    /// as written and the end blocks rebuilt from what's selected; as plain text (`clip.plainText`),
-    /// every block's visible text. `settled: false` drops an open last block.
+    /// A markdown text as `MarkdownView` shows it, clipped. Both ends in one of its texts: that
+    /// text's selected characters as shown. Otherwise Markdown: blocks selected whole as written,
+    /// the end blocks rebuilt from what's selected, links as their text. `settled: false` drops
+    /// an open last block.
     static func markdownText(_ source: Substring, _ clip: Clip, settled: Bool = true) -> String {
-        if clip.whole, !clip.plainText { return source.trimmingCharacters(in: .whitespacesAndNewlines) }
+        let clip = Clip(lo: clip.lo, hi: clip.hi)
+        if clip.whole { return MarkdownLinks.unlinked(source.trimmingCharacters(in: .whitespacesAndNewlines)) }
         var blocks = MarkdownParser.parse(source, base: 0, zoom: Zoom.shared.scale)
         if !settled, blocks.last?.isOpen == true { blocks.removeLast() }
+        if let lo = clip.lo, let hi = clip.hi, lo.path == hi.path {
+            return shown(blocks, lo.path[...]).map { Clip.slice($0, lo.offset, hi.offset) } ?? ""
+        }
         let utf8 = source.utf8
         var out: [String] = []
         for (i, block) in blocks.enumerated() {
             guard clip.touches([i]) else { continue }
-            if clip.covers([i]), !clip.plainText {
-                // Selected whole: its own source, exactly as written.
+            if clip.covers([i]) {
+                // Selected whole: its own source, exactly as written, links as their text.
                 let from = utf8.index(utf8.startIndex, offsetBy: block.id)
                 let to = i + 1 < blocks.count ? utf8.index(utf8.startIndex, offsetBy: blocks[i + 1].id) : utf8.endIndex
-                out.append(String(source[from..<to]).trimmingCharacters(in: .whitespacesAndNewlines))
+                let text = String(source[from..<to]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if case .code = block.kind { out.append(text) } else { out.append(MarkdownLinks.unlinked(text)) }
             } else if let part = clip.block(block, [i]) {
                 out.append(part)
             }
         }
         return out.joined(separator: "\n\n")
+    }
+
+    /// The text at `path` as it shows (the selection's offsets are into it); nil for none.
+    static func shown(_ blocks: [MarkdownBlock], _ path: ArraySlice<Int>) -> String? {
+        guard let i = path.first, blocks.indices.contains(i) else { return nil }
+        let rest = path.dropFirst()
+        switch blocks[i].kind {
+        case .heading(_, let text), .paragraph(let text): return String(text.characters)
+        case .code(_, let text): return text
+        case .rule: return nil
+        case .quote(let inner): return shown(inner, rest)
+        case .list(let list):
+            guard let n = rest.first, list.items.indices.contains(n) else { return nil }
+            return shown(list.items[n].blocks, rest.dropFirst())
+        case .table(let table):
+            guard rest.count == 2, let r = rest.first, let c = rest.last, r >= 0, r <= table.rows.count, c >= 0 else { return nil }
+            let cells = r == 0 ? table.header : table.rows[r - 1]
+            return c < cells.count ? String(cells[c].characters) : ""
+        }
     }
 
     // MARK: Pieces
@@ -244,7 +272,10 @@ struct Clip {
         case .paragraph(let text):
             return span(path).map { inline(text, $0) }
         case .code(let language, let text):
-            return span(path).map { SelectionCopy.fence(Self.slice(text, $0.0, $0.1), language: language) }
+            // Fenced only when all of it is selected; part of it is its lines.
+            return span(path).map {
+                $0.0 == 0 && $0.1 >= text.utf16.count ? SelectionCopy.fence(text, language: language) : Self.slice(text, $0.0, $0.1)
+            }
         case .rule:
             return touches(path) ? "---" : nil
         case .quote(let inner):
@@ -255,7 +286,11 @@ struct Clip {
             guard touches(path) else { return nil }
             var lines: [String] = []
             for (n, item) in list.items.enumerated() {
-                let body = blocks(item.blocks, path + [n]).joined(separator: "\n\n")
+                // A nested list sits on the next line, as in a tight list.
+                let parts = item.blocks.enumerated().compactMap { j, inner in self.block(inner, path + [n, j]).map { (inner, $0) } }
+                let body = parts.enumerated().map { k, part in
+                    k == 0 ? part.1 : (part.0.kind.isList ? "\n" : "\n\n") + part.1
+                }.joined()
                 guard !body.isEmpty else { continue }
                 var marker = list.ordered ? "\(list.start + n). " : "- "
                 if let task = item.task { marker += task ? "[x] " : "[ ] " }
@@ -270,13 +305,13 @@ struct Clip {
             let width = max(table.header.count, table.rows.map(\.count).max() ?? 0)
             func row(_ cells: [AttributedString], _ r: Int) -> String? {
                 let texts = (0..<width).map { c -> String? in
-                    c < cells.count ? span(path + [r, c]).map { inline(cells[c], $0) } : nil
+                    c < cells.count ? span(path + [r, c]).map { inline(cells[c], $0).replacingOccurrences(of: "|", with: "\\|") } : nil
                 }
                 guard texts.contains(where: { $0 != nil }) else { return nil }
                 return "| " + texts.map { $0 ?? "" }.joined(separator: " | ") + " |"
             }
             // The header row always, so what's pasted is still a table.
-            var out = [row(table.header, 0) ?? "| " + table.header.map { String($0.characters) }.joined(separator: " | ") + " |"]
+            var out = [row(table.header, 0) ?? "| " + table.header.map { inline($0, (0, .max)).replacingOccurrences(of: "|", with: "\\|") }.joined(separator: " | ") + " |"]
             out.append("|" + String(repeating: "---|", count: width))
             for (r, cells) in table.rows.enumerated() { if let line = row(cells, r + 1) { out.append(line) } }
             return out.joined(separator: "\n")
@@ -329,7 +364,7 @@ struct Clip {
     }
 
     /// Part of an attributed text back as inline markdown, from the attributes the parser kept:
-    /// code, bold, italic, strikethrough and links.
+    /// code, bold, italic and strikethrough. A link is its text.
     func inline(_ text: AttributedString, _ span: (Int, Int)) -> String {
         let (a, b) = span
         var out = ""
@@ -347,10 +382,104 @@ struct Clip {
             if intent.contains(.stronglyEmphasized) { part = "**" + part + "**" }
             if intent.contains(.emphasized) { part = "*" + part + "*" }
             if intent.contains(.strikethrough) { part = "~~" + part + "~~" }
-            if let link = run.link { part = "[" + part + "](" + link.absoluteString + ")" }
             out += part
         }
         return out
+    }
+}
+
+private extension MarkdownBlock.Kind {
+    var isList: Bool { if case .list = self { true } else { false } }
+}
+
+/// Markdown source with its links as their visible text: `[text](url)` is `text`, `<url>` is
+/// `url`. Code spans, escapes and images are left as written.
+enum MarkdownLinks {
+    nonisolated static func unlinked(_ text: String) -> String {
+        guard text.contains("](") || text.contains("<") else { return text }
+        let c = Array(text)
+        var out = ""
+        var i = 0
+        while i < c.count {
+            let ch = c[i]
+            if ch == "\\", i + 1 < c.count {
+                out.append(ch)
+                out.append(c[i + 1])
+                i += 2
+            } else if ch == "`" {
+                let end = codeSpanEnd(c, i)
+                out += String(c[i..<end])
+                i = end
+            } else if ch == "[", i == 0 || c[i - 1] != "!", let (inner, end) = link(c, i) {
+                out += unlinked(inner)
+                i = end
+            } else if ch == "<", let end = autolinkEnd(c, i) {
+                out += String(c[(i + 1)..<(end - 1)])
+                i = end
+            } else {
+                out.append(ch)
+                i += 1
+            }
+        }
+        return out
+    }
+
+    /// Past a code span opening at `i` (a run of backticks to the next run as long); past the
+    /// run alone when it never closes.
+    private static func codeSpanEnd(_ c: [Character], _ i: Int) -> Int {
+        var n = 0
+        while i + n < c.count, c[i + n] == "`" { n += 1 }
+        var j = i + n
+        while j < c.count {
+            guard c[j] == "`" else { j += 1; continue }
+            var m = 0
+            while j + m < c.count, c[j + m] == "`" { m += 1 }
+            if m == n { return j + m }
+            j += m
+        }
+        return i + n
+    }
+
+    /// `[text](destination)` at `i`: its text and where it ends.
+    private static func link(_ c: [Character], _ i: Int) -> (String, Int)? {
+        var depth = 0, j = i
+        while j < c.count {
+            switch c[j] {
+            case "\\": j += 1
+            case "[": depth += 1
+            case "]": depth -= 1
+            default: break
+            }
+            if depth == 0 { break }
+            j += 1
+        }
+        guard j + 1 < c.count, c[j] == "]", c[j + 1] == "(" else { return nil }
+        var k = j + 1, parens = 0
+        while k < c.count {
+            switch c[k] {
+            case "\\": k += 1
+            case "(": parens += 1
+            case ")": parens -= 1
+            case "\n" where k + 1 < c.count && c[k + 1] == "\n": return nil
+            default: break
+            }
+            if parens == 0 { break }
+            k += 1
+        }
+        guard k < c.count, c[k] == ")" else { return nil }
+        return (String(c[(i + 1)..<j]), k + 1)
+    }
+
+    /// `<scheme:…>` or `<name@host>` at `i`: where it ends.
+    private static func autolinkEnd(_ c: [Character], _ i: Int) -> Int? {
+        var j = i + 1
+        while j < c.count, c[j] != ">" {
+            if c[j] == " " || c[j] == "\n" || c[j] == "<" { return nil }
+            j += 1
+        }
+        guard j < c.count, j > i + 1 else { return nil }
+        let inner = c[(i + 1)..<j]
+        return inner.contains(":") || inner.contains("@") ? j + 1 : nil
     }
 }
 

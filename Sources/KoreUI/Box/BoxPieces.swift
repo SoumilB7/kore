@@ -51,6 +51,8 @@ struct BoxNoteLine: View {
             opened?()
         case .showLog(let path):
             NSWorkspace.shared.open(URL(fileURLWithPath: path))
+        case .signIn(let page):
+            if let url = URL(string: page) { NSWorkspace.shared.open(url) }
         default:
             let act = act
             Task { await act(action, alias) }

@@ -45,7 +45,13 @@ func fakeEnv(
         macName: { "MacBook" })
 }
 
-func suite() -> UserDefaults { UserDefaults(suiteName: "kore-net-\(UUID().uuidString)")! }
+/// A scratch defaults domain. `ownSignedIn`: Kore's own tailnet signed in here before (its
+/// one sign-in done while Tailscale ran), as these tests assume; false for the standby's own tests.
+func suite(ownSignedIn: Bool = true) -> UserDefaults {
+    let defaults = UserDefaults(suiteName: "kore-net-\(UUID().uuidString)")!
+    if ownSignedIn { defaults.set(true, forKey: KoreNetSwitch.ownReadyKey) }
+    return defaults
+}
 
 /// The box's welcome at link 1.12 with full control.
 @MainActor

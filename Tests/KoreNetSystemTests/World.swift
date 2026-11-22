@@ -120,6 +120,8 @@ final class World {
         clock = VirtualClock(pulse: pulse)
         let pulse = pulse
         net = SharedTailnet { pulse.beat() }
+        // The boxes' work off the main thread (status reads, WhoIs, the tailnet's choice), counted.
+        HostNet.counting = { $0 ? pulse.began() : pulse.ended() }
         mac = MacNode(root: root.appendingPathComponent("mac"), net: net, pulse: pulse, clock: clock)
         mac.launch()
     }
@@ -137,6 +139,7 @@ final class World {
     }
 
     func finish() {
+        HostNet.counting = { _ in }
         for phone in phones { phone.quit() }
         mac.quit()
         for box in boxes { box.stop() }
@@ -155,8 +158,9 @@ final class World {
     // MARK: Cast
 
     @discardableResult
-    func box(_ alias: String, tailscale: BackendState = .running) throws -> BoxNode {
-        let box = try BoxNode(alias: alias, root: root.appendingPathComponent(alias), ip: "100.64.0.\(10 + boxes.count)", net: net, pulse: pulse, tailscale: tailscale)
+    func box(_ alias: String, tailscale: BackendState = .running, own: Bool = false) throws -> BoxNode {
+        let box = try BoxNode(
+            alias: alias, root: root.appendingPathComponent(alias), ip: "100.64.0.\(10 + boxes.count)", net: net, pulse: pulse, tailscale: tailscale, own: own)
         boxes.append(box)
         return box
     }

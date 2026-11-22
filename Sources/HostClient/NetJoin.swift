@@ -20,8 +20,11 @@ package protocol DevicesNet: AnyObject {
 }
 
 extension KoreNetSwitch: DevicesNet {
-    package var facts: NetFacts { NetFacts(on: on, state: state, status: status) }
-    package var authURL: String? { status?.authURL }
+    package var facts: NetFacts {
+        _ = nodeRevision
+        return NetFacts(on: on, state: state, status: status, ownSignIn: state == .installed ? ownSignIn : nil, own: own)
+    }
+    package var authURL: String? { state == .installed ? ownSignIn : status?.authURL }
 }
 
 // MARK: SSH box → KoreNet (frame D2)
@@ -355,7 +358,7 @@ package final class BoxNetJoin {
             note = "UDP is blocked on \(name)'s network, so traffic goes through Tailscale's relays. Chats are fine, and syncs run slower."
             ending = .relayed
         } else {
-            note = "SSH stays as a backup."
+            note = "SSH still works too."
             ending = .done
         }
     }

@@ -38,4 +38,16 @@ struct KoreReachTests {
         #expect(KoreReach.isDevRun(["KORE_AGENT_PASS": "p", "KORE_OPEN": "/f"]))
         #expect(!KoreReach.isDevRun([:]))
     }
+
+    /// A Kore install.sh started after an install or update carries its build settings: still the
+    /// owner's run, so its windows' tabs and groups are saved.
+    @Test func theInstallersVariablesArentDevHooks() {
+        let installed = [
+            "KORE_BUILD_SHA": "6d23295", "KORE_SOURCE_COMMIT": "6d2329533cc085e7967971d45a323009b7c03b6c",
+            "KORE_RELEASE_TAG": "v0.3.7", "KORE_SIGN_IDENTITY": "Kore", "PATH": "/bin",
+        ]
+        #expect(!KoreReach.isDevRun(installed))
+        #expect(!KoreReach.isDevRun(installed.merging(["KORE_AGENT_PASS": "p"]) { $1 }))
+        #expect(KoreReach.isDevRun(installed.merging(["KORE_OPEN": "/f"]) { $1 }))
+    }
 }

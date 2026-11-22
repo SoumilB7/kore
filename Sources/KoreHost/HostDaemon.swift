@@ -96,10 +96,17 @@ package final class HostDaemon {
     /// KoreNet off or the daemon). Tests set their own, or none.
     package lazy var boxTailnet: BoxTailnet? = KoreLog.isTestProcess ? nil : BoxTailnet.standard(paths)
     /// Kore's own tailnet while it runs: whether it still does, and how it stops.
-    private var koreTailnet: (alive: @Sendable () -> Bool, stop: @Sendable () -> Void)?
+    var koreTailnet: (alive: @Sendable () -> Bool, stop: @Sendable () -> Void)?
     /// A choice under way, and each choice's number (an older one's result is dropped).
     private var choosingTailnet = false
-    private var tailnetChoices = 0
+    var tailnetChoices = 0
+    /// Kore's own as last heard (`BoxOwnTailnet.swift`), its key's expiry timer, and its node
+    /// while it signs in beside running Tailscale.
+    lazy var ownRecord: BoxOwnRecord? = BoxOwnRecord.read(paths)
+    var ownExpiryTimer: DispatchWorkItem?
+    var ownStandby: (@Sendable () -> Void)?
+    var ownStandbyWatch: Task<Void, Never>?
+    var ownPreparing = false
     /// Tests: each choice applied, and each Kore's own tailnet stopped.
     nonisolated(unsafe) package static var tailnetChosen: ((String) -> Void)?
     /// KoreNet's port (tests take the kernel's pick, 0).
@@ -543,7 +550,13 @@ package final class HostDaemon {
         tailnetChoices += 1
         let mine = tailnetChoices
         net.choosing()
+        let standby = takeOwnStandby()
+        let counting = HostNet.counting
+        counting(true)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            defer { DispatchQueue.main.async { counting(false) } }
+            // Kore's own signing in beside Tailscale stops first: they share a folder.
+            standby?()
             let pick = box.choose()
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
@@ -567,11 +580,19 @@ package final class HostDaemon {
     /// The box's tailnet as chosen: KoreNet listens on it, or says why it can't.
     private func chose(_ pick: BoxTailnet.Pick, _ net: HostNet) {
         net.port = netPort
+        // Kore's own as its start left it (afresh after an unreadable state), its expiry armed.
+        if let read = BoxOwnRecord.read(paths), read != ownRecord {
+            ownRecord = read
+            netNodeChanged()
+        }
+        armOwnExpiry()
         switch pick {
         case .installed(let tailnet, let choice):
             net.join(tailnet, choice: choice)
             HostJournal.note("korenet on", ["tailnet": "tailscale", "choice": "\(choice)"])
             Self.tailnetChosen?("installed")
+            // Kore's own is the default: signed in once while Tailscale overrides, so it's ready.
+            if choice == .installed { prepareOwn() }
         case .kore(let tailnet, let alive, let stop, let beside):
             koreTailnet = (alive, stop)
             net.join(tailnet, userspace: true)
@@ -602,9 +623,11 @@ package final class HostDaemon {
 
     /// Installed Tailscale went down (stopped, signed out) under KoreNet: Kore's own takes over
     /// beside it, when it's here (`HostNet` says, on the change).
-    package func installedTailscaleWentDown() {
-        guard let box = boxTailnet, box.helper() != nil, !box.forced else { return }
+    @discardableResult
+    package func installedTailscaleWentDown() -> Bool {
+        guard let box = boxTailnet, box.helper() != nil, !box.forced, config.netOn, net?.tailnet != nil else { return false }
         chooseTailnetAgain("tailscale went down")
+        return true
     }
 
     /// The box's tailnet chosen afresh with KoreNet on: the port and tailnet links go (Macs and
@@ -649,6 +672,7 @@ package final class HostDaemon {
         besideWatch = nil
         net.leave()
         stopKoreTailnet()
+        if let standby = takeOwnStandby() { DispatchQueue.global(qos: .utility).async { standby() } }
         for connection in connections where connection.route == .tailnet && connection.peer != nil { connection.end(.quit) }
         HostJournal.note("korenet off")
     }
@@ -739,7 +763,7 @@ package final class HostDaemon {
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
             caps: ["tx", "attn", "commands", "control", "box", BoxTools.deviceCap] + (control != .watch ? ["history", "blob", "diff"] : [])
-                + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap, LinkPolicy.alwaysAllowCap, LinkPolicy.fullAccessCap] : []))
+                + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, LinkFiles.bytesCap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap, LinkPolicy.alwaysAllowCap, LinkPolicy.fullAccessCap] : []))
     }
 
     /// Whether a served folder's window is closed (`window.close`); one with a chat shows anyway.
@@ -1178,9 +1202,10 @@ package final class HostDaemon {
             let login = cli == "claude" ? args.login ?? args.chatId.flatMap(chat).map { $0.record.account ?? LinkAccount.main } : nil
             let accounts = accounts
             Task {
-                let reply1: KoreCore.JSONValue?
-                if let login { reply1 = try? await accounts.status(login) } else { reply1 = try? await ops.calls.status() }
-                reply(Self.told(id: id, provider: cli, reading: reply1.map(ops.parse)))
+                // Why a read failed goes with it (the CLI not found mid-update, an app-server that
+                // ended as it started): the box's line says it in one line.
+                let read = await Self.readAccount { if let login { try await accounts.status(login) } else { try await ops.calls.status() } }
+                reply(Self.told(id: id, provider: cli, reading: read.reply.map(ops.parse), why: read.why))
             }
             return nil
         case .accountUsage where cli == "codex":
@@ -1220,8 +1245,8 @@ package final class HostDaemon {
                     reply(.init(id: id, ok: true, message: page.joined(separator: " ")))
                     _ = try await handle.wait()
                     self?.signIns[cli] = nil
-                    let reading = (try? await HostAccounts.pinned(folder) { try await ops.calls.status() }).map(ops.parse)
-                    reply(Self.told(id: id + ":done", provider: cli, reading: reading))
+                    let read = await Self.readAccount { try await HostAccounts.pinned(folder) { try await ops.calls.status() } }
+                    reply(Self.told(id: id + ":done", provider: cli, reading: read.reply.map(ops.parse), why: read.why))
                 } catch {
                     self?.signIns[cli] = nil
                     reply(.init(id: id, ok: false, code: .invalid, message: AccountReason.of(error) ?? "Couldn't sign in."))
@@ -1332,12 +1357,18 @@ package final class HostDaemon {
     /// The sign-in a box uses when the client names none.
     static let boxMethod = ["claude": "claudeai", "codex": "chatgptDeviceCode"]
 
-    private static func told(id: String, provider: String, reading: AccountReading?) -> LinkMessage.Result {
+    /// A CLI's account status, or why it couldn't be read (one plain line; nil when the error
+    /// has none).
+    package static func readAccount(_ status: () async throws -> KoreCore.JSONValue) async -> (reply: KoreCore.JSONValue?, why: String?) {
+        do { return (try await status(), nil) } catch { return (nil, AccountReason.of(error)) }
+    }
+
+    package static func told(id: String, provider: String, reading: AccountReading?, why: String? = nil) -> LinkMessage.Result {
         let message: String =
             switch reading {
             case .signedIn(let identity)?: "Signed in" + (identity.email.map { " as " + $0 } ?? "") + "."
             case .signedOut?: "\(provider) isn't signed in."
-            case nil: "Couldn't read \(provider)'s account."
+            case nil: "Couldn't read \(provider)'s account" + (why.map { ": " + $0 } ?? ".")
             }
         var result = LinkMessage.Result(id: id, ok: reading != nil, message: message)
         switch reading {

@@ -61,11 +61,15 @@ package final class Workspace {
         didSet {
             bindTabs(previous: oldValue)
             if !tabGroups.isEmpty { tabGroups.normalize(order: tabs.map(\.id)) }
+            if keptBoxGroups != nil { adoptBoxGroups() }
             if !selection.isEmpty { keepSelectionTrue() }
         }
     }
     /// Browser-style groups of the tabs (TabGroups.swift).
     package internal(set) var tabGroups = TabGroups()
+    /// A box window's groups as kept here, and the box chats that have taken theirs up.
+    @ObservationIgnored private var keptBoxGroups: KeptTabGroups?
+    @ObservationIgnored private var takenBoxGroups: Set<String> = []
     /// Tabs picked together (TabSelection.swift): ⇧-click a range, ⌘-click one at a time. Empty
     /// while the active tab is the only one; else two or more, the active tab among them.
     package internal(set) var selection: Set<UUID> = []
@@ -284,6 +288,11 @@ package final class Workspace {
         tabGroups = groups
         restoredChats = Set(restored.compactMap { $0.chat.map(ObjectIdentifier.init) })
         activeID = restored[min(max(saved?.active ?? 0, 0), restored.count - 1)].id
+        // A box keeps the tabs, this Mac their groups: taken up as the box's chats come.
+        if let box {
+            keptBoxGroups = Self.keptGroups(box.key)
+            adoptBoxGroups()
+        }
         if restore, let explorer = Self.savedExplorer(for: folder) {
             explorerWidth = explorer.width
             explorerOpen = explorer.open
@@ -1467,19 +1476,52 @@ package final class Workspace {
     func persistNow() {
         saveGeneration += 1
         saveQueued = false
-        guard !isClosed, box == nil, Self.persists(folder) else { return }
+        guard !isClosed, Self.persists(folder) else { return }
+        if let box { return saveBoxGroups(box.key) }
         UserDefaults.standard.set(try? JSONEncoder().encode(persistenceSnapshot()), forKey: Self.key(Self.savedKey, folder))
     }
 
     /// Saves this folder's tabs, once for a burst of changes.
     func save() {
-        guard !isClosed, box == nil, Self.persists(folder), !saveQueued else { return }
+        guard !isClosed, Self.persists(folder), !saveQueued else { return }
         saveQueued = true
         let generation = saveGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
             guard let self, !isClosed, saveQueued, generation == saveGeneration else { return }
             persistNow()
         }
+    }
+
+    // MARK: - A box window's groups
+
+    /// Each tab with the box chat it shows (none for an agent's tab).
+    private var boxTabChats: [(id: UUID, chat: String?)] {
+        tabs.map { tab in (tab.id, tab.agent == nil ? (tab.chat?.services as? BoxChatServices)?.chatId : nil) }
+    }
+
+    /// The kept groups taken up by the tabs that show their chats now.
+    private func adoptBoxGroups() {
+        guard let kept = keptBoxGroups, !kept.isEmpty else { return }
+        var groups = tabGroups
+        let order = groups.adopt(kept, tabs: boxTabChats, taken: &takenBoxGroups)
+        if groups != tabGroups { tabGroups = groups }
+        guard let order else { return }
+        let byId = Dictionary(tabs.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        tabs = order.compactMap { byId[$0] }
+    }
+
+    private static let boxGroupsKey = "boxTabGroups"
+
+    static func keptGroups(_ boxKey: String) -> KeptTabGroups? {
+        UserDefaults.standard.data(forKey: boxGroupsKey + "." + boxKey).flatMap { try? JSONDecoder().decode(KeptTabGroups.self, from: $0) }
+    }
+
+    /// The groups now, and the kept ones of chats not shown yet; none kept once no group is left.
+    private func saveBoxGroups(_ boxKey: String) {
+        let waiting = keptBoxGroups?.members.filter { !takenBoxGroups.contains($0.chat) } ?? []
+        let kept = KeptTabGroups(tabGroups, tabs: boxTabChats, waiting: waiting, waitingGroups: keptBoxGroups?.groups ?? [])
+        let key = Self.boxGroupsKey + "." + boxKey
+        if kept.isEmpty { UserDefaults.standard.removeObject(forKey: key) } else { UserDefaults.standard.set(try? JSONEncoder().encode(kept), forKey: key) }
     }
 
     private func bindTabs(previous: [ChatTab]) {

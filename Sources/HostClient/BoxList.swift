@@ -53,6 +53,8 @@ package final class BoxList {
         package var fresh = false
         /// Set up fine, with a catch to say (linger off).
         package var warning: String?
+        /// Kore's tailnet there as Set up's last step left it (said with "Ready").
+        package var own: NetNodeWire.Own?
         /// What the machine is, as last found (kept across runs).
         package var machine: BoxMachine?
         /// What it lacks next to this Mac, as last compared.
@@ -100,7 +102,10 @@ package final class BoxList {
             case .ready:
                 if older { return Note(line: "\(NodeNames.name(alias)) needs an update", action: .update) }
                 if let warning { return Note(line: warning) }
-                if fresh { return Note(line: "Ready") }
+                if fresh {
+                    guard let own else { return Note(line: "Ready") }
+                    return Note(line: "Ready · " + own.line, action: own.signedIn ? nil : own.page.map { .signIn($0) })
+                }
                 if let machine {
                     if ![BoxAgent.claude, .codex].contains(where: { machine.has($0.rawValue) }) {
                         return Note(line: "No agents on \(NodeNames.name(alias)) yet", action: .setUpAgents)
@@ -262,6 +267,7 @@ package final class BoxList {
             probes[name] = nil
             busy.remove(name)
             working[name] = nil
+            logins[name] = nil
         }
         boxes.removeAll { names.contains($0.alias) }
     }
@@ -369,25 +375,50 @@ package final class BoxList {
     @ObservationIgnored private var mac: BoxMachine?
     @ObservationIgnored package var findMac: @Sendable () async -> BoxMachine? = { await MacMachine.find() }
 
-    /// The box against this Mac, from the machines as found and the logins each side said.
-    package func compare(_ alias: String, macLogins: [String: BoxLogin] = [:], boxLogins: [String: BoxLogin] = [:], refresh: Bool = false) async {
-        guard let machine = box(alias)?.machine else { return }
+    /// Each box's logins as last said (this Mac's, the box's): a compare after a fresh look at the
+    /// machine (an install's) keeps them.
+    @ObservationIgnored private var logins: [String: (mac: [String: BoxLogin], box: [String: BoxLogin])] = [:]
+
+    /// The box against this Mac, from the machines as found and the logins each side said (nil:
+    /// as they were last said).
+    package func compare(_ alias: String, macLogins: [String: BoxLogin]? = nil, boxLogins: [String: BoxLogin]? = nil, refresh: Bool = false) async {
+        guard let key = listedAlias(alias), let machine = box(key)?.machine else { return }
+        let said = (mac: macLogins ?? logins[key]?.mac ?? [:], box: boxLogins ?? logins[key]?.box ?? [:])
+        logins[key] = said
         if mac == nil || refresh { mac = await findMac() }
         guard let mac else { return }
-        update(alias) { $0.parity = BoxParity.compare(mac: mac, box: machine, name: alias, macLogins: macLogins, boxLogins: boxLogins) }
+        update(key) { $0.parity = BoxParity.compare(mac: mac, box: machine, name: alias, macLogins: said.mac, boxLogins: said.box) }
     }
 
-    /// Installs or updates a CLI there, then finds the machine again. The failure's line, or nil.
+    /// How long one install there may run, its downloads each bounded within it.
+    @ObservationIgnored package var installLimit: Duration = .seconds(900)
+
+    /// Installs or updates a CLI there, then finds the machine again and says how it went: nil
+    /// when the CLI is there and not older than this Mac's; else the failure's one line (the
+    /// script's own last line, a timeout, a look afterwards that failed, a version unchanged).
     package func install(_ agent: BoxAgent, on alias: String) async -> BoxSetup.Failure? {
         guard let machine = box(alias)?.machine else { return BoxSetup.Failure(message: "Check \(NodeNames.name(alias)) first", fix: .tryAgain) }
+        let name = NodeNames.name(alias)
         switch agent.install(on: machine, name: alias) {
         case .failure(let why): return why
         case .success(let script):
-            let ran = await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell.script(alias, script)
-            await detect(alias)
+            let ran = await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell.script(alias, script, limit: installLimit)
+            // Every install ends with a fresh look, failed or not: the card shows what's there now.
+            let found = await detect(alias)
             guard ran.ok else {
                 if ran.status == AttachExit.sshFailed { return BoxSetup.sshFailure(alias, ran.output) }
                 return BoxSetup.Failure(message: "\(agent.rawValue) didn't install" + (ran.lastLine.isEmpty ? "" : ": " + ran.lastLine), fix: nil)
+            }
+            guard let found else { return BoxSetup.Failure(message: "\(agent.rawValue) installed, but \(name) didn't answer after", fix: .tryAgain) }
+            guard found.has(agent.rawValue) || found.versions[agent.rawValue] != nil else {
+                return BoxSetup.Failure(message: "\(agent.rawValue) installed, but \(name) doesn't find it on its PATH", fix: nil)
+            }
+            // The same version as before and still older than this Mac's: the update didn't take.
+            if let now = found.versions[agent.rawValue], let before = machine.versions[agent.rawValue],
+                BoxMachine.versionParts(before) == BoxMachine.versionParts(now),
+                let here = mac?.versions[agent.rawValue], BoxMachine.older(now, than: here), let shown = BoxMachine.majorMinor(now)
+            {
+                return BoxSetup.Failure(message: "\(agent.rawValue) is still \(shown) on \(name)", fix: nil)
             }
             return nil
         }
@@ -473,6 +504,9 @@ package final class BoxList {
         }
         var setup = makeSetup(alias, grant ?? BoxSetup.grant(for: alias, defaults: defaults))
         setup.mayInstallKit = kitConsent
+        // Kore's tailnet is how this Mac reaches its boxes by default: Set up signs it in there.
+        setup.signInOwn = KoreNetSwitch.shared?.on == true
+        setup.openURL = { BoxUpgrades.shared.openURL($0) }
         let first = retry == .start ? "Starting…" : "Checking \(NodeNames.name(alias))…"
         working[alias] = first
         update(alias) { $0.status = .working(first) }
@@ -487,6 +521,7 @@ package final class BoxList {
                 update(alias) {
                     $0.warning = done.warning
                     $0.machine = done.machine
+                    $0.own = done.own
                 }
             }
         } catch {
@@ -521,7 +556,10 @@ package final class BoxList {
         connection.retain()
         defer { connection.release() }
         let end = ContinuousClock.now + patience
-        while ContinuousClock.now < end, !connection.isOnline, connection.phase != .offline {
+        // `.offline` with a dial under way isn't an end: a first add's tailnet try turned away
+        // (the box still holds this Mac's old key) falls back to SSH at once, and that SSH link
+        // gives the box the new key. Only an end with no dial after it is one.
+        while ContinuousClock.now < end, !connection.isOnline, connection.phase != .offline || connection.dialing {
             if case .refused = connection.phase { break }
             try? await Task.sleep(for: .milliseconds(100))
         }

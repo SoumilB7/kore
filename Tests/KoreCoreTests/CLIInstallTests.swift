@@ -118,6 +118,24 @@ struct CLIInstallTests {
         #expect(await CLIExecutable.located("codex") == nil)
     }
 
+    @Test("a CLI mid-update is found once it answers again, without a restart")
+    func midUpdate() async throws {
+        // npm's link in place, its native binary not unpacked yet: --version fails.
+        let home = try mac([])
+        defer { try? FileManager.default.removeItem(at: home) }
+        let codex = home.appendingPathComponent(".npm-global/bin/codex")
+        try FileManager.default.createDirectory(at: codex.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "#!/bin/sh\nexit 1\n".write(to: codex, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: codex.path)
+        CLIExecutable.look(in: places(home))
+        defer { CLIExecutable.look(in: nil) }
+        #expect(await CLIExecutable.located("codex") == nil)
+        // The update lands: the same path answers, and a long-running kore-host finds it now.
+        try "#!/bin/sh\necho codex-cli 0.171.0\n".write(to: codex, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: codex.path)
+        #expect(await CLIExecutable.located("codex")?.path == codex.path)
+    }
+
     @Test("--locate-cli: only when asked, and only for the two CLIs")
     func headless() {
         #expect(CLIExecutable.headless(["Kore"]) == nil)

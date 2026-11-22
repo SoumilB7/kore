@@ -205,7 +205,12 @@ public enum CLIExecutable {
             checks[url.path] = task
             return task
         }
-        return await check.value
+        let answered = await check.value
+        // A path that didn't answer is asked again next time: a CLI being updated (its link
+        // replaced, its native binary not unpacked yet) answers once the update lands, and a
+        // long-running kore-host mustn't take it for missing until it restarts.
+        if !answered { checks.withLock { if $0[url.path] == check { $0[url.path] = nil } } }
+        return answered
     }
 
     private static func versionAnswers(_ url: URL, environment: [String: String]) -> Bool {

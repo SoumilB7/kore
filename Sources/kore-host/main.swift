@@ -20,6 +20,7 @@ let usage = """
     usage: kore-host run
            kore-host join
            kore-host upgrade [--want <version>] [--grant <name>] [--relogin]
+           kore-host tailnet [--within <seconds>] [--until-in]
            kore-host net on|off
            kore-host devices [allow <id|code> | remove <id|code|name> | logs <id|code|name>]   (a code: "0009 a0e9", or "0009")
            kore-host status
@@ -218,6 +219,17 @@ case "upgrade":
         fail("kore-host: the new kore-host didn't start (\(String(cString: strerror(errno))))", code: 1)
     }
     exit(report.exit)
+case "tailnet":
+    // Kore's own tailnet here as the daemon last heard it: `own: in|out` (or `own: none` without
+    // `kore-tailnet`), `login:`, `why:`, `page:`. `--within <s>` waits for a sign-in page or a
+    // sign-in; `--until-in` for the sign-in alone.
+    let within = arguments.firstIndex(of: "--within").flatMap { at in at + 1 < arguments.count ? TimeInterval(arguments[at + 1]) : nil } ?? 0
+    guard BoxTailnet.helper(executable: URL(fileURLWithPath: HostService.executable()), environment: ProcessInfo.processInfo.environment) != nil else {
+        print("own: none")
+        exit(0)
+    }
+    let record = BoxOwnRecord.wait(paths, within: max(0, min(within, 900)), untilSignedIn: arguments.contains("--until-in"))
+    for line in (record?.own ?? .signedOut(.never)).report { print(line) }
 case "net":
     switch arguments.dropFirst().first {
     case "on":

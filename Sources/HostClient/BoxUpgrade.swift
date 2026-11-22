@@ -156,6 +156,8 @@ package final class BoxUpgrades {
         var state: String
         var at: Date
         var failed: Bool
+        /// Links up on KoreNet so far when it was marked (`HostConnection.netUps`).
+        var netUps: Int
     }
 
     package init() {}
@@ -305,7 +307,7 @@ package final class BoxUpgrades {
             joins[key] = join
         }
         let joined = join.ending == .done || join.ending == .relayed
-        tried[key] = Mark(state: state(key), at: now(), failed: !joined)
+        tried[key] = Mark(state: state(key), at: now(), failed: !joined, netUps: HostConnection.netUps)
         let auto = automatic.remove(join.key) != nil || automatic.remove(key) != nil
         reconnecting.remove(join.key)
         reconnecting.remove(key)
@@ -365,6 +367,12 @@ package final class BoxUpgrades {
         // Stopped, but on KoreNet since (its Tailscale came up, a window's link moved it): quiet.
         // "Can't reach Tailscale" is about a box that is on and listening: it stays.
         let listening = book.entry(forKey: current(key)).map { $0.enrolled && $0.listening } ?? false
+        // Its link is up on KoreNet now (a re-key over SSH let it in after the join gave up): nothing to say.
+        // Or it was on KoreNet since the join gave up, its window closed now.
+        let gaveUp = tried[current(key)]?.netUps ?? Int.max
+        if join.ending == .unreachable, names.contains(where: { name in
+            HostConnection.existing(name).map { ($0.isOnline && $0.route?.isNet == true) || ($0.netUpAt.map { $0 > gaveUp } ?? false) } ?? false
+        }) { return nil }
         guard let line = join.line, on || join.ending == .unreachable || !listening else { return nil }
         return BoxUpgradeFacts(note: line, fix: on ? .copy(BoxNetJoin.lingerLine) : join.fix)
     }

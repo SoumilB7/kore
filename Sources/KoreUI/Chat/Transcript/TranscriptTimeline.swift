@@ -205,7 +205,13 @@ struct TranscriptTimeline: View, Equatable {
                         restore.value = nil
                         restoreInRow.value = nil
                         landingUntil.value = Date().addingTimeInterval(Self.landing)
-                        proxy.scrollTo(id, anchor: .top)
+                        // Over a send's glide still under way: its animation outlives this move
+                        // and carried the view back to the end, which was followed again.
+                        glidingUntil.value = nil
+                        glideCut.value = store.sentAt
+                        var instant = Transaction()
+                        instant.disablesAnimations = true
+                        withTransaction(instant) { proxy.scrollTo(id, anchor: .top) }
                     }
                 }
             }

@@ -34,8 +34,8 @@ extension World {
     /// A box set up over SSH before KoreNet (link 1.x, `attach --as laptop`): its window was open
     /// once, so Kore knows it, and closed.
     @discardableResult
-    func sshBox(_ alias: String, tailscale: BackendState = .running) async throws -> BoxNode {
-        let box = try box(alias, tailscale: tailscale)
+    func sshBox(_ alias: String, tailscale: BackendState = .running, own: Bool = false) async throws -> BoxNode {
+        let box = try box(alias, tailscale: tailscale, own: own)
         mac.addSSHBox(box)
         await step("\(alias) set up over SSH", until: { self.mac.link(box)?.isOnline == true }) { mac.openWindow(box) }
         await step("\(alias)'s window closes") { mac.closeWindow(box) }

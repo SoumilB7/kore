@@ -184,6 +184,9 @@ struct FileVerbTests {
         #expect(host.welcome(control: .full).caps.contains(LinkFsOps.cap) == true)
         #expect(host.welcome(control: .act).caps.contains(LinkFsOps.cap) == false)
         #expect(host.welcome(control: .watch).caps.contains(LinkFsOps.cap) == false)
+        // 1.15: a file's bytes, to a full grant only.
+        #expect(host.welcome(control: .full).caps.contains(LinkFiles.bytesCap) == true)
+        #expect(host.welcome(control: .act).caps.contains(LinkFiles.bytesCap) == false)
     }
 }
 

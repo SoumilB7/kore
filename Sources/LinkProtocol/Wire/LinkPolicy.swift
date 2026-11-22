@@ -352,6 +352,7 @@ package enum LinkPolicy {
             if kind == .fsList, args.path == nil { return .allow }
             guard LinkFiles.plainPath(args.path) else { return .deny(.invalid, "An absolute path.") }
             if kind == .fsRead, let max = args.max, max < 0 { return .deny(.invalid, "A size of 0 or more.") }
+            if kind == .fsRead, let offset = args.offset, offset < 0 { return .deny(.invalid, "An offset of 0 or more.") }
             return .allow
         case .fsWrite, .fsCreate, .fsDelete, .fsCount:
             // 1.8: inside served folders only (the box checks where the path leads).

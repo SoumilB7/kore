@@ -150,11 +150,16 @@ struct BoxAddChoicesList: View {
                 BoxAddRow(glyph: nil, title: "New box…", detail: nil, story: StoryID.Net.newBox, action: newBox)
             }
         }
+        // The rows move only when the choices change, never in an animation: the "Looking" line's
+        // spinner starts as the rows shift, and its endless turn must not take them along.
+        .transaction { $0.animation = nil }
         .task(id: net == .running) {
             async let release: Void = HostRelease.shared.check()
             if net == .running {
-                looking.value = true
-                peers.value = await Devices.shared.claims?.peers() ?? []
+                // "Looking" only while nothing is known yet: a second look never blanks the rows,
+                // and the same boxes (in one order, however the probes answered) change nothing.
+                if peers.value.isEmpty { looking.value = true }
+                peers.value = (await Devices.shared.claims?.peers() ?? []).sorted { ($0.name, $0.id) < ($1.name, $1.id) }
                 looking.value = false
             }
             await release

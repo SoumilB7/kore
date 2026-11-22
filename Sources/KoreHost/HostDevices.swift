@@ -139,6 +139,7 @@ extension HostDaemon {
         let nodeKey = net?.tailnet != nil && net?.listening == true ? net?.selfNode?.publicKey : nil
         return NetNodeWire.Node(
             device: identity.device, identityKey: identity.signer.publicKey, name: name, on: config.netOn, nodeKey: nodeKey, enrolled: enrolled,
-            os: BoxOS.here.rawValue, tailnet: net?.tailnet == nil ? nil : (net?.userspace == true ? "kore" : "tailscale"))
+            os: BoxOS.here.rawValue, tailnet: net?.tailnet == nil ? nil : (net?.userspace == true ? "kore" : "tailscale"),
+            own: ownTailnet)
     }
 }

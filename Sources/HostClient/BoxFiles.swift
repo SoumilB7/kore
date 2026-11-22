@@ -80,6 +80,31 @@ package protocol BoxFileSource: AnyObject {
     func find(_ path: String) async -> Result<Set<String>?, HostRefusal>
     /// A carry's landing (`LinkFsOps.isLanding`) to the box's trash.
     func trashLanding(_ path: String) async -> Result<Void, HostRefusal>
+    // 1.15 (`LinkFiles.bytesCap`): a file's own bytes from `offset`, of any kind, a piece at a time.
+    /// `base`: the stamp held; the box answers `unchanged` when the file is still that.
+    func bytes(_ path: String, offset: Int64, base: FileStamp?) async -> Result<BoxBytes, HostRefusal>
+}
+
+/// A piece of a box file's bytes (`fs.read {offset}`): the file's whole size and its stamp.
+package struct BoxBytes: Sendable, Equatable {
+    package var data: Data
+    package var size: Int64
+    package var stamp: FileStamp?
+    /// Asked with the stamp held, and still that: nothing came.
+    package var unchanged = false
+
+    package init(data: Data, size: Int64, stamp: FileStamp?, unchanged: Bool = false) {
+        self.data = data
+        self.size = size
+        self.stamp = stamp
+        self.unchanged = unchanged
+    }
+}
+
+/// Why a box file didn't come whole to this Mac: past the cap (its size), or the box's words.
+package enum BoxFetchFailure: Error, Equatable, Sendable {
+    case tooLarge(Int64)
+    case refused(String)
 }
 
 /// What a `sync.apply` did on the box, all its turns together.
@@ -139,6 +164,81 @@ extension BoxFileSource {
     package func trashLanding(_ path: String) async -> Result<Void, HostRefusal> { .failure(Self.olderBox(alias)) }
 
     static func olderBox(_ alias: String) -> HostRefusal { HostRefusal(message: "\(NodeNames.name(alias)) needs an update for that") }
+
+    /// A stand-in from before 1.15: no file's bytes.
+    package func bytes(_ path: String, offset: Int64, base: FileStamp?) async -> Result<BoxBytes, HostRefusal> {
+        .failure(HostRefusal(message: "\(NodeNames.name(alias)) needs an update to preview this"))
+    }
+
+    /// The whole file into `file`, in pieces of at most `LinkFiles.pieceMax` written to a part file
+    /// beside it and moved over it at the end; nothing is written on the box. A file that changes
+    /// on the way is read again from the start (once). Past `cap`: `tooLarge`, nothing kept.
+    /// `base`: the stamp of what `file` holds; when the box still has that, nothing comes and
+    /// `written` is false.
+    package func fetch(_ path: String, to file: URL, cap: Int64, base: FileStamp?) async
+        -> Result<(stamp: FileStamp?, written: Bool), BoxFetchFailure>
+    {
+        let files = FileManager.default
+        let part = file.deletingLastPathComponent().appendingPathComponent("." + file.lastPathComponent + ".part")
+        defer { try? files.removeItem(at: part) }
+        for _ in 0..<2 {
+            guard files.createFile(atPath: part.path, contents: nil), let out = FileHandle(forWritingAtPath: part.path) else {
+                return .failure(.refused("Kore can't keep a copy of it on this Mac."))
+            }
+            var offset: Int64 = 0
+            var stamp: FileStamp?
+            var changed = false
+            pieces: while true {
+                if Task.isCancelled {
+                    try? out.close()
+                    return .failure(.refused("Stopped."))
+                }
+                switch await bytes(path, offset: offset, base: offset == 0 ? base : nil) {
+                case .failure(let why):
+                    try? out.close()
+                    return .failure(.refused(why.message))
+                case .success(let piece):
+                    if piece.unchanged {
+                        try? out.close()
+                        return .success((base, false))
+                    }
+                    if piece.size > cap {
+                        try? out.close()
+                        return .failure(.tooLarge(piece.size))
+                    }
+                    if offset == 0 {
+                        stamp = piece.stamp
+                    } else if piece.stamp != stamp {
+                        changed = true
+                        break pieces
+                    }
+                    guard offset + Int64(piece.data.count) <= piece.size, !piece.data.isEmpty || offset == piece.size else {
+                        try? out.close()
+                        return .failure(.refused("\(NodeNames.name(alias)) sent the file short."))
+                    }
+                    do { try out.write(contentsOf: piece.data) } catch {
+                        try? out.close()
+                        return .failure(.refused("Kore can't keep a copy of it on this Mac."))
+                    }
+                    offset += Int64(piece.data.count)
+                    if offset >= piece.size { break pieces }
+                }
+            }
+            try? out.close()
+            if changed { continue }
+            do {
+                if files.fileExists(atPath: file.path) {
+                    _ = try files.replaceItemAt(file, withItemAt: part)
+                } else {
+                    try files.moveItem(at: part, to: file)
+                }
+            } catch {
+                return .failure(.refused("Kore can't keep a copy of it on this Mac."))
+            }
+            return .success((stamp, true))
+        }
+        return .failure(.refused("It kept changing on \(NodeNames.name(alias)) as it came."))
+    }
 }
 
 /// A copy on a box under way (`fs.copy`): its bytes as the box says them, and its Cancel
@@ -189,6 +289,16 @@ extension HostConnection: BoxFileSource {
             path: result.path ?? path, kind: kind, size: result.size ?? 0, text: result.text,
             image: result.data.flatMap { Data(base64Encoded: $0) }, truncated: result.truncated == true,
             stamp: result.mtime.map { FileStamp(size: result.size ?? 0, mtime: $0) }))
+    }
+
+    package func bytes(_ path: String, offset: Int64, base: FileStamp?) async -> Result<BoxBytes, HostRefusal> {
+        guard caps.contains(LinkFiles.bytesCap) else { return .failure(HostRefusal(message: "\(NodeNames.name(alias)) needs an update to preview this")) }
+        var args = ControlArgs(path: path, base: base)
+        args.offset = offset
+        let result = await files(.fsRead, args)
+        if result.ok, result.unchanged == true, let base { return .success(BoxBytes(data: Data(), size: base.size, stamp: base, unchanged: true)) }
+        guard result.ok, let size = result.size, let data = result.data.flatMap({ Data(base64Encoded: $0) }) else { return .failure(refusal(result)) }
+        return .success(BoxBytes(data: data, size: size, stamp: result.mtime.map { FileStamp(size: size, mtime: $0) }))
     }
 
     /// Text up to `LinkFiles.inlineMax` goes in the command; more (or bytes that aren't UTF-8)

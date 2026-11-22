@@ -37,6 +37,11 @@ private struct QuickLookHost: NSViewRepresentable {
     }
 
     func updateNSView(_ view: QLPreviewView, context: Context) {
+        if (view.previewItem as? NSURL) as URL? != url {
+            context.coordinator.token = reloadToken
+            view.previewItem = url as NSURL
+            return
+        }
         guard context.coordinator.token != reloadToken else { return }
         context.coordinator.token = reloadToken
         view.refreshPreviewItem()
