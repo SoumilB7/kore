@@ -290,7 +290,7 @@ package final class Devices {
         return DevicesWords.boxCue(row)
     }
 
-    private func boxRow(_ key: String) -> DeviceRow? {
+    func boxRow(_ key: String) -> DeviceRow? {
         var keys: Set<String> = [key, HostConnection.current(key)]
         if let entry = NodeDirectory.shared.entry(forKey: key) {
             keys.insert(entry.id.raw)
@@ -446,6 +446,33 @@ package final class Devices {
     /// "Sign in again ↗": the box's Kore tailnet signs in afresh, with this Mac's account.
     @ObservationIgnored package var reloginBox: @MainActor (String) -> Void = { BoxUpgrades.shared.relogin($0) }
     package func relogin(_ row: DeviceRow) { reloginBox(row.id) }
+
+    /// ⋯ Forget this SSH route: only while the tailnet carries the box and its stores are keyed by
+    /// its id; never by itself. The SSH config is left as it is.
+    package func canForgetSSH(_ row: DeviceRow) -> Bool {
+        guard row.kind == .box, row.ssh != nil, DevicesWords.sshNotNeeded(row) != nil else { return false }
+        return forgetsSSH?(row.id) ?? (NodeDirectory.shared.entry(forKey: row.id)?.rekeyed == true)
+    }
+
+    package func forgetSSH(_ row: DeviceRow) {
+        if let forget = forgetSSHRoute { forget(row.id) } else if let route = NodeDirectory.shared.forgetSSH(row.id) {
+            HostLog.note(row.id, "ssh route", "forgotten: " + route)
+            BoxList.shared.reload()
+        }
+        changed()
+    }
+
+    /// Storylines: whether a box's SSH route may be forgotten, and forgetting it.
+    @ObservationIgnored package var forgetsSSH: (@MainActor (String) -> Bool)?
+    @ObservationIgnored package var forgetSSHRoute: (@MainActor (String) -> Void)?
+
+    /// A box's route on the first page: "Kore's tailnet", "SSH (mybox-cf)", with its hover (the
+    /// node; the SSH route not needed now). Nil while it isn't connected.
+    package func boxRoute(_ key: String) -> (line: String, help: String?)? {
+        _ = revision
+        guard let row = boxRow(key), row.status == .connected, !row.paused, let line = DevicesWords.route(row) else { return nil }
+        return (line, DevicesWords.help(row))
+    }
 
     package func setPaused(_ row: DeviceRow, _ paused: Bool) {
         switch row.kind {

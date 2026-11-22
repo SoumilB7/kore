@@ -46,7 +46,7 @@ struct NodeNamesTests {
         #expect(found.isEmpty, "\(found.joined(separator: "\n"))")
     }
 
-    @Test func aRekeyedBoxIsCalledByItsAliasInWords() throws {
+    @Test func aRekeyedBoxIsCalledByItsOwnNameInWords() throws {
         let defaults = UserDefaults(suiteName: "kore-names-\(UUID().uuidString)")!
         let directory = NodeDirectory(defaults: defaults)
         let before = NodeDirectory.shared
@@ -54,19 +54,19 @@ struct NodeNamesTests {
         defer { NodeDirectory.shared = before }
         let device = UUID()
         let id = device.uuidString.lowercased()
-        directory.upsert(.init(device: device, name: "box-1.local", ssh: "mybox", nodeKey: nil, identityKey: Data([1]), enrolled: true, rekeyed: true))
+        directory.upsert(.init(device: device, name: "mybox", ssh: "mybox-cf", nodeKey: nil, identityKey: Data([1]), enrolled: true, rekeyed: true))
         func clean(_ words: String, sourceLocation: SourceLocation = #_sourceLocation) {
             #expect(words.contains("mybox") && !words.contains(id) && !words.lowercased().contains(id.prefix(8)), "\(words)", sourceLocation: sourceLocation)
         }
-        // The key stays the id; the words, the alias.
+        // The key stays the id; the words, its own name (never the alias it was set up by).
         let connection = HostConnection(alias: id, cache: HostCache(alias: id, root: FileManager.default.temporaryDirectory)) { FakeHost.pair().client }
-        #expect(connection.alias == id && connection.name == "mybox" && connection.sshAlias == "mybox")
+        #expect(connection.alias == id && connection.name == "mybox" && connection.sshAlias == "mybox-cf")
         clean(HostConnection.Refused.auth.line(connection.name))
         for code in [ResultCode.busy, .goneChat, .goneFolder, .deniedControl, .tooLarge, .unknown] {
             clean(HostRefusal(LinkMessage.Result(id: "c1", ok: false, code: code, message: nil), alias: id).message)
         }
         clean(FilePlace.box(alias: id, path: "/w").device)
-        #expect(BoxAddress(id)?.host == "mybox")
+        #expect(BoxAddress(id)?.host == "mybox-cf")
         // A box this Mac never heard of keeps whatever it's keyed by; a plain alias is its own name.
         #expect(NodeNames.name("other-box") == "other-box")
         // Before its alias was known (no SSH alias), the name the box gave.

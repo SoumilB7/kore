@@ -159,7 +159,9 @@ extension World {
             // With no window holding it the link sleeps and the row has no fresh probe (BoxList's
             // SSH probe doesn't run here): quiet is fine then, a live link must be ●.
             let live = mac.link(box)?.isOnline == true
-            if (live ? row.dot != "●" : !["●", ""].contains(row.dot)) || row.detail != nil || row.route != .tailnet {
+            // On the tailnet its detail is that route ("Kore's tailnet", "Tailscale"), nothing else.
+            let onTailnet = row.detail == nil || row.detail == "Kore's tailnet" || row.detail == "Tailscale"
+            if (live ? row.dot != "●" : !["●", ""].contains(row.dot)) || !onTailnet || row.route != .tailnet {
                 out.append("Mac Devices: \(box.alias) shows \"\(row)\" (route \(row.route.map { "\($0)" } ?? "none")), not on the tailnet")
             }
             if !box.netOn { out.append("\(box.alias): KoreNet is off on the box") }

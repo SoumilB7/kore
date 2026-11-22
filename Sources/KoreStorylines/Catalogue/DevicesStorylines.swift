@@ -129,7 +129,7 @@ final class DevicesTakeOffline: ChatStoryline {
             Expect("never dialled while it is") { _ in HostConnection.isPaused("mybox") },
             Expect("the icon stays quiet for it") { _ in Devices.shared.look().dot == nil },
             Press(Self.part("mybox", .reload)),
-            Expect("mybox back") { _ in !NetPauses.shared.contains("mybox") && Self.detail("mybox") == nil },
+            Expect("mybox back") { _ in !NetPauses.shared.contains("mybox") && Self.detail("mybox") == "Tailscale" },
         ]
     }
 
@@ -158,7 +158,7 @@ final class DevicesJoinKoreNet: ChatStoryline {
             Press(.id(StoryID.Net.icon)),
             WaitForElement(.id(StoryID.Net.panel)),
             Expect("mybox runs via SSH and can join") { _ in
-                Devices.shared.picture().devices.first { $0.id == "mybox" }.map { $0.canJoin && DevicesWords.detail($0, now: Date()) == "via SSH" } == true
+                Devices.shared.picture().devices.first { $0.id == "mybox" }.map { $0.canJoin && DevicesWords.detail($0, now: Date()) == "SSH (mybox)" } == true
             },
             Press(DevicesTakeOffline.part("mybox", .use)),
             WaitForElement(sheet),

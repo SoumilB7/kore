@@ -308,6 +308,10 @@ struct DevicesPopup: View {
         default:
             break
         }
+        // The SSH route it was set up by, while the tailnet carries it: only when asked.
+        if devices.canForgetSSH(row), let ssh = row.ssh {
+            items.append(OptionItem("Forget this SSH route", children: [OptionItem("Forget \(NodeDirectory.sshRoute(ssh))") { devices.forgetSSH(row) }]))
+        }
         if !items.isEmpty { items.append(.rule) }
         let forget = DevicesWords.remove(row.name, kind: row.kind, enrolled: row.enrolled)
         items.append(OptionItem("Remove", destructive: true, children: [OptionItem(forget, destructive: true) { devices.remove(row) }]))

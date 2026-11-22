@@ -46,7 +46,11 @@ enum NetLiveness {
         // Woken: links probed, the phones' listener looks again, a failed upgrade tries again.
         wake = LinkWake(center: NSWorkspace.shared.notificationCenter, name: NSWorkspace.didWakeNotification)
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { HostConnection.probeAll("activate") }
+            MainActor.assumeIsolated {
+                HostConnection.probeAll("activate")
+                // Back from Terminal (a host key, a key copied there): the boxes waiting on it look again.
+                BoxList.shared.lookAgainOnReturn()
+            }
         })
         observers.append(NotificationCenter.default.addObserver(forName: .koreNodeWillRekey, object: nil, queue: .main) { note in
             guard let old = note.userInfo?["old"] as? String else { return }

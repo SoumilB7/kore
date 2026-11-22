@@ -91,8 +91,12 @@ struct BoxAgentsView: View {
         let box = list.box(alias)
         let machine = box?.machine
         VStack(alignment: .leading, spacing: Space.sm) {
-            // The one essential line: what the machine is.
-            Text(machine?.kind ?? NodeNames.name(alias)).font(Chrome.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+            // The one essential line: what the machine is, and the route its link is on now.
+            let route = Devices.shared.boxRoute(alias)
+            Text([machine?.kind ?? NodeNames.name(alias), route?.line].compactMap { $0 }.joined(separator: " · "))
+                .font(Chrome.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+                .help(route?.help ?? "")
+                .storyID(StoryID.Boxes.cardRoute)
             ForEach(BoxAgent.allCases, id: \.self) { agent in agentLine(agent, machine: machine) }
             ownLine()
             let rest = differences(box?.parity?.differences)

@@ -96,7 +96,7 @@ import Testing
     @Test func onTheTailnetWithSSHFallbackSaysViaSSH() {
         let picture = Self.picture(Self.facts(Self.entry(rekeyed: true), online: true, route: .ssh(alias: "mybox", grant: "laptop")))
         #expect(picture.devices.map(\.route) == [.ssh])
-        #expect(picture.devices.map { DevicesWords.detail($0, now: DevicesPictureTests.now) } == ["via SSH"])
+        #expect(picture.devices.map { DevicesWords.detail($0, now: DevicesPictureTests.now) } == ["SSH (mybox)"])
     }
 
     @Test func tailnetDownFallsBackToSSHInOneRow() {

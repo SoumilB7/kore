@@ -14,6 +14,9 @@ package final class HostDaemon {
     package let paths: HostPaths
     package let services = HostServices()
     package private(set) var config: HostConfig
+    /// The name this box says on KoreNet (`net.node`): its host name's first label. Tests that run
+    /// several boxes in one process name each.
+    package var deviceName = String(ProcessInfo.processInfo.hostName.split(separator: ".").first ?? "box")
     package private(set) var chats: [HostChat] = []
     /// Chats whose tabs were closed, oldest first: hidden from every client's state, kept to reopen.
     package private(set) var closedChats: [HostChat] = []

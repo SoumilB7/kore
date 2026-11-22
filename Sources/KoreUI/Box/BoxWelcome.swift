@@ -172,7 +172,7 @@ struct BoxWelcomeLine: View {
         let box = BoxList.shared.box(alias)
         let connection = BoxList.shared.link(alias)
         if let note = box?.note {
-            BoxNoteLine(note: note, alias: alias)
+            BoxNoteLine(note: note, alias: alias, story: StoryID.Boxes.line.part(.use))
         } else if NetJoinLine.shows(alias) {
             NetJoinLine(alias: alias)
         } else if connection.ghSignedIn == false || connection.accounts.line(BoxAccounts.gitHub).step != .idle {

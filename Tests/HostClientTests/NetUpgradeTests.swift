@@ -116,9 +116,10 @@ struct NetUpgradeTests {
         #expect(usage.map(\.chat) == [id + "/c1"])
         #expect(moved.withLock { $0 } == [alias + "→" + id, alias + "→" + id])
         #expect(said.withLock { $0 } == ["will \(alias) \(id)", "did \(alias) \(id)"])
-        // The alias still names the same link; the SSH route still reaches it by its alias.
+        // The alias still names the same link; the SSH route still reaches it by its alias; in
+        // words it's the name the box says (never its alias).
         #expect(HostConnection.named(alias) === connection)
-        #expect(connection.sshAlias == alias && connection.name == alias)
+        #expect(connection.sshAlias == alias && connection.name == "box-1")
         #expect(BoxAddress(id)?.host == alias)
         // Its copy is written under the id from now on.
         #expect(connection.cache.folder.path.hasSuffix("nodes/" + id))

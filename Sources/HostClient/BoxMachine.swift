@@ -38,6 +38,8 @@ package struct BoxMachine: Codable, Equatable, Sendable {
     package var gitEmail: String?
     /// The CLIs' setup by name (`kore-host facts`); nil before kore-host is there.
     package var facts: AgentFacts?
+    /// Its host name (`uname -n`): the box's own name, whatever alias reached it.
+    package var hostname: String?
 
     package init() {}
 
@@ -62,6 +64,7 @@ package struct BoxMachine: Codable, Equatable, Sendable {
             #"echo "uid=$(id -u)""#,
             #"echo "shell=$SHELL""#,
             #"echo "home=$HOME""#,
+            #"echo "hostname=$(uname -n)""#,
             #"[ -r /etc/os-release ] && grep -E '^(PRETTY_NAME|ID|ID_LIKE)=' /etc/os-release | sed 's/^/os./'"#,
             #"command -v sw_vers >/dev/null 2>&1 && echo "macos=$(sw_vers -productVersion)""#,
             "for t in \(looked.joined(separator: " ")); do p=$(command -v \"$t\" 2>/dev/null) && echo \"has.$t=$p\"; done",
@@ -99,6 +102,7 @@ package struct BoxMachine: Codable, Equatable, Sendable {
             case "uid": machine.root = value == "0"
             case "shell": machine.shell = value.isEmpty ? nil : value
             case "home": machine.home = value.isEmpty ? nil : value
+            case "hostname": machine.hostname = value.isEmpty ? nil : value
             case "os.PRETTY_NAME": machine.distro = unquoted
             case "os.ID": machine.distroID = unquoted.lowercased()
             case "os.ID_LIKE": machine.distroLike = unquoted.lowercased()

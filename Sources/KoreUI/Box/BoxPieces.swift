@@ -21,19 +21,49 @@ struct BoxNoteLine: View {
     @StateObject private var copied = Local(false)
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
-            Text(note.line).foregroundStyle(Theme.tertiary).lineLimit(2).textSelection(.enabled)
-            if let action = note.action {
-                Text("·").foregroundStyle(Theme.tertiary)
-                Button(copied.value ? "Copied" : action.title) { take(action) }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(Theme.accent)
-                    .fixedSize()
-                    .storyID(story, press: { take(action) })
+        Group {
+            if note.more.isEmpty {
+                HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+                    Text(note.line).foregroundStyle(Theme.tertiary).lineLimit(2).textSelection(.enabled)
+                    if let action = note.action {
+                        Text("·").foregroundStyle(Theme.tertiary)
+                        button(action, story: story)
+                    }
+                }
+            } else {
+                // Several actions (Trust · Copy · Check again): the line whole (a fingerprint is
+                // never cut), its actions under it.
+                VStack(alignment: .leading, spacing: Space.xxs) {
+                    Text(note.line).foregroundStyle(Theme.tertiary).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    HStack(alignment: .firstTextBaseline, spacing: Space.xs) {
+                        if let action = note.action { button(action, story: story) }
+                        ForEach(Array(note.more.enumerated()), id: \.offset) { _, more in
+                            Text("·").foregroundStyle(Theme.tertiary)
+                            button(more, story: (story ?? StoryID.Boxes.line).part(Self.part(more)))
+                        }
+                    }
+                }
             }
         }
         .font(Chrome.caption)
         .background(BoxAnchor { anchor.value = $0 })
+    }
+
+    private func button(_ action: BoxList.Action, story: StoryID?) -> some View {
+        let copies = if case .copy = action { true } else { false }
+        return Button(copied.value && copies ? "Copied" : action.title) { take(action) }
+            .buttonStyle(.plain)
+            .foregroundStyle(Theme.accent)
+            .fixedSize()
+            .storyID(story, press: { take(action) })
+    }
+
+    private static func part(_ action: BoxList.Action) -> StoryID.Part {
+        switch action {
+        case .copy: .copy
+        case .checkAgain, .tryAgain: .retry
+        default: .use
+        }
     }
 
     private func take(_ action: BoxList.Action) {

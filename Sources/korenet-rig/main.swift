@@ -274,7 +274,7 @@ final class Once<T: Sendable>: @unchecked Sendable {
 
 let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Void)] = [
     ("plain-ssh", "plain SSH over the LAN to a box with no Tailscale → Set up → its own tailnet signs in → the link moves to KoreNet; SSH stays a route", plainSSH),
-    ("first-contact", "a box this Mac has never met: its own empty known_hosts, ssh's own host-key check → Set up stops with the one line to run; once run, Set up → Ready → KoreNet", firstContact),
+    ("first-contact", "a box this Mac has never met: its own empty known_hosts, ssh's own host-key check → Set up stops at the new key, its fingerprint shown with Trust; Trust → the key added as accept-new would → Set up goes on → Ready → KoreNet", firstContact),
     ("ts-ip", "SSH over the box's Tailscale IP, Tailscale on the box and the Mac → the upgrade uses installed Tailscale; the box's own signs in on standby", tsIP),
     ("box-ts-stops", "box tailscaled stops while its own is on standby → the box moves to its own, the Mac follows, SSH still works; tailscaled back → both move back, one box node online", boxTailscaleStops),
     ("mac-ts-quits", "the Mac's installed Tailscale quits → the Mac moves to its own; the box (on Tailscale) stays reachable, SSH over its Tailscale IP too; Tailscale back → the Mac moves back", macTailscaleQuits),
@@ -856,14 +856,28 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     let status = await r.kore.addAndSetUp("b24")
     let said: String
     if case .failed(let line, let fix)? = status { said = line + " · fix: \(fix.map { "\($0)" } ?? "none")" } else { said = "\(status.map { "\($0)" } ?? "-")" }
-    r.check("Set up stops at the new host key with the line to run", said.contains("host key is new") && said.contains("ssh b24"), said)
+    r.check("Set up stops at the new host key", said.contains("host key is new"), said)
     r.note("Set up said: \(said)")
-    // The owner runs it once in Terminal and answers yes.
-    let accepted = await run(r.places.sshWrapper.path, ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "b24", "true"])
-    r.check("ssh b24 once, its key accepted", accepted.ok, accepted.out)
-    r.check("known_hosts holds b24's key now", ((try? String(contentsOf: known, encoding: .utf8)) ?? "").contains("[127.0.0.1]:22124"))
-    guard await r.setUp("b24") else { return }
-    if await r.linkOnNet("b24") { await r.works("b24", "KoreNet (first contact)") }
+    // The line then shows the key's fingerprint, as ssh prints it, and Trust (no Terminal).
+    var offer: BoxHostKey.Offer?
+    guard await r.expect("b24's line shows its key's fingerprint and Trust", within: 30, box: "b24", {
+        if case .failed(_, .trust(let shown))? = BoxList.shared.box("b24")?.status { offer = shown }
+        return offer != nil
+    }), let offer else { return }
+    r.note("the line: \(offer.line)")
+    // The box's own keys, read apart from Kore: what's shown is one of them.
+    let scanned = await run("/bin/sh", ["-c", "ssh-keyscan -p 22124 127.0.0.1 2>/dev/null | ssh-keygen -lf -"])
+    let prints = offer.fingerprints.compactMap { $0.split(separator: " ").last.map(String.init) }
+    r.check("the fingerprint shown is b24's own key", !prints.isEmpty && prints.allSatisfy { scanned.out.contains($0) }, scanned.out)
+    r.check("known_hosts is still empty before Trust", ((try? String(contentsOf: known, encoding: .utf8)) ?? "").isEmpty)
+    let start = now()
+    await BoxList.shared.act(.trust(offer), on: "b24")
+    let after = BoxList.shared.box("b24")?.status
+    r.check(String(format: "Trust → Set up goes on → Ready (%.1fs)", now() - start), after == .ready, "\(after.map { "\($0)" } ?? "-")")
+    let kept = (try? String(contentsOf: known, encoding: .utf8)) ?? ""
+    r.check("known_hosts holds b24's key as accept-new writes it", kept.contains("[127.0.0.1]:22124") && offer.lines.allSatisfy(kept.contains), kept)
+    guard after == .ready else { return }
+    if await r.linkOnNet("b24") { await r.works("b24", "KoreNet (first contact, Trust)") }
 }
 
 @MainActor func plainSSH(_ r: Run) async {

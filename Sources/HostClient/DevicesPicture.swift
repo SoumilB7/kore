@@ -133,6 +133,12 @@ package struct DeviceRow: Identifiable, Equatable, Sendable {
     package var ownStep: String?
     /// Its sign-in page while Kore's own there is signed out (the row's "Sign in ↗").
     package var ownPage: String? { own.flatMap { $0.signedIn ? nil : $0.page } }
+    /// A box's SSH route: the alias (or destination) it was set up by, kept as a fallback.
+    package var ssh: String?
+    /// The tailnet its link goes over: "Kore's tailnet" or "Tailscale".
+    package var tailnetName: String?
+    /// The tailnet node its link reaches: "node mybox-kore 100.87.122.76".
+    package var node: String?
 
     package init(id: String, kind: Kind, name: String, status: Status, route: Route? = nil) {
         self.id = id
@@ -279,6 +285,7 @@ extension DevicesPicture {
         guard net.on else {
             for box in boxes where box.listed != nil {
                 var row = DeviceRow(id: box.key, kind: .box, name: box.name, status: boxStatus(box), route: .ssh)
+                row.ssh = sshRoute(box)
                 row.paused = box.paused
                 row.update = updateLine(box)
                 row.lastSeen = box.lastHeard
@@ -304,6 +311,11 @@ extension DevicesPicture {
         for box in boxes {
             var row = DeviceRow(id: box.key, kind: .box, name: box.name, status: boxStatus(box))
             let tailnetPeer = net.on ? peer(box.entry.flatMap { $0.nodeKey ?? $0.lastNodeKey }) : nil
+            row.ssh = sshRoute(box)
+            row.tailnetName = net.state == .installed ? "Tailscale" : "Kore's tailnet"
+            // The node the link reaches: the box's online node, the one it listens on first.
+            let reached = (box.entry?.knownKeys ?? []).lazy.compactMap { peer($0) }.first { $0.online } ?? tailnetPeer
+            row.node = reached.map { peer in (["node", peer.hostName] + Array(peer.tailscaleIPs.filter { !$0.contains(":") }.prefix(1))).filter { !$0.isEmpty }.joined(separator: " ") }
             row.paused = box.paused
             row.keyExpiry = tailnetPeer?.keyExpiry
             row.lastSeen = tailnetPeer?.lastSeen ?? box.lastHeard
@@ -402,6 +414,13 @@ extension DevicesPicture {
         return out
     }
 
+    /// A box's SSH route: its entry's alias, else its key when that's an alias (nil: claimed over
+    /// the tailnet, or its SSH route forgotten).
+    static func sshRoute(_ box: BoxFacts) -> String? {
+        if let entry = box.entry { return entry.ssh }
+        return NodeDirectory.isNodeKey(box.key) ? nil : box.key
+    }
+
     static func net(_ facts: NetFacts) -> Net {
         guard facts.on else { return .off }
         switch facts.state {
@@ -498,10 +517,12 @@ package enum DevicesWords {
         case .unknown where row.tailscaleOff, .connected where row.tailscaleOff:
             if row.koreTailnet { return "Sign in for \(row.name)" }
             return row.macOS ? BoxNetJoin.openLine(row.name) : "Tailscale is off on \(row.name)"
-        case .unknown: return row.route == .ssh ? "via SSH" : nil
+        case .unknown: return row.route == .ssh ? route(row) : nil
         case .connected: break
         }
         if let expiry = row.keyExpiry, expiry.timeIntervalSince(now) < DevicesPicture.expirySoon { return "key expires " + expiresIn(expiry, now: now) }
+        // A box: the route its link is on now, as it moves ("Kore's tailnet", "SSH (mybox-cf)").
+        if row.kind == .box { return route(row) }
         switch row.route {
         case .ssh?: return "via SSH"
         case .relayed?: return "relayed"
@@ -511,9 +532,29 @@ package enum DevicesWords {
         return row.presence.map { "in " + $0 }
     }
 
+    /// A box's active route in words: "Kore's tailnet", "Tailscale", "Kore's tailnet · relayed",
+    /// "SSH (mybox-cf)"; nil while it has none.
+    package static func route(_ row: DeviceRow) -> String? {
+        switch row.route {
+        case .tailnet?: return row.tailnetName ?? "tailnet"
+        case .relayed?: return (row.tailnetName ?? "tailnet") + " · relayed"
+        case .ssh?: return row.ssh.map(NodeDirectory.sshRoute) ?? "SSH"
+        case nil: return nil
+        }
+    }
+
+    /// The quiet hint while the tailnet carries a box set up over SSH: the SSH route stays (Kore
+    /// falls back to it), it just isn't needed now.
+    package static func sshNotNeeded(_ row: DeviceRow) -> String? {
+        guard row.kind == .box, row.status == .connected, row.route == .tailnet || row.route == .relayed, let ssh = row.ssh else { return nil }
+        return NodeDirectory.sshRoute(ssh) + " · not needed now; \(row.tailnetName ?? "the tailnet") carries \(row.name)"
+    }
+
     /// A row's hover, where its detail has more to say; Kore's tailnet there, as it last said.
     package static func help(_ row: DeviceRow) -> String? {
         var lines: [String] = []
+        if row.kind == .box, row.status == .connected, row.route == .tailnet || row.route == .relayed, let node = row.node { lines.append(node) }
+        if let hint = sshNotNeeded(row) { lines.append(hint) }
         if row.route == .relayed, row.status == .connected { lines.append("UDP is blocked there, so syncs run slower") }
         if let own = row.own { lines.append(own.line) }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")

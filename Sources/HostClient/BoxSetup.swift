@@ -139,6 +139,11 @@ package enum BoxFix: Equatable, Sendable {
     case signIn(String)
     /// Kore's own tailnet on the box signs out, and its new sign-in page opens here (asked for).
     case relogin
+    /// A new host key, its fingerprint shown: Trust adds it to known_hosts as ssh's
+    /// `accept-new` would, then goes on (never offered for a changed key).
+    case trust(BoxHostKey.Offer)
+    /// Look at the box again, right on the line after a step the user does outside Kore.
+    case checkAgain
 
     package var title: String {
         switch self {
@@ -155,6 +160,8 @@ package enum BoxFix: Equatable, Sendable {
         case .showLog: "Show log"
         case .signIn: "Sign in ↗"
         case .relogin: "Sign in again ↗"
+        case .trust: "Trust"
+        case .checkAgain: "Check again"
         }
     }
 }
@@ -302,6 +309,12 @@ package struct BoxSetup: Sendable {
         await step("Kore's tailnet on \(name)…")
         let first = await shell.run(alias, "\(Self.target) net on >/dev/null && \(Self.target) tailnet --within 25")
         guard first.ok, var own = NetNodeWire.Own.parse(report: first.output) else { return nil }
+        // Signed out with no page yet (its control server slow to answer): one more wait for it,
+        // so the page still opens here.
+        if !own.signedIn, own.page == nil {
+            let again = await shell.run(alias, "\(Self.target) tailnet --within 25")
+            if again.ok, let later = NetNodeWire.Own.parse(report: again.output) { own = later }
+        }
         if !own.signedIn, let page = own.page, let url = URL(string: page) {
             await openURL(url)
             await step("Kore's tailnet on \(name) · finish signing in, it's open in your browser")
@@ -350,10 +363,10 @@ package struct BoxSetup: Sendable {
         let text = said.lowercased()
         if text.contains("remote host identification has changed") {
             let reset = "ssh-keygen -R \(address?.host ?? name)"
-            return Failure(message: "\(name)'s host key changed · check it, then \(reset)", fix: .copy(reset))
+            return Failure(message: "\(name)'s host key changed · this could be an attack, so Kore won't trust it · check with the box, then \(reset)", fix: .copy(reset))
         }
         if text.contains("host key verification failed") || text.contains("host key is known") {
-            return Failure(message: "\(name)'s host key is new · \(ssh) once in Terminal", fix: .copy(ssh))
+            return Failure(message: newKeyLine(name, ssh), fix: .copy(ssh))
         }
         if text.contains("permission denied") || text.contains("too many authentication failures") {
             let copyID = address?.command("ssh-copy-id") ?? "ssh-copy-id \(name)"
@@ -365,6 +378,12 @@ package struct BoxSetup: Sendable {
         if text.contains("connection refused") { return Failure(message: "\(name) refused SSH", fix: .tryAgain) }
         return Failure(message: "Can't reach \(name)", fix: .tryAgain)
     }
+
+    /// A new host key's line before its fingerprint is known (the box list then looks for it).
+    package static func newKeyLine(_ name: String, _ ssh: String) -> String { "\(name)'s host key is new · \(ssh) once in Terminal" }
+
+    /// A line that's a new host key's (`newKeyLine`), for the SSH name or destination it's about.
+    package static func isNewKey(_ line: String) -> Bool { line.contains("'s host key is new · ") && line.hasSuffix(" once in Terminal") }
 
     // MARK: This Mac's grant
 

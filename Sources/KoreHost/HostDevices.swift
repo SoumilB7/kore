@@ -134,7 +134,7 @@ extension HostDaemon {
     /// pins the identity key and enrolls once. Nil before the box has an identity.
     func netNode(enrolled: UUID?) -> NetNodeWire.Node? {
         guard let identity = net?.identity else { return nil }
-        let name = String(ProcessInfo.processInfo.hostName.split(separator: ".").first ?? "box")
+        let name = deviceName
         // The node key only while the port takes connections: a Mac dials as soon as it hears it.
         let nodeKey = net?.tailnet != nil && net?.listening == true ? net?.selfNode?.publicKey : nil
         return NetNodeWire.Node(

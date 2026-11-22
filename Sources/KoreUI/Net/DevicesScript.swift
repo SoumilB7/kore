@@ -42,6 +42,14 @@ package final class ScriptedNet: DevicesNet {
 
     package static let running = TailnetStatus(
         backendState: .running, selfNode: .init(publicKey: "nodekey:mac", tailscaleIPs: ["100.64.0.1"], userID: 7))
+
+    /// Running, with one peer online (a box's node): its key, name on the tailnet and address.
+    package static func running(peer key: String, hostName: String, address: String) -> TailnetStatus {
+        var status = running
+        let json = #"{"PublicKey":"\#(key)","TailscaleIPs":["\#(address)","fd7a::1"],"Online":true,"HostName":"\#(hostName)","OS":"linux","CurAddr":"10.0.0.2:41641"}"#
+        if let peer = try? JSONDecoder().decode(TailnetStatus.Peer.self, from: Data(json.utf8)) { status.peers = [peer] }
+        return status
+    }
 }
 
 /// Phones as a script has them, and a phone knocking in the Add device window.
@@ -283,8 +291,55 @@ package final class ScriptedBoxes: BoxAdding {
 
     package func act(_ action: BoxFix, on alias: String) async {
         log.append([action.title, alias].joined(separator: " "))
-        guard action == .setUp || action == .setUpAnyway, let first = steps.first else { return }
-        update(alias) { $0.status = .working(first) }
+        switch action {
+        case .trust(let offer):
+            // Trusted: Set up goes on where the key stopped it.
+            trusted.append(offer.fingerprints.first ?? "")
+            guard offer.setUp, let first = steps.first else { return answer(alias) }
+            update(alias) { $0.status = .working(first) }
+        case .checkAgain, .tryAgain:
+            answer(alias)
+        case .setUp, .setUpAnyway:
+            guard let first = steps.first else { return }
+            if hostKeys[alias] != nil { return meetKey(alias) }
+            update(alias) { $0.status = .working(first) }
+        default:
+            break
+        }
+    }
+
+    /// Fingerprints a Trust added (storylines check what was shown is what was trusted).
+    @ObservationIgnored package private(set) var trusted: [String] = []
+    /// Host names the boxes have (the real list finds them over SSH): the row's name after Set up.
+    @ObservationIgnored package var hostnames: [String: String] = [:]
+    /// Boxes whose Set up meets a new host key, its fingerprint as ssh prints it.
+    @ObservationIgnored package var hostKeys: [String: String] = [:]
+
+    private func meetKey(_ key: String) {
+        guard let print = hostKeys.removeValue(forKey: key) else { return }
+        // The scripted boxes are plain aliases: the SSH name is the key.
+        let ssh = key
+        let offer = BoxHostKey.Offer(
+            ssh: ssh, fingerprints: ["ED25519 " + print], lines: [ssh + " ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIStoryline"], command: "ssh " + ssh, setUp: true)
+        update(key) { $0.status = .failed(offer.line, .trust(offer)) }
+    }
+
+    /// The box's key changed since this Mac last saw it: said plainly, never a Trust.
+    package func keyChanged(_ alias: String) {
+        let why = BoxSetup.sshFailure(alias, "WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED!")
+        update(alias) { $0.status = .unreachable(why.message, why.fix) }
+    }
+
+    /// The box wants a key this Mac hasn't given it: a command for Terminal, Check again beside it.
+    package func needsKey(_ alias: String) {
+        let why = BoxSetup.sshFailure(alias, "Permission denied (publickey).")
+        update(alias) { $0.status = .unreachable(why.message, why.fix) }
+    }
+
+    /// The box's link went back to SSH (its tailnet node stopped).
+    package func leaveNet(_ alias: String) {
+        onNet[alias] = nil
+        Devices.shared.changed()
     }
 
     /// The box answers its first probe: SSH works, kore-host isn't there.
@@ -300,6 +355,8 @@ package final class ScriptedBoxes: BoxAdding {
                 $0.status = .ready
                 $0.fresh = true
             }
+            // Its own name, as Set up found it: the alias is its SSH route from now on.
+            NodeDirectory.shared.noteFound(hostnames[alias], alias: alias)
         }
     }
 
@@ -312,13 +369,14 @@ package final class ScriptedBoxes: BoxAdding {
     /// Devices' rows for the boxes listed.
     package func facts() -> [BoxFacts] {
         boxes.map { box in
-            var facts = BoxFacts(key: box.alias, name: box.alias)
+            var facts = BoxFacts(key: box.alias, name: NodeNames.name(box.alias))
             facts.listed = box.status
             facts.online = box.status == .ready
             facts.route = facts.online ? .ssh(alias: box.alias, grant: "mac") : nil
             if let tailnet = onNet[box.alias] {
                 facts.route = .net
-                var entry = NodeDirectory.Entry(device: UUID(), name: box.alias, ssh: box.alias, nodeKey: "nodekey:" + box.alias, identityKey: Data([1]), enrolled: true)
+                var entry = NodeDirectory.Entry(
+                    device: UUID(), name: hostnames[box.alias] ?? box.alias, ssh: box.alias, nodeKey: "nodekey:" + box.alias, identityKey: Data([1]), enrolled: true)
                 entry.tailnet = tailnet
                 facts.entry = entry
             }

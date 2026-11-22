@@ -101,6 +101,12 @@ extension StoryID {
         package static func place(_ key: String) -> StoryID { StoryID(.titlebar, "boxes.place", key: key) }
         package static let add = StoryID(.titlebar, "boxes.add")
         package static let field = StoryID(.titlebar, "boxes.field")
+        /// A box's one line on the Welcome (its action: `.part(.use)`, Copy, Check again).
+        package static let line = StoryID(.welcome, "boxes.line")
+        /// The box's route under its name on the Welcome: "Kore's tailnet", "SSH (mybox-cf)".
+        package static let route = StoryID(.welcome, "boxes.route")
+        /// The box card's first line: what the machine is · its route now.
+        package static let cardRoute = StoryID(.titlebar, "boxes.cardRoute")
         package static func folder(_ path: String) -> StoryID { StoryID(.titlebar, "boxes.folder", key: path) }
         package static func chat(_ id: String) -> StoryID { StoryID(.titlebar, "boxes.chat", key: id) }
         package static let browser = StoryID(.titlebar, "boxes.browser")

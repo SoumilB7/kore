@@ -215,7 +215,7 @@ enum BoxTailnetStory {
     /// On KoreNet: the run ended done and the row is on the tailnet.
     static func joined() -> Expect {
         Expect("mybox on KoreNet", found: { _ in "\(String(describing: upgrades.joins["mybox"]?.ending)) \(String(describing: row()?.route))" }) { _ in
-            upgrades.joins["mybox"]?.ending == .done && row()?.route == .tailnet && row().flatMap { DevicesWords.detail($0, now: Date()) } == nil
+            upgrades.joins["mybox"]?.ending == .done && row()?.route == .tailnet && row().flatMap { DevicesWords.detail($0, now: Date()) } == "Tailscale"
         }
     }
 

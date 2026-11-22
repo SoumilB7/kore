@@ -211,13 +211,54 @@ package final class NodeDirectory: Sendable {
         return all[key.lowercased()]?.ssh
     }
 
-    /// What a box is called in words: the alias it was set up by (what the owner always saw),
-    /// else the name it gave; a key that isn't a node's id is its own name.
+    /// What a box is called in words: the name the owner gave it, else its own device name (the
+    /// name it says on KoreNet, else the host name its setup found), never the SSH alias it was
+    /// set up by while it has one (the alias is a route: "SSH (mybox-cf)"). A key nothing is
+    /// known of is its own name.
     package func name(forKey key: String) -> String {
         if let renamed = renamed(key) { return renamed }
-        guard Self.isNodeKey(key) else { return key }
-        guard let entry = all[key.lowercased()] else { return key }
-        return entry.ssh ?? entry.name
+        let entries = all
+        if let entry = entries[key.lowercased()] ?? entries.values.first(where: { $0.ssh == key }), !entry.name.isEmpty { return entry.name }
+        guard !Self.isNodeKey(key) else { return key }
+        return found(key) ?? key
+    }
+
+    /// The route words for a box key's SSH alias, when it has one: "SSH (mybox-cf)".
+    package static func sshRoute(_ alias: String) -> String { "SSH (\(alias))" }
+
+    // MARK: Host names found by setup
+
+    package static let foundKey = "koreNodeHostnames"
+    private let foundNames = Mutex<[String: String]?>(nil)
+
+    /// The host name a box's setup found (`BoxMachine.hostname`), by the alias it was found over.
+    package func found(_ alias: String) -> String? {
+        foundNames.withLock { held in
+            if let held { return held[alias] }
+            let read = defaults.dictionary(forKey: Self.foundKey) as? [String: String] ?? [:]
+            held = read
+            return read[alias]
+        }
+    }
+
+    /// Keeps the host name found over `alias` (a short, printable name only).
+    package func noteFound(_ hostname: String?, alias: String) {
+        guard let name = hostname.flatMap(Self.deviceName) else { return }
+        foundNames.withLock { held in
+            var given = held ?? (defaults.dictionary(forKey: Self.foundKey) as? [String: String] ?? [:])
+            guard given[alias] != name else { return }
+            given[alias] = name
+            held = given
+            defaults.set(given, forKey: Self.foundKey)
+        }
+    }
+
+    /// A host name as a device's name: its first label, printable, at most 64 characters; nil
+    /// when nothing is left ("localhost" says nothing either).
+    package static func deviceName(_ hostname: String) -> String? {
+        let first = hostname.trimmingCharacters(in: .whitespacesAndNewlines).split(separator: ".").first.map(String.init) ?? ""
+        let kept = String(first.unicodeScalars.filter { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "_-".unicodeScalars.contains($0)) }.prefix(64))
+        return kept.isEmpty || kept == "localhost" ? nil : kept
     }
 
     // MARK: Names given in Devices
@@ -229,7 +270,8 @@ package final class NodeDirectory: Sendable {
     private func renamed(_ key: String) -> String? {
         let given = names.withLock { held in
             if let held { return held }
-            let read = defaults.dictionary(forKey: Self.namesKey) as? [String: String] ?? [:]
+            let read = Self.withoutAliasNames(defaults.dictionary(forKey: Self.namesKey) as? [String: String] ?? [:], entries: all)
+            if read.count != (defaults.dictionary(forKey: Self.namesKey)?.count ?? 0) { defaults.set(read, forKey: Self.namesKey) }
             held = read
             return read
         }
@@ -238,6 +280,16 @@ package final class NodeDirectory: Sendable {
         let entries = all
         let entry = entries[key.lowercased()] ?? entries.values.first { $0.ssh == key }
         return entry.flatMap { given[$0.id.raw] ?? $0.ssh.flatMap { given[$0] } }
+    }
+
+    /// Names kept before a box was called by its own name (0.3.9 and before showed the alias): a
+    /// "given" name that's only the box's SSH alias goes, so the box's real name shows. Read once.
+    static func withoutAliasNames(_ given: [String: String], entries: [String: Entry]) -> [String: String] {
+        given.filter { key, name in
+            if name == key, !isNodeKey(key) { return false }
+            let entry = entries[key.lowercased()] ?? entries.values.first { $0.ssh == key }
+            return entry?.ssh != name
+        }
     }
 
     /// Renames a box in words (Devices ⋯ Rename); an empty name goes back to its own.
@@ -265,6 +317,22 @@ package final class NodeDirectory: Sendable {
             held = kept
             if kept.count != given.count { defaults.set(kept, forKey: Self.namesKey) }
         }
+        foundNames.withLock { held in
+            let found = held ?? (defaults.dictionary(forKey: Self.foundKey) as? [String: String] ?? [:])
+            let kept = found.filter { !keys.contains($0.key) }
+            held = kept
+            if kept.count != found.count { defaults.set(kept, forKey: Self.foundKey) }
+        }
+    }
+
+    /// Forgets the SSH route a box was set up by (Devices ⋯ Forget this SSH route): KoreNet
+    /// carries it from now on; the alias stays in the SSH config, and adding it again is a first add.
+    /// Only for a box whose stores moved to its id (nothing is keyed by the alias any more).
+    @discardableResult
+    package func forgetSSH(_ key: String) -> String? {
+        guard let entry = entry(forKey: key) ?? all.values.first(where: { $0.ssh == key }), entry.rekeyed, let alias = entry.ssh else { return nil }
+        update { $0[entry.id.raw]?.ssh = nil }
+        return alias
     }
 
     /// Keeps the box's pending list on its entry (a box without one keeps nothing).

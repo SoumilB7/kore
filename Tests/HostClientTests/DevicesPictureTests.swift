@@ -70,11 +70,11 @@ struct DevicesPictureTests {
         var box = Self.box()
         box.entry?.own = .signedIn("me@x.com")
         var row = Self.picture(status: status, boxes: [box]).devices[0]
-        #expect(DevicesWords.detail(row, now: Self.now) == nil && DevicesWords.help(row) == "Kore's tailnet: signed in as me@x.com")
+        #expect(DevicesWords.detail(row, now: Self.now) == "Tailscale" && DevicesWords.help(row) == "node mybox 100.64.0.9\nSSH (mybox) · not needed now; Tailscale carries mybox\nKore's tailnet: signed in as me@x.com")
         box.entry?.own = .signedOut(.loggedOut, page: "https://login.tailscale.com/a/1")
         row = Self.picture(status: status, boxes: [box]).devices[0]
         #expect(DevicesWords.detail(row, now: Self.now) == DevicesWords.ownOut && row.ownPage == "https://login.tailscale.com/a/1")
-        #expect(DevicesWords.help(row) == "Kore's tailnet: signed out")
+        #expect(DevicesWords.help(row) == "node mybox 100.64.0.9\nSSH (mybox) · not needed now; Tailscale carries mybox\nKore's tailnet: signed out")
         // This Mac's row: "this Mac" while signed in (Tailscale overriding: "using Tailscale").
         let signedIn = DevicesPicture.make(
             net: NetFacts(on: true, state: .installed, status: status, own: .signedIn("me@x.com")), macName: "MacBook", boxes: [], phones: [], addUntil: nil,
@@ -133,8 +133,8 @@ struct DevicesPictureTests {
         let status = Self.status(peers: [Self.peer("nodekey:box", name: "mybox")])
         let picture = Self.picture(status: status, boxes: [Self.box()], phones: [Self.phone])
         #expect(Self.look(picture) == NetIconLook(dimmed: false, dot: nil, line: "MacBook, mybox and Pixel 9 connected · using Tailscale"))
-        // Tailnet is the normal route: the box's row says nothing; the phone's says its presence.
-        #expect(picture.devices.map { DevicesWords.detail($0, now: Self.now) } == [nil, "in deploy fix"])
+        // The box's row says the route its link is on (2026-11-24); the phone's says its presence.
+        #expect(picture.devices.map { DevicesWords.detail($0, now: Self.now) } == ["Tailscale", "in deploy fix"])
         #expect(picture.tailnetName == "macbook")
         #expect(Self.look(Self.picture()) == NetIconLook(dimmed: false, dot: nil, line: "No other devices yet"))
     }
@@ -201,8 +201,8 @@ struct DevicesPictureTests {
         let ssh = Self.box("box-1", route: .ssh(alias: "box-1", grant: "mac"), nodeKey: nil)
         let relayed = Self.box("box-3", nodeKey: "nodekey:b3")
         let picture = Self.picture(status: status, boxes: [Self.box(), ssh, relayed])
-        #expect(picture.devices.map { DevicesWords.detail($0, now: Self.now) } == [nil, "via SSH", "relayed"])
-        #expect(DevicesWords.help(picture.devices[2]) == "UDP is blocked there, so syncs run slower")
+        #expect(picture.devices.map { DevicesWords.detail($0, now: Self.now) } == ["Tailscale", "SSH (box-1)", "Tailscale · relayed"])
+        #expect(DevicesWords.help(picture.devices[2]) == "node box-3 100.64.0.9\nSSH (box-3) · not needed now; Tailscale carries box-3\nUDP is blocked there, so syncs run slower")
         // An SSH box that hasn't joined can.
         #expect(picture.devices.map(\.canJoin) == [false, true, false])
     }
@@ -256,7 +256,7 @@ struct DevicesPictureTests {
         phone.connected = false
         let picture = Self.picture(state: .stopped, boxes: [ssh], phones: [phone])
         #expect(picture.net == .stopped && !picture.net.adds)
-        #expect(picture.devices.map { DevicesWords.detail($0, now: Self.now) } == ["via SSH", "needs Tailscale on"])
+        #expect(picture.devices.map { DevicesWords.detail($0, now: Self.now) } == ["SSH (mybox)", "needs Tailscale on"])
         #expect(picture.devices[1].needsTailscale)
         #expect(!picture.devices[0].canJoin)
     }
@@ -448,12 +448,13 @@ struct DevicesStateTests {
         let device = UUID()
         let id = device.uuidString.lowercased()
         directory.upsert(.init(device: device, name: "box-1", ssh: "mybox", nodeKey: "n", identityKey: Data([1]), enrolled: true, rekeyed: true))
-        #expect(directory.name(forKey: id) == "mybox")
+        // Its own name (what it says on KoreNet), never the alias it was set up by.
+        #expect(directory.name(forKey: id) == "box-1")
         directory.rename(id, to: "  GPU box ")
         #expect(directory.name(forKey: id) == "GPU box" && directory.name(forKey: "mybox") == "GPU box")
         #expect(NodeDirectory(defaults: defaults).name(forKey: id) == "GPU box")
         directory.rename("mybox", to: "")
-        #expect(directory.name(forKey: id) == "mybox")
+        #expect(directory.name(forKey: id) == "box-1")
         directory.forget(id)
         #expect(directory.all.isEmpty)
     }
