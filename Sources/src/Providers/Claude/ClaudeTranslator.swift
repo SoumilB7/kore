@@ -28,6 +28,10 @@ package final class ClaudeTranslator {
     private var followups: [Followup] = []
     /// Replaying a transcript: no snapshots; a turn's files come from its tool edits.
     private var replaying = false
+    /// Names Kore asked the CLI for (`rename_session`): each one's frame is a rename.
+    package var askedTitles: [String] = []
+    /// A turn of this process has ended: from then a name the CLI says unasked is a rename.
+    private var turnEnded = false
     /// The running turn's login was refused: the CLI's line, for its failed notice.
     private var authRefused: String?
     /// The reset a `rate_limit_event` gave as it refused this turn's request (the plan's limit).
@@ -224,6 +228,9 @@ package final class ClaudeTranslator {
         out.append(.userMessage(text: text, attachments: attachments, id: id))
     }
 
+    /// A new CLI process: the name it says before its first turn ends is only said again.
+    package func launching() { turnEnded = false }
+
     /// Closes a turn that never reached the CLI (the send failed).
     package func abandonTurn() {
         guard let turn else { return }
@@ -240,6 +247,7 @@ package final class ClaudeTranslator {
             commands.interrupting = false
         }
         turnAgents = []
+        if !replaying { turnEnded = true }
         if let answer = finalAnswer() { out.append(.finalAnswer(answer)) }
         out.append(.turnFinished(turn, outcome, duration: duration))
         if let turn {
@@ -542,9 +550,16 @@ package final class ClaudeTranslator {
                 }
             case "session_title_changed":
                 // The session's name (never an AI title): at start when it has one, and after
-                // each rename, `/rename` typed in the chat or Kore's own `rename_session`.
+                // each rename, `/rename` typed in the chat or Kore's own `rename_session`. One
+                // not asked for before this process's first turn ends is only said (a fork's
+                // session has its original's name until it's renamed).
                 if let title = json["title"]?.string, !title.allSatisfy(\.isWhitespace) {
-                    out.append(.titleChanged(title, rename: true))
+                    if let asked = askedTitles.firstIndex(of: title) {
+                        askedTitles.removeSubrange(...asked)
+                        out.append(.titleChanged(title, rename: true))
+                    } else {
+                        out.append(turnEnded ? .titleChanged(title, rename: true) : .titleAnnounced(title))
+                    }
                 }
             case "api_retry":
                 // No network, or the API not answering: the CLI tries again, ten times over minutes.

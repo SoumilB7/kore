@@ -637,6 +637,7 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     /// A box that keeps "Allow commands in Plan" with the chat (0.3.5) answers there.
     package var keepsPlanAllow: Bool { offers("setPlanAllow") }
+    package var tellsAnnouncedName: Bool { false }
 
     package func keepPlanAllow(_ on: Bool) {
         Task {

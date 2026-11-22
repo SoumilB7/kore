@@ -688,6 +688,7 @@ package final class CodexBackend: ChatBackend {
         let (events, changes) = translator.take()
         for event in events {
             if case .titleChanged = event { mayTitle = false }
+            if case .titleAnnounced = event { mayTitle = false }
             if case .agentResumed(let id) = event {
                 observed.remove(id)
                 follows.removeValue(forKey: id)?.cancel()

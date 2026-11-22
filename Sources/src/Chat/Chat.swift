@@ -271,6 +271,15 @@ package final class Chat: Identifiable {
         status.name = newName
     }
 
+    /// A name the CLI only says as it starts never replaces the chat's (a fork's file carries its
+    /// original's name): when they differ, the CLI is told the chat's.
+    private func tellName(_ event: ChatEvent) {
+        guard case .titleAnnounced(let said) = event, let name = status.name, name != said, let backend,
+            backend.tellsAnnouncedName
+        else { return }
+        Task { try? await backend.rename(name) }
+    }
+
     /// The name a typed `/rename` gives (nil: not one, or this chat's CLI keeps no title).
     private func typedRename(_ text: String, files: Bool) -> String? {
         guard !files, provider.renames else { return nil }
@@ -400,6 +409,7 @@ package final class Chat: Identifiable {
             Task.detached { HandoffRecords.alias(record, session: id) }
         }
         noteFork(event)
+        tellName(event)
         status.apply(event)
         context.apply(event)
         // Codex says a model's window only in a chat: kept for the next import into one.

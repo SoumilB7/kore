@@ -326,7 +326,7 @@ final class ForkFromMessage: ChatStoryline {
         super.steps() + [
             Send("one"), TurnFinished(1), Send("two"), TurnFinished(2),
             Fork.fromMessage(2),
-            Expect("a “(fork)” tab") { try $0.activeChat().storyTitle.hasSuffix("(fork)") },
+            Expect("a “(fork)” tab") { try $0.activeChat().storyTitle.isForkTitle },
             Expect.rows("only what came before message 2") { rows in
                 rows.filter { $0.kind == "user" }.map(\.text) == ["one"] && rows.contains { $0.text == "First answer" }
                     && !rows.contains { $0.text == "Second answer" }
@@ -348,7 +348,7 @@ final class ForkFromAnswer: ChatStoryline {
         super.steps() + [
             Send("one"), TurnFinished(1), Send("two"), TurnFinished(2),
             Fork.fromAnswer(1),
-            Expect("a “(fork)” tab") { try $0.activeChat().storyTitle.hasSuffix("(fork)") },
+            Expect("a “(fork)” tab") { try $0.activeChat().storyTitle.isForkTitle },
             Expect.rows("the conversation through answer 1") { rows in
                 rows.filter { $0.kind == "user" }.map(\.text) == ["one"] && rows.last { $0.kind == "assistant" }?.text == "First answer"
             },
@@ -794,7 +794,7 @@ final class ForkStartFails: ChatStoryline {
             Expect.rows("the original's history up to the fork point") { rows in
                 users(rows) == ["one"] && rows.contains { $0.text == "First answer" }
             },
-            Expect("a “(fork)” tab") { try $0.activeChat().storyTitle.hasSuffix("(fork)") },
+            Expect("a “(fork)” tab") { try $0.activeChat().storyTitle.isForkTitle },
             Send("two again"), TurnFinished(1),
             Expect.rows("the fork goes on") { rows in users(rows) == ["one", "two again"] },
         ]
@@ -828,7 +828,7 @@ final class ForkListedInHistory: ChatStoryline {
         super.steps() + [
             Send("one"), TurnFinished(1),
             Fork.fromAnswer(1),
-            Expect("a “(fork)” tab") { try $0.activeChat().storyTitle.hasSuffix("(fork)") },
+            Expect("a “(fork)” tab") { try $0.activeChat().storyTitle.isForkTitle },
             Press(.id(StoryID.Titlebar.history)),
             Expect("one History row for the fork, nothing sent in it", found: { "\(Self.listed($0))" }) { story in
                 // The fork's backend is found by the session its chat has taken, which the chat's
@@ -1127,7 +1127,7 @@ final class SlashMenuCaret: ChatStoryline {
             Expect("the fork's chip and text", found: { story in
                 "chip \(story.app.chat?.command?.name ?? "none"), draft “\(story.app.chat?.draft ?? "?")”"
             }) { story in
-                story.app.chat?.storyTitle.hasSuffix("(fork)") == true && story.app.chat?.command?.name == "review"
+                story.app.chat?.storyTitle.isForkTitle == true && story.app.chat?.command?.name == "review"
                     && story.app.chat?.draft == "café → “ok” 🙂" + text.trimmingCharacters(in: .whitespaces)
             },
         ]

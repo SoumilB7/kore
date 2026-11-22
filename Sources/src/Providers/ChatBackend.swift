@@ -131,6 +131,9 @@ package protocol ChatBackend: AnyObject {
     /// there, and the chat there answers each permission, never this one.
     var keepsPlanAllow: Bool { get }
     func keepPlanAllow(_ on: Bool)
+    /// The chat's name goes to the CLI when the CLI starts with another (`ChatEvent.titleAnnounced`);
+    /// a box's chat does it there.
+    var tellsAnnouncedName: Bool { get }
     func close() async
 }
 
@@ -297,6 +300,7 @@ extension ChatBackend {
     /// For a backend whose chat's settings are this Mac's.
     package func keepAutoCompact(_ point: Int?) {}
     package var keepsPlanAllow: Bool { false }
+    package var tellsAnnouncedName: Bool { true }
     package func keepPlanAllow(_ on: Bool) {}
 
     /// For a backend with no account to read.

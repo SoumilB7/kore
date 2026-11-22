@@ -129,6 +129,7 @@ package final class ClaudeBackend: ChatBackend {
 
     private func launch() async throws {
         try Task.checkCancellation()
+        translator.launching()
         // A resumed session's past is read while the CLI starts, and shown as soon as it's read
         // (a page takes a fraction of a second, the CLI a second or more).
         let folder = options.folder
@@ -1171,6 +1172,7 @@ package final class ClaudeBackend: ChatBackend {
         // A fork's session exists from its first message: give it its "(fork)" title.
         if let title = options.forkTitle, !forkNamed {
             forkNamed = true
+            translator.askedTitles.append(title)
             try? await session.rename(title)
         }
         // Headless sessions don't name themselves; ask, as the VS Code extension does. Not
@@ -1377,6 +1379,7 @@ package final class ClaudeBackend: ChatBackend {
         }
         try await start()
         titled = true
+        translator.askedTitles.append(title)
         try await session?.rename(title)
     }
 

@@ -157,7 +157,7 @@ private struct ClickRowAction: Step {
         case (let expected?, _): (expected.what, { try expected.check(story) })
         case (nil, .copy): ("its text copied", { StoryTranscript.copied == entry.text })
         case (nil, .fork): ("a fork tab", {
-            (story.app.workspace?.tabs.count ?? 0) > tabs && ((try? story.activeChat().storyTitle.hasSuffix("(fork)")) ?? false)
+            (story.app.workspace?.tabs.count ?? 0) > tabs && ((try? story.activeChat().storyTitle.isForkTitle) ?? false)
         })
         case (nil, .rollback): ("“Roll back, files stay” shown", { !frames(base.part(.rollback).part(.done)).isEmpty })
         case (nil, .confirm): ("a rollback", { false })

@@ -51,6 +51,11 @@ extension ChatEvent: Codable {
             var t = try Tagged(encoder, "titleChanged")
             if rename { try t.put("rename", true) }
             try t.put("title", title)
+        case .titleAnnounced(let title):
+            // A titleChanged to an older Mac: taken only while it has no name.
+            var t = try Tagged(encoder, "titleChanged")
+            try t.put("announced", true)
+            try t.put("title", title)
         case .controlsLoaded(let controls):
             var t = try Tagged(encoder, "controlsLoaded")
             try t.put("controls", controls)
@@ -239,7 +244,10 @@ extension ChatEvent: Codable {
         switch u.type {
         case "sessionIdentified": self = .sessionIdentified(try u.get("id"))
         case "conversationReset": self = .conversationReset(try u.get("id"))
-        case "titleChanged": self = .titleChanged(try u.get("title"), rename: try u.opt("rename") ?? false)
+        case "titleChanged":
+            self =
+                (try u.opt("announced") as Bool?) == true
+                ? .titleAnnounced(try u.get("title")) : .titleChanged(try u.get("title"), rename: try u.opt("rename") ?? false)
         case "controlsLoaded": self = .controlsLoaded(try u.get("controls"))
         case "modeChanged": self = .modeChanged(try u.get("change"))
         case "planModeChanged": self = .planModeChanged(try u.get("change"))

@@ -485,11 +485,12 @@ package final class Workspace {
 
     /// A fork of `chat` from one of its user messages, in a new tab right after it: the history
     /// before that message, the message itself in the composer (not sent), the same mode, and
-    /// "<title> (fork)" (the Claude Code extension's fork). Its settings are its original's
-    /// (`open(_:of:)`); `arsenal` false: its Arsenal stays off (an agent's fork).
+    /// "<title> (fork)" (the Claude Code extension's fork), then "(fork 2)" and on
+    /// (`forkTitle`). Its settings are its original's (`open(_:of:)`); `arsenal` false: its
+    /// Arsenal stays off (an agent's fork).
     @discardableResult
     func fork(_ chat: Chat, _ start: ForkStart, text: String, arsenal: Bool = true) -> Chat? {
-        let title = "\(chat.title) (fork)"
+        let title = Self.forkTitle(of: chat.title, taken: chats.map(\.title) + tabs.compactMap { $0.chat?.title })
         let fork: Chat
         // A box's chat forks on the box: its fork is a new chat there, made from the same point.
         if let box {
@@ -527,6 +528,24 @@ package final class Workspace {
         }
         open(fork, of: chat, text: text, arsenal: arsenal)
         return fork
+    }
+
+    /// A fork's name: its chat's base title (a fork's own, without its "(fork n)") and the first
+    /// "(fork)", "(fork 2)", … that no chat of the folder has.
+    nonisolated static func forkTitle(of title: String, taken: [String]) -> String {
+        let base = forkBase(title) ?? title
+        let used = Set(taken)
+        var n = 1
+        while used.contains(n == 1 ? "\(base) (fork)" : "\(base) (fork \(n))") { n += 1 }
+        return n == 1 ? "\(base) (fork)" : "\(base) (fork \(n))"
+    }
+
+    /// A fork's title without its "(fork)" / "(fork n)"; nil when it isn't one.
+    nonisolated package static func forkBase(_ title: String) -> String? {
+        guard title.hasSuffix(")"), let open = title.range(of: " (fork", options: .backwards) else { return nil }
+        let number = title[open.upperBound..<title.index(before: title.endIndex)]
+        guard number.isEmpty || (number.first == " " && Int(number.dropFirst()).map { $0 > 1 } == true) else { return nil }
+        return String(title[..<open.lowerBound])
     }
 
     /// The fork of an imported chat from its first own message: the history kept with its
@@ -1809,4 +1828,9 @@ extension Workspace {
         onFolderMoved?(new)
         Task { await refresh() }
     }
+}
+
+extension String {
+    /// "<title> (fork)" or "<title> (fork n)" (`Workspace.forkTitle`).
+    package var isForkTitle: Bool { Workspace.forkBase(self) != nil }
 }

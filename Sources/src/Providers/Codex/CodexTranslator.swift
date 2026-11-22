@@ -194,7 +194,8 @@ package final class CodexTranslator {
             out.append(.sessionIdentified(id))
             // Codex names a thread only when a client sets one (a rename, or the Codex app's own
             // generated title); until then the chat goes by its first prompt.
-            if let name = Self.threadName(raw["thread"]?["name"]) { out.append(.titleChanged(name, rename: true)) }
+            // Said as the thread starts (a fork's is its original's): no rename.
+            if let name = Self.threadName(raw["thread"]?["name"]) { out.append(.titleAnnounced(name)) }
         case .turnStarted(let id):
             if case .sub(let thread) = agent {
                 // A follow-up (followup_task, resume_agent) runs a child again as a turn of its own.

@@ -268,6 +268,25 @@ struct BoxStateTests {
         #expect(await logged(hc).contains { if case .titleChanged("Device", true)? = $0.e { true } else { false } })
     }
 
+    /// A fork on the box, Claude's and Codex's: its CLI says its original's name as it starts;
+    /// the fork keeps "(fork)" for every client and its CLI is told so.
+    @Test(arguments: ["claude", "codex"])
+    func aBoxForkKeepsItsNameOverItsCLIsStartTimeName(_ provider: String) async throws {
+        let (rig, _, made) = try rig(provider)
+        defer { rig.finish() }
+        let hc = try #require(
+            rig.host.newChat(folder: rig.folder.path, provider: provider, modelId: nil, fork: ("s0", "m1"), title: "Slive (fork)"))
+        let chat = try #require(rig.host.live(hc))
+        await chat.startOnce()
+        #expect(made.last.options.forkTitle == "Slive (fork)")
+        made.last.sink.yield(.titleAnnounced("Slive"))
+        try await until { made.last.calls.contains("rename Slive (fork)") }
+        #expect(hc.record.title == "Slive (fork)" && chat.title == "Slive (fork)")
+        // A rename its CLI makes later still renames.
+        made.last.sink.yield(.titleChanged("Device", rename: true))
+        try await until { hc.record.title == "Device" }
+    }
+
     /// A box chat kept with a session and an empty title (as the phone's untitled row) wakes
     /// with a title: its first words, or its CLI's name.
     @Test func aBoxChatKeptWithAnEmptyTitleShowsOne() async throws {

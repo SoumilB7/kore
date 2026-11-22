@@ -1026,7 +1026,7 @@ private struct ActiveTabName: View {
             .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
             .foregroundStyle(tint ?? Theme.text)
             .lineLimit(1)
-            .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
+            .truncationMode(Workspace.forkBase(tab.title) != nil ? .middle : .tail)
             .padding(.leading, Space.sm)
             .help(tab.title)
             .storyID(StoryID.Titlebar.tabName)
@@ -1132,7 +1132,7 @@ private struct HiddenTabsList: View {
                     .font(tab.isPreview ? Chrome.bodyItalic : Chrome.body)
                     .foregroundStyle(TabMark.fileTint(tab, in: files) ?? Theme.text)
                     .lineLimit(1)
-                    .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
+                    .truncationMode(Workspace.forkBase(tab.title) != nil ? .middle : .tail)
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, Space.md)
@@ -1379,8 +1379,8 @@ private struct TabItem: View {
                 .foregroundStyle(TabMark.fileTint(tab, in: workspace.files) ?? (isActive ? Theme.text : Theme.secondary))
                 .strikethrough(tab.file?.notice == .deleted)
                 .lineLimit(1)
-                // A fork's title is cut in the middle, so " (fork)" always shows.
-                .truncationMode(tab.title.hasSuffix(" (fork)") ? .middle : .tail)
+                // A fork's title is cut in the middle, so its " (fork n)" always shows.
+                .truncationMode(Workspace.forkBase(tab.title) != nil ? .middle : .tail)
             if let from = movedFrom {
                 Text("from \(from)").font(Chrome.label).foregroundStyle(Theme.tertiary).lineLimit(1).layoutPriority(-1)
             }

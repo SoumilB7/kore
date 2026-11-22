@@ -38,6 +38,8 @@ package final class ChatStatus {
             sessionId = id
         case .titleChanged(let title, let rename):
             if rename || name == nil { name = title }
+        case .titleAnnounced(let title):
+            if name == nil { name = title }
         case .turnStarted:
             isRunning = true
         case .turnFinished, .exited:

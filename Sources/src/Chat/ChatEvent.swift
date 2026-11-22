@@ -13,6 +13,10 @@ package enum ChatEvent: Sendable {
     /// `system/session_title_changed`, Codex's `thread/name/updated`), which replaces any title;
     /// otherwise a generated one (Claude, after the first prompt), taken only while there's none.
     case titleChanged(String, rename: Bool = false)
+    /// The name the CLI says its session has as it starts (Claude's `session_title_changed`
+    /// before its first turn ends, the name in Codex's thread start): never a rename. A chat with
+    /// a name keeps it, and tells its CLI (a fork carries its original's name until then).
+    case titleAnnounced(String)
     /// The CLI discarded the conversation (Claude's /clear): it goes on as this session id, on a
     /// fresh transcript; the old session stays in History.
     case conversationReset(String)

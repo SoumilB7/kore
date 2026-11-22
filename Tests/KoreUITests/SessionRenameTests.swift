@@ -19,7 +19,8 @@ struct SessionRenameTests {
 
     @Test func claudesRenameFrameRenamesTheChat() throws {
         let t = ClaudeTranslator(folder: Self.folder, sessionId: "s1")
-        let events = try ActiveCommandsTests.claude(t, [Self.renamed])
+        // After a turn: before one, it's only the name said at start (`ForkTitleTests`).
+        let events = try ActiveCommandsTests.claude(t, [ForkTitleTests.result, Self.renamed])
         #expect(events.contains { if case .titleChanged("Device", true) = $0 { true } else { false } })
         let status = ChatStatus(resume: nil)
         status.apply(.titleChanged("Claude"))
