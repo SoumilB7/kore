@@ -504,6 +504,10 @@ package final class InputDriver {
     /// sight (as a person scrolls to what they click), and checked to be inside the window.
     private func aim(_ element: StoryElement) async throws -> (NSWindow, CGPoint) {
         StoryHost.touch(element.id.raw)
+        // Aimed once it holds still: a list just changed (a row moved under another) puts its
+        // views in place on a later pass, and a frame read before then is where the row was, not
+        // where it's drawn and hit.
+        let element = await settled(element)
         guard let window = element.window, var frame = element.frame else {
             throw StoryFailure.elementNotFound(element.id.raw, nearby: StoryRegistry.nearest(to: element.id.raw))
         }
@@ -516,6 +520,20 @@ package final class InputDriver {
             throw StoryFailure.other("\(element.id) is outside its window (\(Self.describe(frame)) in \(Self.describe(window.contentView?.frame ?? .zero)))")
         }
         return (window, point)
+    }
+
+    /// The element once its window is laid out and its frame is the same over two passes (at
+    /// most ten), looked up again each time: laying out can put it in a view of its own.
+    private func settled(_ element: StoryElement) async -> StoryElement {
+        var element = element, was: CGRect?
+        for _ in 0..<10 {
+            element.window?.contentView?.layoutSubtreeIfNeeded()
+            element = element.window.flatMap { StoryElement(element.id, in: $0) } ?? StoryElement(element.id) ?? element
+            guard let now = element.frame, now != was else { return element }
+            was = now
+            await pass()
+        }
+        return element
     }
 
     private func mouseEvent(

@@ -296,6 +296,13 @@ final class AccountLoginEdges: ChatStoryline {
                 return true
             }
         }
+        // Main's own folder: what a read of main answers, while work's keeps work's.
+        let mainStatus = { (what: String, _ reply: JSONValue) in
+            Expect(what) { _ in
+                accounts.statusOf["\(provider)/main"] = reply
+                return true
+            }
+        }
         return [UseScript(AccountPopup.script(provider), for: provider), SeedLogins(provider: provider), OpenFolder(), StartChat()]
             + [WaitForFocus(.id(StoryID.Composer.field))] + open + [
                 Press(part(.switch)),
@@ -309,11 +316,11 @@ final class AccountLoginEdges: ChatStoryline {
                 // Main's row is up from the start (one login lists too): pressed only once the
                 // sign-in has ended, as a row can't switch while one runs.
                 Expect("the sign-in's outcome", found: { $0.app.chat?.storyAccount.last }) { $0.app.chat?.storyAccount.last == "Switched accounts." },
-                status("main's status, as its folder reads", me),
+                mainStatus("main's status, as its folder reads", me),
                 Press(.id(main)),
                 logins("main active", ["✓ you@example.com", "work@acme.dev"]),
                 // Signed out from a terminal: the list stays, with the signed-out row under it.
-                status("main signed out outside Kore", out),
+                mainStatus("main signed out outside Kore", out),
                 Key(.escape),
                 ExpectElement(popup, .absent),
             ] + open + [
@@ -329,7 +336,7 @@ final class AccountLoginEdges: ChatStoryline {
                 Press(added(nil)),
                 logins("switched to work", ["you@example.com · Signed out", "✓ work@acme.dev"]),
                 // Main signs in again as work: the added login is the same account.
-                status("main's status, as its folder reads", out),
+                mainStatus("main's status, as its folder reads", out),
                 Press(.id(main)),
                 logins("main active, signed out", ["✓ you@example.com · Signed out", "work@acme.dev"]),
                 Press(part(.signIn)),
