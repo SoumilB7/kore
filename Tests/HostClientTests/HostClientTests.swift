@@ -245,6 +245,46 @@ struct HostClientTests {
         #expect(BoxList(defaults: defaults, hosts: { [] }, cacheRoot: root).boxes.map(\.alias) == ["mybox", "other"])
     }
 
+    /// A probe's line is its link's answer, whichever ends first: the machine's look beside it
+    /// failing never puts its own line over the link's (a slow ssh under load did once).
+    @Test func aProbesLineIsItsLinksWhicheverEndsFirst() async throws {
+        for linkFirst in [true, false] {
+            let root = Fixture.scratch()
+            let defaults = try #require(UserDefaults(suiteName: "hostclient-\(UUID().uuidString)"))
+            // The machine's look fails once `go` is there (link first) or at once; the link ends at
+            // once (link first) or once the look has failed.
+            let (go, looked, ssh) = (root.appendingPathComponent("go"), root.appendingPathComponent("looked"), root.appendingPathComponent("fake-ssh"))
+            let wait = linkFirst ? "i=0\nwhile [ ! -f '\(go.path)' ] && [ $i -lt 3000 ]; do sleep 0.01; i=$((i+1)); done\n" : ""
+            try Data("#!/bin/sh\n\(wait)touch '\(looked.path)'\nexit 1\n".utf8).write(to: ssh)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)
+            let list = BoxList(
+                defaults: defaults, hosts: { [] }, cacheRoot: root.appendingPathComponent("cache"),
+                connection: { alias in
+                    let connection = HostConnection(alias: alias, cache: HostCache(alias: alias, root: root.appendingPathComponent(alias))) {
+                        let (client, host) = FakeHost.pair()
+                        Task { @MainActor in
+                            if !linkFirst { _ = await until { FileManager.default.fileExists(atPath: looked.path) } }
+                            host.close()
+                        }
+                        return client
+                    }
+                    connection.backoff = [.seconds(30)]
+                    return connection
+                }, setup: { BoxSetup(alias: $0, grant: $1, shell: BoxShell(ssh: ssh.path, scp: "/usr/bin/false")) })
+            list.add("other")
+            let link = BoxList.Status.unreachable("Can't reach other", .tryAgain)
+            if linkFirst {
+                Task { @MainActor in
+                    _ = await until { list.box("other")?.status == link }
+                    FileManager.default.createFile(atPath: go.path, contents: nil)
+                }
+            }
+            await list.probe("other")
+            #expect(FileManager.default.fileExists(atPath: looked.path), "link first: \(linkFirst)")
+            #expect(list.box("other")?.status == link, "link first: \(linkFirst)")
+        }
+    }
+
     @Test func sshHostsAndArguments() {
         let config = """
             Host mybox

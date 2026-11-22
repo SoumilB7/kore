@@ -348,7 +348,7 @@ package final class BoxList {
             $0.fresh = false
         }
         // The machine, once per box (kept after): found beside the link, over its own session.
-        let finding = box(alias)?.machine == nil ? Task { await detect(alias) } : nil
+        let finding = box(alias)?.machine == nil ? Task { await detect(alias, beside: true) } : nil
         let found: (folders: [BoxFolder], older: Bool)? = await linked(alias) { (await $0.listFolders(), $0.hostOlder) }
         if let found {
             update(alias) {
@@ -365,12 +365,15 @@ package final class BoxList {
     // MARK: The machine
 
     /// Finds what the box is (one ssh session, reading only) and keeps it; compares it with this
-    /// Mac again. Nil, with the line set, when ssh failed.
+    /// Mac again. Nil, with the line set, when ssh failed; `beside` a probe's link, whose own
+    /// answer is the line, it never sets it.
     @discardableResult
-    package func detect(_ alias: String, deep: Bool = true) async -> BoxMachine? { try? await look(alias, deep: deep).get() }
+    package func detect(_ alias: String, deep: Bool = true, beside: Bool = false) async -> BoxMachine? {
+        try? await look(alias, deep: deep, beside: beside).get()
+    }
 
     /// `detect`, with why it failed (Check again says it).
-    package func look(_ alias: String, deep: Bool = true) async -> Result<BoxMachine, BoxSetup.Failure> {
+    package func look(_ alias: String, deep: Bool = true, beside: Bool = false) async -> Result<BoxMachine, BoxSetup.Failure> {
         do {
             let machine = try await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).detect(deep: deep)
             machine.keep(alias, root: cacheRoot)
@@ -381,7 +384,7 @@ package final class BoxList {
             return .success(machine)
         } catch {
             // Only when nothing better is known: the link's own answer says more.
-            if case .probing = box(alias)?.status {} else if box(alias)?.status != .ready {
+            if beside {} else if case .probing = box(alias)?.status {} else if box(alias)?.status != .ready {
                 update(alias) { $0.status = .unreachable(error.message, error.fix) }
             }
             return .failure(error)
