@@ -176,13 +176,15 @@ final class TerminalRunBusy: ChatStoryline {
 }
 
 /// The owner's clipboard is never written or read by these storylines: only its change count is
-/// looked at, before and after.
+/// looked at, before and after. By its name: under a host `NSPasteboard.general` is the host's own
+/// board (GeneralPasteboardGuard), which the terminal's copy writes.
 enum ClipboardGuard {
     @MainActor private static var count: Int?
-    static var start: Do { Do("Note the owner's clipboard's change count (never its content)") { _ in count = NSPasteboard.general.changeCount } }
+    private static var owners: NSPasteboard { NSPasteboard(name: .general) }
+    static var start: Do { Do("Note the owner's clipboard's change count (never its content)") { _ in count = owners.changeCount } }
     static var end: Expect {
-        Expect("the owner's clipboard untouched", found: { _ in "\(count ?? -1) → \(NSPasteboard.general.changeCount)" }) { _ in
-            count == NSPasteboard.general.changeCount
+        Expect("the owner's clipboard untouched", found: { _ in "\(count ?? -1) → \(owners.changeCount)" }) { _ in
+            count == owners.changeCount
         }
     }
 }
