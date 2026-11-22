@@ -2,6 +2,81 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
+## [0.3.10] - 2026-11-26
+
+### Added
+- Copy and paste a chat: Copy or Cut on a tab's right-click or a History row, then Paste Chat (or
+  ⌘V outside a text field) in any window, on this Mac or a box. The phone can do it too: Copy on a
+  chat or a History row, Paste chat on a window of any device; the Mac makes the copy. A copy the
+  phone asked for starts at Manual at most, with Arsenal and Plan's allow switch off, and stays
+  there through restarts and moves until you pick a higher mode on the Mac.
+- Resume after a close: chats that were working when Kore quit or crashed are offered once, in
+  one quiet line, when their window opens again. Resume sends each picked chat a short note to
+  carry on ("Resume with sub-agents" when some were running).
+- File copies and sync with a box run over KoreNet with `kore pipe`, so a box needs no SSH for
+  them; with Tailscale gone, box SSH and sync follow Kore's tailnet.
+- Phone: long-press a chat to Pin it; pins are the phone's own and sit at the top of that
+  device's list.
+- Arsenal arranges tabs: a chat can group, move, fold, rename and show the tabs in its own window
+  (`kore_arrange`, `kore_show_tab`), and its list of chats shows each window's tab order, front
+  tab and groups. Your own groups stay unless you asked for the change.
+- Arsenal sets a chat's auto-compact point (50 to 90 %, or off), as the context wheel does
+  (`kore_set_compact`).
+- Box chats add Claude accounts on the box itself, each signed in its own folder there; a box's
+  Codex keeps its one login.
+- Terminal keys work as in Terminal.app: ⌘←/⌘→ to the line's start and end, ⌘⌫ deletes to the
+  line's start, ⌘K clears, ⌥-click moves the cursor on the prompt's line, and ⌥ types what the
+  keyboard layout puts on a key. ⌘C copies the selection as shown. Text typed or pasted while a
+  shell is still starting waits for its prompt instead of echoing twice. A program in the terminal
+  can't read your clipboard.
+- Box host keys in Set up: a new key shows its fingerprint with Trust · Copy · Check again; a
+  changed key says it could be an attack and offers no Trust; an alias that now points at a new
+  address says so.
+
+### Changed
+- Kore asks its questions in its own card over the window (unsaved files, closing a busy tab,
+  removing things), and hover tips are Kore's own; no more macOS alerts.
+- A chat left idle for 10 minutes rests its CLI and gives its memory back; the next message or a
+  key typed in its composer starts it again on the same session, transcript kept.
+- A box's name is your Devices rename, else the box's own name, never its SSH alias. Its row
+  shows the route in use ("· Kore's tailnet", "· Tailscale" or "· SSH (alias)"); the hover shows
+  the node and address, and ⋯ can Forget the SSH route.
+- Devices has one +: Add a box or Add a phone (which turns KoreNet on first if it's off). Kore's
+  tailnet and "Update boxes automatically" sit at the pane's foot.
+- The agent map lists one line per agent, with counts of running and done ones, and a failed
+  agent says why at its end. Clicking a tab closes the map.
+- New tabs open after the front tab's group instead of splitting it; a group stays whole.
+- History marks the chat the current tab shows. A usage window not begun yet keeps its row at 0 %,
+  "Starts with your next message".
+- A background command's output in the terminal is shown whole and only grows, instead of
+  redrawing from the top.
+- A code block's Copy is always there, faint until you point at the block.
+- Phone: question cards show whole, with a scrollbar instead of fades; hold an option to read it
+  in full.
+- Phone: links stay up for a few minutes while the app is off screen, so coming back is instant.
+- Arsenal's list says when a chat can't be driven because it was told Always allow and the caller
+  wasn't.
+
+### Fixed
+- Past box sessions opened from History show their history at once, not an empty chat until a
+  send.
+- Arsenal opening a chat, or a box chat landing on this Mac, can no longer come up in a freer
+  mode than its history or the chat that asked for it.
+- Long chats jump less while you read and while an answer streams, and the message rail lights
+  the message you're on after a send.
+- A trackpad pinch no longer snaps the page back, and the editor keeps its sideways scroll when
+  zoomed.
+- Numbered lists that start past 1 ("5.", "6.") stay lists, on the Mac and the phone.
+- Panes floating over a narrow window close on a click elsewhere, and their icon's first press
+  opens them.
+- "Always ask for these in my settings" with an added Claude login writes to the settings that
+  login reads, and no longer parts its linked settings file from the main one.
+- Right-clicking the empty end of the tab strip opens its menu again.
+- A box host key is compared by the key itself, so a reordered or hashed known_hosts no longer
+  looks like a new key.
+- A dead SSH link to a box ends with a line saying so instead of waiting.
+- TODO(Resource): terminal busy on a slow shell start; box probe line.
+
 ## [0.3.9] - 2026-11-24
 
 ### Changed
