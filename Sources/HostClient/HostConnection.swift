@@ -99,6 +99,11 @@ package final class HostConnection {
     /// 1.10: the last move command's bytes on the link, both ways (a move's cost).
     @ObservationIgnored package var lastMoveBytes = 0
     @ObservationIgnored package private(set) var control: LinkControlLevel?
+    /// The welcome's caps and control as the link would take them (tests).
+    package func welcomed(caps: [String], control: LinkControlLevel?) {
+        self.caps = caps
+        self.control = control
+    }
     @ObservationIgnored package private(set) var cache: HostCache
     /// The CLIs whose login its chats' usage asked for (`LinkChatBackend`): once each.
     @ObservationIgnored package var loginsAsked: Set<String> = []

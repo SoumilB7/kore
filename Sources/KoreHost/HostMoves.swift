@@ -120,8 +120,8 @@ extension HostDaemon {
 
     func adopt(_ args: ControlArgs, id: String, from client: LinkClient) -> MoveResult {
         func refused(_ code: ResultCode, _ message: String) -> MoveResult { .refused(id, code, message) }
-        // Box chats go up to Auto: an older Mac's Full access comes in at Auto, said once.
-        let (args, capped) = Self.boxCapped(args)
+        // Full access comes in as it was from a Mac with full control; else at Auto, said once.
+        let (args, capped) = Self.boxCapped(args, fullAccess: client.mayFullAccess)
         guard let grant = client.holder, let phase = args.phase.flatMap(MovePhase.init(rawValue:)), let moveId = args.moveId,
             LinkMoves.plainMoveID(moveId)
         else { return refused(.invalid, "Name the move.") }
@@ -296,22 +296,37 @@ extension HostDaemon {
         return macChanged == false
     }
 
-    /// A move's or copy's commit as a box takes it: a mode above Auto (`LinkPolicy.raiseCap`), an
-    /// older Mac's Full access, is the highest at or below it, and the line that says so. The CLI
-    /// is never launched able to bypass here (as root it refuses to start at all).
-    static func boxCapped(_ args: ControlArgs) -> (ControlArgs, String?) {
+    /// A move's or copy's commit as a box takes it: Full access kept from a Mac with full control
+    /// (`fullAccess`), else the highest mode at or below Auto (`LinkPolicy.raiseCap`), and the
+    /// line that says so. Claude's Full access as root starts at Auto too (`rootRefusal`).
+    static func boxCapped(_ args: ControlArgs, fullAccess: Bool = false) -> (ControlArgs, String?) {
         guard let provider = args.provider else { return (args, nil) }
         var args = args
         var line: String?
-        if let mode = args.mode, case let capped = LinkPolicy.cappedMode(mode, provider: provider), capped != mode {
-            args.mode = capped
-            line = LinkPolicy.boxCappedLine(provider, to: capped)
+        func capped(_ mode: String) -> (mode: String, line: String)? {
+            if let root = rootRefusal(provider, mode) { return (LinkPolicy.cappedMode(mode, provider: provider), root) }
+            let capped = LinkPolicy.cappedMode(mode, provider: provider, fullAccess: fullAccess)
+            return capped == mode ? nil : (capped, LinkPolicy.boxCappedLine(provider, to: capped))
         }
-        if let mode = args.settings?.mode, case let capped = LinkPolicy.cappedMode(mode, provider: provider), capped != mode {
-            args.settings?.mode = capped
-            line = LinkPolicy.boxCappedLine(provider, to: capped)
+        if let mode = args.mode, let to = capped(mode) {
+            args.mode = to.mode
+            line = to.line
+        }
+        if let mode = args.settings?.mode, let to = capped(mode) {
+            args.settings?.mode = to.mode
+            line = to.line
         }
         return (args, line)
+    }
+
+    /// claude refuses every bypass flag as root, unless `IS_SANDBOX` says it's in a sandbox: Claude's
+    /// Full access can't start on a box run so. Read once; tests set it.
+    nonisolated(unsafe) static var bypassRefusedAsRoot = getuid() == 0 && ProcessInfo.processInfo.environment["IS_SANDBOX"] == nil
+
+    /// Why `mode` can't run on this box (Claude's Full access as root); nil when it can.
+    static func rootRefusal(_ provider: String?, _ mode: String?) -> String? {
+        guard bypassRefusedAsRoot, provider == "claude", mode == ClaudeModes.fullAccess else { return nil }
+        return LinkPolicy.boxRootLine(ProcessInfo.processInfo.hostName.split(separator: ".").first.map(String.init) ?? "this box")
     }
 
     static func joined(_ lines: String?...) -> String? {

@@ -296,7 +296,8 @@ struct HostTests {
         #expect(HostMeta.modeID(hc) == "auto")
         #expect(hc.record.mode == "auto")
         #expect(!HostMeta.meta(hc, raise: true).allowedModeIds.contains("bypassPermissions"))
-        #expect(rig.host.apply(.setMode(chatId: hc.id, modeId: "bypassPermissions"), id: "5", control: .full) { _ in }?.code == .raiseMode)
+        // A phone's raise stops at Auto, even under a full grant (a Mac's may go to Full access).
+        #expect(rig.host.apply(.setMode(chatId: hc.id, modeId: "bypassPermissions"), id: "5", control: .full, phone: true) { _ in }?.code == .raiseMode)
         // Lowering stays open to an act grant; an unknown mode is refused to anyone.
         #expect(rig.host.apply(.setMode(chatId: hc.id, modeId: "plan"), id: "3", control: .act) { _ in }?.ok == true)
         #expect(rig.host.apply(.setMode(chatId: hc.id, modeId: "nope"), id: "4", control: .full) { _ in }?.code == .invalid)

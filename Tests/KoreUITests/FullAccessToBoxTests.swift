@@ -7,9 +7,9 @@ import Testing
 @testable import KoreUI
 @testable import src
 
-/// Full access stays on this Mac (the review of 0.3.7): what a move or a copy says to a box is
-/// at most Auto, with one line on why; a chat brought back here isn't raised by coming, nor by
-/// the mode last picked here.
+/// Full access and boxes: what a move or a copy says to a box is at most Auto, with one line on
+/// why, unless this Mac has full control of a box that takes Full access (owner, 2026-11-22); a
+/// chat brought back here isn't raised by coming; Full access is never the mode new chats start in.
 @Suite("Full access stays on this Mac", .serialized) @MainActor
 struct FullAccessToBoxTests {
     @Test func aMoveOrCopyToABoxSaysAutoAndWhy() {
@@ -25,6 +25,61 @@ struct FullAccessToBoxTests {
             // At or below Auto: as it is, nothing said.
             var none: [String] = []
             #expect(ChatSettings(mode: cap).said(to: connection, provider: cli, notes: &none).mode == cap && none.isEmpty)
+        }
+    }
+
+    @Test func aMacWithFullControlOfABoxThatTakesItKeepsFullAccess() {
+        let alias = "fa-\(UUID().uuidString.prefix(6))"
+        let connection = HostConnection(alias: alias, cache: HostCache(alias: alias, root: FileManager.default.temporaryDirectory.appendingPathComponent("kore-fa-\(alias)"))) {
+            HistoryRenameTests.Silent()
+        }
+        for cli in ["claude", "codex"] {
+            let full = cli == "claude" ? ClaudeModes.fullAccess : CodexModes.fullAccess
+            func said(_ caps: [String], _ control: LinkControlLevel) -> (String?, [String]) {
+                connection.welcomed(caps: caps, control: control)
+                var notes: [String] = []
+                return (ChatSettings(mode: full).said(to: connection, provider: cli, notes: &notes).mode, notes)
+            }
+            // Full control of a box that takes it: kept, nothing said.
+            let kept = said([LinkPolicy.fullAccessCap], .full)
+            #expect(kept.0 == full && kept.1.isEmpty, "\(cli)")
+            // An older box, or a grant without full control: capped, said once.
+            for (caps, control) in [([String](), LinkControlLevel.full), ([LinkPolicy.fullAccessCap], .standard)] {
+                let (mode, notes) = said(caps, control)
+                #expect(mode != full && notes.count == 1, "\(cli) \(caps) \(control)")
+            }
+        }
+    }
+
+    @Test func fullAccessIsNeverRememberedButAutoIs() throws {
+        let defaults = try #require(UserDefaults(suiteName: "kore-fa-memory"))
+        defaults.removePersistentDomain(forName: "kore-fa-memory")
+        defer { defaults.removePersistentDomain(forName: "kore-fa-memory") }
+        let memory = ModeMemory(defaults: defaults)
+        for (provider, auto, full) in [(ProviderDescriptor.claude, "auto", ClaudeModes.fullAccess), (.codex, "approveForMe", CodexModes.fullAccess)] {
+            memory.remember(auto, for: provider)
+            #expect(memory.mode(for: provider) == auto)
+            // Full access is that chat's only: the last other pick stays.
+            memory.remember(full, for: provider)
+            #expect(memory.mode(for: provider) == auto)
+            #expect(ControlsStore(provider: provider, memory: memory).mode == auto)
+            // A chat picking it doesn't keep it either.
+            let chat = Chat(provider: provider, folder: URL(fileURLWithPath: "/tmp/kore-fa-memory"), modeMemory: memory)
+            chat.controls.remember(full)
+            #expect(memory.mode(for: provider) == auto)
+        }
+    }
+
+    @Test func aFullAccessKeptByAnOlderKoreFallsBackToTheFirstMode() throws {
+        let defaults = try #require(UserDefaults(suiteName: "kore-fa-migrate"))
+        defaults.removePersistentDomain(forName: "kore-fa-migrate")
+        defer { defaults.removePersistentDomain(forName: "kore-fa-migrate") }
+        let memory = ModeMemory(defaults: defaults)
+        for (provider, full) in [(ProviderDescriptor.claude, ClaudeModes.fullAccess), (.codex, CodexModes.fullAccess)] {
+            // As 0.3.7 kept it.
+            defaults.set(full, forKey: "lastMode." + provider.id)
+            #expect(ControlsStore(provider: provider, memory: memory).mode == provider.modes[0].id)
+            #expect(defaults.string(forKey: "lastMode." + provider.id) == nil)
         }
     }
 

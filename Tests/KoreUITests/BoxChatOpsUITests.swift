@@ -1,6 +1,7 @@
 import Foundation
 import HostClient
 import KoreCore
+import LinkProtocol
 import Testing
 
 @testable import KoreUI
@@ -62,5 +63,24 @@ struct BoxChatOpsUITests {
         #expect(box.newChat(.claude).controls.cappedModes.map(\.label) == ["Full access"])
         let macClaude = Chat(provider: .claude, folder: URL(fileURLWithPath: "/tmp"))
         #expect(macClaude.controls.availableModes.contains { $0.id == ClaudeModes.fullAccess } && macClaude.controls.cappedModes.isEmpty)
+    }
+
+    @Test func aMacWithFullControlOfABoxThatTakesItOffersFullAccess() {
+        let box = BoxBinding(alias: "mybox-\(UUID().uuidString.prefix(6))", folder: "/home/me/app")
+        for (provider, full) in [(ProviderDescriptor.claude, ClaudeModes.fullAccess), (.codex, CodexModes.fullAccess)] {
+            let chat = box.newChat(provider)
+            // A box that takes it, full control: offered, nothing dim; Arsenal still stops at Auto.
+            box.connection.welcomed(caps: [LinkPolicy.fullAccessCap], control: .full)
+            #expect(chat.controls.availableModes.contains { $0.id == full } && chat.controls.cappedModes.isEmpty)
+            let caller = Chat(provider: provider, folder: URL(fileURLWithPath: "/tmp"))
+            caller.controls.mode = full
+            let mac = Chat(provider: provider, folder: URL(fileURLWithPath: "/tmp"))
+            #expect(!chat.arsenalMayMove(to: full, under: caller) && mac.arsenalMayMove(to: full, under: caller))
+            // An older box, or a grant without full control: dim, with the line as before.
+            for (caps, control) in [([String](), LinkControlLevel.full), ([LinkPolicy.fullAccessCap], .standard)] {
+                box.connection.welcomed(caps: caps, control: control)
+                #expect(chat.controls.cappedModes.map(\.id) == [full] && chat.controls.levelCapNote == "Box chats go up to Auto")
+            }
+        }
     }
 }

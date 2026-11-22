@@ -301,14 +301,16 @@ struct StreamTests {
         let (rig, grant, hc) = try rig(backend)
         defer { rig.finish() }
         let client = try await StreamClient(rig, grant: grant)
-        // A raise past Auto, a `!` line and Always allow are refused; Auto itself is fine.
-        #expect(try await client.call(hc.id, .setMode("bypassPermissions")).code == .raiseMode)
+        // A `!` line and Always allow are refused; Auto is fine, and Full access from a Mac with
+        // full control (owner, 2026-11-22). A phone's or a standard grant's raise stops at Auto.
+        #expect(LinkPolicy.check(.setMode("bypassPermissions"), HostMeta.facts(hc, raise: true), control: .full) == .deny(.raiseMode, "The link can raise a chat's mode up to Auto."))
+        #expect(try await client.call(hc.id, .setMode("bypassPermissions")).ok)
         #expect(try await client.call(hc.id, .setMode("auto")).ok)
         #expect(try await client.call(hc.id, .send(text: "!rm -rf x", files: [], queued: nil, id: "m1")).code == .command)
         #expect(try await client.call(hc.id, .respond(approval: "a", decision: .allowAlways)).code == .alwaysAllow)
         #expect(try await client.call(hc.id, .setRemoteControl(true)).code == .command)
         #expect(try await client.call(hc.id, .send(text: "/login", files: [], queued: nil, id: "m2")).code == .command)
-        #expect(!backend.calls.contains { $0.hasPrefix("send") || $0 == "mode bypassPermissions" })
+        #expect(!backend.calls.contains { $0.hasPrefix("send") })
         // A call this box doesn't know reads as unknown and is refused.
         let unknown = #"{"t":"chat.call","id":"u1","chatId":"\#(hc.id)","command":{"teleport":{"_0":"x"}}}"#
         client.socket.send(Data(unknown.utf8))
@@ -341,7 +343,7 @@ struct StreamTests {
         let codex = rig.host.apply(.control(.chatNew, ControlArgs(provider: "codex", mode: "fullAccess", folder: path)), id: "1", control: .act) { _ in }
         #expect(codex?.code == .raiseMode)
         let fork = ControlArgs(entryId: "m1", provider: "claude", sessionId: "s1", mode: "bypassPermissions", folder: path)
-        #expect(rig.host.apply(.control(.chatNew, fork), id: "2", control: .full) { _ in }?.code == .raiseMode)
+        #expect(rig.host.apply(.control(.chatNew, fork), id: "2", control: .full, phone: true) { _ in }?.code == .raiseMode)
         #expect(rig.host.apply(.control(.chatNew, ControlArgs(provider: "claude", mode: "auto", folder: path)), id: "3", control: .act) { _ in }?.code == .raiseMode)
         #expect(rig.host.apply(.control(.chatNew, ControlArgs(provider: "claude", mode: "auto", folder: path)), id: "4", control: .full) { _ in }?.ok == true)
         // A control kind the box has no rule for is refused.

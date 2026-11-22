@@ -369,8 +369,13 @@ package final class HostChat {
         let chat = Chat(
             provider: provider, folder: folderURL, resume: session, fork: fork, modeMemory: ModeMemory(defaults: nil),
             compactMemory: AutoCompactMemory(defaults: nil), services: services)
-        // Never above Auto here, whatever a record from before says (`LinkPolicy.cappedMode`).
-        if let mode = record.mode { chat.controls.mode = LinkPolicy.cappedMode(mode, provider: provider.id) }
+        // As kept: Full access only as a Mac with full control set it, and never as root for
+        // Claude (`HostDaemon.rootRefusal`), which starts at Auto.
+        if let mode = record.mode {
+            chat.controls.mode = LinkPolicy.cappedMode(mode, provider: provider.id, fullAccess: HostDaemon.rootRefusal(provider.id, mode) == nil)
+        }
+        // Arsenal never moves a box chat above Auto, a chat in Full access's own agent included.
+        chat.controls.arsenalCap = LinkPolicy.raiseCap.rawValue
         if provider.planToggle != nil, let on = record.planMode { chat.controls.planMode = on }
         if let on = record.planAllow { chat.controls.planAllow = on }
         chat.copiedFrom = record.copied

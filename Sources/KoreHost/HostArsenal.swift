@@ -455,7 +455,10 @@ extension HostDaemon {
         }
         guard let provider = Registry.provider(args.provider ?? hc.provider.id) else { return Self.failed(.refused, "Kore runs claude or codex.") }
         let rank = rank(hc)
-        let cap = { (mode: String) in Chat.noFreer(mode, unreviewed: false, than: rank.id, unreviewed: rank.unreviewed) }
+        // At or below the caller's mode, and never above Auto (`LinkPolicy.raiseCap`).
+        let cap = { (mode: String) in
+            Chat.noFreer(mode, unreviewed: false, than: rank.id, unreviewed: rank.unreviewed) && LinkPolicy.cappedMode(mode, provider: provider.id) == mode
+        }
         let modes = provider.modes.filter { $0.listed || $0.id == CodexModes.readOnly }
         let named = { (option: ModeOption, name: String) in option.id.lowercased() == name.lowercased() || option.label.lowercased() == name.lowercased() }
         var wanted: ModeOption?

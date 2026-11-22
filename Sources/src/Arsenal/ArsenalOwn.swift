@@ -74,6 +74,8 @@ extension Chat {
     /// it no freer than the caller (the owner, 2026-11-15: "only when the chat is on the same
     /// level"; a chat in Edit automatically can't put another in Auto). Its own chat only lowers.
     package func arsenalMayMove(to id: String, under caller: Chat? = nil) -> Bool {
+        // A box's chat: never above Auto by Arsenal (`ControlsStore.arsenalCap`).
+        if let cap = controls.arsenalCap, let level = provider.modes.first(where: { $0.id == id })?.level, level > cap { return false }
         if let caller, caller !== self {
             let planning = id == "plan" || provider.planToggle?.id == id
             // A Codex chat ranks by its permissions: its Plan switch leaves them as they are.
