@@ -875,7 +875,7 @@ package final class ClaudeTranslator {
             id: r.id, title: "Allow \(r.toolName)?", detail: r.description,
             body: Self.summary(of: r.input, in: folder), canAlwaysAllow: !r.suggestions.isEmpty,
             questions: [], changes: Self.proposedChange(r.toolName, r.input).map { [$0] } ?? [], agent: agent)
-        // Auto asks a person (Kore's ask list, a safety check, the classifier): Run once or Deny,
+        // Auto asks a person in place (a safety check, the classifier, a hook of the user's): Run once or Deny,
         // and for a Bash command the CLI lets keep, Always allow its kind (`KoreAlwaysRule`).
         if r.personOnly {
             let rule = Self.alwaysRule(r, in: folder)

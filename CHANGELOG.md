@@ -29,6 +29,7 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
   the Devices line says so, and the old node stays in the Tailscale admin console until removed.
 - "Sign in on mybox" signs in to an account of its own on the box, never the box's main login.
 - Full access is never remembered as the default mode for new chats; Auto and the rest still are.
+- Auto no longer holds a chat on Kore's own list: Claude's own check decides; if a chat stops because a command was refused, a card offers Run once / Always allow.
 
 ### Fixed
 - Set up on a box again no longer locks its Mac out: the box keeps the grant tied to that Mac, and

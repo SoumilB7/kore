@@ -86,9 +86,8 @@ public actor ClaudeSession {
             var settings: [String] = []
             if let fastMode { settings.append(#""fastMode":\#(fastMode)"#) }
             if let switchModelsOnFlag { settings.append(#""switchModelsOnFlag":\#(switchModelsOnFlag)"#) }
-            // Kore's ask list (`kore hook pretool`): a PreToolUse hook for this process only, never a
-            // settings file. It asks only in Auto, so it rides every launch and a later switch to
-            // Auto has it too.
+            // Kore's hook (`kore hook pretool --once …`): a PreToolUse hook for this process only,
+            // never a settings file, and only while a Run once pass is open in Auto.
             if let askHook, let command = try? JSONEncoder().encode(askHook), let quoted = String(data: command, encoding: .utf8) {
                 settings.append(#""hooks":{"PreToolUse":[{"matcher":"Bash","hooks":[{"type":"command","command":\#(quoted)}]}]}"#)
             }

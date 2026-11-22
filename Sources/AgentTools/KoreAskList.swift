@@ -1,12 +1,15 @@
 import Foundation
 
-/// The calls an Auto chat asks a person about before Auto's own check sees them (the owner via
-/// Kore-main, 2026-11-19; z-docs/design/cli-wiring.md, "Auto asks"): Kore's PreToolUse hook
-/// (`kore hook pretool`, `kore-host hook pretool`) answers "ask" for these, so the person answers
-/// in place and the chat goes on with the real result. Everything else gets no decision, and the
-/// classifier decides as before. Text only: no network, no model, fast.
+/// Kore's reading of a shell line (which commands a line runs, what a removal reaches) and its
+/// PreToolUse hook (`kore hook pretool`, `kore-host hook pretool`). Since 0.3.7 Kore keeps no
+/// list of its own (the owner via Kore-main, 2026-11-22; z-docs/design/cli-wiring.md, "Auto
+/// stops"): Claude's own Auto check is the only judge, and the hook answers "ask" only for a
+/// one-time pass the person gave (`Pass`, Run once on a "Claude stopped" card), so the CLI asks in
+/// place and Kore answers allow. The reading serves `KoreAlwaysRule` (a rule's kind, the critical
+/// floor). Text only: no network, no model, fast.
 package enum KoreAskList {
-    /// Why a Bash command is on the list; nil when it isn't.
+    /// Why a Bash command is risky to Kore's reading (the kind `KoreAlwaysRule` keeps comes from
+    /// its first risky part); nil when nothing is.
     /// `environment`: the variables a removal's path may name besides the ones the line sets
     /// itself (only `HOME` and `TMPDIR` are taken from it). `cwd`: the folder it runs in, for
     /// relative paths; nil leaves them as written.
@@ -21,45 +24,65 @@ package enum KoreAskList {
     static let criticalReason = "a forced removal of the working folder, a folder above it, a home folder or a system path"
     static let unseenReason = "a removal of paths Kore can't see"
 
-    /// The hook's answer for one call (the PreToolUse input): its JSON when it asks, else nil.
-    /// Only in Auto: other modes ask by themselves. `rules`: the settings' `Bash` allow rules
-    /// (`KoreAlwaysRule.allowRules`, read only for a call on the list): a call they allow gets no
-    /// decision, so the CLI's own flow runs it, except a critical removal, which always asks.
-    package static func answer(_ input: [String: Any], rules: (() -> [String])? = nil) -> [String: Any]? {
-        guard input["permission_mode"] as? String == "auto", input["tool_name"] as? String == "Bash",
-            let command = (input["tool_input"] as? [String: Any])?["command"] as? String
-        else { return nil }
-        let cwd = input["cwd"] as? String
-        let critical = KoreAlwaysRule.critical(command, cwd: cwd)
-        guard let why = reason(for: command, cwd: cwd) ?? (critical ? criticalReason : nil) else { return nil }
-        if !critical, let rules, KoreAlwaysRule.allowed(command, by: rules(), cwd: cwd) { return nil }
-        return [
-            "hookSpecificOutput": [
-                "hookEventName": "PreToolUse", "permissionDecision": "ask",
-                "permissionDecisionReason": "Kore asks you first: \(why).",
-            ]
-        ]
+    /// A one-time pass (Run once): exactly this command, in this chat, once, until then (`cwd`:
+    /// where it was refused, for the record). It rides the
+    /// hook's command line (`--once <base64 JSON>`), so the hook needs no file and no state.
+    package struct Pass: Codable, Equatable, Sendable {
+        package let command: String
+        package let cwd: String
+        /// Seconds since 1970.
+        package let until: Double
+
+        package init(command: String, cwd: String, until: Date) {
+            self.command = command
+            self.cwd = cwd
+            self.until = until.timeIntervalSince1970
+        }
+
+        /// The hook's argument for it.
+        package var argument: String { ((try? JSONEncoder().encode(self)) ?? Data()).base64EncodedString() }
+
+        package init?(argument: String) {
+            guard let data = Data(base64Encoded: argument), let pass = try? JSONDecoder().decode(Pass.self, from: data) else { return nil }
+            self = pass
+        }
+
+        /// The call is this pass's command, before it expires: in any folder of the chat, so a `cd`
+        /// between the refusal and the retry doesn't stop it (the pass rides only that chat's CLI).
+        package func covers(_ command: String, at now: Date) -> Bool {
+            now.timeIntervalSince1970 < until && command == self.command
+        }
     }
 
-    /// `kore hook pretool`: the hook's whole run. The call on stdin, the answer (or nothing) on
-    /// stdout; anything it can't read gets no decision, so the CLI goes on as without it.
-    package static func runHook() -> Int32 {
+    package static let passReason = "Run once: you allowed this command once."
+
+    /// The hook's answer for one call (the PreToolUse input): "ask" for a pass's command, so the
+    /// CLI asks in place and Kore answers allow; nil (no decision, Claude's own check decides)
+    /// for anything else. Only in Auto.
+    package static func answer(_ input: [String: Any], passes: [Pass], now: Date = Date()) -> [String: Any]? {
+        guard input["permission_mode"] as? String == "auto", input["tool_name"] as? String == "Bash",
+            let command = (input["tool_input"] as? [String: Any])?["command"] as? String,
+            passes.contains(where: { $0.covers(command, at: now) })
+        else { return nil }
+        return ["hookSpecificOutput": ["hookEventName": "PreToolUse", "permissionDecision": "ask", "permissionDecisionReason": passReason]]
+    }
+
+    /// `kore hook pretool [--once <pass>]…`: the hook's whole run. The call on stdin, the answer (or
+    /// nothing) on stdout; anything it can't read gets no decision, so the CLI goes on as without it.
+    package static func runHook(_ arguments: [String] = []) -> Int32 {
+        var passes: [Pass] = []
+        var rest = arguments[...]
+        while let flag = rest.popFirst() {
+            if flag == "--once", let value = rest.popFirst(), let pass = Pass(argument: value) { passes.append(pass) }
+        }
+        // Read whole even without a pass: the CLI writes the call either way.
         let data = FileHandle.standardInput.readDataToEndOfFile()
-        guard let input = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-            let answer = answer(input, rules: { settingsRules(input, environment: ProcessInfo.processInfo.environment) }),
+        guard !passes.isEmpty, let input = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+            let answer = answer(input, passes: passes),
             let out = try? JSONSerialization.data(withJSONObject: answer)
         else { return 0 }
         FileHandle.standardOutput.write(out)
         return 0
-    }
-
-    /// The allow rules a hook sees: the project's (`CLAUDE_PROJECT_DIR`, and the call's `cwd`)
-    /// and the user's (`CLAUDE_CONFIG_DIR`, else `~/.claude`), as the CLI that runs it reads them.
-    package static func settingsRules(_ input: [String: Any], environment: [String: String]) -> [String] {
-        let projects = [environment["CLAUDE_PROJECT_DIR"], input["cwd"] as? String].compactMap { $0 }.filter { !$0.isEmpty }
-        let home = environment["HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? NSHomeDirectory()
-        let config = environment["CLAUDE_CONFIG_DIR"].flatMap { $0.isEmpty ? nil : $0 } ?? home + "/.claude"
-        return KoreAlwaysRule.allowRules(projects: projects, configDirectory: config)
     }
 
     // MARK: Judging a line

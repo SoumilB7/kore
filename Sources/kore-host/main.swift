@@ -345,8 +345,8 @@ case "kore":
     // The Mac's `kore` commands for a box chat (`kore` on its PATH is this).
     exit(HostCommand.run(Array(arguments.dropFirst())))
 case "hook" where arguments.dropFirst().first == "pretool":
-    // A box Auto chat's PreToolUse hook: asks a person about Kore's list, says nothing otherwise.
-    exit(HostAskHook.run())
+    // A box Auto chat's PreToolUse hook: "ask" only for a Run once pass (`--once`), else nothing.
+    exit(HostAskHook.run(Array(arguments.dropFirst(2))))
 case "mcp":
     // A box chat's `kore_app` server, which kore-host starts its CLI with while Arsenal is on.
     exit(HostToolServer.run())

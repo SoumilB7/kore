@@ -56,16 +56,17 @@ package enum LinkProjection {
 
     // MARK: Cards
 
-    /// A permission's (or a plan's ready) answers, the same on a Mac and a box: a call Auto refused
-    /// outright takes OK only, its line saying why; one Auto asked about runs once; Always allow
-    /// only where the CLI offers it and Auto didn't stop the call, with its rule as the tooltip.
+    /// A permission's (or a plan's ready) answers, the same on a Mac and a box: a call only the
+    /// person runs (Codex's critical refusal, Claude's critical removal) takes OK or Dismiss only,
+    /// its line saying why; an Auto card runs once (a "Claude stopped" card: Run once · Dismiss);
+    /// Always allow only where the CLI offers it outside Auto, with its rule as the tooltip.
     package static func permissionActions(_ approval: Approval) -> [CardAction] {
-        if approval.autoStop, approval.allowNote != nil { return [.init(id: .deny, label: "OK", style: .neutral)] }
+        if approval.autoStop, approval.allowNote != nil { return [.init(id: .deny, label: approval.denyLabel, style: .neutral)] }
         let always: [CardAction] =
             approval.canAlwaysAllow && !approval.autoStop
             ? [.init(id: .allowAlways, label: "Always allow", style: .neutral, refused: true, help: approval.alwaysHelp.isEmpty ? nil : approval.alwaysHelp)] : []
         return [.init(id: .allow, label: approval.autoStop ? "Run once" : "Allow", style: .primary, refused: approval.allowNote != nil ? true : nil)]
-            + always + [.init(id: .deny, label: "Deny", style: .destructive)]
+            + always + [.init(id: .deny, label: approval.denyLabel, style: approval.id.hasPrefix(ClaudeAutoStops.idPrefix) ? .neutral : .destructive)]
     }
 
     // MARK: Transcript

@@ -2081,9 +2081,10 @@ package final class Chat: Identifiable {
         transcriptView.approvalSettled(approval.id)
         if case .deny = decision { transcriptView.actionDenied() }
         let backend = backend
-        // Codex's one retry of a denied action: recorded first, then, if nothing's running, the agent
-        // is asked to try it again (a running turn sees the approval itself).
-        if let retry = approval.retryMessage, case .allow = decision {
+        // Codex's one retry of a denied action, and a "Claude stopped" card's Run once or Always
+        // allow: recorded first, then, if nothing's running, the agent is asked to go on (a running
+        // turn sees the approval itself).
+        if let retry = approval.retryMessage, Self.retries(approval, decision), backend?.followsUpThere != true {
             Task {
                 await backend?.respond(to: approval.id, decision)
                 if !self.status.isRunning { self.sendFromLink(retry) }
@@ -2102,6 +2103,12 @@ package final class Chat: Identifiable {
         transcriptView.approvalSettled(approval.id)
         let backend = backend
         Task { await backend?.answerHeld(allow: allow, by: by) }
+    }
+
+    private static func retries(_ approval: Approval, _ decision: Decision) -> Bool {
+        if case .allow = decision { return true }
+        if case .allowAlways = decision { return approval.id.hasPrefix(ClaudeAutoStops.idPrefix) }
+        return false
     }
 
     private static func denies(_ decision: Decision) -> Bool {

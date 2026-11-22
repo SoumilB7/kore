@@ -31,8 +31,8 @@ case "help", "-h", "--help":
 case "logs":
     exit(Logs.run(Array(arguments.dropFirst())))
 case "hook" where arguments.dropFirst().first == "pretool":
-    // An Auto chat's PreToolUse hook: asks a person about Kore's list, says nothing otherwise.
-    exit(KoreAskList.runHook())
+    // An Auto chat's PreToolUse hook: "ask" only for a Run once pass (`--once`), else nothing.
+    exit(KoreAskList.runHook(Array(arguments.dropFirst(2))))
 case "mcp":
     exit(MCPServer.run())
 case let first? where Reads.names.contains(first):

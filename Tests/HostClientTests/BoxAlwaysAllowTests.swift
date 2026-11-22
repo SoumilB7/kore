@@ -9,7 +9,8 @@ import Testing
 @testable import src
 
 /// Always allow in a box chat driven by a Mac with full control: the card keeps its button, the
-/// answer reaches the box's chat as `.allowAlways`, and the box's CLI keeps the rule there.
+/// answer reaches the box's chat as `.allowAlways`, and the box's CLI keeps the rule there (a CLI
+/// ask's Always allow; a "Claude stopped" card's is `AutoStopTests`).
 @Suite("box always allow", .serialized)
 @MainActor
 struct BoxAlwaysAllowTests {
@@ -62,16 +63,12 @@ struct BoxAlwaysAllowTests {
         let shown = try #require(chat.approvals.pending.first)
         #expect(shown.canAlwaysAllow && shown.alwaysAllowNote == nil && shown.alwaysHelp == "Always allow `sudo apt install …`")
 
-        // The box's hook asks before, and stands aside after.
-        let input: [String: Any] = ["permission_mode": "auto", "tool_name": "Bash", "tool_input": ["command": "sudo apt install curl"], "cwd": box.path]
-        let env = ["HOME": rig.root.path]
-        #expect(KoreAskList.answer(input, rules: { KoreAskList.settingsRules(input, environment: env) }) != nil)
         chat.answer(shown, .allowAlways)
         #expect(await until { rig.cli.answers == ["ap1 allowAlways"] })
         let file = box.appendingPathComponent(".claude/settings.local.json")
         #expect(box.standardizedFileURL.path == rig.folder.standardizedFileURL.path)
         #expect(String(decoding: try Data(contentsOf: file), as: UTF8.self).contains("Bash(sudo apt install *)"))
-        #expect(KoreAskList.answer(input, rules: { KoreAskList.settingsRules(input, environment: env) }) == nil)
+        #expect(KoreAlwaysRule.allowRules(projects: [box.path], configDirectory: rig.root.path).contains("sudo apt install *"))
         #expect(chat.approvals.pending.isEmpty && !chat.transcriptView.entries.contains { $0.text.hasPrefix("Couldn't answer") })
         chat.close()
     }

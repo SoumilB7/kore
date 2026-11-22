@@ -649,9 +649,10 @@ package struct Approval: Identifiable, Sendable, Codable {
     package var held: [HeldSender]? = nil
     /// Why Allow can't be picked here (a hold a flag can't lift): the card shows it dim, saying so.
     package var allowNote: String? = nil
-    /// A call Auto asks a person about (Kore's ask list, a safety check, the classifier) or
-    /// refused (`ClaudeAutoStops`): Allow reads Run once; a person runs it, or another chat's agent
-    /// at Auto with Act unlimited or above (`arsenalRunAutoAsk`), never a critical removal.
+    /// A call Auto asks a person about (the CLI's safety check or classifier asking in place, a
+    /// Codex review) or Claude stopped for (`ClaudeAutoStops`): Allow reads Run once; a person
+    /// runs it, or another chat's agent at Auto with Act unlimited or above (`arsenalRunAutoAsk`),
+    /// never a critical removal.
     package var autoStop = false
     /// Run once's follow-up (a Codex review's one retry): sent once the answer's in, when the chat
     /// is idle, so the agent tries it again.
@@ -703,6 +704,13 @@ package struct Approval: Identifiable, Sendable, Codable {
         copy.cwd = cwd
         if canAlwaysAllow { copy.alwaysAllowNote = note }
         return copy
+    }
+
+    /// What Deny reads: Dismiss on a "Claude stopped" card (the CLI already refused the call), OK
+    /// on another refusal that only says why, else Deny.
+    package var denyLabel: String {
+        if id.hasPrefix(ClaudeAutoStops.idPrefix) { return "Dismiss" }
+        return autoStop && allowNote != nil ? "OK" : "Deny"
     }
 
     /// Always allow's tooltip: the rule it keeps, as it reads (`Always allow `sudo apt install …``).

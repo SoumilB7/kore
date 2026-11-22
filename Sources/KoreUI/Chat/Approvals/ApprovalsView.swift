@@ -33,26 +33,18 @@ struct ApprovalsView: View {
         }
     }
 
-    /// An Auto ask in a Claude chat on this Mac: Kore's ask list into the user's Claude settings,
-    /// or out again. Only on the owner's click.
+    /// Kore's old ask list out of the user's Claude settings, where an older Kore put it (since
+    /// 0.3.7 the hook asks only for a Run once pass, so the list does nothing there): offered on a
+    /// Claude Auto card on this Mac while it's in. Only on the owner's click.
     private func askSettings(_ approval: Approval) -> (label: String, run: () -> Void)? {
-        guard approval.autoStop, !approval.id.hasPrefix(ClaudeAutoStops.idPrefix), chat.provider.id == "claude", chat.boxPlace == nil,
-            let command = ClaudeBackend.askHook
-        else { return nil }
+        guard approval.autoStop, chat.provider.id == "claude", chat.boxPlace == nil else { return nil }
         let file = ClaudeAskSettings.file()
+        guard ClaudeAskSettings.installed(file) else { return nil }
         let chat = chat
-        if ClaudeAskSettings.installed(file) {
-            return ("Stop asking for these in my settings", {
-                do {
-                    try ClaudeAskSettings.remove(file)
-                    chat.note("Kore's ask list is out of your Claude settings (\(file.path)).")
-                } catch { chat.note("Couldn't change your Claude settings: \(error)") }
-            })
-        }
-        return ("Always ask for these in my settings", {
+        return ("Take Kore's old ask list out of my settings", {
             do {
-                try ClaudeAskSettings.install(file, command: command)
-                chat.note("Kore's ask list is in your Claude settings (\(file.path)): Claude asks about these outside Kore too.")
+                try ClaudeAskSettings.remove(file)
+                chat.note("Kore's ask list is out of your Claude settings (\(file.path)).")
             } catch { chat.note("Couldn't change your Claude settings: \(error)") }
         })
     }

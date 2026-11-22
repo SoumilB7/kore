@@ -62,10 +62,11 @@ struct ClaudeFullAccessLinkTests {
     }
 
     @Test func koreAsksNothingInIt() {
-        let call: [String: Any] = ["permission_mode": "auto", "tool_name": "Bash", "tool_input": ["command": "sudo reboot"]]
-        #expect(KoreAskList.answer(call) != nil)
+        let pass = KoreAskList.Pass(command: "sudo reboot", cwd: "/w", until: .distantFuture)
+        let call: [String: Any] = ["permission_mode": "auto", "tool_name": "Bash", "tool_input": ["command": "sudo reboot"], "cwd": "/w"]
+        #expect(KoreAskList.answer(call, passes: [pass]) != nil)
         var full = call
         full["permission_mode"] = ClaudeModes.fullAccess
-        #expect(KoreAskList.answer(full) == nil)
+        #expect(KoreAskList.answer(full, passes: [pass]) == nil)
     }
 }

@@ -1,3 +1,4 @@
+import AgentTools
 import Foundation
 import Testing
 
@@ -53,21 +54,20 @@ struct AutoAsksTests {
         #expect(plain.title == "Allow Bash?" && !plain.autoStop && plain.canAlwaysAllow)
     }
 
-    @Test func callsAutoRefusedOutrightGetACardThatRunsNothing() {
+    /// Since 0.3.7 a refusal mid-turn is no card: only a turn that ended on a refused command
+    /// (`ClaudeAutoStops`; the whole flow is `AutoStopTests`').
+    @Test func onlyATurnEndingOnARefusedCommandIsACard() {
         let stops = ClaudeAutoStops()
-        let critical = stops.denied(
-            toolUseId: "t1", tool: "Bash", input: ["command": "rm -rf /tmp/kc-probe-xer1/work"],
-            error: ClaudeAutoStops.safetyDenial + ", not by the user. The check stops removals…")
-        #expect(critical?.title == "Auto stopped: rm -rf /tmp/kc-probe-xer1/work (a removal Auto never runs)")
-        #expect(critical?.line == ClaudeAutoStops.safetyLine && critical?.id == "autostop-t1")
-        let blocked = stops.denied(
-            toolUseId: "t2", tool: "Bash", input: ["command": "launch-something"],
-            error: ClaudeAutoStops.classifierDenial + ". Reason: [Undermining Oversight]. If you have other tasks…")
-        #expect(blocked?.title == "Auto stopped: launch-something (Undermining Oversight)" && blocked?.line == ClaudeAutoStops.classifierLine)
-        // Once per call; anything else is no card.
-        #expect(stops.denied(toolUseId: "t1", tool: "Bash", input: [:], error: ClaudeAutoStops.safetyDenial) == nil)
-        #expect(stops.denied(toolUseId: "t3", tool: "Bash", input: [:], error: "Exit code 1") == nil)
-        #expect(stops.exited() == ["autostop-t1", "autostop-t2"])
+        stops.called("t1", tool: "Bash", input: ["command": "rm -rf /tmp/kc-probe-xer1/work"])
+        stops.result("t1", isError: true, text: ClaudeAutoStops.safetyDenial + ", not by the user. The check stops removals…")
+        stops.called("t2", tool: "Bash", input: ["command": "ls"])
+        stops.result("t2", isError: true, text: "Exit code 1")
+        #expect(stops.refused == ["t1"] && stops.turnEnded(cwd: "/tmp/w") == nil, "went on after it")
+        stops.called("t3", tool: "Bash", input: ["command": "launch-something"])
+        stops.denied("t3")
+        let card = stops.turnEnded(cwd: "/tmp/w")
+        #expect(card?.id == "autostop-t3" && card?.title == "Claude stopped: it needs `launch-something`" && card?.critical == false)
+        #expect(stops.dismiss() == "autostop-t3" && stops.dismiss() == nil)
     }
 
     /// The luna probe's review, denied: its card, and the event Codex takes back for one retry
@@ -152,12 +152,15 @@ struct AutoAsksTests {
         #expect(rmCard?.canAlwaysAllow == false && rmCard?.alwaysRule == nil)
     }
 
-    /// The hook runs a process per Bash call (about 11 ms, release): only an Auto chat has it.
-    @Test func onlyAnAutoChatRunsTheHook() {
+    /// The hook runs a process per Bash call (about 11 ms, release): only an Auto chat with a Run
+    /// once pass open has it.
+    @Test func onlyAnAutoChatWithAPassRunsTheHook() {
         let saved = ClaudeBackend.askHook
         defer { ClaudeBackend.askHook = saved }
         ClaudeBackend.askHook = "'/k/kore' hook pretool"
-        #expect(ClaudeBackend.askHook(for: "auto") == "'/k/kore' hook pretool")
-        for mode in ["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk"] { #expect(ClaudeBackend.askHook(for: mode) == nil, "\(mode)") }
+        let pass = KoreAskList.Pass(command: "make", cwd: "/w", until: .distantFuture)
+        #expect(ClaudeBackend.askHook(for: "auto", pass: pass) == "'/k/kore' hook pretool --once " + pass.argument)
+        #expect(ClaudeBackend.askHook(for: "auto", pass: nil) == nil)
+        for mode in ["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk"] { #expect(ClaudeBackend.askHook(for: mode, pass: pass) == nil, "\(mode)") }
     }
 }

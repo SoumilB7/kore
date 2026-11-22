@@ -9,6 +9,8 @@ package protocol ChatBackend: AnyObject {
     var events: AsyncStream<ChatEvent> { get }
     /// Claude session id / Codex thread id, once known.
     var sessionId: String? { get }
+    /// The chat on the other side (a box's) sends a card's follow-up itself (`followsUpThere`).
+    var followsUpThere: Bool { get }
     /// Agents observed from another client's files, whose work this CLI does not own.
     var observedAgents: Set<String> { get }
     /// Each history it replaces is whole (a box's log, started again): nothing the chat took
@@ -259,6 +261,9 @@ extension ChatBackend {
     package func earlierMessages() async -> [EarlierMessage] { [] }
     package func unloadPoint(message id: String?, text: String) async -> UnloadPoint? { nil }
     package func unloaded(to earlier: String) {}
+    /// A card's follow-up (`Approval.retryMessage`) is sent by the chat on the other side (a
+    /// box's chat answers the card itself and sends it): this side doesn't send it again.
+    package var followsUpThere: Bool { false }
     package var observedAgents: Set<String> { [] }
     package var historiesWhole: Bool { false }
     package func relaunchAfterAccountChange() async -> Bool {

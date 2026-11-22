@@ -1,3 +1,4 @@
+import AgentTools
 import Foundation
 @testable import src
 import Testing
@@ -72,11 +73,12 @@ struct ClaudeFullAccessTests {
         let saved = ClaudeBackend.askHook
         defer { ClaudeBackend.askHook = saved }
         ClaudeBackend.askHook = "'/k/kore' hook pretool"
-        #expect(ClaudeBackend.askHook(for: ClaudeModes.fullAccess) == nil)
-        #expect(ClaudeBackend.askHook(for: "auto") != nil)
+        let pass = KoreAskList.Pass(command: "make", cwd: "/tmp/kore-full-access", until: .distantFuture)
+        #expect(ClaudeBackend.askHook(for: ClaudeModes.fullAccess, pass: pass) == nil)
+        #expect(ClaudeBackend.askHook(for: "auto", pass: pass) != nil)
         let args = { (mode: ClaudeSession.PermissionMode) in
             var options = ClaudeSession.Options(cwd: URL(fileURLWithPath: "/tmp/kore-full-access"), permissionMode: mode)
-            options.askHook = ClaudeBackend.askHook(for: mode.rawValue)
+            options.askHook = ClaudeBackend.askHook(for: mode.rawValue, pass: pass)
             return options.arguments.joined(separator: " ")
         }
         #expect(!args(.bypassPermissions).contains("PreToolUse") && args(.auto).contains("PreToolUse"))

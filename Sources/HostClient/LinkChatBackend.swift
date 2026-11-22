@@ -604,6 +604,9 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
 
     package func interrupt() async { _ = try? await call(.interrupt) }
 
+    /// The box's chat answers a card itself (`HostStream`), and sends its follow-up.
+    package var followsUpThere: Bool { true }
+
     package func respond(to approvalID: String, _ decision: Decision) async {
         sentHere.insert(approvalID)
         do {

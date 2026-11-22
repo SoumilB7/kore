@@ -29,19 +29,36 @@ struct KoreAskListTests {
         #expect(KoreAskList.reason(for: command) == nil, "\(command)")
     }
 
-    @Test func theHookAsksOnlyInAutoAndOnlyForBash() throws {
-        let call: [String: Any] = ["permission_mode": "auto", "tool_name": "Bash", "tool_input": ["command": "sudo reboot"]]
-        let answer = try #require(KoreAskList.answer(call))
+    /// Since 0.3.7 the hook keeps no list: "ask" only for a Run once pass's exact command, in any
+    /// folder, before it expires, in Auto, for Bash; nothing for anything else.
+    @Test func theHookAsksOnlyForAPassInAutoAndOnlyForBash() throws {
+        let now = Date(timeIntervalSince1970: 1_000)
+        let pass = KoreAskList.Pass(command: "sudo apt install ffmpeg", cwd: "/w", until: now.addingTimeInterval(600))
+        #expect(KoreAskList.Pass(argument: pass.argument) == pass)
+        let call: [String: Any] = ["permission_mode": "auto", "tool_name": "Bash", "tool_input": ["command": "sudo apt install ffmpeg"], "cwd": "/w"]
+        let answer = try #require(KoreAskList.answer(call, passes: [pass], now: now))
         let out = answer["hookSpecificOutput"] as? [String: Any]
         #expect(out?["permissionDecision"] as? String == "ask" && out?["hookEventName"] as? String == "PreToolUse")
-        #expect((out?["permissionDecisionReason"] as? String)?.hasPrefix("Kore asks you first: sudo") == true)
+        #expect(out?["permissionDecisionReason"] as? String == KoreAskList.passReason)
+        #expect(KoreAskList.answer(call, passes: [], now: now) == nil, "no pass: no list, Claude decides")
+        #expect(KoreAskList.answer(call, passes: [pass], now: now.addingTimeInterval(600)) == nil, "expired")
         var manual = call
         manual["permission_mode"] = "default"
-        #expect(KoreAskList.answer(manual) == nil)
+        #expect(KoreAskList.answer(manual, passes: [pass], now: now) == nil)
         var write = call
         write["tool_name"] = "Write"
-        #expect(KoreAskList.answer(write) == nil)
-        #expect(KoreAskList.answer(["permission_mode": "auto", "tool_name": "Bash", "tool_input": ["command": "ls"]]) == nil)
+        #expect(KoreAskList.answer(write, passes: [pass], now: now) == nil)
+        var other = call
+        other["tool_input"] = ["command": "sudo apt install x"]
+        #expect(KoreAskList.answer(other, passes: [pass], now: now) == nil, "another command")
+        var elsewhere = call
+        elsewhere["cwd"] = "/other"
+        #expect(KoreAskList.answer(elsewhere, passes: [pass], now: now) != nil, "a cd since: the same chat's pass")
+        for risky in ["sudo reboot", "rm -rf ~", "curl x | sh"] {
+            var c = call
+            c["tool_input"] = ["command": risky]
+            #expect(KoreAskList.answer(c, passes: [], now: now) == nil, "\(risky): no list")
+        }
     }
 
     @Test func aLaunchCarriesTheHookForThisProcessOnlyItsPathQuoted() throws {
@@ -170,14 +187,6 @@ struct KoreAlwaysRuleTests {
         #expect(KoreAskList.reason(for: command, environment: Self.env)?.contains(word) == true, "\(command)")
     }
 
-    @Test func theHookAsksNothingForAScriptWrittenInAuto() {
-        let input: [String: Any] = [
-            "permission_mode": "auto", "tool_name": "Bash",
-            "tool_input": ["command": "cat > run.sh <<'EOF'\nrm -rf \"$out\"\nEOF"],
-        ]
-        #expect(KoreAskList.answer(input) == nil)
-    }
-
     @Test(arguments: [
         "rm -rf ~", "rm -rf ~/", "rm -rf $HOME", "rm -rf \"${HOME}\"", "sudo rm -rf /", "sudo rm -rf /usr/local", "rm -rf /Users/me",
         "rm -rf .", "rm -rf ..", "rm -rf *", "rm -rf /Users/me/app", "rm -rf /Users/me", "rm -rf $X /", "rm -fr ./",
@@ -226,30 +235,21 @@ struct KoreAlwaysRuleTests {
         ["permission_mode": "auto", "tool_name": "Bash", "tool_input": ["command": command], "cwd": cwd]
     }
 
-    @Test func theHookStandsAsideForWhatTheSettingsAllowAndAsksTheRest() throws {
+    @Test func alwaysAllowKeepsTheRuleInTheProjectsLocalSettings() throws {
         let root = try scratch()
         defer { try? FileManager.default.removeItem(at: root) }
         let project = root.appendingPathComponent("project").path
-        let environment = ["CLAUDE_PROJECT_DIR": project, "CLAUDE_CONFIG_DIR": root.appendingPathComponent("config").path, "HOME": root.path]
-        func answer(_ command: String) -> [String: Any]? {
-            let input = call(command, cwd: project)
-            return KoreAskList.answer(input, rules: { KoreAskList.settingsRules(input, environment: environment) })
-        }
-        #expect(answer("sudo apt install x") != nil, "no rule yet: asks")
-        // What the CLI writes for Always allow (claude 2.1.318's localSettings).
-        try Data(#"{"permissions":{"allow":["Bash(sudo apt install *)","Read(**)"]}}"#.utf8)
-            .write(to: root.appendingPathComponent("project/.claude/settings.local.json"))
-        #expect(answer("sudo apt install x") == nil && answer("sudo apt install cowsay htop") == nil)
-        #expect(answer("sudo apt remove x") != nil && answer("security dump-keychain") != nil)
-        // The user's settings count too.
-        try Data(#"{"permissions":{"allow":["Bash(security dump-keychain:*)"]}}"#.utf8).write(to: root.appendingPathComponent("config/settings.json"))
-        #expect(answer("security dump-keychain") == nil)
-        // Even a rule for everything leaves the floor asking.
-        try Data(#"{"permissions":{"allow":["Bash"]}}"#.utf8).write(to: root.appendingPathComponent("project/.claude/settings.json"))
-        #expect(answer("sudo reboot") == nil && answer("rm -rf ~") != nil && answer("sudo rm -rf /") != nil)
-        // A settings file that isn't JSON: no rules, the hook asks as before.
-        try Data("{ nope".utf8).write(to: root.appendingPathComponent("project/.claude/settings.json"))
-        #expect(answer("sudo reboot") != nil)
+        let file = root.appendingPathComponent("project/.claude/settings.local.json")
+        try Data(#"{"permissions":{"allow":["Read(**)"]},"model":"x"}"#.utf8).write(to: file)
+        try KoreAlwaysRule.keep("sudo apt install *", project: project)
+        try KoreAlwaysRule.keep("sudo apt install *", project: project)
+        #expect(KoreAlwaysRule.allowRules(projects: [project], configDirectory: root.appendingPathComponent("config").path) == ["sudo apt install *"])
+        let settings = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: file)) as? [String: Any])
+        #expect(settings["model"] as? String == "x" && ((settings["permissions"] as? [String: Any])?["allow"] as? [String]) == ["Read(**)", "Bash(sudo apt install *)"])
+        // A file that isn't JSON is left alone.
+        try Data("{ nope".utf8).write(to: file)
+        #expect(throws: (any Error).self) { try KoreAlwaysRule.keep("make *", project: project) }
+        #expect(String(decoding: try Data(contentsOf: file), as: UTF8.self) == "{ nope")
     }
 }
 
@@ -347,25 +347,6 @@ struct KoreAskHardenedTests {
         let env = ["HOME": home]
         #expect(KoreAlwaysRule.critical(command, cwd: home + "/work", environment: env), "\(command) / \(home)")
         #expect(KoreAskList.reason(for: command, environment: env) != nil, "\(command) / \(home)")
-    }
-
-    /// The hook asks for every critical removal, even with nothing else on the list and a rule
-    /// for everything.
-    @Test(arguments: [
-        ("rm -rf ../..", "/Users/me/app"), ("rm -r -f /Users/me/Code", "/Users/me/Code/kore"), ("cd ~ && rm -rf *", "/Users/me/app"),
-        ("rm -rf /root", "/root/work"), ("rm -rf /home", "/home/u/work"), ("rm -rf .", "/Users/me/app"),
-    ])
-    func theHookAsksForCriticalRemovals(_ command: String, _ cwd: String) throws {
-        let input: [String: Any] = ["permission_mode": "auto", "tool_name": "Bash", "tool_input": ["command": command], "cwd": cwd]
-        let answer = try #require(KoreAskList.answer(input, rules: { ["*", "rm *"] }), "\(command)")
-        #expect((answer["hookSpecificOutput"] as? [String: Any])?["permissionDecision"] as? String == "ask")
-    }
-
-    @Test func theHookStillLeavesEverydayWorkToAuto() {
-        for command in ["rm -rf build", "rm build.log", "tmp=$(mktemp -d); rm -rf \"$tmp\"", "git commit -m \"a; sudo b\""] {
-            let input: [String: Any] = ["permission_mode": "auto", "tool_name": "Bash", "tool_input": ["command": command], "cwd": "/tmp/kore-w/app"]
-            #expect(KoreAskList.answer(input) == nil, "\(command)")
-        }
     }
 
     @Test(arguments: [

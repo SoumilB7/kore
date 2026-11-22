@@ -1,3 +1,4 @@
+import AgentTools
 import Foundation
 import KoreCore
 
@@ -151,9 +152,9 @@ package final class ClaudeBackend: ChatBackend {
             permissionMode: ClaudeSession.PermissionMode(rawValue: options.mode) ?? .default,
             fastMode: options.fastMode ?? false, resume: fork?.from ?? sessionId)
         launch.switchModelsOnFlag = RefusalFallback.saved
-        // Kore's ask list rides only an Auto launch; a mode change adds or takes it (`syncAskHook`).
-        launch.askHook = Self.askHook(for: options.mode)
-        askHookOn = launch.askHook != nil
+        // Kore's hook rides only an Auto launch with a Run once pass open (`syncAskHook`).
+        launch.askHook = Self.askHook(for: options.mode, pass: stops.openPass)
+        hookOn = launch.askHook
         if let environment = options.environment { launch.environment.merge(try environment()) { $1 } }
         if let fork {
             launch.extraArgs += ["--fork-session", "--resume-session-at", fork.at]
@@ -473,44 +474,60 @@ package final class ClaudeBackend: ChatBackend {
     /// What the running CLI wrote to stderr, for its exit line.
     private var stderrTail = StderrTail()
 
-    /// Kore's ask-list hook for every launch (`KoreAskList`): this Mac's `kore` helper; a box's
+    /// Kore's hook (`KoreAskList`), for a Run once pass: this Mac's `kore` helper; a box's
     /// kore-host sets its own (`HostAskHook.install`). Nil: none.
     package static var askHook: String? = KoreReach.helper.map { quoted($0.path) + " hook pretool" }
 
     /// A path as one shell word, single-quoted.
     nonisolated package static func quoted(_ path: String) -> String { "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'" }
 
-    /// Calls Auto refused without asking: their cards (`ClaudeAutoStops`).
-    private let stops = ClaudeAutoStops()
-    /// The calls of this turn and the last few, for a refused one's command.
-    private var calls: [String: (tool: String, input: JSONValue)] = [:]
+    /// Auto's refusals this turn, and the card when Claude stopped for one (`ClaudeAutoStops`).
+    package let stops = ClaudeAutoStops()
 
-    /// The model's calls and their results, as they pass: a hard stop becomes a card.
+    /// The main agent's calls and their results, as they pass; at the turn's end in Auto, the
+    /// card when the last call was refused.
     private func watchCalls(_ event: ClaudeEvent) {
         switch event {
-        case .assistant(_, let blocks, _, _):
-            for case .toolUse(let id, let name, let input) in blocks {
-                if calls.count > 64 { calls.removeAll() }
-                calls[id] = (name, input)
-            }
-        case .user(let blocks, _, _):
+        case .assistant(_, let blocks, let parent, _) where parent == nil:
+            for case .toolUse(let id, let name, let input) in blocks { stops.called(id, tool: name, input: input) }
+        case .user(let blocks, let parent, _) where parent == nil:
             for case .toolResult(let id, let content, let isError) in blocks {
-                if isError, let call = calls[id],
-                    let card = stops.denied(toolUseId: id, tool: call.tool, input: call.input, error: ClaudeTranslator.text(of: content))
-                {
-                    var approval = Approval(id: card.id, title: card.title, detail: card.line, body: nil, canAlwaysAllow: false, questions: [])
-                    approval.autoStop = true
-                    approval.allowNote = card.line
-                    approval.tool = call.tool
-                    yield(.approvalRequested(approval))
-                }
-                calls[id] = nil
+                stops.result(id, isError: isError, text: ClaudeTranslator.text(of: content))
             }
+        case .raw(let json) where json["type"]?.string == "system" && json["subtype"]?.string == "permission_denied":
+            if json["agent_id"]?.string == nil, let id = json["tool_use_id"]?.string { stops.denied(id) }
+        case .turnCompleted:
+            let shown = stops.card?.id
+            guard let card = stops.turnEnded(cwd: options.folder.path, auto: options.mode == "auto") else { return }
+            // One card at a time: a newer stop takes an older one's place.
+            if let shown, shown != card.id { yield(.approvalWithdrawn(shown)) }
+            yield(.approvalRequested(card.approval))
         case .exited:
-            for id in stops.exited() { yield(.approvalWithdrawn(id)) }
-            calls.removeAll()
+            if let id = stops.dismiss() { yield(.approvalWithdrawn(id)) }
+            stops.exited()
         default: break
         }
+    }
+
+    /// The person's answer to a "Claude stopped" card. Run once: a pass for its command, in
+    /// Kore's hook; Always allow: its rule in the project's local settings, and the same pass for
+    /// the retry (the CLI reloads the file on its own time); Dismiss: nothing runs. The chat's
+    /// "continue" message follows (`Approval.retryMessage`, `Chat.answer`).
+    private func answerStop(_ id: String, _ decision: Decision) async {
+        switch decision {
+        case .allow:
+            _ = stops.runOnce(id)
+        case .allowAlways:
+            if let card = stops.card, card.id == id, let rule = card.rule {
+                do { try KoreAlwaysRule.keep(rule, project: options.folder.path) } catch {
+                    yield(.notice("Couldn't keep `\(KoreAlwaysRule.shown(rule))` in .claude/settings.local.json: \(error.localizedDescription)"))
+                }
+            }
+            _ = stops.runOnce(id)
+        default:
+            _ = stops.dismiss()
+        }
+        await syncAskHook(options.mode)
     }
 
     /// Cross-session messages the CLI held: their card and the policy window.
@@ -556,6 +573,15 @@ package final class ClaudeBackend: ChatBackend {
 
     private func handle(_ event: ClaudeEvent) {
         if rollbackAt != nil, Self.writesSession(event) { forgetRollbackPoint() }
+        // The CLI asks about a Run once pass's command (Kore's hook): allowed, no card, pass spent.
+        if case .permissionRequest(let r) = event, stops.spend(r) {
+            let session = session
+            Task {
+                try? await session?.respond(to: r, .allow)
+                await syncAskHook(options.mode)
+            }
+            return
+        }
         switch event {
         case .sessionStarted(let info):
             KoreSessions.shared.record(cli: "claude", session: info.sessionId, folder: options.folder, launch: "started", account: planAccount)
@@ -569,6 +595,7 @@ package final class ClaudeBackend: ChatBackend {
             options.planWindows?(snapshot)
             PlanQuietReads.shared.busy("claude", account: planAccount)
         case .turnCompleted:
+            watchCalls(event)
             KoreUsageRefresh.soon("claude")
             PlanQuietReads.shared.ended("claude", account: planAccount) { [weak self] in await self?.quietRead() }
         case .stderr(let text):
@@ -585,6 +612,8 @@ package final class ClaudeBackend: ChatBackend {
             holds.bypass = options.mode == "bypassPermissions"
             held(holds.frame(hold))
         case .assistant, .user:
+            watchCalls(event)
+        case .raw(let json) where json["subtype"]?.string == "permission_denied":
             watchCalls(event)
         case .exited:
             held(holds.exited())
@@ -1093,6 +1122,9 @@ package final class ClaudeBackend: ChatBackend {
     package func send(_ text: String, files: [Attachments.File], queued: String?, id: String?) async throws -> Bool {
         try await start()
         guard let session else { return false }
+        // A new message: a "Claude stopped" card goes, and an expired pass leaves the hook.
+        if let card = stops.dismiss() { yield(.approvalWithdrawn(card)) }
+        await syncAskHook(options.mode)
         if text.trimmingCharacters(in: .whitespaces) == "/compact" { translator.compactRequested = true }
         // A message sent while a turn runs: stamped with Kore's id, so its echo (mid-turn, at the
         // next tool boundary) or its `command_lifecycle` start (as the next turn) says where it went.
@@ -1169,8 +1201,7 @@ package final class ClaudeBackend: ChatBackend {
     }
 
     package func respond(to approvalID: String, _ decision: Decision) async {
-        // A card for a call the CLI already refused: nothing to answer it.
-        if approvalID.hasPrefix(ClaudeAutoStops.idPrefix) { return }
+        if approvalID.hasPrefix(ClaudeAutoStops.idPrefix) { return await answerStop(approvalID, decision) }
         if approvalID == ClaudePeerHolds.cardID {
             if case .deny = decision { return await answerHeld(allow: false, by: nil) }
             return await answerHeld(allow: true, by: nil)
@@ -1277,19 +1308,24 @@ package final class ClaudeBackend: ChatBackend {
     /// The mode the running CLI was launched in.
     private var launchedMode = "default"
 
-    /// The hook a chat in `mode` runs: Kore's in Auto, none otherwise.
-    package static func askHook(for mode: String) -> String? { mode == "auto" ? askHook : nil }
+    /// The hook a chat in `mode` runs: Kore's, in Auto with a Run once pass open; none otherwise
+    /// (a hook process runs for each Bash call).
+    package static func askHook(for mode: String, pass: KoreAskList.Pass?) -> String? {
+        guard mode == "auto", let pass, let askHook else { return nil }
+        return askHook + " --once " + pass.argument
+    }
 
-    /// The ask-list hook is in this process's flag settings.
-    private var askHookOn = false
+    /// The hook in this process's flag settings.
+    private var hookOn: String?
 
-    /// The ask-list hook on in Auto and off in any other mode, as the mode changes (the user's
-    /// pick, or the CLI's own switch): a hook process runs for each Bash call, so only Auto has one.
+    /// Kore's hook as the mode and the pass are: on in Auto while a pass is open, off once it's
+    /// spent, expired, or the mode changes (the user's pick, or the CLI's own switch).
     private func syncAskHook(_ mode: String) async {
-        let want = Self.askHook(for: mode) != nil
-        guard want != askHookOn, let session else { return }
-        askHookOn = want
-        do { try await session.setAskHook(want ? Self.askHook : nil) } catch { askHookOn = !want }
+        let want = Self.askHook(for: mode, pass: stops.openPass)
+        guard want != hookOn, let session else { return }
+        let was = hookOn
+        hookOn = want
+        do { try await session.setAskHook(want) } catch { hookOn = was }
     }
 
     package func setPlanMode(_ on: Bool) async {}

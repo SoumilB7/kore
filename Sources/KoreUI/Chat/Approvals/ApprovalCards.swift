@@ -10,7 +10,7 @@ struct PermissionCard: View {
     var folder: URL?
     /// The mode it asks past: its corner marks' colour.
     var corners: Color?
-    /// An Auto ask's "Always ask for these in my settings" (or its undo): its label and action.
+    /// Kore's old ask list out of the user's Claude settings, where an older Kore put it.
     var settings: (label: String, run: () -> Void)?
     let decide: (Decision) -> Void
 
@@ -51,7 +51,7 @@ struct PermissionCard: View {
             }
             AdaptiveButtons {
                 // A call Auto already refused has nothing to deny: its card is dismissed.
-                Button(approval.autoStop && approval.allowNote != nil ? "OK" : "Deny") { decide(.deny) }
+                Button(approval.denyLabel) { decide(.deny) }
                     .buttonStyle(SubtleButtonStyle())
                     .storyID(StoryID.Approval.card(approval.id).part(.deny))
                 if approval.canAlwaysAllow, approval.autoStop {
@@ -74,7 +74,7 @@ struct PermissionCard: View {
                         .help(note)
                         .storyID(StoryID.Approval.card(approval.id).part(.always))
                 }
-                // A call Auto refused outright has no Run once: its line says why, and OK.
+                // A call only the person runs, in Manual (a critical removal), has no Run once.
                 if !(approval.autoStop && approval.allowNote != nil) {
                     Button(approval.autoStop ? "Run once" : "Allow") { decide(.allow) }
                         .buttonStyle(SubtleButtonStyle(prominent: true))

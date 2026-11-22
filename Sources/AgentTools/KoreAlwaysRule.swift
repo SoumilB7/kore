@@ -1,10 +1,10 @@
 import Foundation
 
-/// "Always allow" on an Auto asks card (the owner via Kore-main, 2026-11-20): the kind of command,
-/// not the one line, kept as a Claude `Bash(…)` allow rule. The rule's content is in claude 2.1's
-/// own form (`git push *`: program and subcommand, the varying part a `*`); Kore's hook reads the
-/// same allow rules and stops asking for what they cover, so the CLI's own flow runs it. Removals
-/// of the working folder, its parents, a home or system path are never covered.
+/// "Always allow" on a "Claude stopped" card (the owner via Kore-main, 2026-11-20 and 11-22): the
+/// kind of command, not the one line, kept as a Claude `Bash(…)` allow rule in the project's local
+/// settings (`keep`). The rule's content is in claude 2.1's own form (`git push *`: program and
+/// subcommand, the varying part a `*`), which Claude's Auto honours. Removals of the working
+/// folder, its parents, a home or system path are never covered.
 package enum KoreAlwaysRule {
     /// The rule an Always allow keeps for `command` (a `Bash(…)` rule's content); nil where Kore
     /// doesn't offer one (a critical removal, an empty line). `suggested`: the CLI's own rule
@@ -205,6 +205,32 @@ package enum KoreAlwaysRule {
         files.append("\(configDirectory)/settings.json")
         var seen = Set<String>()
         return files.filter { seen.insert(URL(fileURLWithPath: $0).standardizedFileURL.path).inserted }.flatMap(bashRules)
+    }
+
+    /// Always allow on a "Claude stopped" card: `Bash(<rule>)` in the project's
+    /// `.claude/settings.local.json`, as the CLI itself keeps one (the file's other settings and
+    /// rules stay). claude 2.1.318 honours such a rule in Auto: Auto strips only broad ones
+    /// (`Bash(*)`, `python:*`, `sudo *`), which Kore never writes.
+    package static func keep(_ rule: String, project: String) throws {
+        let folder = URL(fileURLWithPath: project).appendingPathComponent(".claude", isDirectory: true)
+        let file = folder.appendingPathComponent("settings.local.json")
+        var settings: [String: Any] = [:]
+        if let data = FileManager.default.contents(atPath: file.path), !data.isEmpty {
+            guard let read = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
+                throw CocoaError(.fileReadCorruptFile, userInfo: [NSFilePathErrorKey: file.path])
+            }
+            settings = read
+        }
+        var permissions = settings["permissions"] as? [String: Any] ?? [:]
+        var allow = permissions["allow"] as? [Any] ?? []
+        let entry = "Bash(\(rule))"
+        guard !allow.contains(where: { ($0 as? String) == entry }) else { return }
+        allow.append(entry)
+        permissions["allow"] = allow
+        settings["permissions"] = permissions
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        try data.write(to: file, options: .atomic)
     }
 
     static func bashRules(in file: String) -> [String] {

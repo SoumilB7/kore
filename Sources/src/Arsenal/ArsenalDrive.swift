@@ -213,8 +213,9 @@ extension Chat {
     /// The lowest tier that runs a command Auto asks about for another chat (the owner, 2026-11-21).
     package static let autoAskFloor = ArsenalTier.drive
 
-    /// An Auto-asks card run once, or Always allowed, by another chat's agent (the owner,
-    /// 2026-11-21): a caller at Auto or above (`mayApprove`) with Act unlimited or Act device,
+    /// An Auto card (Claude's "Claude stopped", Codex's review) run once, or Always allowed, by
+    /// another chat's agent (the owner, 2026-11-21): a caller at Auto or above (`mayApprove`) with
+    /// Act unlimited or Act device, never in a chat it started (`arsenalOrigins`),
     /// never a forced removal of the working folder or above, a home folder or a system path
     /// (`KoreAlwaysRule.critical`). The same answer as the person's Run once or Always allow.
     func arsenalRunAutoAsk(_ card: Approval, always: Bool, by caller: Chat?, tier: ArsenalTier?) -> Result<String, ArsenalRefusal> {
