@@ -34,7 +34,7 @@ struct ModePicker: View {
                     ModeRow(mode: mode, current: false, lit: false, pick: {}, hover: { _ in })
                         .disabled(true)
                         .opacity(Theme.missingLogo)
-                        .help(chat.controls.levelCapNote ?? "")
+                        .tip(chat.controls.levelCapNote ?? "")
                         .storyID(StoryID.Composer.modeRow(mode.id))
                 }
                 if let plan = chat.provider.planToggle {

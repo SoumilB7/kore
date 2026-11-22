@@ -148,7 +148,7 @@ struct BoxFolderBrowser: View {
             list
             // One plain line, its room always kept: nothing below moves when it comes.
             Text(model.problem ?? " ").font(Chrome.caption).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.tail)
-                .help(model.problem ?? "")
+                .tip(model.problem ?? "")
             TextField("", text: $typed.value, prompt: Text(model.path ?? "Path on \(NodeNames.name(model.alias))").foregroundStyle(Theme.tertiary))
                 .textFieldStyle(.plain)
                 .font(Chrome.label)

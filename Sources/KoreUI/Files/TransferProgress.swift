@@ -407,7 +407,7 @@ struct TransferBar: View {
                 actions(item, failed: failed)
             }
             if failed, let why = details.first {
-                Text(why).font(Chrome.caption).foregroundStyle(Theme.secondary).lineLimit(4).fixedSize(horizontal: false, vertical: true).help(why)
+                Text(why).font(Chrome.caption).foregroundStyle(Theme.secondary).lineLimit(4).fixedSize(horizontal: false, vertical: true).tip(why)
             } else if !details.isEmpty {
                 ViewThatFits(in: .horizontal) {
                     ForEach(details, id: \.self) { Text($0).lineLimit(1).fixedSize() }
@@ -415,7 +415,7 @@ struct TransferBar: View {
                 .font(Chrome.caption).monospacedDigit().foregroundStyle(Theme.tertiary)
             }
         }
-        .help(failed ? "" : TransferProgress.line(item))
+        .tip(failed ? "" : TransferProgress.line(item))
     }
 
     /// Cancel while it goes (a carry's: Pause or remove its partial copy, asked in a popup);
@@ -437,7 +437,7 @@ struct TransferBar: View {
                 action("Cancel") { Self.ask(item.id, pause: false) }
             } else {
                 Button { progress.dismiss(item.id) } label: { Image(systemName: "xmark").font(Chrome.caption) }
-                    .buttonStyle(.plain).foregroundStyle(Theme.tertiary).help("Dismiss")
+                    .buttonStyle(.plain).foregroundStyle(Theme.tertiary).tip("Dismiss")
             }
         case .done:
             EmptyView()

@@ -200,7 +200,7 @@ struct OpenInEditor: View {
 
     var body: some View {
         TextButton(title) { openURL(Self.url(path, in: folder)) }
-            .help("Open in editor")
+            .tip("Open in editor")
     }
 
     static func url(_ path: String, in folder: URL?) -> URL {

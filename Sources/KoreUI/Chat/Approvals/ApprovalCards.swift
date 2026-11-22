@@ -59,19 +59,19 @@ struct PermissionCard: View {
                     // shows exactly what it lets run.
                     Button("Always allow") { decide(.allowAlways) }
                         .buttonStyle(SubtleButtonStyle())
-                        .help(approval.alwaysHelp)
+                        .tip(approval.alwaysHelp)
                         .storyID(StoryID.Approval.card(approval.id).part(.always))
                 } else if approval.canAlwaysAllow, !approval.autoStop {
                     Button("Always allow") { decide(.allowAlways) }
                         .buttonStyle(SubtleButtonStyle())
-                        .help(approval.alwaysHelp)
+                        .tip(approval.alwaysHelp)
                         .storyID(StoryID.Approval.card(approval.id).part(.always))
                 } else if let note = approval.alwaysAllowNote {
                     // A box's chat: offered by its CLI, set on the box itself.
                     Button("Always allow") {}
                         .buttonStyle(SubtleButtonStyle())
                         .disabled(true)
-                        .help(note)
+                        .tip(note)
                         .storyID(StoryID.Approval.card(approval.id).part(.always))
                 }
                 // A call only the person runs, in Manual (a critical removal), has no Run once.
@@ -80,7 +80,7 @@ struct PermissionCard: View {
                         .buttonStyle(SubtleButtonStyle(prominent: true))
                         // Held by a setting Kore can't change: dim, saying so.
                         .disabled(approval.allowNote != nil)
-                        .help(approval.allowNote ?? "")
+                        .tip(approval.allowNote ?? "")
                         .storyID(StoryID.Approval.card(approval.id).part(.allow))
                 }
             }

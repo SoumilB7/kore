@@ -33,7 +33,7 @@ struct StayAwakeButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(line)
+        .tip(line)
         .koreContextMenu("stay-awake") { StayAwakeModes(awake: awake).items }
         .accessibilityLabel(Text("Stay awake"))
         .accessibilityValue(Text(line))

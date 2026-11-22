@@ -21,11 +21,32 @@ final class UnsavedGuard: NSObject, NSWindowDelegate {
         window.delegate = guarding
     }
 
+    /// Answered yes once: the close it asked about goes through without asking again.
+    private var answered = false
+    /// A question about this close is up: a second ⌘W doesn't ask twice.
+    private var asking = false
+
     func windowShouldClose(_ sender: NSWindow) -> Bool {
-        if let workspace {
+        if let workspace, !answered {
             workspace.flushAutoSaves()
-            guard TerminalPanel.confirm(working: workspace.terminals.workingCount),
-                  Self.confirm(workspace.unsavedFiles, saveAll: workspace.saveAll) else { return false }
+            let working = workspace.terminals.workingCount
+            let files = workspace.unsavedFiles
+            if working > 0 || !files.isEmpty {
+                // Kore's own questions, over this window; it closes once they're answered.
+                guard !asking else { return false }
+                asking = true
+                Task { @MainActor [weak self, weak sender] in
+                    guard let self else { return }
+                    var go = await TerminalPanel.confirm(working: working, in: sender)
+                    if go { go = await Self.confirm(files, saveAll: workspace.saveAll, in: sender) }
+                    self.asking = false
+                    guard go, let sender else { return }
+                    self.answered = true
+                    sender.performClose(nil)
+                    self.answered = false
+                }
+                return false
+            }
         }
         return original?.windowShouldClose?(sender) ?? true
     }
@@ -44,23 +65,15 @@ final class UnsavedGuard: NSObject, NSWindowDelegate {
     }
 
     /// Save all, cancel, or discard; true when it may go ahead.
-    static func confirm(_ files: [FileDocument], saveAll: () -> Void) -> Bool {
+    static func confirm(_ files: [FileDocument], saveAll: () -> Void, in window: NSWindow? = nil) async -> Bool {
         guard !files.isEmpty else { return true }
-        let alert = NSAlert()
-        alert.messageText = files.count == 1
-            ? "Do you want to save the changes you made to \(files[0].name)?"
-            : "Do you want to save the changes you made to \(files.count) files?"
-        alert.informativeText = "Your changes will be lost if you don't save them."
-        alert.addButton(withTitle: files.count == 1 ? "Save" : "Save All")
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Don't Save")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn:
+        switch await KoreAsk.saveChanges(files.map(\.name), key: "save-files", in: window) {
+        case .save:
             saveAll()
             return files.allSatisfy { !$0.isDirty }
-        case .alertThirdButtonReturn:
+        case .discard:
             return true
-        default:
+        case .cancel:
             return false
         }
     }

@@ -419,7 +419,7 @@ private struct SearchToggle: View {
         .buttonStyle(.plain)
         .hitTargetRoom(Size.Editor.findToggleReach)
         .onHover { hovered.value = $0 }
-        .help(help)
+        .tip(help)
     }
 }
 

@@ -50,7 +50,7 @@ struct BoxExplorer: View {
                 .foregroundStyle(Theme.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .help(searching ? "Search in \(workspace.folder.lastPathComponent)" : box.label)
+                .tip(searching ? "Search in \(workspace.folder.lastPathComponent)" : box.label)
                 // The folder's name clears the selection: New File then goes in the folder itself.
                 .contentShape(Rectangle())
                 .onTapGesture { if !searching { store.pickOnly(nil) } }
@@ -602,22 +602,18 @@ private struct BoxNameField: View {
     /// One question for all of them (as the Files explorer asks), then the box's trash.
     static func trash(_ paths: [String], store: BoxExplorerStore) {
         guard !paths.isEmpty else { return }
-        let alert = NSAlert()
-        alert.messageText = paths.count == 1
-            ? "Are you sure you want to delete “\((paths[0] as NSString).lastPathComponent)”?"
-            : "Are you sure you want to delete the following \(paths.count) items?"
-        alert.informativeText = (paths.count == 1 ? "" : paths.prefix(10).map { ($0 as NSString).lastPathComponent }.joined(separator: "\n") + "\n\n")
-            + "You can restore \(paths.count == 1 ? "it" : "them") from the trash on \(NodeNames.name(store.alias))."
-        alert.addButton(withTitle: "Move to Trash")
-        alert.addButton(withTitle: "Cancel")
-        guard StorylineSeams.confirm?("trash") ?? (alert.runModal() == .alertFirstButtonReturn) else { return }
-        Task { _ = await store.trash(paths) }
+        let window = NSApp.keyWindow
+        Task { @MainActor in
+            guard await KoreAsk.confirm(TreeActions.trashQuestion(paths),
+                                        detail: TreeActions.trashDetail(paths, from: "the trash on \(NodeNames.name(store.alias))"),
+                                        yes: "Move to Trash", danger: true, key: "trash", in: window) else { return }
+            _ = await store.trash(paths)
+        }
     }
 
     static func show(_ message: String) {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.runModal()
+        let window = NSApp.keyWindow
+        Task { @MainActor in await KoreAsk.tell(message, key: "box-files-failure", in: window) }
     }
 }
 
@@ -702,11 +698,8 @@ private struct BoxDrop: DropDelegate {
                 let movable = paths.filter { store.parent(of: $0) != folder && !LinkFiles.inside(folder, $0) }
                 guard !movable.isEmpty else { return }
                 if movable.count > 1 {
-                    let alert = NSAlert()
-                    alert.messageText = "Move \(movable.count) items into “\((folder as NSString).lastPathComponent)”?"
-                    alert.addButton(withTitle: "Move")
-                    alert.addButton(withTitle: "Cancel")
-                    guard StorylineSeams.confirm?("move") ?? (alert.runModal() == .alertFirstButtonReturn) else { return }
+                    guard await KoreAsk.confirm("Move \(movable.count) items into “\((folder as NSString).lastPathComponent)”?",
+                                                yes: "Move", key: "move") else { return }
                 }
                 _ = await store.move(movable, into: folder)
             }

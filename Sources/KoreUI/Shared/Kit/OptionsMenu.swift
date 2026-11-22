@@ -67,6 +67,8 @@ final class OptionsMenu {
     static func install() {
         guard nativeMonitor == nil else { return }
         nativeMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) { event in
+            // Under a question (`KoreAsk`) the page takes no clicks, a menu's included.
+            guard !KoreAsk.shared.isOpen else { return event }
             guard event.type == .rightMouseDown || event.modifierFlags.contains(.control),
                   let window = event.window, let content = window.contentView,
                   shared.retargetContextClick(event) else { return event }
@@ -308,7 +310,7 @@ private struct OptionsList: View {
                             }
                             .buttonStyle(.plain)
                             .disabled(!item.enabled)
-                            .help(item.title)
+                            .tip(item.title)
                             .accessibilityAddTraits(item.checked ? .isSelected : [])
                             .background(menu.selected == index ? Theme.Row.selected(.surface) : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
                             .onHover { if $0 { menu.hover(index) } }
@@ -389,13 +391,13 @@ extension View {
     }
 }
 
-/// Its own view, so only the tip, not the row, follows the popup opening and closing. A KoreNet
-/// popup covers it too, except for the popup's own views.
+/// Kore's tip (`KoreTip`), which stays away while a Kore popup is up; a KoreNet popup's own
+/// views keep theirs.
 private struct PopupAwareHelp: ViewModifier {
     let text: String
     @Environment(\.insideNetPopup) private var inside
     func body(content: Content) -> some View {
-        content.help(OptionsMenu.shared.items.isEmpty && (inside || NetPopupHost.shared.showing == nil) ? text : "")
+        content.tip(inside || NetPopupHost.shared.showing == nil ? text : "")
     }
 }
 

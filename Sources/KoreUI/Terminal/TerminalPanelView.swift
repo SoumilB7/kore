@@ -96,7 +96,7 @@ private struct TerminalPanelView: View {
                     let title = panel.title(of: active)
                     Text(title).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle).layoutPriority(-1)
                         .storyID(StoryID.Terminal.title)
-                        .help(title)
+                        .tip(title)
                         .koreContextMenu("terminal") { terminalOptions(active, panel: panel) }
                     IconButton(symbol: "pencil", help: "Rename terminal") { panel.startRename(active) }
                         .storyID(StoryID.Terminal.rename)
@@ -165,7 +165,7 @@ private struct TerminalListRow: View {
         .padding(.leading, Space.sm)
         .background(panel.selected == entry.id ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
         .onHover { hovered.value = $0 }
-        .help(panel.title(of: entry))
+        .tip(panel.title(of: entry))
         .koreContextMenu("terminal") { terminalOptions(entry, panel: panel) }
         .accessibilityAction(named: "Rename") { panel.startRename(entry) }
     }

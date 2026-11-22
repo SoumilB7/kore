@@ -225,7 +225,7 @@ private struct FileListRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(change.path)
+        .tip(change.path)
     }
 
     private var directory: String {

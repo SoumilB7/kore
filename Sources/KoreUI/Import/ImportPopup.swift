@@ -111,7 +111,7 @@ struct ImportPopup: View {
         case .ready(let preview):
             ready(preview)
         case .notImportable(let why):
-            caption("Not a chat Kore can import", Theme.tertiary).help(why)
+            caption("Not a chat Kore can import", Theme.tertiary).tip(why)
         case .sourceBusy:
             caption("Still running in its tab.", Theme.secondary)
         case .signedOut(let product):
@@ -140,12 +140,12 @@ struct ImportPopup: View {
     /// the company's what leaves.
     private func ready(_ preview: HandoffPreview) -> some View {
         HStack(spacing: 0) {
-            caption(ImportState.count(preview), Theme.secondary).help(ImportState.breakdown(preview))
+            caption(ImportState.count(preview), Theme.secondary).tip(ImportState.breakdown(preview))
             caption(" · " + ImportState.tokens(preview), Theme.secondary)
             if let company = ImportState.company(preview, into: chat) {
                 caption(" · ", Theme.secondary)
                 caption("sent to \(company)", Theme.secondary)
-                    .help("Everything carried goes to \(company)'s model, including anything pasted into that chat.")
+                    .tip("Everything carried goes to \(company)'s model, including anything pasted into that chat.")
             }
         }
     }
@@ -201,7 +201,7 @@ private struct ImportRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .help(row.folder.map { $0 == folder.path ? row.title : "\(row.title)\n\($0)" } ?? row.title)
+        .tip(row.folder.map { $0 == folder.path ? row.title : "\(row.title)\n\($0)" } ?? row.title)
         .storyID(StoryID.Composer.importRow(row.id), press: pick)
     }
 }

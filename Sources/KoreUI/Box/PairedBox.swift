@@ -174,7 +174,7 @@ struct PairedBoxCue: View {
             }
             .buttonStyle(.plain)
             .onHover { hovered.value = $0 }
-            .help("\(NodeNames.name(paired.alias)) · \(paired.folder)")
+            .tip("\(NodeNames.name(paired.alias)) · \(paired.folder)")
             .layoutPriority(-1)
         }
     }

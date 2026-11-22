@@ -60,7 +60,7 @@ struct WorkedFor: View {
                             .lineLimit(1)
                     }
                     .foregroundStyle(Theme.secondary)
-                    .help("Denied this turn")
+                    .tip("Denied this turn")
                 }
             }
             .font(TextStyle.body)

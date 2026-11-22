@@ -496,7 +496,7 @@ struct UsagePopup: View {
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .help(account.map(UsageText.who) ?? "")
+                .tip(account.map(UsageText.who) ?? "")
             Spacer(minLength: 0)
             freshness
             HStack(spacing: Space.xxs) {
@@ -592,7 +592,7 @@ struct UsagePopup: View {
                 .tabStop(StoryID.Composer.usage.part(.reset)) { state.toggleResets() }
             }
         } else {
-            Text(line).lineLimit(1).truncationMode(.tail).help(line)
+            Text(line).lineLimit(1).truncationMode(.tail).tip(line)
         }
     }
 
@@ -620,7 +620,7 @@ struct UsagePopup: View {
         return VStack(alignment: .leading, spacing: 0) {
             Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.md)
             HStack(spacing: Space.xs) {
-                Text(caption).lineLimit(1).truncationMode(.tail).help(caption)
+                Text(caption).lineLimit(1).truncationMode(.tail).tip(caption)
                 Spacer(minLength: 0)
                 if state.rereading { SpinningArc().frame(width: Size.spinner, height: Size.spinner) }
             }
@@ -656,21 +656,21 @@ struct UsagePopup: View {
                     .truncationMode(.tail)
             }
             .frame(minHeight: Size.contextCardLine)
-            .help(help)
+            .tip(help)
                 .storyID(limit.map { StoryID.Composer.usageLimit($0.title) })
             LimitBar(
                 fraction: limit.map { UsageText.fraction($0.used) } ?? 0, kore: UsageText.fraction(kore),
                 share: limit.map { StoryID.Composer.usageLimit($0.title).part(.share) })
                 .frame(minWidth: Size.usageBarMin, maxWidth: .infinity)
                 .storyID(limit.map { StoryID.Composer.usageLimit($0.title).part(.track) })
-                .help(limit.map { state.barHelp($0, now: now) } ?? "")
+                .tip(limit.map { state.barHelp($0, now: now) } ?? "")
                 .accessibilityLabel(kore > 0 ? "about \(UsageText.kore(kore).dropFirst()) in Kore" : "")
             Text(limit.map { UsageText.percent($0.used) } ?? "—")
                 .font(TextStyle.label.monospacedDigit())
                 .foregroundStyle(Theme.secondary)
                 .lineLimit(1)
                 .gridColumnAlignment(.trailing)
-                .help(help)
+                .tip(help)
             // Blank while loading or without a time, still as wide as a short time.
             HStack(spacing: Space.xxs) {
                 Image(systemName: "arrow.clockwise").font(Glyph.chevron).foregroundStyle(Theme.tertiary)
@@ -679,7 +679,7 @@ struct UsagePopup: View {
             .lineLimit(1)
             .fixedSize()
             .opacity(reset.isEmpty ? 0 : 1)
-            .help(help)
+            .tip(help)
         }
     }
 }
@@ -791,7 +791,7 @@ private struct ResetRowView: View {
         .hoverFill(step == .asking || (hovered.value && step == nil), step == .asking ? Theme.Row.selected(.surface) : Theme.Row.hover(.surface))
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
-        .help(step == nil ? row.credit.map { UsageText.expiresAt($0.expiresAt, now: now) } ?? "" : "")
+        .tip(step == nil ? row.credit.map { UsageText.expiresAt($0.expiresAt, now: now) } ?? "" : "")
         // One element to VoiceOver, its "Use reset" a button on it.
         .accessibilityElement(children: .combine)
         .storyID(id)
@@ -817,7 +817,7 @@ private struct ResetRowView: View {
     }
 
     private func said(_ words: String, _ color: Color) -> some View {
-        Text(words).foregroundStyle(color).lineLimit(1).truncationMode(.tail).help(words)
+        Text(words).foregroundStyle(color).lineLimit(1).truncationMode(.tail).tip(words)
     }
 
     /// Never truncated, at the row's trailing edge.

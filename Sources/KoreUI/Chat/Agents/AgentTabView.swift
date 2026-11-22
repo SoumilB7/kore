@@ -284,6 +284,6 @@ private struct CrumbLink: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help("Back to the chat")
+        .tip("Back to the chat")
     }
 }

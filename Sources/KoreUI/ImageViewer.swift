@@ -324,7 +324,7 @@ struct ImageToolbar: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Actual size")
+                .tip("Actual size")
             }
             if density != .minimal {
                 toolButton("plus.magnifyingglass", help: "Zoom in (⌘=)", action: editor.zoomIn)
@@ -337,7 +337,7 @@ struct ImageToolbar: View {
                     .buttonStyle(SubtleButtonStyle())
                     .lineLimit(1)
                     .fixedSize()
-                    .help(secondary.help)
+                    .tip(secondary.help)
                     .padding(.leading, Space.xs)
             }
             Button(actionTitle, action: finish).storyID(StoryID.Viewer.add)
@@ -345,7 +345,7 @@ struct ImageToolbar: View {
                 .lineLimit(1)
                 .fixedSize()
                 .disabled(!actionEnabled)
-                .help(actionHelp ?? "\(actionTitle) (Return)")
+                .tip(actionHelp ?? "\(actionTitle) (Return)")
                 .padding(.leading, Space.xs)
         }
     }
@@ -373,7 +373,7 @@ struct ImageToolbar: View {
                 }
                 .buttonStyle(.plain)
                 .fixedSize()
-                .help("Pen colour")
+                .tip("Pen colour")
             }
         }
         toolButton("arrow.uturn.backward", help: "Undo (⌘Z)", action: editor.undo)

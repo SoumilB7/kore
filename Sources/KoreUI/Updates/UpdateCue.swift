@@ -24,7 +24,7 @@ struct UpdateCue: View {
                     .foregroundStyle(Theme.secondary)
                     .padding(.horizontal, Space.xxl)
                     .padding(.vertical, Space.md)
-                    .help("Building \(version)")
+                    .tip("Building \(version)")
             }
             .storyMark(StoryID.NewTab.update.part(.working))
         case .failed(let version, let why):
@@ -49,7 +49,7 @@ struct UpdateCue: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(help)
+        .tip(help)
         .storyID(id)
     }
 }

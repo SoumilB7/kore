@@ -208,8 +208,12 @@ final class TerminalPanel {
     }
 
     func requestClose(_ entry: TerminalEntry) {
-        guard Self.confirm(working: entry.session?.hasWork == true ? 1 : 0) else { return }
-        close(entry)
+        guard entry.session?.hasWork == true else { return close(entry) }
+        let window = self.window
+        Task { @MainActor in
+            guard await Self.confirm(working: 1, in: window), entries.contains(where: { $0 === entry }) else { return }
+            close(entry)
+        }
     }
 
     func close(_ entry: TerminalEntry) {
@@ -262,14 +266,12 @@ final class TerminalPanel {
         else { window?.makeFirstResponder(nil) }
     }
 
-    static func confirm(working: Int) -> Bool {
+    static func confirm(working: Int, in window: NSWindow? = nil) async -> Bool {
         guard working > 0 else { return true }
-        let alert = NSAlert()
-        alert.messageText = working == 1 ? "A terminal is running a command" : "\(working) terminals are running commands"
-        alert.informativeText = "Closing stops these commands and ends the window's shells."
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Stop and Close").hasDestructiveAction = true
-        return alert.runModal() == .alertSecondButtonReturn
+        return await KoreAsk.confirm(
+            working == 1 ? "A terminal is running a command" : "\(working) terminals are running commands",
+            detail: "Closing stops these commands and ends the window's shells.",
+            yes: "Stop and Close", danger: true, cancelFirst: true, key: "close-terminals", in: window)
     }
 }
 

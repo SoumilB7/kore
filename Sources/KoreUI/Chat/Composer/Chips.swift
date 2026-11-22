@@ -21,7 +21,7 @@ struct PlanChip: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help("Turn off Plan mode")
+        .tip("Turn off Plan mode")
     }
 }
 
@@ -45,7 +45,7 @@ struct RemoteChip: View {
         .buttonStyle(.plain)
         .fixedSize()
         .onHover { hovered.value = $0 }
-        .help(remote.line(cli: cli))
+        .tip(remote.line(cli: cli))
         .accessibilityLabel(Text(remote.line(cli: cli)))
     }
 
@@ -102,7 +102,7 @@ struct AttachmentChip: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(attachment.name)
+                .tip(attachment.name)
             } else {
                 HStack(spacing: Space.sm) {
                     Image(systemName: icon)
@@ -120,7 +120,7 @@ struct AttachmentChip: View {
                 .background(
                     selected ? Theme.Selection.chip(focused: focused) : Theme.surfaceHover,
                     in: RoundedRectangle(cornerRadius: Radius.chip))
-                .help(attachment.url?.path ?? attachment.name)
+                .tip(attachment.url?.path ?? attachment.name)
             }
         }
         .task { attachment.poster?.make() }
@@ -135,7 +135,7 @@ struct AttachmentChip: View {
                 .buttonStyle(.plain)
                 .hitTargetRoom(Size.chipBadgeReach)
                 .offset(x: Size.chipBadge.width, y: Size.chipBadge.height)
-                .help("Remove")
+                .tip("Remove")
             }
         }
     }

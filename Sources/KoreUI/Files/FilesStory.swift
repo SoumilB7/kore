@@ -30,6 +30,23 @@ extension Workspace {
         if tabs.indices.contains(index) { select(tabs[index]) }
     }
 
+    /// The active file tab has edits not yet saved.
+    package var storyActiveFileDirty: Bool { activeFile?.isDirty ?? false }
+
+    /// A drop of `paths` on `folder` in the tree (relative to the folder), as a drag lands it.
+    package func storyDrop(_ paths: [String], into folder: String, copy: Bool) {
+        guard let store = files else { return }
+        let root = self.folder.path
+        TreeActions.drop(paths.map { root + "/" + $0 }, into: folder.isEmpty ? root : root + "/" + folder, copy: copy,
+                         store: store, workspace: self, undo: nil)
+    }
+
+    /// The window's close button, as it's pressed (its questions ask first).
+    package func storyPressClose() { window?.performClose(nil) }
+
+    /// A terminal's close as its × asks it, with `working` commands running.
+    package func storyAskTerminalClose(working: Int) async -> Bool { await TerminalPanel.confirm(working: working, in: window) }
+
     /// The name of the tab at `index` (0-based) in the strip: `tabs.file[…]` for a file's.
     package func storyTabID(at index: Int) -> StoryID? {
         guard tabs.indices.contains(index) else { return nil }

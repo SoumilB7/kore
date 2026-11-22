@@ -585,7 +585,7 @@ private struct AgentGraphRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(node.background ? "\(info.name) · Background" : info.name)
+        .tip(node.background ? "\(info.name) · Background" : info.name)
         .storyID(StoryID.AgentMap.row(info.id), press: { select() })
     }
 
@@ -811,7 +811,7 @@ struct AgentDetail: View {
                 }
                 .buttonStyle(SubtleButtonStyle())
                 .fixedSize()
-                .help("Stop agent")
+                .tip("Stop agent")
                 .storyID(StoryID.AgentMap.stop)
             }
             Button {
@@ -822,7 +822,7 @@ struct AgentDetail: View {
             }
             .buttonStyle(SubtleButtonStyle())
             .fixedSize()
-            .help("Open in tab (Return)")
+            .tip("Open in tab (Return)")
             .storyID(StoryID.AgentMap.open)
         }
     }

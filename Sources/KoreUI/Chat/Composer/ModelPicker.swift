@@ -192,7 +192,7 @@ struct ModelPicker: View {
         )
         .storyID(StoryID.Composer.modelChip(member.model.id))
         .tabStop(StoryID.Composer.modelChip(member.model.id)) { pick(member.model) }
-        .help(member.model.name)
+        .tip(member.model.name)
     }
 
     // MARK: Picking
@@ -342,7 +342,7 @@ private struct FastBolt: View {
         .buttonStyle(.plain)
         .disabled(!enabled)
         .onHover(perform: hover)
-        .help(unavailable ?? (paused ? "Standard speed for now, after a rate limit" : cost.detail.isEmpty ? "Fast mode: uses extra usage" : cost.detail))
+        .tip(unavailable ?? (paused ? "Standard speed for now, after a rate limit" : cost.detail.isEmpty ? "Fast mode: uses extra usage" : cost.detail))
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text("Fast mode"))
         .accessibilityValue(Text(unavailable ?? ((on ? "On" : "Off") + (cost.times.isEmpty ? "" : ", \(cost.times) usage"))))
@@ -367,7 +367,7 @@ private struct MoreChip: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help("More versions")
+        .tip("More versions")
     }
 }
 

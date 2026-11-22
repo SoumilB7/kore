@@ -114,7 +114,7 @@ struct UsageModal: View {
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .help(account.map(UsageText.who) ?? "")
+                .tip(account.map(UsageText.who) ?? "")
             Spacer(minLength: 0)
             if let readAt = state.readAt {
                 Text("as of " + readAt.formatted(date: .omitted, time: .shortened))
@@ -252,7 +252,7 @@ struct UsageModal: View {
                     let split = share.surfaces
                         .map { "\($0.name) \($0.estimated ? UsageText.kore($0.points) : UsageText.percent($0.points))" }
                         .joined(separator: " · ")
-                    note(split).help(split)
+                    note(split).tip(split)
                 }
                 if let quality = quality(limit, share) { note(quality) }
             } else {
@@ -358,7 +358,7 @@ private struct UsagePickRow: View {
         .buttonStyle(.plain)
         .hoverFill(selected || hovered.value, selected ? Theme.Row.selected(.surface) : Theme.Row.hover(.surface))
         .onHover { hovered.value = $0 }
-        .help(help)
+        .tip(help)
         .accessibilityLabel(label)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -481,7 +481,7 @@ private struct UsageChatRow: View {
             }
             .foregroundStyle(Theme.secondary)
             .lineLimit(1)
-            .help("\(share.agents) \(share.agents == 1 ? "agent" : "agents") · \(UsageText.kore(share.agentPoints))")
+            .tip("\(share.agents) \(share.agents == 1 ? "agent" : "agents") · \(UsageText.kore(share.agentPoints))")
         }
     }
 }

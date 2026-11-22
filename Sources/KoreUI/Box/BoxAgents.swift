@@ -141,7 +141,7 @@ struct BoxAgentsView: View {
                 Text("Kore's tailnet").font(TextStyle.labelMedium).foregroundStyle(Theme.text)
                 Text(own.signedIn ? own.login.map { "signed in as \($0)" } ?? "signed in" : own.why == .never ? "not signed in" : "signed out")
                     .font(TextStyle.caption).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.middle)
-                    .help(own.line)
+                    .tip(own.line)
                 Spacer(minLength: Space.sm)
                 if !own.signedIn {
                     Button("Sign in ↗") { signInOwn(own) }.smallButton()

@@ -110,7 +110,7 @@ struct PreviewSourceSwitch: View {
     /// key always flips it.
     private func segment(_ title: String, selected: Bool, action: @escaping () -> Void) -> some View {
         SwitchSegment(title: title, selected: selected, action: action)
-            .help(selected ? title : (title == "Preview" ? "Show Preview (⇧⌘V)" : "Show Source (⇧⌘V)"))
+            .tip(selected ? title : (title == "Preview" ? "Show Preview (⇧⌘V)" : "Show Source (⇧⌘V)"))
     }
 }
 

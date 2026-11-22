@@ -99,38 +99,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let app = AppModel()
 
     /// Chats still working, then unsaved file edits, in any window, are asked about first.
+    /// Asked in Kore's own card over the front window (`KoreAsk`), so the answer comes later:
+    /// AppKit waits (`terminateLater`) and hears it by `reply(toApplicationShouldTerminate:)`.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let workspaces = Workspace.all.allObjects
-        guard Self.confirmQuit(working: workspaces.reduce(0) { $0 + $1.workingChats },
-                               terminals: workspaces.reduce(0) { $0 + $1.terminals.workingCount },
-                               transfers: FileCarries.shared.active) else { return .terminateCancel }
+        let working = workspaces.reduce(0) { $0 + $1.workingChats }
+        let terminals = workspaces.reduce(0) { $0 + $1.terminals.workingCount }
+        let transfers = FileCarries.shared.active
         for workspace in workspaces { workspace.flushAutoSaves() }
         let files = workspaces.flatMap(\.unsavedFiles)
-        guard UnsavedGuard.confirm(files, saveAll: { workspaces.forEach { $0.saveAll() } }) else { return .terminateCancel }
-        workspaces.forEach { $0.persistNow() }
-        return .terminateNow
+        guard working > 0 || terminals > 0 || transfers > 0 || !files.isEmpty else {
+            workspaces.forEach { $0.persistNow() }
+            return .terminateNow
+        }
+        guard !quitAsking else { return .terminateCancel }
+        quitAsking = true
+        Task { @MainActor in
+            var quit = await Self.confirmQuit(working: working, terminals: terminals, transfers: transfers)
+            if quit { quit = await UnsavedGuard.confirm(files, saveAll: { workspaces.forEach { $0.saveAll() } }) }
+            if quit { workspaces.forEach { $0.persistNow() } }
+            quitAsking = false
+            sender.reply(toApplicationShouldTerminate: quit)
+        }
+        return .terminateLater
     }
+
+    /// A quit's question is up: another ⌘Q doesn't ask twice.
+    private var quitAsking = false
 
     /// Quitting ends every CLI, and with it what its chat is doing, and pauses file transfers
     /// (they go on at the next launch): asked once, Cancel the default.
-    private static func confirmQuit(working: Int, terminals: Int, transfers: Int) -> Bool {
+    static func confirmQuit(working: Int, terminals: Int, transfers: Int) async -> Bool {
         guard working > 0 || terminals > 0 || transfers > 0 else { return true }
-        let alert = NSAlert()
         let pausing = transfers == 1 ? "1 transfer will pause" : "\(transfers) transfers will pause"
+        let title: String
+        let detail: String
         if working == 0, terminals == 0 {
-            alert.messageText = pausing
-            alert.informativeText = "\(transfers == 1 ? "It goes" : "They go") on from where \(transfers == 1 ? "it" : "they") stopped when Kore opens again."
+            title = pausing
+            detail = "\(transfers == 1 ? "It goes" : "They go") on from where \(transfers == 1 ? "it" : "they") stopped when Kore opens again."
         } else {
-            alert.messageText = terminals > 0 ? "Work is running in Kore" : (working == 1 ? "1 chat is working" : "\(working) chats are working")
-            alert.informativeText = (terminals > 0
+            title = terminals > 0 ? "Work is running in Kore" : (working == 1 ? "1 chat is working" : "\(working) chats are working")
+            detail = (terminals > 0
                 ? "Quitting stops working chats and terminal commands, and ends every shell."
                 : "Quitting stops their turns, agents and background commands.")
                 + (transfers > 0 ? " \(pausing) until Kore opens again." : "")
         }
-        alert.addButton(withTitle: "Cancel")
-        let quit = alert.addButton(withTitle: "Quit")
-        quit.hasDestructiveAction = true
-        return alert.runModal() == .alertSecondButtonReturn
+        return await KoreAsk.confirm(title, detail: detail, yes: "Quit", danger: true, cancelFirst: true, key: "quit")
     }
 
     /// The CLIs end with Kore: one left running would go on acting in a session Kore resumes
@@ -385,4 +399,11 @@ private final class DockItem: NSMenuItem {
     required init(coder: NSCoder) { fatalError("init(coder:) is not used") }
 
     @objc private func fire() { run() }
+}
+
+/// Storylines: quitting's question as ⌘Q asks it, answered without quitting.
+package enum QuitQuestion {
+    package static func ask(working: Int, terminals: Int, transfers: Int) async -> Bool {
+        await AppDelegate.confirmQuit(working: working, terminals: terminals, transfers: transfers)
+    }
 }

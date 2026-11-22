@@ -198,7 +198,7 @@ struct PlatformFormView: View {
     @ViewBuilder private var keyFile: some View {
         if let path = form.keyFile {
             Text(URL(fileURLWithPath: path).lastPathComponent).font(TextStyle.label).foregroundStyle(Theme.text).lineLimit(1)
-                .truncationMode(.middle).help(path)
+                .truncationMode(.middle).tip(path)
         } else {
             Text("No file").font(TextStyle.label).foregroundStyle(Theme.tertiary)
         }
@@ -255,7 +255,7 @@ struct PlatformFormView: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
-                .help(words)
+                .tip(words)
                 Spacer(minLength: 0)
                 Button("Save", action: save)
                     .smallButton(prominent: true)

@@ -160,7 +160,7 @@ private struct PathRow: View {
                 }
                 .foregroundStyle(Theme.tertiary)
                 .padding(.horizontal, Space.xs)
-                .help("On \(NodeNames.name(box.alias)): \(box.path)")
+                .tip("On \(NodeNames.name(box.alias)): \(box.path)")
                 Image(systemName: "chevron.right").font(Chrome.glyphCrumb).foregroundStyle(Theme.tertiary)
             }
             ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
@@ -225,7 +225,7 @@ private struct Crumb: View {
         .onGeometryChange(for: [CGRect].self) { [$0.frame(in: .named(CrumbMenu.space)), $0.frame(in: .global)] } action: {
             frames.value = ($0[0], $0[1])
         }
-        .help(isFile ? "Files beside \(name)" : "Files in \(name)")
+        .tip(isFile ? "Files beside \(name)" : "Files in \(name)")
     }
 }
 
@@ -252,7 +252,7 @@ private struct TurnMark: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help("View changes")
+        .tip("View changes")
     }
 }
 
@@ -419,6 +419,6 @@ private struct StatusItem: View {
         .padding(.horizontal, Space.xs)
         .background(hovered.value ? Theme.Row.hover(.window) : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
         .onHover { hovered.value = $0 }
-        .help(help)
+        .tip(help)
     }
 }

@@ -308,7 +308,7 @@ private struct WelcomeRow: View {
         }
         .buttonStyle(.plain)
         .disabled(item.missing)
-        .help(item.missing || full.value > shown.value + 0.5 ? item.help : "")
+        .tip(item.missing || full.value > shown.value + 0.5 ? item.help : "")
         .storyID(item.story, press: item.open)
     }
 }

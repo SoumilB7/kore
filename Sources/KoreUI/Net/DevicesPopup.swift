@@ -35,7 +35,7 @@ struct NetworkButton: View {
             anchor.value = view
             DispatchQueue.main.async { NetAnchors.icon(view) }
         })
-        .help(look.line)
+        .tip(look.line)
         .accessibilityLabel(Text("Devices"))
         .accessibilityValue(Text(look.line))
         .storyID(StoryID.Net.icon, press: press)
@@ -156,7 +156,7 @@ struct DevicesPopup: View {
                     .controlSize(.mini)
                     .labelsHidden()
                     .tint(Theme.accent)
-                    .help(picture.net == .off ? "KoreNet is off" : "KoreNet is on")
+                    .tip(picture.net == .off ? "KoreNet is off" : "KoreNet is on")
                     .accessibilityLabel("KoreNet")
                     .storyID(StoryID.Net.toggle, press: { devices.setOn(picture.net == .off) })
             }
@@ -199,7 +199,7 @@ struct DevicesPopup: View {
             Text(DevicesWords.macDetail(picture)).font(Theme.Net.detail).foregroundStyle(Theme.tertiary).lineLimit(1)
             Spacer(minLength: 0)
         }
-        .help(DevicesWords.macHelp(picture))
+        .tip(DevicesWords.macHelp(picture))
         .storyID(StoryID.Net.row("this-mac"))
     }
 
@@ -240,7 +240,7 @@ struct DevicesPopup: View {
         .onHover { inside in
             if inside { hoveredRow.value = row.id } else if hoveredRow.value == row.id { hoveredRow.value = nil }
         }
-        .help(DevicesWords.help(row) ?? "")
+        .tip(DevicesWords.help(row) ?? "")
         .background(BoxAnchor { [anchors] view in anchors.value["row:" + row.id] = view })
         .storyID(StoryID.Net.row(row.id))
         .background {
@@ -383,7 +383,7 @@ struct DevicesPopup: View {
                 .buttonStyle(.plain).foregroundStyle(Theme.accent).netHit()
                 .storyID(StoryID.Net.lineAction, press: { devices.unavailableAction(why) })
             }
-            .help(why)
+            .tip(why)
             .storyID(StoryID.Net.line)
         case .running:
             runningLines(picture, now: now)
@@ -396,14 +396,14 @@ struct DevicesPopup: View {
             NetRule()
             NetLine { NetSpinner(); Text("On the phone or box, choose Join KoreNet") }
             ForEach(picture.refusals, id: \.name) { refusal in
-                NetLine { Text(refusal.line) }.help(refusal.help)
+                NetLine { Text(refusal.line) }.tip(refusal.help)
             }
             NetAction(title: "Get the phone app", glyph: .external, trailing: false) { devices.getPhoneApp() }
                 .storyID(StoryID.Net.phoneApp, press: { devices.getPhoneApp() })
         } else if picture.lockedOut {
             NetRule()
             NetLine { Text("This Mac waits for a Tailnet Lock signature") }
-                .help("Sign it from a device that holds your lock key")
+                .tip("Sign it from a device that holds your lock key")
                 .storyID(StoryID.Net.line)
         } else if let expiry = picture.macKeyExpiry, expiry.timeIntervalSince(now) < DevicesPicture.expirySoon {
             NetRule()
@@ -498,7 +498,7 @@ struct DevicesPopup: View {
         } else {
             // Its sign-in went with the key change (0.3.7): that's the line until it's signed in again.
             NetAction(title: KoreNetSwitch.shared?.signInAgainNote ?? DevicesWords.signIn, glyph: .external, trailing: true) { devices.signIn() }
-                .help("Kore's own tailnet, inside the app")
+                .tip("Kore's own tailnet, inside the app")
                 .storyID(StoryID.Net.lineAction, press: { devices.signIn() })
         }
     }
@@ -537,7 +537,7 @@ struct DevicesPopup: View {
                     .storyID(StoryID.Net.sign(row.nodeKey), press: { Task { await devices.sign(row) } })
             }
         }
-        .help(row.canSign ? "" : SignatureRow.help)
+        .tip(row.canSign ? "" : SignatureRow.help)
         .storyID(StoryID.Net.pending(row.nodeKey))
     }
 

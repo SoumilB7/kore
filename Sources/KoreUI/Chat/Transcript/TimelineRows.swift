@@ -83,7 +83,7 @@ private struct SignInNotice: View {
             Text(AccountText.expired(product, signedOut: signedOut))
                 .font(TextStyle.body)
                 .foregroundStyle(Theme.danger)
-                .help(said)
+                .tip(said)
                 .selectableOnHover()
             Button("Sign in", action: signIn)
                 .smallButton(prominent: true)
@@ -150,18 +150,18 @@ private struct OutcomeLine: View {
                         .smallButton(prominent: true)
                         .fixedSize()
                         .storyID(StoryID.Transcript.retryOn(turn))
-                        .help("Switch this chat to \(fallback) and go on")
+                        .tip("Switch this chat to \(fallback) and go on")
                 }
                 Button("Add context", action: refused.addContext)
                     .smallButton(prominent: refused.fallback == nil)
                     .fixedSize()
                     .storyID(StoryID.Transcript.addContext(turn))
-                    .help("Your message back in the composer, a line of context first")
+                    .tip("Your message back in the composer, a line of context first")
             } else if let retry {
                 Button("Retry", action: retry)
                     .smallButton(prominent: true)
                     .storyID(StoryID.Transcript.retry(turn))
-                    .help("Retry")
+                    .tip("Retry")
             }
         }
     }
@@ -175,7 +175,7 @@ private struct OutcomeLine: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .frame(maxWidth: Size.sendsQuote, alignment: .leading)
-                    .help(sends)
+                    .tip(sends)
                 Text("· " + ContinueText.sends(at, now: Date()))
                     .font(TextStyle.body)
                     .foregroundStyle(Theme.secondary)
@@ -185,7 +185,7 @@ private struct OutcomeLine: View {
                     .font(TextStyle.body)
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
-                    .help("Continue at reset")
+                    .tip("Continue at reset")
             }
             IconButton(symbol: "xmark", kind: .mini, font: TextStyle.caption, help: sends == nil ? "Don't continue" : "Don't send it, back to the draft", action: cancel)
                 .storyID(StoryID.Transcript.continues(turn).part(.cancel))
@@ -222,7 +222,7 @@ private struct SleptNotice: View {
             Text("Stopped while the Mac slept")
                 .font(TextStyle.body)
                 .foregroundStyle(Theme.secondary)
-                .help(said)
+                .tip(said)
                 .selectableOnHover()
             Button("Continue", action: resume)
                 .smallButton(prominent: true)
@@ -656,7 +656,7 @@ struct MessageHeader: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .panel(.outline)
         .modifier(OpenBox(on: opened, box: box))
-        .help(open ? "" : "Show all")
+        .tip(open ? "" : "Show all")
     }
 
     private static func firstLine(_ text: String) -> String {
@@ -1115,10 +1115,10 @@ struct ToolHeader: View {
             // The file name opens in a Kore tab, through the transcript's openURL: drawn as text,
             // not a SwiftUI link (`FileNameClick`); the selection's copy keeps the link.
             if let selectionPath {
-                drawn.lineLimit(2).help(path ?? "")
+                drawn.lineLimit(2).tip(path ?? "")
                     .selectableText(selectionPath, selectionLine, .toolHeader)
             } else {
-                drawn.lineLimit(2).help(path ?? "")
+                drawn.lineLimit(2).tip(path ?? "")
                     .modifier(FileNameClick(url: path.map { OpenInEditor.url($0, in: folder) }, path: path))
             }
             if added > 0 || removed > 0 { ChangeCounts(added: added, removed: removed) }
@@ -1483,7 +1483,7 @@ private struct AgentHeader: View {
                                 .fixedSize()
                         }
                         .buttonStyle(.plain)
-                        .help("Open in tab (⌘-click)")
+                        .tip("Open in tab (⌘-click)")
                         .storyID(StoryID.Transcript.agent(info.id).part(.open))
                     }
                     AgentMeter(info: info)

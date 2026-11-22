@@ -536,7 +536,7 @@ struct AccountPopup: View {
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .help(caption)
+                    .tip(caption)
                 if identity.changeable || store.flow(provider) != nil || state.editor != nil {
                     row(signedIn: true).padding(.top, Space.sm)
                 } else {
@@ -545,7 +545,7 @@ struct AccountPopup: View {
                         .foregroundStyle(Theme.tertiary)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .help(AccountText.cantChange)
+                        .tip(AccountText.cantChange)
                         .padding(.top, Space.sm)
                 }
             }
@@ -593,7 +593,7 @@ struct AccountPopup: View {
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .help(shown)
+                .tip(shown)
             if email { PrivacyButton() }
             Spacer(minLength: 0)
             if store.status(chat.provider.id) == .unknown, store.isReading(chat.provider.id) {
@@ -616,7 +616,7 @@ struct AccountPopup: View {
                     .foregroundStyle(caption.danger ? Theme.danger : Theme.tertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .help(caption.words)
+                    .tip(caption.words)
                     .transition(.opacity.animation(Motion.fade))
             }
         }
@@ -775,7 +775,7 @@ private struct AccountRow: View {
                 Text(code).font(TextStyle.code).foregroundStyle(Theme.text).textSelection(.enabled)
             }
             .lineLimit(1)
-            .help(AccountText.deviceHelp)
+            .tip(AccountText.deviceHelp)
             Spacer(minLength: 0)
             Button(state.copied ? "Copied" : "Copy code") { state.copy(code) }
                 .smallButton()
@@ -790,16 +790,16 @@ private struct AccountRow: View {
                 Image(systemName: "checkmark").font(Glyph.chevron)
                 Text(words).lineLimit(1).truncationMode(.tail)
             }
-            .help(step == .same ? AccountText.sameHelp : words)
+            .tip(step == .same ? AccountText.sameHelp : words)
             Spacer(minLength: 0)
         case .failed, .keyFailed, .refreshFailed:
             let words = Self.words(step)
-            Text(words).foregroundStyle(Theme.danger).lineLimit(1).truncationMode(.tail).help(words)
+            Text(words).foregroundStyle(Theme.danger).lineLimit(1).truncationMode(.tail).tip(words)
             Spacer(minLength: 0)
             signInControl("Try again", id: id) { state.tryAgain() }
         case .signOutFailed:
             let words = Self.words(step)
-            Text(words).foregroundStyle(Theme.danger).lineLimit(1).truncationMode(.tail).help(words)
+            Text(words).foregroundStyle(Theme.danger).lineLimit(1).truncationMode(.tail).tip(words)
             Spacer(minLength: 0)
         case .timedOut:
             Text(AccountText.timedOut).lineLimit(1)
@@ -918,7 +918,7 @@ private struct MethodList: View {
                 let press: @MainActor @Sendable () -> Void = { if row.enabled { row.action() } }
                 MethodRow(title: row.title, hint: row.hint, action: press)
                     .opacity(row.enabled ? 1 : 0.45)
-                    .help(row.hint ?? "")
+                    .tip(row.hint ?? "")
                     .storyID(StoryID.Composer.accountMethod(row.title))
                     .tabStop(StoryID.Composer.accountMethod(row.title), action: press)
             }
@@ -1114,7 +1114,7 @@ struct LoginRow: View {
                         .font(login.active ? TextStyle.title : TextStyle.body)
                         .foregroundStyle(login.active ? Theme.text : Theme.secondary)
                         .lineLimit(1).truncationMode(.middle)
-                        .help(title)
+                        .tip(title)
                     Spacer(minLength: Space.md)
                     if let pill = LoginRow.pill(usage, plan: plan) { PlanPill(text: pill) }
                     // One trailing slot in every row, ✓ or (on hover) ⋯: the pills line up beside it.
@@ -1221,7 +1221,7 @@ struct PrivacyButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(privacy.on ? "Show emails" : "Hide emails")
+        .tip(privacy.on ? "Show emails" : "Hide emails")
         .storyID(id)
         .tabStop(id, action: flip)
         .accessibilityLabel(Text("Private emails"))

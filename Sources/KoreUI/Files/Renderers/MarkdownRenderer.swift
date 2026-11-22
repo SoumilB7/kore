@@ -330,7 +330,7 @@ private struct MarkdownImage: View {
                     .interpolation(.high)
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: image.size.width, alignment: .leading)
-                    .help(alt)
+                    .tip(alt)
             } else if tried.value, !alt.isEmpty {
                 Text(alt).font(TextStyle.label).foregroundStyle(Theme.tertiary)
             } else {

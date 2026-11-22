@@ -27,7 +27,7 @@ struct HistoryButton: View {
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
-        .help("History")
+        .tip("History")
     }
 }
 
@@ -213,7 +213,7 @@ struct HistoryPanel: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(showArchived.value ? "Show chats" : "Show archived chats")
+            .tip(showArchived.value ? "Show chats" : "Show archived chats")
         }
         .padding(Inset.search)
         .panel(.well)
@@ -383,7 +383,7 @@ private struct HistoryRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help(session.title)
+        .tip(session.title)
     }
 
     private var titleLine: some View {
@@ -465,7 +465,7 @@ private struct HistoryRow: View {
         }
         .buttonStyle(.plain)
         .disabled(locked != nil)
-        .help(help)
+        .tip(help)
     }
 }
 

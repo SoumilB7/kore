@@ -27,7 +27,7 @@ struct LinkMarkButton: View {
         .onHover { hovered.value = $0 }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
         .background(WindowReader { LinkPanel.anchorWindow = $0 })
-        .help(mark.line)
+        .tip(mark.line)
         .accessibilityLabel(Text(mark.line))
     }
 }
@@ -89,7 +89,7 @@ struct LinkCardView: View {
                 Button("Allow with full control") { answer(.allowFull) }
                     .buttonStyle(SubtleButtonStyle())
                     .disabled(!ready.value)
-                    .help("It could also open, close and arrange chats, tabs, boards and windows, until Kore quits.")
+                    .tip("It could also open, close and arrange chats, tabs, boards and windows, until Kore quits.")
                     .storyID(StoryID.Link.allowFull) { if ready.value { answer(.allowFull) } }
                 Button("Allow for this session") { answer(.allow) }
                     .buttonStyle(SubtleButtonStyle())

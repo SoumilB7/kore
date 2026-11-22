@@ -688,10 +688,16 @@ package final class Workspace {
 
     /// Ends the tab's chat, and closes its agents' tabs with it. Closing an agent tab only
     /// closes the view. Closing the last tab leaves a fresh empty one.
-    func close(_ tab: ChatTab, remember: Bool = true) {
+    func close(_ tab: ChatTab, remember: Bool = true, asked: Bool = false) {
         guard let index = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
         tab.file?.flushAutoSave()
-        if let file = tab.file, file.isDirty, !Self.confirmClose(file) { return }
+        // Unsaved edits ask first (Kore's own question); the tab closes once it's answered.
+        if !asked, let file = tab.file, file.isDirty {
+            Task { @MainActor in
+                if await Self.confirmClose(file, in: self.window) { self.close(tab, remember: remember, asked: true) }
+            }
+            return
+        }
         // Closing a board gives its chats back to the strip, where it was.
         if let board = tab.board {
             let chats = board.orderedChats
@@ -1149,17 +1155,11 @@ package final class Workspace {
     }
 
     /// Save, don't save, or cancel; true when the tab may close.
-    private static func confirmClose(_ file: FileDocument) -> Bool {
-        let alert = NSAlert()
-        alert.messageText = "Do you want to save the changes you made to \(file.name)?"
-        alert.informativeText = "Your changes will be lost if you don't save them."
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        alert.addButton(withTitle: "Don't Save")
-        switch alert.runModal() {
-        case .alertFirstButtonReturn: return file.save()
-        case .alertThirdButtonReturn: return true
-        default: return false
+    private static func confirmClose(_ file: FileDocument, in window: NSWindow?) async -> Bool {
+        switch await KoreAsk.saveChanges([file.name], key: "save-tab", in: window) {
+        case .save: return file.save()
+        case .discard: return true
+        case .cancel: return false
         }
     }
 

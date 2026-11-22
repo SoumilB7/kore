@@ -781,7 +781,7 @@ final class FilesStore {
     /// item; `moved` is told each move so open tabs follow. The copying and moving run off the
     /// main thread (a big folder takes a while), one transfer after another.
     func transfer(
-        _ sources: [String], into folder: String, copy: Bool, collision: (String) -> Collision,
+        _ sources: [String], into folder: String, copy: Bool, collision: (String) async -> Collision,
         moved: (String, String) -> Void
     ) async -> (done: [Transfer], failure: Failure?) {
         // In turn: this one's end is what the next waits for.
@@ -804,7 +804,7 @@ final class FilesStore {
             if target == source {
                 target = Self.unusedName(for: name, in: folder)
             } else if manager.fileExists(atPath: target) {
-                switch collision(name) {
+                switch await collision(name) {
                 case .cancel:
                     break items
                 case .keepBoth:

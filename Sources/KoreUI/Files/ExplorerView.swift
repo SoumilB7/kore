@@ -36,7 +36,7 @@ struct ExplorerButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help("Explorer (⇧⌘E)")
+        .tip("Explorer (⇧⌘E)")
     }
 }
 
@@ -80,7 +80,7 @@ struct ExplorerSidebar: View {
                 .foregroundStyle(Theme.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .help(searching ? "Search in \(workspace.folder.lastPathComponent)" : workspace.folder.path)
+                .tip(searching ? "Search in \(workspace.folder.lastPathComponent)" : workspace.folder.path)
                 // The folder's name clears the selection: New File then goes in the folder itself.
                 .contentShape(Rectangle())
                 .onTapGesture { if !searching { store.pickOnly(nil) } }
@@ -285,7 +285,7 @@ struct HeaderButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(help)
+        .tip(help)
         .accessibilityLabel(Text(help))
     }
 }
@@ -760,7 +760,7 @@ private struct TreeRow: View, Equatable {
                 }
                 ChangeCounts(added: touch.added, removed: touch.removed, font: Chrome.captionDigits)
             }
-            .help("Changed by \(touch.help)")
+            .tip("Changed by \(touch.help)")
         } else if row.isFolder, folderTouched || (state != nil && state != .ignored) {
             Circle()
                 .fill(state.map(Theme.Git.color) ?? Theme.Git.modified)
@@ -1060,18 +1060,27 @@ enum TreeActions {
     /// One question for all of `paths`, then the Trash; one undo brings them all back.
     static func trash(_ paths: [String], store: FilesStore, undo: UndoManager?) {
         guard !paths.isEmpty else { return }
-        let alert = NSAlert()
-        alert.messageText = paths.count == 1
+        let window = NSApp.keyWindow
+        Task { @MainActor in
+            guard await KoreAsk.confirm(trashQuestion(paths), detail: trashDetail(paths, from: "the Trash"),
+                                        yes: "Move to Trash", danger: true, key: "trash", in: window) else { return }
+            let result = store.trash(paths)
+            if let failure = result.failure { show(failure) }
+            recordTrash(result.done, store: store, undo: undo)
+        }
+    }
+
+    /// "Are you sure you want to delete “a.txt”?" (one), or the count (several).
+    static func trashQuestion(_ paths: [String]) -> String {
+        paths.count == 1
             ? "Are you sure you want to delete “\((paths[0] as NSString).lastPathComponent)”?"
             : "Are you sure you want to delete the following \(paths.count) items?"
-        alert.informativeText = (paths.count == 1 ? "" : paths.prefix(10).map { ($0 as NSString).lastPathComponent }.joined(separator: "\n") + "\n\n")
-            + "You can restore \(paths.count == 1 ? "it" : "them") from the Trash."
-        alert.addButton(withTitle: "Move to Trash")
-        alert.addButton(withTitle: "Cancel")
-        guard StorylineSeams.confirm?("trash") ?? (alert.runModal() == .alertFirstButtonReturn) else { return }
-        let result = store.trash(paths)
-        if let failure = result.failure { show(failure) }
-        recordTrash(result.done, store: store, undo: undo)
+    }
+
+    /// Several: the first ten names, a line each; then where they can come back from.
+    static func trashDetail(_ paths: [String], from place: String) -> String {
+        (paths.count == 1 ? "" : paths.prefix(10).map { ($0 as NSString).lastPathComponent }.joined(separator: "\n") + "\n\n")
+            + "You can restore \(paths.count == 1 ? "it" : "them") from \(place)."
     }
 
     private static func recordTrash(_ done: [FilesStore.Trashed], store: FilesStore, undo: UndoManager?) {
@@ -1179,39 +1188,37 @@ enum TreeActions {
         let sources = sources.filter { store.canDrop($0, into: folder, copy: copy) }
         guard !sources.isEmpty else { return }
         let folderName = folder == store.root ? (folder as NSString).lastPathComponent : store.relative(folder)
-        if sources.count > 1, answer == nil {
-            let alert = NSAlert()
-            alert.messageText = "\(copy ? "Copy" : "Move") \(sources.count) items into “\(folderName)”?"
-            alert.addButton(withTitle: copy ? "Copy" : "Move")
-            alert.addButton(withTitle: "Cancel")
-            guard StorylineSeams.confirm?(copy ? "copy" : "move") ?? (alert.runModal() == .alertFirstButtonReturn) else { return }
+        let window = NSApp.keyWindow
+        Task { @MainActor in
+            if sources.count > 1, answer == nil {
+                guard await KoreAsk.confirm("\(copy ? "Copy" : "Move") \(sources.count) items into “\(folderName)”?",
+                                            yes: copy ? "Copy" : "Move", key: copy ? "copy" : "move", in: window) else { return }
+            }
+            await transfer(sources, into: folder, folderName: folderName, copy: copy, store: store, workspace: workspace, undo: undo,
+                           answer: answer, window: window)
         }
-        Task { await transfer(sources, into: folder, folderName: folderName, copy: copy, store: store, workspace: workspace, undo: undo, answer: answer) }
     }
 
     private static func transfer(
         _ sources: [String], into folder: String, folderName: String, copy: Bool, store: FilesStore, workspace: Workspace,
-        undo: UndoManager?, answer: FilesStore.Collision?
+        undo: UndoManager?, answer: FilesStore.Collision?, window: NSWindow?
     ) async {
         var always = answer
         let result = await store.transfer(sources, into: folder, copy: copy, collision: { name in
             if let always { return always }
-            let alert = NSAlert()
-            alert.messageText = "“\(name)” already exists in “\(folderName)”."
-            alert.informativeText = "Replacing it moves the one that's there to the Trash."
-            alert.addButton(withTitle: "Replace")
-            alert.addButton(withTitle: "Keep Both")
-            alert.addButton(withTitle: "Cancel")
-            if sources.count > 1 {
-                alert.showsSuppressionButton = true
-                alert.suppressionButton?.title = "Apply to all"
-            }
-            let choice: FilesStore.Collision = switch alert.runModal() {
-            case .alertFirstButtonReturn: .replace
-            case .alertSecondButtonReturn: .keepBoth
+            let asked = await KoreAsk.shared.ask(
+                AskQuestion(
+                    title: "“\(name)” already exists in “\(folderName)”.",
+                    detail: "Replacing it moves the one that's there to the Trash.",
+                    choices: [AskChoice("Cancel", .cancel), AskChoice("Keep Both"), AskChoice("Replace", .danger)],
+                    preferred: 2, tick: sources.count > 1 ? "Apply to all" : nil, key: "collision"),
+                in: window)
+            let choice: FilesStore.Collision = switch asked.choice {
+            case 2: .replace
+            case 1: .keepBoth
             default: .cancel
             }
-            if alert.suppressionButton?.state == .on { always = choice }
+            if asked.ticked { always = choice }
             return choice
         }, moved: workspace.renamed)
         if let failure = result.failure { show(failure) }
@@ -1236,9 +1243,8 @@ enum TreeActions {
     }
 
     static func show(_ failure: FilesStore.Failure) {
-        let alert = NSAlert()
-        alert.messageText = failure.message
-        alert.runModal()
+        let window = NSApp.keyWindow
+        Task { @MainActor in await KoreAsk.tell(failure.message, key: "files-failure", in: window) }
     }
 }
 

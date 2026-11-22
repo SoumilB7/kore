@@ -28,7 +28,7 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
 
     package enum Area: String, Sendable, CaseIterable {
         case titlebar, tabs, newtab, composer, transcript, approval, agentmap, history, explorer, editor, quickopen,
-            search, changes, viewer, usage, welcome, terminal, board
+            search, changes, viewer, usage, welcome, terminal, board, ask
     }
 
     package enum Part: String, Sendable, CaseIterable {
@@ -68,6 +68,20 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
 // MARK: - The names (plan §3's table)
 
 extension StoryID {
+    /// Kore's own question over a window (`KoreAsk`): the card, a choice by its words, its field
+    /// and its tick.
+    /// Kore's hover tip, while one shows (`KoreTip`).
+    package enum Tip {
+        package static let shown = StoryID(.ask, "tip")
+    }
+
+    package enum Ask {
+        package static let card = StoryID(.ask, "card")
+        package static func choice(_ title: String) -> StoryID { StoryID(.ask, "choice", key: title) }
+        package static let field = StoryID(.ask, "card").part(.field)
+        package static let tick = StoryID(.ask, "card").part(.toggle)
+    }
+
     package enum Titlebar {
         package static let explorer = StoryID(.titlebar, "explorer")
         package static let history = StoryID(.titlebar, "history")

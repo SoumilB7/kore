@@ -22,7 +22,7 @@ struct CommandsButton: View {
             }
             .buttonStyle(.plain)
             .onHover { hovered.value = $0 }
-            .help(summary.total == 1 ? "1 command in background" : "\(summary.total) commands in background")
+            .tip(summary.total == 1 ? "1 command in background" : "\(summary.total) commands in background")
             .accessibilityLabel(Text("Background commands"))
             .accessibilityValue(Text("\(summary.total)"))
             .storyID(StoryID.Titlebar.commands, press: open)

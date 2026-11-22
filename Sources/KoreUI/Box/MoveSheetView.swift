@@ -142,7 +142,7 @@ struct ReplicaLine: View {
         .padding(.vertical, Space.sm)
         .background(Theme.surface, in: Capsule())
         .frame(maxWidth: .infinity)
-        .help(replica.here ? "It runs on this Mac now · read-only here" : "It runs on \(replica.name) · read-only here")
+        .tip(replica.here ? "It runs on this Mac now · read-only here" : "It runs on \(replica.name) · read-only here")
     }
 
     /// When a mirror last caught up.

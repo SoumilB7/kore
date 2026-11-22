@@ -338,7 +338,7 @@ private struct MiniComposer: View {
                         .background(Theme.text, in: Circle())
                 }
                 .buttonStyle(.plain)
-                .help("Stop")
+                .tip("Stop")
                 .storyID(StoryID.Board.tile(tile).part(.stop), press: { chat.stop() })
             }
         }

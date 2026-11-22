@@ -544,12 +544,13 @@ private final class TreeCanvas: CanvasView {
             let node = index.nodes[Int(rows[row].node)]
             if !node.isContainer, node.valueLength > 60 { tip = index.value(node, limit: 2_000) }
         }
-        if toolTip != tip { toolTip = tip }
+        KoreTip.shared.set(tip, owner: KoreTip.owner(self))
     }
 
     override func mouseExited(with event: NSEvent) {
         if let hoverRow { setNeedsDisplay(rowRect(hoverRow)) }
         hoverRow = nil
+        KoreTip.shared.leave(owner: KoreTip.owner(self))
     }
 
     private func rowRect(_ row: Int) -> NSRect { NSRect(x: 0, y: CGFloat(row) * rowHeight, width: bounds.width, height: rowHeight) }

@@ -29,7 +29,7 @@ struct BackgroundPrompt: View {
                         .offset(x: Size.backgroundPromptPoint / 2, y: -Size.backgroundPromptPoint / 3)
                 }
             }
-            .help(needsYou ? "Background commands running · needs you" : "Background commands running")
+            .tip(needsYou ? "Background commands running · needs you" : "Background commands running")
             .accessibilityLabel(Text(needsYou ? "Background commands running, needs you" : "Background commands running"))
     }
 }

@@ -49,7 +49,7 @@ struct GroupChip: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(line)
+        .tip(line)
         .accessibilityLabel(Text(line))
         .koreSecondaryClick("tab-group", perform: edit)
         .storyID(StoryID.TabGroups.chip(group.id))
@@ -246,7 +246,7 @@ private struct GroupSwatch: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .help(color.rawValue.capitalized)
+        .tip(color.rawValue.capitalized)
         .storyID(StoryID.TabGroups.swatch(color.rawValue))
     }
 }

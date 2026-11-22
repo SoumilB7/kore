@@ -394,7 +394,7 @@ private struct PDFThumbnail: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Page \(index + 1)")
+        .tip("Page \(index + 1)")
         .task(id: index) {
             await Task.yield()
             image.value = model.thumbnail(index)
@@ -419,7 +419,7 @@ private struct PDFToolbar: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Actual Size")
+            .tip("Actual Size")
             IconButton(symbol: "plus.magnifyingglass", help: "Zoom In (⌘=)", action: model.zoomIn)
             IconButton(symbol: "arrow.left.and.right", help: "Fit Width (⌘0)", action: model.fit)
             BarDivider()
@@ -437,7 +437,7 @@ private struct PDFToolbar: View {
                     pageText.value = "\(model.page + 1)"
                     editing = false
                 }
-                .help("Go to Page")
+                .tip("Go to Page")
             Text("/ \(model.pageCount)")
                 .font(Chrome.labelDigits)
                 .foregroundStyle(Theme.secondary)
@@ -478,7 +478,7 @@ private struct PDFFindBar: View {
                 }
                 .buttonStyle(.plain)
                 .hitTargetRoom(Size.Editor.findToggleReach)
-                .help("Match Case")
+                .tip("Match Case")
             }
             .padding(.horizontal, Space.sm)
             .frame(height: Size.iconButtonSmall)

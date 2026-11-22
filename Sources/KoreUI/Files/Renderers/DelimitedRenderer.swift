@@ -575,10 +575,13 @@ private final class GridCanvas: CanvasView {
             let width = (text as NSString).size(withAttributes: textAttributes).width + 2 * Size.Grid.cellPadding * zoom
             if width > widths[column] { tip = text }
         }
-        if toolTip != tip { toolTip = tip }
+        KoreTip.shared.set(tip, owner: KoreTip.owner(self))
     }
 
-    override func mouseExited(with event: NSEvent) { setHover(nil) }
+    override func mouseExited(with event: NSEvent) {
+        setHover(nil)
+        KoreTip.shared.leave(owner: KoreTip.owner(self))
+    }
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)

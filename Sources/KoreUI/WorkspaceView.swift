@@ -429,7 +429,7 @@ struct TabBar: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .layoutPriority(-1)
-                .help(workspace.box?.label ?? workspace.folder.path)
+                .tip(workspace.box?.label ?? workspace.folder.path)
             // Kore's tailnet of this window's device not signed in: one quiet line, Sign in on it.
             OwnCueLine(box: workspace.box?.alias, story: StoryID.Net.titleCue(workspace.box?.alias)).layoutPriority(-1)
             // A Mac folder synced with a box folder that has chats open there: one quiet line.
@@ -1041,7 +1041,7 @@ private struct ActiveTabName: View {
             .lineLimit(1)
             .truncationMode(Workspace.forkBase(tab.title) != nil ? .middle : .tail)
             .padding(.leading, Space.sm)
-            .help(tab.title)
+            .tip(tab.title)
             .storyID(StoryID.Titlebar.tabName)
     }
 }
@@ -1069,7 +1069,7 @@ private struct OverflowButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help("Hidden tabs")
+        .tip("Hidden tabs")
         .accessibilityLabel(Text("Hidden tabs"))
         .accessibilityValue(Text("\(hidden)"))
         .background(Color.clear.storyMark(StoryID.Titlebar.hiddenCount(hidden)))
@@ -1230,8 +1230,6 @@ private struct TabItem: View {
     /// A dragged tab rests on this one: a drop groups them, in this colour.
     var groupTarget: TabGroupColor? = nil
     @StateObject private var hovered = Local(false)
-    @StateObject private var renaming = Local(false)
-    @StateObject private var newName = Local("")
 
     @StateObject private var closeHovered = Local(false)
 
@@ -1311,15 +1309,10 @@ private struct TabItem: View {
             }
         }
         .onHover { hovered.value = $0 }
-        .help(workspace.asking(tab) ? "Closing the tab stops its turn" : help)
+        .tip(workspace.asking(tab) ? "Closing the tab stops its turn" : help)
         .koreContextMenu("tab") {
             let many = workspace.menuTabs(for: tab)
             return many.count > 1 ? TabMenu.items(many, in: workspace) : TabMenu.items(tab, in: workspace) { startRename() }
-        }
-        .alert("Rename chat", isPresented: $renaming.value) {
-            TextField("Name", text: $newName.value)
-            Button("Rename") { tab.chat?.rename(newName.value) }
-            Button("Cancel", role: .cancel) {}
         }
     }
 
@@ -1393,7 +1386,7 @@ private struct TabItem: View {
         }
         .buttonStyle(.plain)
         // Attach to the selection button too: its hit area owns hover over a clipped name.
-        .help(help)
+        .tip(help)
         .accessibilityLabel(tab.title)
         .storyID(storyKey)
     }
@@ -1459,15 +1452,18 @@ private struct TabItem: View {
         .hitTargetRoom(Self.closeRoom)
         .onHover { closeHovered.value = $0 }
         .opacity(closeShown ? 1 : 0)
-        .help("Close tab")
+        .tip("Close tab")
         // Hidden on an inactive tab until hover: pressed by its action.
         .storyID(storyKey.part(.close), press: { workspace.requestClose(tab) })
     }
 
+    /// Kore's own question with the name in its field (`KoreAsk.name`), over this tab's window.
     private func startRename() {
-        guard tab.chat != nil else { return }
-        newName.value = tab.title
-        renaming.value = true
+        guard let chat = tab.chat else { return }
+        let window = workspace.window
+        Task { @MainActor in
+            if let name = await KoreAsk.name("Rename chat", current: tab.title, key: "rename-chat", in: window) { chat.rename(name) }
+        }
     }
 }
 
@@ -1556,12 +1552,12 @@ private struct TabMark: View {
             } else if !running, tab.agent == nil, chat.interruptedByAccount {
                 // Its work stopped for an account switch or sign-out: worth a look.
                 TabWarning()
-                    .help("Stopped by an account change")
+                    .tip("Stopped by an account change")
                     .storyMark(story.part(.stoppedForAccount))
             } else if running, tab.agent == nil, chat.isBusy || chat.isWaitingForNetwork, chat.connection.stuck {
                 // Offline or stalled: nothing to spin for (the chat's row says which).
                 TabWarning()
-                    .help(chat.connection.word ?? "")
+                    .tip(chat.connection.word ?? "")
                     .storyMark(story.part(.stuck))
             } else if running, tab.agent == nil, TabWork.kind(chat) == .background {
                 // Only background commands run: ">_", the amber point on it while an approval waits.
@@ -1656,7 +1652,7 @@ private struct NewTabButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help("New tab (⌘T)")
+        .tip("New tab (⌘T)")
     }
 }
 
@@ -1752,7 +1748,7 @@ private struct ProviderButton: View {
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
         .disabled(missing && elsewhere != nil)
-        .help(missing ? elsewhere.map { "Not on \($0)" } ?? "Not installed · click to install" : "")
+        .tip(missing ? elsewhere.map { "Not on \($0)" } ?? "Not installed · click to install" : "")
     }
 }
 

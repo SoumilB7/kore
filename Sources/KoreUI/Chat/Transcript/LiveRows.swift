@@ -396,9 +396,9 @@ struct DividerRow: View {
                 Button(action: open) { label(hovered.value ? Theme.text : Theme.secondary) }
                     .buttonStyle(.plain)
                     .onHover { hovered.value = $0 }
-                    .help(help ?? "Open original")
+                    .tip(help ?? "Open original")
             } else {
-                label(Theme.tertiary).help(help ?? "")
+                label(Theme.tertiary).tip(help ?? "")
             }
             Rectangle().fill(Theme.border).frame(height: Stroke.hairline)
         }

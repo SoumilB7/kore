@@ -36,7 +36,7 @@ struct ImportLine: View {
         .buttonStyle(.plain)
         .disabled(locked != nil)
         .opacity(locked == nil ? 1 : Theme.missingLogo)
-        .help(locked ?? "")
+        .tip(locked ?? "")
         .onHover { hovered.value = $0 }
         .storyID(StoryID.Composer.importLine, press: open)
         .opacity(state.isOpen ? 0 : 1)
