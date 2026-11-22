@@ -280,7 +280,7 @@ struct BoxSyncPopup<Content: View>: View {
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
             .background(WindowReader { window.value = $0 })
             .onAppear {
-                monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { event in
+                monitor.value = WindowEvents.monitor([.leftMouseDown, .rightMouseDown, .keyDown]) { event in
                     guard let window = window.value, event.window === window, let view = window.contentView else { return event }
                     if event.type == .keyDown {
                         guard event.keyCode == 53 else { return event }

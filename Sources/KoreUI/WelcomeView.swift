@@ -151,10 +151,13 @@ struct WelcomeView: View {
             hold(place)
         }
         .onAppear {
+            // Shown again (its window closed and opened), nothing is lit from last time: SwiftUI
+            // can keep the closed window's view and its state with it.
+            lit.value = nil
             // Peers coming and going on the tailnet reach the switcher while it shows.
             Devices.shared.net?.hold("welcome", true)
             sshHosts.value = StorylineSeams.sshHosts?() ?? !BoxList.shared.suggestions().isEmpty
-            if monitor.value == nil { monitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { key($0) } }
+            if monitor.value == nil { monitor.value = WindowEvents.monitor(.keyDown) { key($0) } }
             app.welcomeTakesKeys = true
         }
         .onDisappear {
@@ -248,7 +251,7 @@ struct WelcomeView: View {
     /// ↑ ↓ through the rows, stopping at the ends (from none, the first or the last), Return
     /// opens the lit one. This window's keys only; the browser's while it shows.
     private func key(_ event: NSEvent) -> NSEvent? {
-        guard let window = window.value, event.window === window, !KoreAsk.shared.holds(window) else { return event }
+        guard let window = window.value, event.window === window else { return event }
         let typing = window.firstResponder is NSTextView
         if let model = browser.value {
             return BoxFolderBrowser.key(event, model: model, typing: typing) { closeBrowser() } ? nil : event

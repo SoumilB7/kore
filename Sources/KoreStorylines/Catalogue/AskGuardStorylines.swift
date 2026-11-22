@@ -471,6 +471,84 @@ final class AskPlainReturn: ChatStoryline {
     }
 }
 
+/// A popup open when a question comes: Esc is the question's (it cancels), not the popup's.
+@MainActor private func escOverPopup(_ popup: String, open: @escaping @MainActor (StoryContext) throws -> Bool) -> [any Step] {
+    [Expect("\(popup) open") { try open($0) }]
+        + behindAQuestion("nothing", [], found: { story in "\(popup) open \((try? open(story)) == true)" }, unmoved: { _ in true })
+}
+
+/// The hidden tabs' list open, then a question: Esc cancels the question.
+final class AskOverHiddenTabs: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override func steps() -> [any Step] {
+        super.steps() + [OpenTabs(28), Press(.id(StoryID.Titlebar.overflow)), WaitForElement(.id(StoryID.Titlebar.hiddenTabs))]
+            + escOverPopup("the hidden tabs' list") { _ in StoryElement(StoryID.Titlebar.hiddenTabs) != nil }
+    }
+}
+
+/// A tab group's popup open, then a question: Esc cancels the question.
+final class AskOverTabGroup: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override func steps() -> [any Step] {
+        super.steps() + [
+            OpenTabs(1),
+            Do("Group the two tabs and open the group's popup") { story in
+                guard let workspace = story.app.workspace, workspace.tabs.count == 2,
+                    let group = workspace.group(workspace.tabs[1], onto: workspace.tabs[0]) else { throw StoryFailure.modelMissing("a group") }
+                workspace.editGroup(group, naming: false)
+            },
+            WaitForElement(.id(StoryID.TabGroups.popup)),
+        ] + escOverPopup("the group's popup") { _ in StoryElement(StoryID.TabGroups.popup) != nil }
+    }
+}
+
+/// The composer's / menu open, then a question: Esc cancels the question.
+final class AskOverSlashMenu: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override func steps() -> [any Step] {
+        super.steps() + [Press(.id(StoryID.Composer.slash)), WaitForElement(.id(StoryID.Composer.command("account")))]
+            + escOverPopup("the / menu") { _ in StoryElement(StoryID.Composer.command("account")) != nil }
+    }
+}
+
+/// History open, then a question: Esc cancels the question.
+final class AskOverHistory: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override func steps() -> [any Step] {
+        super.steps() + [Press(.id(StoryID.Titlebar.history)), WaitForElement(.id(StoryID.History.search))]
+            + escOverPopup("History") { _ in StoryElement(StoryID.History.search) != nil }
+    }
+}
+
+/// The context card open, then a question: Esc cancels the question.
+final class AskOverContextCard: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override func steps() -> [any Step] {
+        super.steps() + [Do("Open the context card") { story in try story.activeChat().storyOpenContextCard() }]
+            + escOverPopup("the context card") { story in try story.activeChat().isContextCardOpen }
+    }
+}
+
+/// A path segment's menu open, then a question: Esc cancels the question.
+final class AskOverCrumbMenu: EditorStoryline {
+    override class var tags: Set<Tag> { [.editor, .gate] }
+    override class var variants: [Variant] { [.claude, .codex] }
+    override class var files: [(path: String, text: String)] { [("src/a.swift", "let a = 1\n"), ("src/b.swift", "let b = 2\n")] }
+    override func steps() -> [any Step] {
+        super.steps() + [Press(.id(StoryID.Editor.crumb("src"))), WaitForElement(.id(StoryID.Editor.crumbRow("b.swift")))]
+            + escOverPopup("the folder's menu") { _ in StoryElement(StoryID.Editor.crumbRow("b.swift")) != nil }
+    }
+}
+
+/// Devices open, then a question: Esc cancels the question.
+final class AskOverDevices: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override func steps() -> [any Step] {
+        super.steps() + [Press(.id(StoryID.Net.icon)), WaitForElement(.id(StoryID.Net.panel))]
+            + escOverPopup("Devices") { _ in StoryElement(StoryID.Net.panel) != nil }
+    }
+}
+
 /// A cut pasted twice, quickly: one move, one chat.
 final class CutPastedTwice: OpenEndStoryline {
     override class var tags: Set<Tag> { [.chat, .gate] }

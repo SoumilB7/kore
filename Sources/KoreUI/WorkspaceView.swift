@@ -692,7 +692,7 @@ extension TabBar {
         let frames = tabFrames
         let area = stripFrame
         let workspace = workspace
-        doubleClicks.value = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak window] event in
+        doubleClicks.value = WindowEvents.monitor(.leftMouseDown) { [weak window] event in
             guard let window, event.window === window, event.clickCount == 2, let content = window.contentView else { return event }
             // Window coordinates (bottom-left) to SwiftUI's global ones (top-left).
             let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
@@ -1136,7 +1136,7 @@ private struct HiddenTabsList: View {
         .background(WindowReader { window.value = $0 })
         .storyID(StoryID.Titlebar.hiddenTabs)
         .onAppear {
-            monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { handle($0) }
+            monitor.value = WindowEvents.monitor([.leftMouseDown, .rightMouseDown, .keyDown]) { handle($0) }
         }
         .onDisappear {
             if let m = monitor.value { NSEvent.removeMonitor(m) }

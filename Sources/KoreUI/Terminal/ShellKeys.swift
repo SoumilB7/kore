@@ -21,7 +21,7 @@ enum ShellKeys {
         view.optionAsMetaKeyForFunctionalKeys = true
         view.setCursorStyle(.steadyBlock)
         guard monitor == nil else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        monitor = WindowEvents.monitor(.keyDown) { event in
             handle(event) ? nil : event
         }
     }

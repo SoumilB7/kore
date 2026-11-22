@@ -277,7 +277,7 @@ private struct ContextCard: View {
             if now { presence.card(true, intent: true) }
         }
         .onAppear {
-            monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) {
+            monitor.value = WindowEvents.monitor([.leftMouseDown, .rightMouseDown, .keyDown]) {
                 Self.handle($0, presence)
             }
         }

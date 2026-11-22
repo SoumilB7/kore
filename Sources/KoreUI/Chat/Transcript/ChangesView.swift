@@ -46,7 +46,7 @@ struct ChangesView: View {
         .background(WindowReader { window.value = $0 })
         .transition(.opacity)
         .onAppear {
-            keyMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { handleKey($0) }
+            keyMonitor.value = WindowEvents.monitor(.keyDown) { handleKey($0) }
         }
         .onDisappear {
             if let monitor = keyMonitor.value { NSEvent.removeMonitor(monitor) }
@@ -172,7 +172,7 @@ struct ChangesView: View {
     /// While open the modal has this window's keys: Esc and Return close, ↑ ↓ / k j change
     /// file. Other plain keys are swallowed; ⌘ shortcuts (zoom, ⌘W) pass through.
     private func handleKey(_ event: NSEvent) -> NSEvent? {
-        guard let window = window.value, event.window === window, !KoreAsk.shared.holds(window) else { return event }
+        guard let window = window.value, event.window === window else { return event }
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) { return event }
         switch event.keyCode {
         case 53, 36, 76: close()

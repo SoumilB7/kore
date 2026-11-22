@@ -16,8 +16,8 @@ struct RendererKeys: ViewModifier {
             .onAppear {
                 guard monitor.value == nil else { return }
                 defer { arm() }
-                monitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                    guard let window = anchor.value?.window, event.window === window, !KoreAsk.shared.holds(window) else { return event }
+                monitor.value = WindowEvents.monitor(.keyDown) { event in
+                    guard let window = anchor.value?.window, event.window === window else { return event }
                     let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
                     let typing = window.firstResponder is NSText && !flags.contains(.command)
                     if typing && event.keyCode != 53 { return event }

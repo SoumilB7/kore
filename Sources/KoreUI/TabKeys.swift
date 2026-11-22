@@ -46,8 +46,8 @@ struct TabKeys: ViewModifier {
             .onAppear {
                 guard monitor.value == nil else { return }
                 let workspace = workspace
-                monitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                    guard let window = workspace.window, event.window === window, !KoreAsk.shared.holds(window),
+                monitor.value = WindowEvents.monitor(.keyDown) { event in
+                    guard let window = workspace.window, event.window === window,
                         let key = TabKey.of(event.charactersIgnoringModifiers, keyCode: event.keyCode, modifiers: event.modifierFlags)
                     else { return event }
                     switch key {

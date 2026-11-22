@@ -197,7 +197,7 @@ final class SelectionResponderView: NSView, NSMenuItemValidation {
         if let tracking { tracked?.removeTrackingArea(tracking) }
         tracking = nil
         guard let window else { return }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .leftMouseDragged, .leftMouseUp, .rightMouseDown]) {
+        monitor = WindowEvents.monitor([.leftMouseDown, .leftMouseDragged, .leftMouseUp, .rightMouseDown]) {
             [weak self] event in
             guard let self else { return event }
             return self.handle(event)

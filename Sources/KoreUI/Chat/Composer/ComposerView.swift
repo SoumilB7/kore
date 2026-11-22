@@ -158,10 +158,10 @@ struct ComposerView: View {
         .animation(Motion.fadeSlow, value: chat.controls.activeMode.id)
         .onAppear {
             pasteChat.value = chat
-            pasteMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            pasteMonitor.value = WindowEvents.monitor(.keyDown) { event in
                 pasteAttachments(event)
             }
-            clickMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { closeMenu(onClick: $0) }
+            clickMonitor.value = WindowEvents.monitor(.leftMouseDown) { closeMenu(onClick: $0) }
         }
         .onDisappear {
             for monitor in [pasteMonitor.value, clickMonitor.value].compactMap({ $0 }) { NSEvent.removeMonitor(monitor) }

@@ -184,6 +184,8 @@ final class ListKeys: ChatStoryline {
         steps += [
             OpenAnotherFolder(),
             ShowWelcome(),
+            // Shown again (the Claude run's Return closed it): nothing lit from last time.
+            Expect("nothing lit as it opens", found: { _ in litRows("welcome").joined(separator: ", ") }) { _ in litRows("welcome").isEmpty },
             KeyIn(Self.welcome, .down),
             Expect("↓ lights the newest folder", found: { _ in litRows("welcome").joined(separator: ", ") }) { _ in
                 AppModel.shared.map { litRows("welcome") == [StoryID.Welcome.recent($0.storyRecents[0].path).raw] } ?? false

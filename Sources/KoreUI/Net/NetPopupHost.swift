@@ -54,7 +54,7 @@ package final class NetPopupHost {
         content.addSubview(hosting)
         hosting.layoutSubtreeIfNeeded()
         place(hosting.fittingSize)
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+        monitor = WindowEvents.monitor([.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
             guard let self, let host = self.host else { return event }
             if event.type == .keyDown {
                 // Esc in a field of its own (a rename) is the field's: it cancels the edit.

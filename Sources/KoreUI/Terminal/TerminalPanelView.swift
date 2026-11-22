@@ -318,9 +318,9 @@ struct TerminalKeys: ViewModifier {
     func body(content: Content) -> some View {
         content.onAppear {
             guard monitor.value == nil else { return }
-            monitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            monitor.value = WindowEvents.monitor(.keyDown) { event in
                 let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
-                guard let window = workspace.window, event.window === window, !KoreAsk.shared.holds(window),
+                guard let window = workspace.window, event.window === window,
                       event.charactersIgnoringModifiers == "`" || event.charactersIgnoringModifiers == "~",
                       flags == .control || flags == [.control, .shift] else { return event }
                 guard !event.isARepeat else { return nil }

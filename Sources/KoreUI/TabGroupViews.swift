@@ -168,7 +168,7 @@ struct TabGroupPopup: View {
         .onAppear {
             name.value = group?.name ?? ""
             if edit.naming { naming = true }
-            monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { handle($0) }
+            monitor.value = WindowEvents.monitor([.leftMouseDown, .rightMouseDown, .keyDown]) { handle($0) }
         }
         .onDisappear {
             if let m = monitor.value { NSEvent.removeMonitor(m) }

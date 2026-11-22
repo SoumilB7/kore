@@ -31,7 +31,7 @@ final class BoxCard {
         self.host = host
         content.addSubview(host)
         place(host.fittingSize)
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+        monitor = WindowEvents.monitor([.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
             guard let self, let host = self.host else { return event }
             if event.type == .keyDown {
                 if event.keyCode == 53 { self.close(); return nil }

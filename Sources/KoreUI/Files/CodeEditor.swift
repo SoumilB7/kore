@@ -1605,7 +1605,7 @@ final class EditorTextView: NSTextView {
         super.viewDidMoveToWindow()
         MainActor.assumeIsolated { controller?.movedToWindow() }
         guard Self.keys == nil else { return }
-        Self.keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        Self.keys = WindowEvents.monitor(.keyDown) { event in
             guard let text = event.window?.firstResponder as? EditorTextView, text.shortcut(event) else { return event }
             return nil
         }

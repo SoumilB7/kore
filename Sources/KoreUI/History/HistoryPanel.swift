@@ -160,7 +160,7 @@ struct HistoryPanel: View {
             if open {
                 PointerGate.keyed()
                 searchFocused = true
-                monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { event in
+                monitor.value = WindowEvents.monitor([.leftMouseDown, .rightMouseDown, .keyDown]) { event in
                     handle(event)
                 }
                 kept.value = ArsenalMemory.all()
