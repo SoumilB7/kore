@@ -116,6 +116,8 @@ package enum StorylineHost {
 enum OffscreenWindows {
     /// Below and left of any arrangement of displays.
     static let origin = NSPoint(x: -30_000, y: -30_000)
+    /// Windows let onto a screen (the energy bench's transparent "front" window).
+    static var allowed: Set<ObjectIdentifier> = []
 
     private typealias Order = @convention(c) (NSWindow, Selector, NSWindow.OrderingMode, Int) -> Void
 
@@ -139,6 +141,7 @@ enum OffscreenWindows {
 
     /// A window anchored to one already off screen (a popover) stays where it was put.
     private static func moveAway(_ window: NSWindow) {
+        guard !allowed.contains(ObjectIdentifier(window)) else { return }
         guard NSScreen.screens.contains(where: { $0.frame.intersects(window.frame) }) else { return }
         window.setFrameOrigin(origin)
     }

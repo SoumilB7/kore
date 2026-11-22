@@ -14,6 +14,14 @@ extension Step {
     package var timeout: Duration? { nil }
 }
 
+/// Thrown by a step that can't give a meaningful result here (an energy budget on battery or a
+/// busy Mac): it and the steps after it are reported as skipped, with this reason, not failed.
+package struct StorySkip: Error, CustomStringConvertible {
+    package let reason: String
+    package init(_ reason: String) { self.reason = reason }
+    package var description: String { "SKIP: " + reason }
+}
+
 /// Why a step failed, as the report shows it.
 package enum StoryFailure: Error, CustomStringConvertible {
     /// A wait's condition didn't hold in time.

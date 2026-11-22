@@ -123,6 +123,12 @@ package final class StoryContext {
         _ = try await wait(label, timeout: timeout) { try condition() ? true : nil }
     }
 
+    /// Main run-loop passes so far (each a wakeup of the main thread).
+    package var runLoopPasses: Int { waits.passes }
+
+    /// The waits' 50 ms poll off or back on (`Waits.polling`).
+    package func polling(_ on: Bool) { waits.polling(on) }
+
     /// Waits until the app settles: three run-loop passes in a row with no chat event.
     package func idle(timeout: Duration? = nil) async throws {
         try await until("the app to settle", timeout: timeout) { [unowned self] in waits.passes - lastEventPass >= 3 }

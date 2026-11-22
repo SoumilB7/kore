@@ -57,6 +57,11 @@ struct ChatView: View {
                     let covered = !changed.occlusionState.contains(.visible)
                     if occluded.value != covered { occluded.value = covered }
                 }
+                // The notification only says when it changes: a chat that opens in a window
+                // already covered (an agent's new chat while another app is in front) would draw
+                // its stream 30 times a second, unseen, until the window next changed.
+                .onAppear { syncCovered(window) }
+                .onChange(of: window.map(ObjectIdentifier.init)) { _, _ in syncCovered(window) }
         }
     }
 
@@ -73,6 +78,14 @@ struct ChatView: View {
             let moved = ChatPlaces.shared.moved(alias: services.connection.alias, chatId: id)
         else { return nil }
         return { ChatMoving.sendBack(moved, from: workspace) }
+    }
+
+    /// Whether the window is covered, read from the window itself (one ordered in; a window
+    /// still opening says so by notification once it shows).
+    private func syncCovered(_ window: NSWindow?) {
+        guard let window, window.isVisible else { return }
+        let covered = !window.occlusionState.contains(.visible)
+        if occluded.value != covered { occluded.value = covered }
     }
 
     private func content(_ chat: Chat, chats: [Chat]) -> some View {

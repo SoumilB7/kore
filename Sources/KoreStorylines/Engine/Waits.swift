@@ -58,6 +58,22 @@ final class Waits {
     /// Something changed that a wait might be watching (an event arrived).
     func poke() { evaluate() }
 
+    /// The 50 ms poll off (an energy reading: twenty wakeups a second that are the harness's,
+    /// not Kore's) or back on. Waits still run after every run-loop pass and every event.
+    func polling(_ on: Bool) {
+        if on {
+            guard timer == nil, observer != nil else { return }
+            let timer = Timer(timeInterval: 0.05, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.evaluate() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+        } else {
+            timer?.invalidate()
+            timer = nil
+        }
+    }
+
     func start() {
         guard observer == nil else { return }
         let observer = CFRunLoopObserverCreateWithHandler(nil, CFRunLoopActivity.beforeWaiting.rawValue, true, CFIndex.max) {
