@@ -236,6 +236,10 @@ package struct TailnetStatus: Decodable, Sendable, Equatable {
     /// The person this node is signed in as ("you@example.com"); nil for a tagged node or before
     /// a sign-in.
     package var login: String? { selfNode?.owner.flatMap { logins[$0] } }
+    /// Running as someone, with no sign-in asked: a node started from its cached state says
+    /// Running before its control server answers, with no login yet, and still Running when that
+    /// server hands it a sign-in page instead (its key ran out there).
+    package var signedIn: Bool { backendState == .running && !(login ?? "").isEmpty && authURL == nil }
 
     /// This node waits for a Tailnet Lock signature (its health says it's locked out).
     package var lockedOut: Bool { health.contains { $0.localizedCaseInsensitiveContains("locked out") } }
@@ -333,9 +337,32 @@ package struct TailnetWhoIs: Decodable, Sendable, Equatable {
 package enum TailnetEvent: Equatable, Sendable {
     case state(BackendState)
     case status(TailnetStatus)
-    /// A peer came online or went (`PeerChanges`).
+    /// A peer came online or went (`PeerChanges`); removed from the tailnet (`PeersRemoved`,
+    /// deleted in the admin console): no key, offline.
     case peer(nodeID: Int64, key: String?, online: Bool?)
     case error(String)
+    /// A sign-in finished (`LoginFinished`): a node that never left Running (its key ran out at
+    /// its control server, then signed in again) says nothing else, so its status is read again.
+    case loginFinished
+}
+
+extension TailnetEvent {
+    /// After a finished sign-in (`loginFinished`), how long apart its status is read again until it
+    /// says who signed in: the login comes with the node's next netmap, which no bus message the
+    /// watch mask carries announces (a node that never left Running has no state change).
+    package static let signInRereads: [Duration] = [
+        .milliseconds(250), .milliseconds(250), .milliseconds(500), .milliseconds(500), .seconds(1), .seconds(2), .seconds(4), .seconds(8),
+    ]
+}
+
+extension TailnetStatus {
+    /// After a finished sign-in (`loginFinished`): the sign-in is done once it says who (Starting
+    /// while its first netmap comes, or Running), or runs with no page asked (its login comes only
+    /// with its next netmap).
+    package var loggedIn: Bool {
+        guard authURL == nil else { return false }
+        return backendState == .running || (backendState == .starting && !(login ?? "").isEmpty)
+    }
 }
 
 /// A listening end: a TCP socket to `accept` (installed Tailscale), or the sidecar's Unix socket
@@ -357,9 +384,13 @@ struct BusNotify: Decodable {
     var initialStatus: TailnetStatus?
     /// `PeerChangedPatch`: narrow per-peer patches (Online among them), the peer-patches bit's.
     var peerChanges: [PeerChange]?
+    /// `PeersRemoved`: nodes gone from the tailnet (deleted in the admin console), by node id.
+    var peersRemoved: [Int64]?
     var errMessage: String?
     /// The interactive sign-in page is ready (`BrowseToURL`): never kept here, only its news.
     var browseToURL: String?
+    /// `LoginFinished`: present (an empty object) once a sign-in succeeded.
+    var loginFinished: JSONValue?
 
     struct PeerChange: Decodable {
         var nodeID: Int64
@@ -370,7 +401,7 @@ struct BusNotify: Decodable {
 
     enum CodingKeys: String, CodingKey {
         case state = "State", initialStatus = "InitialStatus", peerChanges = "PeerChangedPatch", errMessage = "ErrMessage",
-            browseToURL = "BrowseToURL"
+            browseToURL = "BrowseToURL", peersRemoved = "PeersRemoved", loginFinished = "LoginFinished"
     }
 
     /// The bus's watch mask: initial state + initial status + peer patches, never engine updates
@@ -383,7 +414,9 @@ struct BusNotify: Decodable {
         keys.contains { key in line.withUnsafeBufferPointer { contains($0, key) } }
     }
 
-    private static let keys: [[UInt8]] = ["\"State\"", "\"InitialStatus\"", "\"PeerChangedPatch\"", "\"ErrMessage\""].map { Array($0.utf8) }
+    private static let keys: [[UInt8]] = ["\"State\"", "\"InitialStatus\"", "\"PeerChangedPatch\"", "\"ErrMessage\"", "\"BrowseToURL\"", "\"PeersRemoved\"", "\"LoginFinished\""].map {
+        Array($0.utf8)
+    }
 
     private static func contains(_ hay: UnsafeBufferPointer<UInt8>, _ needle: [UInt8]) -> Bool {
         guard hay.count >= needle.count, let first = needle.first else { return false }
@@ -408,7 +441,9 @@ struct BusNotify: Decodable {
         if state == nil, let browseToURL, !browseToURL.isEmpty { out.append(.state(.needsLogin)) }
         if let initialStatus { out.append(.status(initialStatus)) }
         for change in peerChanges ?? [] { out.append(.peer(nodeID: change.nodeID, key: change.key, online: change.online)) }
+        for id in peersRemoved ?? [] { out.append(.peer(nodeID: id, key: nil, online: false)) }
         if let errMessage, !errMessage.isEmpty { out.append(.error(errMessage)) }
+        if loginFinished != nil { out.append(.loginFinished) }
         return out
     }
 }

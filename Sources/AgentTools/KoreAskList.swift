@@ -40,7 +40,12 @@ package enum KoreAskList {
         }
 
         /// The hook's argument for it.
-        package var argument: String { ((try? JSONEncoder().encode(self)) ?? Data()).base64EncodedString() }
+        package var argument: String {
+            // Sorted keys: the same pass always says the same argument.
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = .sortedKeys
+            return ((try? encoder.encode(self)) ?? Data()).base64EncodedString()
+        }
 
         package init?(argument: String) {
             guard let data = Data(base64Encoded: argument), let pass = try? JSONDecoder().decode(Pass.self, from: data) else { return nil }

@@ -45,9 +45,13 @@ class NetDialer(
         // This phone's user's other online Macs are tried; only the one whose identity proof holds
         // for this record gets in (its new node key appended after a same-user WhoIs, ID2): no
         // re-Join, no Allow. Another Mac fails at its challenge, before this phone says a word.
-        if (device.kind == NodeKind.MAC && (peer == null || !peer.online)) {
+        // A box the same way: it moves between installed Tailscale and Kore's own (`<host>-kore`)
+        // whenever Tailscale starts or stops there; nodes named after it are tried, and only the
+        // one whose proof holds for this record gets in.
+        if ((device.kind == NodeKind.MAC || device.kind == NodeKind.BOX) && (peer == null || !peer.online)) {
             val self = withContext(io) { tailnet.self() }
-            for (moved in movedMacs(device, peers, self)) {
+            val moved = if (device.kind == NodeKind.MAC) movedMacs(device, peers, self) else movedBoxes(device, peers, self)
+            for (moved in moved) {
                 try {
                     return open(moved.address, device, resume, null, enrolling)
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -136,6 +140,27 @@ class NetDialer(
                 .filter { it.os == "macOS" && it.online && it.tags.isEmpty() && it.userId == user && it.nodeKey !in device.nodeKeys && it.nodeKey != self.nodeKey }
                 .sortedWith(compareBy({ it.shortName != name && !it.shortName.startsWith("$name-") }, { it.dnsName }))
                 .take(MOVED_TRIES)
+        }
+
+        /**
+         * Where a box that left its known node may be now: online, untagged nodes of this phone's
+         * own user named after it (`mybox`, `mybox-kore`, either with Tailscale's `-N`), none the
+         * record already holds a key of; at most [MOVED_TRIES].
+         */
+        fun movedBoxes(device: Device, peers: List<TailnetNode>, self: TailnetNode?): List<TailnetNode> {
+            val user = self?.userId ?: return emptyList()
+            val names = listOf(device.name, device.fqdn.trimEnd('.').substringBefore('.'))
+                .map { it.lowercase().substringBefore('.') }.filter { it.isNotEmpty() }.distinct()
+            if (names.isEmpty()) return emptyList()
+            return peers
+                .filter { it.online && it.tags.isEmpty() && it.userId == user && it.os != "android" && it.nodeKey !in device.nodeKeys && it.nodeKey != self.nodeKey }
+                .filter { namedAfter(it.hostName.lowercase(), names) }
+                .take(MOVED_TRIES)
+        }
+
+        /** A box called one of [names] on the tailnet: the name, `<name>-kore`, either with `-N`. */
+        fun namedAfter(host: String, names: List<String>): Boolean = names.any { name ->
+            listOf(name, "$name-kore").any { base -> host == base || (host.startsWith("$base-") && (host.removePrefix("$base-").toIntOrNull() ?: 0) > 0) }
         }
     }
 }

@@ -113,10 +113,10 @@ struct TileMark: View {
         switch state {
         case .working:
             if TabWork.kind(chat) == .background {
-                BackgroundPrompt(provider: chat.provider)
+                BackgroundPrompt(provider: chat.provider, arsenal: chat.arsenal)
             } else {
                 ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
-                    .colorMultiply(WorkingSpinner.tint(chat.provider))
+                    .colorMultiply(WorkingSpinner.tint(chat.provider, arsenal: chat.arsenal))
             }
         case .failed:
             Image(systemName: "exclamationmark.circle.fill")
@@ -129,12 +129,12 @@ struct TileMark: View {
                 .foregroundStyle(Theme.warning)
                 .frame(width: Size.spinner, height: Size.spinner)
         case .unseen:
-            ProviderLogo(provider: chat.provider, size: Size.logoTab)
+            ChatLogo(chat: chat, size: Size.logoTab)
                 .overlay(alignment: .topTrailing) {
                     Circle().fill(Theme.accent).frame(width: Size.dot, height: Size.dot).offset(x: Size.chipBadge.width, y: Size.chipBadge.height)
                 }
         case .waiting, .idle:
-            ProviderLogo(provider: chat.provider, size: Size.logoTab)
+            ChatLogo(chat: chat, size: Size.logoTab)
         }
     }
 }
@@ -455,7 +455,7 @@ struct SlotView: View {
                     workspace.attach(other, to: tab, section: section, slot: slot)
                 } label: {
                     HStack(spacing: Space.md) {
-                        if let chat = other.chat { ProviderLogo(provider: chat.provider, size: Size.logoRow) }
+                        if let chat = other.chat { ChatLogo(chat: chat, size: Size.logoRow) }
                         Text(other.title).font(TextStyle.label).foregroundStyle(Theme.text).lineLimit(1)
                         Spacer(minLength: 0)
                     }

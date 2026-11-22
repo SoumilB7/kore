@@ -20,6 +20,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import dev.kore.link.node.NodeClient
 import dev.kore.phone.kore
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
@@ -338,7 +339,23 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     fun leave() {
         field.removeCallbacks(draftTick)
         drafts.flush(clock())
+        watching?.cancel()
+        watching = null
     }
+
+    /**
+     * On screen (again): the chips as the chat's [store] holds them (a screen made again, or a
+     * process started again after the camera, finds them there), and their uploads going.
+     */
+    fun shown() {
+        watching?.cancel()
+        watching = activity.kore.scope.launch {
+            launch { store.items.collect { activity.runOnUiThread { sync() } } }
+            launch { store.refused.collect { r -> activity.runOnUiThread { Uploads.refusedLine(listOf(r))?.let(::quiet) } } }
+        }
+        kick()
+    }
+    private var watching: kotlinx.coroutines.Job? = null
     /** Sheets drawn from the chat's state, redrawn as it changes. */
     private val live = ArrayList<Sheet>()
     /** Choices sent and not yet in the Mac's state: model, effort, fast, autoCompact. */
@@ -419,6 +436,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         val kind = pending.remove(id) ?: return
         val out = outgoing.remove(id)
         if (out != null && !r.bool("ok")) return failed(out, r)
+        if (out != null) forget(out.files)
         if (kind in CONTROL) return controlResult(kind, r)
         if (r.bool("ok")) {
             note = if (kind == "send") "✓ Sent" else ""
@@ -450,8 +468,8 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
             field.setText(text)
             field.setSelection(text.length)
         }
-        attachments.addAll(0, out.files.filter { it !in attachments })
-        showChips()
+        store.restore(out.files.map { it.item() })
+        sync()
         note = line
         retryable = true
         showStatus()
@@ -464,17 +482,17 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
      */
     private fun reupload(out: Outgoing) {
         quiet("Sending the files again…")
-        val resolver = activity.contentResolver
         activity.kore.scope.launch {
             val ids = ArrayList<String>()
             var why: String? = null
             for (a in out.files) uploading.withLock {
                 if (why != null) return@withLock
-                val read = runCatching { Uploads.read(resolver, a.uri, resolver.getType(a.uri) ?: "application/octet-stream") }.getOrNull()
+                // The bytes as first read, kept with the chat: the picker's grant may be gone by now.
+                val bytes = runCatching { store.file(a.id).readBytes() }.getOrNull()
                     ?: run { why = Uploads.unread(); return@withLock }
-                val r = runCatching { link()?.uploadResult(read.name ?: a.name, read.mime, read.bytes) }.getOrNull()
+                val r = runCatching { link()?.uploadResult(a.name, a.mime, bytes) }.getOrNull()
                 val id = r?.takeIf { it.bool("ok") }?.str("blobId") ?: run { why = Uploads.refused(r?.str("code"), r?.str("message")); return@withLock }
-                Uploads.budget.spend(read.bytes.size.toLong(), System.currentTimeMillis())
+                Uploads.budget.spend(bytes.size.toLong(), System.currentTimeMillis())
                 ids += id
             }
             activity.runOnUiThread {
@@ -561,8 +579,8 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         showingDraft = true
         field.setText("")
         showingDraft = false
-        attachments.clear()
-        showChips()
+        store.take(files.map { it.id })
+        sync()
         dispatch(l, Outgoing(text, files))
         // Sent: the draft goes everywhere (after the message, so it never goes first).
         drafts.sent(clock())
@@ -571,13 +589,70 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
 
     // Attachments: picked with the system's own pickers, uploaded at once, sent with the message.
 
-    /** [uri]: where it was picked, pasted or shot; an image opens full screen from it. */
-    private class Attachment(val name: String, val thumb: Bitmap?, val uri: Uri) {
+    /** One of [store]'s files as the composer shows it; [uri] is its kept copy, an image opens full screen from it. */
+    private class Attachment(val id: String, val name: String, val mime: String, val thumb: Bitmap?, val uri: Uri) {
         var blobId: String? = null
         var failed = false
+        fun item() = PendingFiles.Item(id, name, mime, blobId)
     }
+    /** The composer's chips, drawn from [store] ([sync]). */
     private val attachments = ArrayList<Attachment>()
-    private var shot: Uri? = null
+    /** The chat's files not yet sent, and the camera's target: on disk, so the camera or a picker (or the process ending meanwhile) loses none. */
+    private val store = PendingFiles.of(activity.cacheDir, chatId, activity.kore.scope)
+
+    private fun keptUri(id: String): Uri = androidx.core.content.FileProvider.getUriForFile(activity, activity.packageName + ".files", store.file(id))
+
+    /** The chips again from [store]; a kept photo without its thumbnail (a new process) gets it decoded off the main thread. */
+    private fun sync() {
+        val old = attachments.associateBy { it.id }
+        attachments.clear()
+        for (i in store.items.value) {
+            val a = old[i.id]?.takeIf { it.thumb != null || thumbs[i.id] == null }
+                ?: Attachment(i.id, i.name, i.mime, thumbs[i.id], keptUri(i.id))
+            a.blobId = i.blobId
+            attachments.add(a)
+        }
+        showChips()
+        val missing = attachments.filter { it.thumb == null && it.mime.startsWith("image/") && it.id !in noThumb }
+        // Marked first, so a sync meanwhile doesn't decode them twice; a thumbnail made unmarks it.
+        noThumb.addAll(missing.map { it.id })
+        if (missing.isNotEmpty()) activity.kore.scope.launch {
+            for (a in missing) {
+                val t = runCatching {
+                    android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(store.file(a.id))) { d, info, _ ->
+                        d.setTargetSize(96, maxOf(1, 96 * info.size.height / maxOf(1, info.size.width)))
+                        d.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+                    }
+                }.getOrNull()
+                if (t != null) { thumbs[a.id] = t; noThumb.remove(a.id) }
+            }
+            activity.runOnUiThread { sync() }
+        }
+    }
+
+    /** A message went: its files are done with. */
+    private fun forget(files: List<Attachment>) {
+        val ids = files.map { it.id }
+        store.forget(ids)
+        ids.forEach { thumbs.remove(it) }
+    }
+
+    /**
+     * Uploads what waits, once the link is up (the camera's return may come before it): a link
+     * that drops meanwhile means the file waits for the next, never that it's lost.
+     */
+    private fun kick() {
+        val node = link() ?: return
+        store.drain(node.state.map { it == dev.kore.link.node.NodeMachine.State.Up }) { item, bytes ->
+            val r = runCatching { node.uploadResult(item.name, item.mime, bytes) }.getOrNull()
+            val id = r?.takeIf { it.bool("ok") }?.str("blobId")
+            when {
+                id != null -> { Uploads.budget.spend(bytes.size.toLong(), System.currentTimeMillis()); PendingFiles.Outcome.Uploaded(id) }
+                r == null -> PendingFiles.Outcome.NoAnswer
+                else -> PendingFiles.Outcome.Refused(Uploads.refused(r.str("code"), r.str("message")))
+            }
+        }
+    }
 
     /** What the Mac side offers this link (welcome `caps`): "blob" for uploads, "commands" for the "/" list. */
     private fun hasCap(name: String): Boolean = name in activity.kore.mesh.caps(link())
@@ -611,12 +686,14 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                     val dir = java.io.File(activity.cacheDir, "shots").apply { mkdirs() }
                     val file = java.io.File(dir, "shot-${System.currentTimeMillis()}.jpg")
                     val uri = androidx.core.content.FileProvider.getUriForFile(activity, activity.packageName + ".files", file)
-                    shot = uri
+                    store.shot = file
+                    activity.kore.awayForPick()
                     activity.startActivityForResult(
                         Intent(MediaStore.ACTION_IMAGE_CAPTURE).putExtra(MediaStore.EXTRA_OUTPUT, uri)
                             .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION), CAMERA)
                 },
                 tile(dev.kore.phone.R.drawable.i_file_doc, "File") {
+                    activity.kore.awayForPick()
                     activity.startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE).setType("*/*")
                         .putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true), PICK)
                 },
@@ -642,18 +719,22 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         if (room == 0) return quiet("A message takes ${Uploads.MAX_FILES} attachments at most.")
         val pick = Intent(MediaStore.ACTION_PICK_IMAGES).setType("image/*")
         if (room > 1) pick.putExtra(MediaStore.EXTRA_PICK_IMAGES_MAX, minOf(room, MediaStore.getPickImagesMaxLimit()))
+        activity.kore.awayForPick()
         activity.startActivityForResult(pick, PICK)
     }
 
     /** From the activity: the picked files (one or several) or the shot. */
     fun onResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (resultCode != Activity.RESULT_OK) return
-        val uris = when (requestCode) {
-            PICK -> data?.clipData?.let { clip -> (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri } } ?: listOfNotNull(data?.data)
-            CAMERA -> listOfNotNull(shot)
-            else -> emptyList()
+        if (requestCode == CAMERA) {
+            // The target as kept on disk: this screen (or the whole process) may be new since.
+            val file = store.shot ?: return
+            store.shot = null
+            if (resultCode != Activity.RESULT_OK || !file.exists() || file.length() == 0L) { file.delete(); return }
+            val uri = androidx.core.content.FileProvider.getUriForFile(activity, activity.packageName + ".files", file)
+            return addAll(listOf(uri)) { file.delete() }
         }
-        addAll(uris)
+        if (resultCode != Activity.RESULT_OK || requestCode != PICK) return
+        addAll(data?.clipData?.let { clip -> (0 until clip.itemCount).mapNotNull { clip.getItemAt(it).uri } } ?: listOfNotNull(data?.data))
     }
 
     /** Files read and uploaded one at a time: one picture decoded at once, and the Mac takes 3 uploads at a time. */
@@ -666,8 +747,8 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
      * and uploaded in turn, its chip shown once read. What didn't come is said once, in one line,
      * each with why.
      */
-    private fun addAll(uris: List<Uri>) {
-        if (uris.isEmpty()) return
+    private fun addAll(uris: List<Uri>, after: () -> Unit = {}) {
+        if (uris.isEmpty()) return after()
         val resolver = activity.contentResolver
         val room = Uploads.room(attachments.size + queued)
         val taken = uris.take(room)
@@ -690,17 +771,13 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                     activity.runOnUiThread { queued-- }
                     return@withLock
                 }
-                val item = Attachment(read.name ?: name, read.thumb, uri)
-                activity.runOnUiThread { queued--; attachments.add(item); showChips() }
-                val r = runCatching { link()?.uploadResult(read.name ?: name, read.mime, read.bytes) }.getOrNull()
-                val id = r?.takeIf { it.bool("ok") }?.str("blobId")
-                if (id != null) Uploads.budget.spend(read.bytes.size.toLong(), System.currentTimeMillis())
-                else refused += name to Uploads.refused(r?.str("code"), r?.str("message"))
-                activity.runOnUiThread {
-                    if (id == null) attachments.remove(item) else item.blobId = id
-                    showChips()
-                }
+                // Kept with the chat first, then shown and uploaded when the link is up.
+                val item = store.add(read.name ?: name, read.mime, read.bytes)
+                read.thumb?.let { thumbs[item.id] = it }
+                activity.runOnUiThread { queued--; sync() }
+                kick()
             }
+            after()
             Uploads.refusedLine(refused.toList())?.let { line -> activity.runOnUiThread { quiet(line) } }
         }
     }
@@ -746,7 +823,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                     setStroke(activity.dp(2), Tone.l1)
                 }
                 contentDescription = "Remove ${a.name}"
-                setOnClickListener { attachments.remove(a); showChips() }
+                setOnClickListener { store.remove(a.id); thumbs.remove(a.id); sync() }
             }, android.widget.FrameLayout.LayoutParams(activity.dp(22), activity.dp(22), Gravity.TOP or Gravity.END))
             chips.addView(tile, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { marginEnd = activity.dp(3) })
         }
@@ -1072,8 +1149,8 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         showingDraft = true
         field.setText("")
         showingDraft = false
-        attachments.clear()
-        showChips()
+        store.take(files.map { it.id })
+        sync()
         dispatch(l, Outgoing(text, files, atReset = true))
         drafts.sent(clock())
         scheduleDraft()
@@ -1325,6 +1402,9 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
         /** What a paste attaches rather than inserts: any file but plain text. */
         val PASTE_TYPES = arrayOf("image/*", "video/*", "audio/*", "application/*")
         const val CAMERA = 42
+        /** Kept photos' thumbnails, by [PendingFiles.Item.id]: a screen made again shows them at once. */
+        private val thumbs = java.util.concurrent.ConcurrentHashMap<String, Bitmap>()
+        private val noThumb: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
         /** Commands of KoreLink 1.2 sent from a chat; their results go to [controlResult]. */
         val CONTROL = setOf("mode", "plan", "model", "effort", "fast", "autoCompact", "compact", "rename", "close", "select", "fork",
             "retry", "continue", "cancelContinue", "sendAtReset", "arsenal", "arsenalStop", "revert")

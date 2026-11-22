@@ -11,12 +11,42 @@ import Tailnet
 @testable import KoreLink
 @testable import KoreUI
 
-/// The boxes' SSH ends by alias, for the Mac's `upgradeDial` (read off the main actor).
+/// The boxes' SSH ends by alias, for the Mac's `upgradeDial` (read off the main actor), routed
+/// as ssh is: each alias's host (`ssh -G`) is a LAN or public address (`lan`: reachable while the
+/// box is) or a tailnet address, reachable while this Mac has a route there (installed
+/// Tailscale running, or Kore's own: `SSHTailnetRoute`'s `kore-tailnet nc`) and that node is
+/// online; a box's own userspace node takes SSH too (`OwnSSHForward`).
 final class SSHRoutes: Sendable {
+    static let lan = "lan"
     private let routes = Mutex<[String: InProcessAttach]>([:])
+    private let hosts = Mutex<[String: String]>([:])
+    /// Every dial's host, newest last (`via` the address it went to instead of the alias's).
+    let dialled = Mutex<[String]>([])
+    private let net: SharedTailnet
+    private let macRoutes: @Sendable () -> Bool
+
+    init(net: SharedTailnet, macRoutes: @escaping @Sendable () -> Bool) {
+        self.net = net
+        self.macRoutes = macRoutes
+    }
+
     func set(_ alias: String, _ attach: InProcessAttach) { routes.withLock { $0[alias] = attach } }
-    func dial(_ alias: String) throws -> (fd: Int32, onClose: @Sendable () -> Void) {
-        guard let attach = routes.withLock({ $0[alias] }) else { throw SocketError.failed("ssh", ECONNREFUSED) }
+    /// What the alias's `HostName` is (default `lan`).
+    func setHost(_ alias: String, _ host: String) { hosts.withLock { $0[alias] = host } }
+    func host(_ alias: String) -> String { hosts.withLock { $0[alias] } ?? Self.lan }
+
+    func routable(_ host: String) -> Bool {
+        guard host != Self.lan else { return true }
+        guard macRoutes(), let node = net.node(host) else { return false }
+        return node.online && !node.dark && node.kind == .box
+    }
+
+    func reachable(_ alias: String) -> Bool { routable(host(alias)) && routes.withLock({ $0[alias] })?.reachable.withLock({ $0 }) != false }
+
+    func dial(_ alias: String, via: String? = nil) throws -> (fd: Int32, onClose: @Sendable () -> Void) {
+        let target = via ?? host(alias)
+        dialled.withLock { $0.append(target) }
+        guard routable(target), let attach = routes.withLock({ $0[alias] }) else { throw SocketError.failed("ssh: connect to host \(target)", ETIMEDOUT) }
         return try attach.dial()
     }
 }
@@ -40,7 +70,7 @@ final class MacNode {
     var ip: String { switcher?.state == .sidecar ? ownIP : installedIP }
     var nodeKey: String { switcher?.state == .sidecar ? ownKey : installedKey }
     /// Installed Tailscale's app is in /Applications (an uninstall takes it away).
-    private let app = TailscaleApp()
+    private let app: TailscaleApp
     let root: URL
     let support: URL
     let defaults = UserDefaults.standard
@@ -48,7 +78,7 @@ final class MacNode {
     let net: SharedTailnet
     let pulse: Pulse
     let clock: VirtualClock
-    let ssh = SSHRoutes()
+    let ssh: SSHRoutes
     /// The SSH boxes this Mac set up, by alias (their links' transports).
     private(set) var sshBoxes: [String: BoxNode] = [:]
 
@@ -88,6 +118,12 @@ final class MacNode {
         self.net = net
         self.pulse = pulse
         self.clock = clock
+        let app = TailscaleApp()
+        self.app = app
+        let ip = "100.64.0.1"
+        // A route to tailnet addresses: installed Tailscale running, or Kore's own (its node up).
+        let ownIP = "100.64.0.250"
+        ssh = SSHRoutes(net: net) { (app.present && net.node(ip)?.state == .running) || net.node(ownIP)?.state == .running }
         net.add(SharedTailnet.Node(name: "macbook", kind: .mac, ip: installedIP, nodeKey: installedKey, bindIP: installedIP))
     }
 
@@ -103,10 +139,12 @@ final class MacNode {
             installed: {
                 // Uninstalled: what it left behind reads absent (`LocalAPIDiscovery`).
                 guard app.present else { return (.missing(.absent), nil) }
+                guard app.answering else { return (.missing(.notRunning), nil) }
                 let state = shared.node(ip)?.state ?? .noState
                 return (.state(state), tailnet)
             },
             sidecar: { _ in
+                app.ownStarted()
                 // Kore's own node: new the first time (waiting for its one sign-in), as it was
                 // left after that (its state sealed under the Keychain's key).
                 if shared.node(ownIP) == nil {
@@ -118,7 +156,9 @@ final class MacNode {
             },
             secrets: secrets, defaults: defaults, support: support,
             upgradeDial: { alias, _, _ in try ssh.dial(alias) }, macName: { "MacBook" },
-            watchApp: { app.watch($0) })
+            watchApp: { app.watch($0) },
+            upgradeDialVia: { alias, _, _, host in try ssh.dial(alias, via: host) },
+            hostOf: { ssh.host($0) == SSHRoutes.lan ? "192.168.1.20" : ssh.host($0) })
         directory = NodeDirectory(defaults: defaults)
         NodeDirectory.shared = directory
         let rekeyer = NodeRekeyer(migration: NodeMigration(root: support, defaults: defaults), center: NotificationCenter())
@@ -212,6 +252,9 @@ final class MacNode {
         paths.sleep = clock.sleep
         paths.observe(.init(satisfied: true, interfaces: ["en0"]))
         self.paths = paths
+        HostLog.tap = { [weak self] line in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.trace("log " + line) } }
+        }
         auditWatch = NetAudit.watch { [weak self] line in
             self?.audits.append(line)
             self?.trace("audit " + line)
@@ -231,8 +274,9 @@ final class MacNode {
         guard let box = sshBoxes[alias] else { return nil }
         let grant = box.grant!
         let path = box.paths.socket.path
+        let ssh = ssh
         let connection = HostConnection(alias: key, grant: "laptop", cache: HostCache(alias: key, root: support.appendingPathComponent("hosts"))) {
-            DaemonTransport(path: path, grant: grant)
+            DaemonTransport(path: path, grant: grant) { ssh.reachable(alias) }
         }
         connection.router = switcher
         connection.sleep = clock.sleep
@@ -259,6 +303,10 @@ final class MacNode {
     /// The owner quits installed Tailscale, then drags it to the Trash: what's left of it reads
     /// absent, and the app's watch fires.
     func uninstallTailscale() { app.uninstall() }
+
+    /// Installed Tailscale's daemon answers (or not, as at login before it's up).
+    func tailscaleAnswers(_ answering: Bool) { app.answering = answering }
+    var ownStarts: Int { app.ownStarts }
 
     /// Kore 0.3.7's update: the identity key read from the Keychain before is gone, a new one is
     /// made in its file (same device id); with `losePins`, the boxes' pins left this Mac's book
@@ -311,14 +359,18 @@ final class MacNode {
 
     /// `kore-host upgrade --grant <grant>` on the box, over its SSH (unreachable: ssh's own failure).
     func upgradeOnBox(_ alias: String, grant: String, want: String?) async -> BoxRan {
-        guard let box = sshBoxes[alias], box.attach.reachable.withLock({ $0 }), let host = box.host else {
+        guard let box = sshBoxes[alias], ssh.reachable(alias), let host = box.host else {
             return BoxRan(status: 255, output: "ssh: connect to host \(alias) port 22: Operation timed out")
         }
         upgradeRuns[alias, default: 0] += 1
         let paths = box.paths
         let up = net.node(box.ip)?.state == .running
+        // A box with both on Kore's own now (no Tailscale yet, or it's down): as `upgrade` reads it there.
+        let onOwn = box.beside && host.net?.userspace == true
+        let ownUp = net.node(box.ownIP)?.state == .running
         let tailscale: HostUpgrade.Tailscale = box.own
             ? .kore(up ? .running(node: box.nodeKey, account: "me@example.com") : .signIn("https://login.example/a/\(alias)"))
+            : onOwn ? .kore(ownUp ? .running(node: box.ownKey, account: "me@example.com") : .signIn("https://login.example/a/\(alias)"))
             : up ? .running(node: box.nodeKey) : .stopped(.stopped, login: nil)
         let report = HostUpgrade(
             paths: paths, update: { nil }, service: { .running }, installService: { [] }, startDaemon: { true }, linger: { true },
@@ -351,15 +403,20 @@ final class MacNode {
     // MARK: What the owner does
 
     /// A box window opens (holds the link) or closes.
-    func openWindow(_ box: BoxNode) {
+    func openWindow(_ box: BoxNode, onScreen: Bool = false) {
         guard let connection = link(box) else { return }
         windows[connection.alias] = connection
         connection.retain()
+        if onScreen { connection.onScreen("window", true) }
     }
+
+    /// The box's window comes on screen or leaves it (hidden, minimised, covered).
+    func showWindow(_ box: BoxNode, _ shown: Bool) { link(box)?.onScreen("window", shown) }
 
     func closeWindow(_ box: BoxNode) {
         guard let connection = link(box), connection.inUse else { return }
         windows[connection.alias] = nil
+        connection.onScreen("window", false)
         connection.release()
     }
 
@@ -416,7 +473,17 @@ final class TailscaleApp: @unchecked Sendable {
     private let lock = NSLock()
     private var installed = true
     private var signedIn = false
+    private var daemon = true
+    private var owns = 0
+    /// Kore's own started on this Mac so far (as its node or to sign in beside Tailscale).
+    var ownStarts: Int { lock.withLock { owns } }
+    func ownStarted() { lock.withLock { owns += 1 } }
     private var changed: (@Sendable () -> Void)?
+    /// Its daemon answers its LocalAPI (false: at login, before tailscaled is up).
+    var answering: Bool {
+        get { lock.withLock { daemon } }
+        set { lock.withLock { daemon = newValue } }
+    }
 
     var present: Bool { lock.withLock { installed } }
     var ownSignedIn: Bool {

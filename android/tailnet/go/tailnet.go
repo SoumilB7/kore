@@ -29,6 +29,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -492,4 +493,58 @@ func logsHere(dir string) error {
 		return err
 	}
 	return os.Setenv("TS_LOGS_DIR", logs)
+}
+
+// OnlinePeers returns the node keys of the peers online now, sorted and comma-joined: the form
+// WaitPeers compares against. "" before the node runs.
+func OnlinePeers() string {
+	st, err := status(true)
+	if err != nil {
+		return ""
+	}
+	return onlineKeys(st)
+}
+
+func onlineKeys(st *ipnstate.Status) string {
+	keys := make([]string, 0, len(st.Peer))
+	for _, p := range st.Peer {
+		if p.Online {
+			keys = append(keys, p.PublicKey.String())
+		}
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
+}
+
+// WaitPeers blocks until the peers online differ from known (OnlinePeers' form), the node stops,
+// or timeoutMs passes, and returns the set then. Each change is the IPN bus's word, never a poll:
+// the phone's peer watch calls it in a loop on one thread while a node waits for its peer.
+func WaitPeers(known string, timeoutMs int) string {
+	s := current()
+	if s == nil {
+		return known
+	}
+	lc, err := s.LocalClient()
+	if err != nil {
+		return known
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+	w, err := lc.WatchIPNBus(ctx, ipn.NotifyPeerPatches|ipn.NotifyNoNetMap)
+	if err != nil {
+		return known
+	}
+	defer w.Close()
+	for {
+		if _, err := w.Next(); err != nil {
+			// Timed out or the node stopped: the set as it is now.
+			if now := OnlinePeers(); now != "" {
+				return now
+			}
+			return known
+		}
+		if now := OnlinePeers(); now != known {
+			return now
+		}
+	}
 }

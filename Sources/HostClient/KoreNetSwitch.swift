@@ -42,6 +42,11 @@ package struct NetEnvironment: @unchecked Sendable {
     /// `ssh <alias> kore-host attach --as <grant> --proto 2`, as a connected socket (the upgrade,
     /// and an enrolled box's SSH route).
     package var upgradeDial: @Sendable (_ alias: String, _ grant: String, _ command: String) throws -> (fd: Int32, onClose: @Sendable () -> Void)
+    /// The same, to `host` in place of the alias's own (`ssh -o HostName=<host> <alias>`): a box
+    /// whose alias names a tailnet address it's no longer on.
+    package var upgradeDialVia: @Sendable (_ alias: String, _ grant: String, _ command: String, _ host: String) throws -> (fd: Int32, onClose: @Sendable () -> Void)
+    /// The host an SSH alias reaches (`ssh -G`), nil when it can't be read.
+    package var hostOf: @Sendable (_ alias: String) -> String?
     /// This Mac's name, as a box's enroll shows it.
     package var macName: @Sendable () -> String
     /// Calls `changed` once when installed Tailscale's app leaves its place (moved to the Trash,
@@ -59,8 +64,12 @@ package struct NetEnvironment: @unchecked Sendable {
         support: URL, upgradeDial: @escaping @Sendable (String, String, String) throws -> (fd: Int32, onClose: @Sendable () -> Void),
         macName: @escaping @Sendable () -> String,
         watchApp: @escaping @Sendable (@escaping @Sendable () -> Void) -> (@Sendable () -> Void)? = { _ in nil },
-        watchRunning: @escaping @Sendable (@escaping @Sendable () -> Void) -> (@Sendable () -> Void)? = { _ in nil }
+        watchRunning: @escaping @Sendable (@escaping @Sendable () -> Void) -> (@Sendable () -> Void)? = { _ in nil },
+        upgradeDialVia: (@Sendable (String, String, String, String) throws -> (fd: Int32, onClose: @Sendable () -> Void))? = nil,
+        hostOf: @escaping @Sendable (String) -> String? = { _ in nil }
     ) {
+        self.upgradeDialVia = upgradeDialVia ?? { alias, grant, command, _ in try upgradeDial(alias, grant, command) }
+        self.hostOf = hostOf
         self.installed = installed
         self.sidecar = sidecar
         self.secrets = secrets
@@ -91,11 +100,22 @@ package struct NetEnvironment: @unchecked Sendable {
                 return (sidecar.tailnet, { sidecar.stop() })
             },
             secrets: FileSecrets(folder: FileSecrets.folder(support: support)), defaults: defaults, support: support,
-            upgradeDial: { alias, grant, command in
+            upgradeDial: { alias, grant, command in try sshDial(alias, grant, command, host: nil) },
+            macName: { String(ProcessInfo.processInfo.hostName.split(separator: ".").first ?? "Mac") },
+            watchApp: { changed in AppWatch.start(LocalAPIDiscovery().appPath, changed: changed) },
+            watchRunning: { changed in AppRunWatch.start(LocalAPIDiscovery().appPath ?? LocalAPIDiscovery.macApp, changed: changed) },
+            upgradeDialVia: { alias, grant, command, host in try sshDial(alias, grant, command, host: host) },
+            hostOf: { SSHTransport.hostName(alias: $0) })
+    }
+
+    /// `ssh <alias> kore-host attach --as <grant> --proto 2` (to `host`, when given, in place of
+    /// the alias's own), as a connected socket.
+    static func sshDial(_ alias: String, _ grant: String, _ command: String, host: String?) throws -> (fd: Int32, onClose: @Sendable () -> Void) {
                 let (mine, theirs) = try Sockets.pair()
                 let process = Process()
                 process.executableURL = URL(fileURLWithPath: SSHTransport.ssh)
-                process.arguments = SSHTransport.arguments(alias: alias, grant: grant, command: command) + ["--proto", "2"]
+                let args = SSHTransport.arguments(alias: alias, grant: grant, command: command) + ["--proto", "2"]
+                process.arguments = host.map { ["-o", "HostName=" + $0] + args } ?? args
                 let handle = FileHandle(fileDescriptor: theirs, closeOnDealloc: false)
                 process.standardInput = handle
                 process.standardOutput = handle
@@ -109,10 +129,6 @@ package struct NetEnvironment: @unchecked Sendable {
                 }
                 Sockets.closeFD(theirs)
                 return (mine, { if process.isRunning { process.terminate() } })
-            },
-            macName: { String(ProcessInfo.processInfo.hostName.split(separator: ".").first ?? "Mac") },
-            watchApp: { changed in AppWatch.start(LocalAPIDiscovery().appPath, changed: changed) },
-            watchRunning: { changed in AppRunWatch.start(LocalAPIDiscovery().appPath, changed: changed) })
     }
 }
 
@@ -158,7 +174,7 @@ package final class KoreNetSwitch: NetRouter {
     package private(set) var state = NetState.off
     /// The chosen tailnet's status as last read or heard (the Devices popup draws from it, never
     /// waiting on a read); nil while off or not read yet.
-    package private(set) var status: TailnetStatus?
+    package private(set) var status: TailnetStatus? { didSet { SSHTailnetRoute.heard(status) } }
 
     @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let environment: () -> NetEnvironment
@@ -167,7 +183,10 @@ package final class KoreNetSwitch: NetRouter {
     /// Environments made: each turn on makes one (a test checks off makes none).
     @ObservationIgnored package private(set) var made = 0
     @ObservationIgnored package private(set) var env: NetEnvironment?
-    @ObservationIgnored package private(set) var tailnet: (any Tailnet)?
+    @ObservationIgnored package private(set) var tailnet: (any Tailnet)? {
+        // Kore's ssh follows the tailnet chosen (`SSHTailnetRoute`): Kore's own, or installed.
+        didSet { if global { Self.routeSSH(tailnet) } }
+    }
     @ObservationIgnored private var stopSidecar: (@Sendable () -> Void)?
     @ObservationIgnored private var bus: Task<Void, Never>?
     @ObservationIgnored private var holders: Set<String> = []
@@ -261,21 +280,46 @@ package final class KoreNetSwitch: NetRouter {
         busRetry = 0
         holders = Set(connections().filter(\.inUse).map(\.alias))
         if global { HostConnection.net = self }
-        choose(env, generation)
+        choose(env, generation, grace: 0)
     }
+
+    /// At launch (or KoreNet switched on) with installed Tailscale there but its daemon not
+    /// answering yet (the login race): looked at again these many seconds apart before Kore's own
+    /// starts beside it, so a Tailscale that's coming up is taken with no second node and no flap.
+    /// A quit later hands over at once (no grace).
+    nonisolated package static let launchGrace: [TimeInterval] = [1, 2, 3, 4, 5]
+    @ObservationIgnored private var graceCancel: (() -> Void)?
 
     /// Discovery and the choice off the main actor (Kore's own tailnet started when chosen),
     /// then `chose` on it.
-    private func choose(_ env: NetEnvironment, _ mine: Int, stopFirst: (@Sendable () -> Void)? = nil) {
+    private func choose(_ env: NetEnvironment, _ mine: Int, keep: Sidecar? = nil, grace: Int? = nil) {
         offMain {
-            // Kore's own signing in while Tailscale ran: stopped before it starts as the Mac's node.
-            stopFirst?()
             let (installed, local) = env.installed()
+            // The login race: installed Tailscale's daemon not answering yet. Looked at again
+            // shortly, Kore's own not started meanwhile ("Starting KoreNet").
+            if let grace, grace < Self.launchGrace.count, keep == nil, installed == .missing(.notRunning) {
+                await MainActor.run {
+                    guard self.generation == mine, self.env != nil else { return }
+                    if grace == 0 { HostLog.note("korenet", "tailscale not answering yet", "waiting before Kore's own starts") }
+                    self.graceCancel = self.schedule(Self.launchGrace[grace]) { [weak self] in
+                        guard let self, self.generation == mine, self.env != nil else { return }
+                        self.graceCancel = nil
+                        self.choose(env, mine, grace: grace + 1)
+                    }
+                }
+                return
+            }
             var choice = TailnetChooser.chooseBeside(installed)
-            var sidecar: (tailnet: any Tailnet, stop: @Sendable () -> Void)?
+            var sidecar: Sidecar?
             var problem: String?
             var resealed = false
-            if choice.startsSidecar {
+            // Kore's own already running (signing in, as the Mac's node or beside Tailscale): the
+            // same node goes on as whichever it is now, its sign-in page still the one opened.
+            var standby: Sidecar?
+            if let keep {
+                if choice.startsSidecar { sidecar = keep } else if choice == .installed { standby = keep } else { keep.stop() }
+            }
+            if choice.startsSidecar, sidecar == nil {
                 do {
                     let started = try Self.startSidecar(env)
                     sidecar = started.sidecar
@@ -291,13 +335,23 @@ package final class KoreNetSwitch: NetRouter {
                 choice = TailnetChooser.fallback(installed)
                 problem = nil
             }
-            let (made, failure, signInAgain, chosen) = (sidecar, problem, resealed, choice)
+            let (made, failure, signInAgain, chosen, waiting) = (sidecar, problem, resealed, choice, standby)
             await MainActor.run {
                 guard self.generation == mine, self.env != nil else {
                     made?.stop()
+                    waiting?.stop()
                     return
                 }
                 if signInAgain { self.tailnetSignInAgain = true }
+                if let waiting {
+                    if self.ownReady {
+                        self.offMain { waiting.stop() }
+                    } else {
+                        HostLog.note("korenet", "own tailnet", "kept running beside tailscale until signed in")
+                        self.standby = waiting
+                        self.watchStandby(waiting.tailnet, mine)
+                    }
+                }
                 self.chose(chosen, local: local, sidecar: made, problem: failure)
             }
         }
@@ -307,6 +361,13 @@ package final class KoreNetSwitch: NetRouter {
     /// sealed under an earlier one (kept in the Keychain before 0.3.7), so that goes first; state
     /// the key still doesn't open (another Kore process's key won the race) goes once more and the
     /// start is tried again. `resealed`: a node's sign-in went with it.
+    private static func routeSSH(_ tailnet: (any Tailnet)?) {
+        SSHTailnetRoute.set(tailnet.map { chosen in
+            let own = (chosen as? TailnetSidecar).flatMap { sidecar in NetSidecar.helper().map { (helper: $0.path, socket: sidecar.path) } }
+            return SSHTailnetRoute.Current(tailnet: chosen, own: own)
+        })
+    }
+
     package nonisolated static func startSidecar(_ env: NetEnvironment) throws -> (sidecar: (tailnet: any Tailnet, stop: @Sendable () -> Void), resealed: Bool) {
         let state = env.support.appendingPathComponent("net/tailnet/state/state.sealed")
         let files = FileManager.default
@@ -356,7 +417,7 @@ package final class KoreNetSwitch: NetRouter {
     /// Signed in again: the line goes for good.
     private func signedInAgain() {
         noteOwn()
-        guard state == .sidecar, status?.backendState == .running else { return }
+        guard state == .sidecar, status?.signedIn == true else { return }
         if tailnetSignInAgain { tailnetSignInAgain = false }
         if !ownReady { ownReady = true }
     }
@@ -440,14 +501,14 @@ package final class KoreNetSwitch: NetRouter {
         DispatchQueue.main.asyncAfter(deadline: .now() + min(wait, 400 * 86400), execute: item)
     }
 
-    private func chose(_ choice: TailnetChooser.Choice, local: (any Tailnet)?, sidecar: (tailnet: any Tailnet, stop: @Sendable () -> Void)?, problem: String?) {
+    private func chose(_ choice: TailnetChooser.Choice, local: (any Tailnet)?, sidecar: Sidecar?, problem: String?) {
         // Installed Tailscale there (running, quit or signed out): its app leaving chooses again,
         // so an uninstall hands over to Kore's own tailnet with no restart; its launches and
         // quits choose again too, so the Mac moves between the app's node and Kore's own.
         self.chosen = choice
         besideRetry = 0
         watchApp(choice == .sidecar ? nil : env)
-        watchRunning(choice == .sidecar ? nil : env)
+        watchRunning(env)
         watchBeside(local, beside: choice == .beside)
         switch choice {
         case .installed:
@@ -476,7 +537,14 @@ package final class KoreNetSwitch: NetRouter {
         }
         readStatus()
         if !holders.isEmpty { holdBus() }
-        if state.reaches { for connection in connections() { connection.peerOnline() } }
+        if state.reaches {
+            // Chosen again (this Mac moved nodes): links on the old node go now, onto this one.
+            let moved = relinkOnChoice
+            relinkOnChoice = false
+            for connection in connections() {
+                if moved, connection.route == .net { connection.relink("this Mac moved tailnet nodes") } else { connection.peerOnline() }
+            }
+        }
         // U-b: every SSH box not on KoreNet yet upgrades now, with no window.
         if state.reaches { upgrades?.switchedOn() }
         // Tailscale runs: Kore's own signs in now if it never has, then stops (its state kept),
@@ -491,6 +559,10 @@ package final class KoreNetSwitch: NetRouter {
     @ObservationIgnored private var appWatch: (@Sendable () -> Void)?
     /// Choices made again after the app moved (tests).
     @ObservationIgnored package private(set) var rechosen = 0
+    /// A choice made again: its tailnet links redial on the new node once it's up.
+    @ObservationIgnored private var relinkOnChoice = false
+    /// Called as this Mac is about to leave its tailnet node for another (the phones' listener).
+    @ObservationIgnored package var willMove: (@MainActor () -> Void)?
 
     private func watchApp(_ env: NetEnvironment?) {
         appWatch?()
@@ -519,7 +591,10 @@ package final class KoreNetSwitch: NetRouter {
     }
     /// While Tailscale runs and Kore's own has never signed in: its sign-in page (Devices' line).
     package private(set) var ownSignIn: String?
-    @ObservationIgnored private var standby: (tailnet: any Tailnet, stop: @Sendable () -> Void)?
+    /// The hold a sign-in pressed on this Mac keeps until it's signed in.
+    package static let signInHold = "signin"
+    package typealias Sidecar = (tailnet: any Tailnet, stop: @Sendable () -> Void)
+    @ObservationIgnored private var standby: Sidecar?
     @ObservationIgnored private var standbyWatch: Task<Void, Never>?
     @ObservationIgnored private var preparing = false
 
@@ -561,6 +636,18 @@ package final class KoreNetSwitch: NetRouter {
                 case .state:
                     let read = await Self.offMain(counting) { try? tailnet.status() }
                     if self.standbyHeard(read) { return }
+                case .loginFinished:
+                    for wait in [Duration.zero] + TailnetEvent.signInRereads {
+                        if wait > .zero { try? await Task.sleep(for: wait) }
+                        guard !Task.isCancelled, self.generation == mine else { return }
+                        let read = await Self.offMain(counting) { try? tailnet.status() }
+                        if self.standbyHeard(read) { return }
+                        // The sign-in finished (`TailnetStatus.loggedIn`).
+                        if let read, read.loggedIn {
+                            self.ownSignedIn(read)
+                            return
+                        }
+                    }
                 default: break
                 }
             }
@@ -570,7 +657,7 @@ package final class KoreNetSwitch: NetRouter {
     /// True once it's signed in (and stopped); else its page is kept for the line.
     private func standbyHeard(_ status: TailnetStatus?) -> Bool {
         guard let status else { return false }
-        if status.backendState == .running {
+        if status.signedIn {
             ownSignedIn(status)
             return true
         }
@@ -588,12 +675,15 @@ package final class KoreNetSwitch: NetRouter {
     }
 
     /// Stops watching Kore's own signing in; how it stops (run it off the main actor).
-    private func stopStandby() -> (@Sendable () -> Void)? {
+    private func stopStandby() -> (@Sendable () -> Void)? { takeStandby()?.stop }
+
+    /// Kore's own signing in beside Tailscale, no longer watched here: stopped, or handed on.
+    private func takeStandby() -> Sidecar? {
         standbyWatch?.cancel()
         standbyWatch = nil
         ownSignIn = nil
         defer { standby = nil }
-        return standby?.stop
+        return standby
     }
 
     // MARK: Kore's own beside a quit or signed-out app
@@ -678,27 +768,39 @@ package final class KoreNetSwitch: NetRouter {
                     // gone: the same node, no restart.
                     if next.startsSidecar, self.chosen?.startsSidecar == true { self.chosen = next }
                     self.watchApp(next == .sidecar ? nil : env)
-                    self.watchRunning(next == .sidecar ? nil : env)
+                    self.watchRunning(env)
                     self.watchBeside(local, beside: next == .beside)
                     self.settled?("choice kept")
                     return
                 }
                 HostLog.note("korenet", "choose again", why)
+                // Phones hear it over the old node while it's still there: they come back from
+                // their quick waits on the new one, never after their 5-minute cap.
+                self.willMove?()
+                self.relinkOnChoice = true
                 self.rechosen += 1
                 self.generation += 1
                 self.bus?.cancel()
                 self.bus = nil
                 self.cancelBusRetry()
                 self.busRetry = 0
+                let sidecarNet = self.state == .sidecar ? self.tailnet : nil
                 self.tailnet = nil
                 self.status = nil
+                // Kore's own not signed in yet goes on running, so a sign-in under way isn't cut
+                // off (its page stays the one opened): beside Tailscale until it's signed in, or
+                // as the Mac's node again. Signed in, the Mac's node stops as before.
+                var keep = self.takeStandby()
                 if let stop = self.stopSidecar {
                     self.stopSidecar = nil
-                    self.offMain { stop() }
+                    if keep == nil, !self.ownReady, let own = sidecarNet {
+                        keep = (own, stop)
+                    } else {
+                        self.offMain { stop() }
+                    }
                 }
-                let standby = self.stopStandby()
                 self.state = .choosing
-                self.choose(env, self.generation, stopFirst: standby)
+                self.choose(env, self.generation, keep: keep)
             }
         }
     }
@@ -713,6 +815,8 @@ package final class KoreNetSwitch: NetRouter {
     }
 
     private func end() {
+        graceCancel?()
+        graceCancel = nil
         let standby = stopStandby()
         if let standby { offMain { standby() } }
         watchApp(nil)
@@ -745,6 +849,8 @@ package final class KoreNetSwitch: NetRouter {
 
     /// The Devices popup (step 7) or a box window holds the bus while visible.
     package func hold(_ key: String, _ held: Bool) {
+        // Sign in pressed while Tailscale runs: Kore's own runs for it if it isn't already.
+        if held, key == Self.signInHold, state == .installed, let env { prepareOwn(env) }
         // A first holder: a bus that ends by itself is held again from the first step.
         if held, holders.isEmpty { busRetry = 0 }
         if held { holders.insert(key) } else { holders.remove(key) }
@@ -836,7 +942,11 @@ package final class KoreNetSwitch: NetRouter {
                     }
                 }
                 guard self.generation == mine, self.env != nil, let read else { return }
-                if read != self.status { self.status = read }
+                if read != self.status {
+                    self.status = read
+                    self.dialable()
+                }
+                self.learnPending()
                 self.signedInAgain()
                 // A read is as good as the bus: Tailscale stopped or signed out shows without one.
                 self.follow(read.backendState)
@@ -850,7 +960,44 @@ package final class KoreNetSwitch: NetRouter {
         signedInAgain()
         switch event {
         case .peer(_, let key?, let online?) where online:
-            for connection in connections() where directory.entry(forKey: connection.alias)?.isPeer(key) == true { connection.peerOnline() }
+            for connection in connections() {
+                guard let entry = directory.entry(forKey: connection.alias), isNode(key, of: entry) else { continue }
+                // Up on a node that's gone (the box moved from it): the link moves now, to this one.
+                if connection.route == .net, let on = linkNode[connection.alias], on != key, !peerOnline(on) {
+                    connection.relink("\(entry.ssh ?? entry.name) is on another node")
+                } else {
+                    connection.peerOnline()
+                }
+            }
+        case .peer(_, let key?, let online?) where !online:
+            // The node a link is on went offline: checked now, so it moves as soon as the box is
+            // heard on another node (or stays, should it answer).
+            for connection in connections() where connection.route == .net && linkNode[connection.alias] == key {
+                // Another node of the box is up (it moved there): the link goes there now.
+                if let entry = directory.entry(forKey: connection.alias), entry.knownKeys.contains(where: { $0 != key && peerOnline($0) }) {
+                    connection.relink("\(entry.ssh ?? entry.name) moved to another node")
+                } else {
+                    connection.probe("node offline")
+                }
+            }
+        case .loginFinished:
+            readStatus()
+        case .peer(_, nil, false?):
+            // A node removed from the tailnet (deleted in the admin console): the bus doesn't say
+            // which key it had, and a link on it is dead with no word. Links on KoreNet are checked
+            // now (a probe: any word back), so one on that node moves within its wait.
+            for connection in connections() where connection.route == .net { connection.probe("a node left the tailnet") }
+            readStatus()
+        case .status where !held(parked: true).isEmpty:
+            // Given up (parked): a node of the box online now dials it, whichever node that is.
+            guard let status, let env else { break }
+            let book = book(env)
+            for connection in held(parked: true) {
+                guard let entry = directory.entry(forKey: connection.alias), entry.enrolled,
+                      !BoxNodes.candidates(keys: boxKeys(entry, book: book), names: boxNames(entry), status: status, others: otherKeys(entry, book: book)).isEmpty
+                else { continue }
+                connection.peerOnline()
+            }
         case .state(let backend) where state == .sidecar:
             // Kore's own tailnet signed in (its addresses and peers), or waiting for its sign-in
             // (the page): either comes with a fresh read.
@@ -889,7 +1036,11 @@ package final class KoreNetSwitch: NetRouter {
     private func note(_ event: TailnetEvent) {
         switch event {
         case .status(let next):
-            if next != status { status = next }
+            if next != status {
+                status = next
+                learnPending()
+                dialable()
+            }
         case .peer(_, let key?, let online?):
             guard var next = status, let i = next.peers.firstIndex(where: { $0.publicKey == key }), next.peers[i].online != online else { return }
             next.peers[i].online = online
@@ -902,6 +1053,13 @@ package final class KoreNetSwitch: NetRouter {
         default:
             break
         }
+    }
+
+    /// A new status: links that wanted KoreNet while this Mac couldn't dial their box move now if
+    /// it can.
+    private func dialable() {
+        guard state.reaches else { return }
+        for connection in connections() { connection.netDialable() }
     }
 
     // MARK: Routes
@@ -951,25 +1109,188 @@ package final class KoreNetSwitch: NetRouter {
         if issued { issuedChanged?() }
     }
 
-    package func transport(for connection: HostConnection) -> (any HostTransport)? {
-        guard state.reaches, let tailnet, let env, let entry = directory.entry(forKey: connection.alias), entry.enrolled, let nodeKey = entry.nodeKey
-        else { return nil }
+    /// The box's node keys said over a proven link (`net.node`): each one this Mac's own tailnet
+    /// shows as a node of its own user (online or not: Kore's own stops once signed in beside
+    /// Tailscale) joins the box's record in this Mac's book (at most 3), so this Mac and its
+    /// phones know that node is the box before the box moves onto it. Never a key another
+    /// device holds, a tagged or another user's node, or an SSH-only pin's (its first dial's
+    /// WhoIs gives it a user).
+    private func learnKeys(_ entry: NodeDirectory.Entry, book: DeviceBook, readIfMissing: Bool = false) {
+        // A key this Mac's status doesn't list yet (the box's own just signed in beside its
+        // Tailscale): learned again at the next status (one read asked for now, never a loop).
+        let listed = { (key: String) in self.status?.peers.contains { $0.publicKey == key } == true }
+        if entry.knownKeys.allSatisfy(listed) {
+            toLearn[entry.device] = nil
+        } else if readIfMissing {
+            toLearn[entry.device] = 0
+            readStatus()
+        } else if let tries = toLearn[entry.device] {
+            // At most a few statuses later it's given up (the key may be a node long gone).
+            toLearn[entry.device] = tries >= 10 ? nil : tries + 1
+        }
+        guard let status, let me = status.selfNode?.userID else { return }
+        let held = Set(((try? book.record(entry.device)) ?? nil)?.nodeKeys ?? [])
+        let keys = entry.knownKeys.filter { key in
+            !held.contains(key) && status.peers.contains { $0.publicKey == key && $0.userID == me && $0.tags.isEmpty && !$0.shared }
+        }
+        guard !keys.isEmpty else { return }
+        var changed = false
+        _ = try? book.update { devices in
+            guard let i = devices.firstIndex(where: { $0.id == entry.device && $0.kind == .box }), !devices[i].sshOnly, devices[i].userId == me else { return }
+            let taken = Set(devices.filter { $0.id != entry.device }.flatMap(\.nodeKeys))
+            var next = devices[i].nodeKeys
+            for key in keys.reversed() where !taken.contains(key) && !next.contains(key) {
+                next.append(key)
+                if next.count > DeviceRecord.maxNodeKeys {
+                    // The oldest goes, never one the box said it has now.
+                    if let old = next.firstIndex(where: { !keys.contains($0) }) { next.remove(at: old) } else { next.removeFirst() }
+                }
+            }
+            guard next != devices[i].nodeKeys else { return }
+            devices[i].nodeKeys = next
+            changed = true
+        }
+        if changed {
+            HostLog.note(entry.ssh ?? entry.id.raw, "korenet", "knows its nodes")
+            directoryChanged?()
+        }
+    }
+
+    /// Boxes with a node key said that this Mac's status didn't list yet.
+    @ObservationIgnored private var toLearn: [UUID: Int] = [:]
+
+    /// A new status: keys said before it listed them are learned now.
+    private func learnPending() {
+        guard !toLearn.isEmpty, let env else { return }
         let book = book(env)
+        for id in Array(toLearn.keys) {
+            guard let entry = directory.all[id.uuidString.lowercased()] else {
+                toLearn[id] = nil
+                continue
+            }
+            learnKeys(entry, book: book)
+        }
+    }
+
+    /// Every node key the Mac knows for a box: its entry's, then its record's in the book.
+    package func boxKeys(_ entry: NodeDirectory.Entry, book: DeviceBook) -> [String] {
+        var keys = entry.knownKeys
+        for key in ((try? book.record(entry.device))??.nodeKeys ?? []).reversed() where key != Binding.Route.sshNodeKey && !keys.contains(key) { keys.append(key) }
+        return keys
+    }
+
+    /// The names a box goes by on the tailnet, for finding a node of it not known yet.
+    package func boxNames(_ entry: NodeDirectory.Entry) -> [String] {
+        var names = [entry.name]
+        if let ssh = entry.ssh, !names.contains(ssh) { names.append(ssh) }
+        return names
+    }
+
+    /// Node keys other devices this Mac knows hold (never dialled as this box).
+    private func otherKeys(_ entry: NodeDirectory.Entry, book: DeviceBook) -> Set<String> {
+        var keys = Set(((try? book.read().devices) ?? []).filter { $0.id != entry.device }.flatMap(\.nodeKeys))
+        for other in directory.all.values where other.device != entry.device { keys.formUnion(other.knownKeys) }
+        return keys
+    }
+
+    /// The node the box's link is dialling now, by its tailnet name (the reconnect card's words).
+    @ObservationIgnored package private(set) var dialling: [String: String] = [:]
+    /// The node key each box link reached, by link key.
+    @ObservationIgnored package private(set) var linkNode: [String: String] = [:]
+
+    /// Whether a tailnet node is a box's: one of its known keys, or (none of those online) a
+    /// node of this Mac's user named after it that no other device holds.
+    private func isNode(_ key: String, of entry: NodeDirectory.Entry) -> Bool {
+        if entry.isPeer(key) { return true }
+        guard let status, let env else { return false }
+        let book = book(env)
+        return BoxNodes.candidates(keys: boxKeys(entry, book: book), names: boxNames(entry), status: status, others: otherKeys(entry, book: book))
+            .contains { $0.key == key }
+    }
+
+    /// Links in use that gave up dialling (only an event dials them again).
+    private func held(parked: Bool) -> [HostConnection] { connections().filter { $0.inUse && $0.parked == parked && !$0.isOnline } }
+
+    private func peerOnline(_ key: String) -> Bool { status?.peers.first { $0.publicKey == key }?.online ?? false }
+
+    package func otherNodeOnline(_ connection: HostConnection) -> Bool {
+        guard let entry = directory.entry(forKey: connection.alias) else { return false }
+        let on = linkNode[connection.alias]
+        return entry.knownKeys.contains { $0 != on && peerOnline($0) }
+    }
+
+    package func canDial(_ connection: HostConnection) -> Bool {
+        guard state.reaches, tailnet != nil, let env, let entry = directory.entry(forKey: connection.alias), entry.enrolled else { return false }
+        let book = book(env)
+        let keys = boxKeys(entry, book: book)
+        guard let status else { return !keys.isEmpty }
+        guard status.backendState == .running else { return false }
+        return !BoxNodes.candidates(keys: keys, names: boxNames(entry), status: status, others: otherKeys(entry, book: book), offline: true).isEmpty
+    }
+
+    package func transport(for connection: HostConnection) -> (any HostTransport)? {
+        guard state.reaches, let tailnet, let env, let entry = directory.entry(forKey: connection.alias), entry.enrolled else { return nil }
+        let book = book(env)
+        let keys = boxKeys(entry, book: book)
+        let names = boxNames(entry)
+        let others = otherKeys(entry, book: book)
+        // Nothing known online (as last heard): straight to SSH, no dial that can only fail. With
+        // no status read yet, the dial reads one.
+        if let status, BoxNodes.candidates(keys: keys, names: names, status: status, others: others, offline: true).isEmpty { return nil }
+        guard !keys.isEmpty || status != nil else { return nil }
         if pinGone(entry, book: book, connection: connection) { return nil }
         let identities = identities
         let server = entry.device
+        let alias = connection.alias
+        let everyNode = connection.everyNode
+        let reached = Mutex<String?>(nil)
         return NetTransport(
             route: .tailnet,
-            open: {
+            open: { [weak self] in
                 let status = try tailnet.status()
                 guard status.backendState == .running, let me = status.selfNode else { throw TailnetError.notRunning(status.backendState) }
-                guard let peer = status.peers.first(where: { $0.publicKey == nodeKey }), let address = peer.tailscaleIPs.first else {
-                    throw TailnetError.notTailnet(nodeKey)
+                // Every node it may be on, online first: the first that takes the connection. After
+                // the box's `restart`, every node it's known on at once, whatever the tailnet says.
+                let candidates = everyNode
+                    ? BoxNodes.every(keys: keys, names: names, status: status, others: others)
+                    : BoxNodes.candidates(keys: keys, names: names, status: status, others: others, offline: true)
+                guard !candidates.isEmpty else { throw TailnetError.sidecar("the box is offline") }
+                var dialled: (fd: Int32, who: TailnetWhoIs, node: BoxNodes.Candidate)?
+                if everyNode {
+                    let (made, node) = try BoxNodes.race(candidates, close: { Sockets.closeFD($0.fd) }) { node in
+                        let who = try tailnet.whois(node.address)
+                        return Opening(fd: try tailnet.dial(node.address, port: NetListener.port), who: who)
+                    }
+                    dialled = (made.fd, made.who, node)
+                } else {
+                    var lastError: (any Error)?
+                    for node in candidates {
+                        do {
+                            let who = try tailnet.whois(node.address)
+                            let fd = try tailnet.dial(node.address, port: NetListener.port)
+                            dialled = (fd, who, node)
+                            break
+                        } catch {
+                            lastError = error
+                        }
+                    }
+                    if dialled == nil { throw lastError ?? TailnetError.sidecar("the box is offline") }
                 }
-                guard peer.online else { throw TailnetError.sidecar("the box is offline") }
-                let who = try tailnet.whois(address)
-                let identity = try identities.get(env)
-                let fd = try tailnet.dial(address, port: NetListener.port)
+                guard let dialled else { throw TailnetError.sidecar("the box is offline") }
+                let name = dialled.node.name
+                HostLog.note(alias, "korenet dial", "\(name) \(dialled.node.address)")
+                Task { @MainActor in self?.dialling[alias] = name }
+                if !dialled.node.known { HostLog.note(alias, "korenet", "trying \(name), a node named after it") }
+                let who = dialled.who
+                reached.withLock { $0 = who.node.key }
+                let identity: MacIdentity
+                do {
+                    identity = try identities.get(env)
+                } catch {
+                    Sockets.closeFD(dialled.fd)
+                    throw error
+                }
+                let fd = dialled.fd
                 var setup = NetSession.Client(
                     local: NetLocal(device: identity.device, kind: .mac, nodeKey: me.publicKey, signer: identity.signer), route: .tailnet,
                     peer: NetPeerFacts(nodeKey: who.node.key, userId: who.userId, tags: who.node.tags), book: book, server: server, service: "link")
@@ -981,9 +1302,21 @@ package final class KoreNetSwitch: NetRouter {
                     guard let self, let connection else { return }
                     // Its first tailnet node key (or a new one): phones may dial it now.
                     if case .appended? = append { self.directoryChanged?() }
+                    // The node it answered on, proven: kept with its others.
+                    if let key = reached.withLock({ $0 }) {
+                        self.directory.know(key, device: entry.device)
+                        self.linkNode[alias] = key
+                        SSHTailnetRoute.linked(connection.sshAlias, node: key)
+                    }
                     await self.welcomed(connection, id: entry.id)
                 }
             })
+    }
+
+    /// A node's connection as a restart's race made it.
+    private struct Opening: Sendable {
+        var fd: Int32
+        var who: TailnetWhoIs
     }
 
     /// Made for the SSH route while KoreNet is off (closures only: nothing runs until a dial).
@@ -1004,9 +1337,26 @@ package final class KoreNetSwitch: NetRouter {
         if pinGone(entry, book: book, connection: connection) { return nil }
         let identities = identities
         let (alias, grant, command, server) = (connection.sshAlias, connection.grant, connection.sshCommand, entry.device)
-        return NetTransport(route: .ssh) {
+        // The box's nodes now, for an alias whose host is a tailnet address (`SSHTailnetRoute`,
+        // the one rule): its node offline, another of the box's; this Mac on Kore's own tailnet,
+        // through it. Only with neither installed Tailscale nor Kore's own carrying this Mac is an
+        // alias whose host is a tailnet address out of reach, said at once.
+        let routes = state == .installed || state == .sidecar
+        let tailnet = routes ? self.tailnet : nil
+        let own = state == .sidecar ? (self.tailnet as? TailnetSidecar).flatMap { sidecar in NetSidecar.helper().map { (helper: $0.path, socket: sidecar.path) } } : nil
+        let noRoute = on && !routes
+        let (keys, names, others) = (boxKeys(entry, book: book), boxNames(entry), otherKeys(entry, book: book))
+        let key = connection.alias
+        return NetTransport(route: .ssh) { [weak self] in
             let identity = try identities.get(env)
-            let (fd, onClose) = try env.upgradeDial(alias, grant, command)
+            if noRoute, let host = env.hostOf(alias), BoxNodes.overTailnet(host) {
+                Task { @MainActor in self?.sshNoRoute.insert(key) }
+                throw TailnetError.sidecar(Self.sshNeedsTailscale)
+            }
+            Task { @MainActor in self?.sshNoRoute.remove(key) }
+            let via = tailnet.flatMap { Self.sshHost(alias: alias, env: env, tailnet: $0, keys: keys, names: names, others: others, own: own) }
+            Task { @MainActor in self?.sshVia[key] = via }
+            let (fd, onClose) = try via.map { try env.upgradeDialVia(alias, grant, command, $0) } ?? env.upgradeDial(alias, grant, command)
             var setup = NetSession.Client(
                 local: NetLocal(device: identity.device, kind: .mac, nodeKey: Binding.Route.sshNodeKey, signer: identity.signer), route: .ssh, peer: .ssh,
                 book: book, server: server, service: "link")
@@ -1016,6 +1366,28 @@ package final class KoreNetSwitch: NetRouter {
             return NetTransport.Opened(fd: fd, setup: setup, onClose: onClose)
         }
     }
+
+    /// Where an SSH dial to a box goes instead of its alias's host, when that host is a tailnet
+    /// address whose node is offline (or gone) and the box is online on another node of this
+    /// Mac's tailnet: that node's address (`ssh -o HostName=`). Nil: the alias as it is.
+    nonisolated static func sshHost(
+        alias: String, env: NetEnvironment, tailnet: any Tailnet, keys: [String], names: [String], others: Set<String>,
+        own: (helper: String, socket: String)? = nil
+    ) -> String? {
+        guard let host = env.hostOf(alias), BoxNodes.overTailnet(host), let status = try? tailnet.status(), status.backendState == .running else { return nil }
+        let known = BoxNodes.candidates(keys: keys, names: names, status: status, others: others)
+        // `jump` and `keyAlias` don't move the target: SSHTransport's own options carry them.
+        return SSHTailnetRoute.route(host: host, jump: false, keyAlias: true, status: status, own: own, known: known).target
+    }
+
+    /// Why SSH to a box can't go now: its alias's host is on the tailnet, and only installed
+    /// Tailscale routes this Mac's own connections there.
+    nonisolated package static let sshNeedsTailscale = "SSH goes over Tailscale, which isn't running on this Mac"
+    /// Boxes whose SSH host can't be reached now for that reason, by link key.
+    @ObservationIgnored package private(set) var sshNoRoute: Set<String> = []
+
+    /// The address an SSH dial went to instead of its alias's host, by link key (nil: the alias's).
+    @ObservationIgnored package private(set) var sshVia: [String: String?] = [:]
 
     /// An enrolled box whose pin left this Mac's book (a Remove cut short, another Kore over the
     /// same folder): its proof can't be checked here, so every dial would end at its challenge.
@@ -1068,6 +1440,7 @@ package final class KoreNetSwitch: NetRouter {
     }
 
     package func watchNode(_ key: String, _ watcher: (@MainActor (NetNodeWire.Node) -> Void)?) { nodeWatchers[key] = watcher }
+    package func watchesNode(_ key: String) -> Bool { nodeWatchers[key] != nil }
     package func watchEnroll(_ key: String, _ watcher: (@MainActor (Bool) -> Void)?) { enrollWatchers[key] = watcher }
 
     package func said(_ node: NetNodeWire.Node, on connection: HostConnection) {
@@ -1102,6 +1475,7 @@ package final class KoreNetSwitch: NetRouter {
             // Its stores were kept under the old device's id: they move to the new one's.
             if connection.alias == old.id.raw { Task { _ = await rekeyer.rekey(connection, to: entry.id, directory: directory) } }
         }
+        learnKeys(entry, book: book(env), readIfMissing: true)
         // U0: a box reached over SSH that isn't on KoreNet yet upgrades (once per state).
         let viaSSH = connection.route.map { !$0.isNet } ?? false
         defer { if viaSSH { upgrades?.reached(connection.alias, fresh: false) } }
@@ -1145,13 +1519,11 @@ package final class KoreNetSwitch: NetRouter {
             // Its enroll over `attach --proto 2` proved this Mac's key there (taken, or re-keyed).
             connection.keyTaken()
             if outcome == .enrolled { connection.ownRouteCameUp() }
-            if directory.all[device.uuidString.lowercased()]?.nodeKey != nil {
-                connection.preferNet()
-            } else if outcome == .enrolled {
-                // The box's KoreNet is off: the link still dials again, over `attach --proto 2`,
-                // so it's this Mac's proven device there (an owner Mac may switch it on).
-                connection.relink("enrolled")
-            }
+            // KoreNet off there, or this Mac's tailnet can't dial it yet (`preferNet` false: it
+            // moves once it can): the link still dials again, over `attach --proto 2`, so it's
+            // this Mac's proven device there (an owner Mac may switch it on).
+            let moving = directory.all[device.uuidString.lowercased()]?.nodeKey != nil && connection.preferNet()
+            if !moving, outcome == .enrolled { connection.relink("enrolled") }
         }
         settled?("enroll \(outcome)")
         enrollWatchers[key]?(outcome == .enrolled || outcome == .already)

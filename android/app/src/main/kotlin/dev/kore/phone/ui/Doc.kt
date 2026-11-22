@@ -10,7 +10,7 @@ import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
 import kotlinx.serialization.json.JsonObject
 
-/** The Mac's render tree (`Block`/`Span`) as styled text: no markdown parser on the phone. */
+/** The render tree (`Block`/`Span`, the Mac's or [Markdown]'s) as one styled text: copies and summaries. */
 object Doc {
     fun render(blocks: List<JsonObject>): CharSequence = SpannableStringBuilder().also { out -> blocks.forEach { block(out, it, "") } }.trimEnd('\n')
 
@@ -64,7 +64,7 @@ object Doc {
             if (s.bool("em")) out.setSpan(StyleSpan(Typeface.ITALIC), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             if (s.bool("strike")) out.setSpan(StrikethroughSpan(), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             if (s.bool("code")) out.setSpan(TypefaceSpan("monospace"), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
-            // Links show as text: nothing on the phone opens them.
+            // Plain text for copying and summaries: a link shows tinted; rendered answers open it ([DocViews]).
             if (s.str("link") != null) out.setSpan(ForegroundColorSpan(K.accent), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
         }
     }

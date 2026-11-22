@@ -93,6 +93,8 @@ package final class Workspace {
             if window !== oldValue, LinkTaps.on { LinkTaps.layout?() }
             guard let window, window !== oldValue else { return }
             terminals.window = window
+            // A box window's link is checked while the window shows.
+            box?.watchScreen(window)
             // Opened quietly (an agent's `--silent`): behind, the window that was key stays key.
             if Self.quietOpens.remove(windowKey) != nil { ArsenalWindows.lower(window) }
             if let closer { NotificationCenter.default.removeObserver(closer) }
@@ -1379,8 +1381,28 @@ package final class Workspace {
         }
     }
 
-    /// A history row's chat while a tab has it open: its logo shows the chat's Arsenal.
-    func openChat(_ session: SessionSummary) -> Chat? { tab(for: session.id, provider: Registry.provider(for: session.agent).id)?.chat }
+    /// A history row's chat while a tab has it open: its logo shows the chat's Arsenal. On a box,
+    /// also by its box chat id (a chat the box lists as closed while a tab here still shows it).
+    func openChat(_ session: SessionSummary) -> Chat? {
+        if let chat = tab(for: session.id, provider: Registry.provider(for: session.agent).id)?.chat { return chat }
+        guard box != nil else { return nil }
+        return tabs.first { $0.agent == nil && ($0.chat?.services as? BoxChatServices)?.chatId == session.id }?.chat
+    }
+
+    /// What a History row's logo shows of Arsenal: its open tab's chat (the logo reads its tier,
+    /// so it follows the tab), else the tier kept for it in `kept` (`ArsenalMemory.all()`, read
+    /// once per list load). `on`: the paired box the row is on.
+    func historyArsenal(_ row: SessionSummary, on alias: String?, kept: [String: ArsenalTier]) -> (live: Chat?, kept: ArsenalTier?) {
+        if let chat = openChat(row) { return (chat, nil) }
+        return (nil, kept[arsenalKey(row, on: alias)])
+    }
+
+    /// Where `ArsenalMemory` keeps a History row's tier: a box's chat (this box window's, or the
+    /// paired box's row, `on`) by its box and id there, else by its CLI and session.
+    func arsenalKey(_ row: SessionSummary, on alias: String?) -> String {
+        if let alias = alias ?? box?.alias { return ArsenalMemory.key(box: alias, chat: row.id) }
+        return ArsenalMemory.key(cli: Registry.provider(for: row.agent).id, session: row.id)
+    }
 
     private func chat(_ session: SessionSummary) -> Chat {
         let chat = Self.chat(session, provider: Registry.provider(for: session.agent), in: folder)

@@ -258,7 +258,7 @@ struct HostClientTests {
         #expect(SSHHosts.parse(config) == ["mybox", "web1", "web2", "gpu"])
         #expect(
             SSHTransport.arguments(alias: "mybox", grant: "laptop") == [
-                "-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", "--", "mybox", "~/.local/bin/kore-host",
+                "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2", "--", "mybox", "~/.local/bin/kore-host",
                 "attach", "--as", "laptop",
             ])
     }

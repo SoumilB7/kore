@@ -64,13 +64,19 @@ struct TailscaleQuitTests {
         var stops: Int { calls.held.withLock { $0.stops } }
     }
 
-    func start(_ mac: Mac, ownSignedIn: Bool = true) async -> (KoreNetSwitch, Feed<String>, URL) {
+    func start(
+        _ mac: Mac, ownSignedIn: Bool = true, waitForChoice: Bool = true, scheduled: Box<[@MainActor () -> Void]>? = nil, looks: Feed<Int>? = nil
+    ) async -> (KoreNetSwitch, Feed<String>, URL) {
         let root = netScratch()
         let defaults = suite(ownSignedIn: ownSignedIn)
         let (net, settled) = netSwitch(defaults, root: root) { mac.env(root: root, defaults: defaults) }
-        net.schedule = { _, _ in {} }
+        net.schedule = { _, work in
+            scheduled?.value.append(work)
+            looks?.send(1)
+            return {}
+        }
         net.set(true)
-        await settled.next { $0 == "chose" }
+        if waitForChoice { await settled.next { $0 == "chose" } }
         return (net, settled, root)
     }
 
@@ -160,12 +166,40 @@ struct TailscaleQuitTests {
         net.set(false)
     }
 
-    /// Kore at login before the app's daemon answers: Kore's own, then the app's node once it's up.
-    @Test func notUpYetAtLoginThenUp() async {
+    /// Kore at login before the app's daemon answers (item 20): looked at again within the grace,
+    /// Kore's own never started, so no second node and no flap; up meanwhile, the app's node.
+    @Test func notUpYetAtLoginWaitsThenTakesTailscale() async {
         let mac = Mac(.missing(.notRunning))
-        let (net, settled, root) = await start(mac)
+        let scheduled = Box<[@MainActor () -> Void]>([])
+        let looks = Feed<Int>()
+        let (net, settled, root) = await start(mac, waitForChoice: false, scheduled: scheduled, looks: looks)
         defer { try? FileManager.default.removeItem(at: root) }
-        #expect(net.state == .sidecar)
+        _ = await looks.next()
+        #expect(net.state == .choosing && mac.sidecars == 0)
+        // Still not answering at the first look: another.
+        scheduled.value.removeFirst()()
+        _ = await looks.next()
+        #expect(net.state == .choosing && mac.sidecars == 0)
+        mac.set(.state(.running))
+        scheduled.value.removeFirst()()
+        await settled.next { $0 == "chose" }
+        #expect(net.state == .installed && mac.sidecars == 0)
+        net.set(false)
+    }
+
+    /// Never up within the grace: Kore's own beside it, as before; the app's node once it's up.
+    @Test func notUpAtAllAfterTheGraceIsKoresOwn() async {
+        let mac = Mac(.missing(.notRunning))
+        let scheduled = Box<[@MainActor () -> Void]>([])
+        let looks = Feed<Int>()
+        let (net, settled, root) = await start(mac, waitForChoice: false, scheduled: scheduled, looks: looks)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for _ in KoreNetSwitch.launchGrace {
+            _ = await looks.next()
+            scheduled.value.removeFirst()()
+        }
+        await settled.next { $0 == "chose" }
+        #expect(net.state == .sidecar && mac.sidecars == 1)
         mac.set(.state(.running))
         net.rechoose("tailscale looked at again")
         await settled.next { $0 == "chose" }

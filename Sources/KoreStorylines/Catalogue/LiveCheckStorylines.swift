@@ -212,11 +212,10 @@ final class LiveBoard: LiveArea {
 
 // MARK: - Arsenal, devices, pickers, zoom, sizes
 
-/// Arsenal on: the tab's corner marks in Arsenal's blue and its logo in its own colours (no
-/// tint), wide and narrow, then off: neither. Read off the window's pixels (ArsenalTabCorners).
+/// Arsenal on: the tab's CLI logo in Arsenal's blue and nothing else of the tab, then off: the
+/// logo's own colours. Read off the window's pixels (ArsenalLogoTint).
 final class LiveArsenal: LiveArea {
-    override class var variants: [Variant] { [.claude] }
-    override class var wraps: Storyline.Type? { ArsenalTabCorners.self }
+    override class var wraps: Storyline.Type? { ArsenalLogoTint.self }
     override func checks() -> [any Step] { [Look(name: "arsenal", frames: 3)] }
 }
 

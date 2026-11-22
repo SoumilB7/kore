@@ -14,8 +14,9 @@ import (
 
 // tsNode is the real node: tsnet with its state sealed in dir.
 type tsNode struct {
-	srv *tsnet.Server
-	lc  *local.Client
+	srv  *tsnet.Server
+	lc   *local.Client
+	stop context.CancelFunc
 }
 
 func startTSNet(dir, hostname string, ephemeral bool, key []byte, logf logger.Logf) (node, error) {
@@ -24,6 +25,9 @@ func startTSNet(dir, hostname string, ephemeral bool, key []byte, logf logger.Lo
 		return nil, err
 	}
 	srv := &tsnet.Server{Dir: dir, Hostname: hostname, Ephemeral: ephemeral, Store: store, Logf: logf, UserLogf: quiet(logf)}
+	if control := testControlURL(); control != "" {
+		srv.ControlURL = control
+	}
 	if err := srv.Start(); err != nil {
 		srv.Close()
 		return nil, fmt.Errorf("tsnet: %w", err)
@@ -33,7 +37,32 @@ func startTSNet(dir, hostname string, ephemeral bool, key []byte, logf logger.Lo
 		srv.Close()
 		return nil, err
 	}
-	return &tsNode{srv: srv, lc: lc}, nil
+	ctx, stop := context.WithCancel(context.Background())
+	n := &tsNode{srv: srv, lc: lc, stop: stop}
+	offer := &signInOffer{grace: signInGrace, ask: lc.StartLoginInteractive}
+	if st, err := lc.Status(ctx); err == nil {
+		offer.started(st.BackendState == ipn.NeedsLogin.String())
+	}
+	go offer.watch(ctx, n.bus)
+	return n, nil
+}
+
+// bus hands each with every state and sign-in page change, from the current state on.
+func (n *tsNode) bus(ctx context.Context, each func(*ipn.Notify) error) error {
+	w, err := n.lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
+	if err != nil {
+		return err
+	}
+	defer w.Close()
+	for {
+		msg, err := w.Next()
+		if err != nil {
+			return err
+		}
+		if err := each(&msg); err != nil {
+			return err
+		}
+	}
 }
 
 // quiet keeps tsnet's user lines (the auth URL among them) off stderr unless logging is on.
@@ -77,4 +106,7 @@ func (n *tsNode) Dial(ctx context.Context, addr string, port int) (net.Conn, err
 
 func (n *tsNode) Logout(ctx context.Context) error { return n.lc.Logout(ctx) }
 
-func (n *tsNode) Close() error { return n.srv.Close() }
+func (n *tsNode) Close() error {
+	n.stop()
+	return n.srv.Close()
+}

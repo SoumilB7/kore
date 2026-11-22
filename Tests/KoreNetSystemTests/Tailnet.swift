@@ -40,8 +40,21 @@ final class SharedTailnet: Sendable {
         /// A box on Kore's own tailnet: its listen is a handoff socket, as `kore-tailnet` gives
         /// (connections still reach it through `greet`).
         var userspace = false
+        /// Its data plane cut (blocked, or gone while its control server still lists it):
+        /// dials to it hang to their bound, its relayed links go quiet.
+        var dark = false
+        /// What other nodes are told of it while its control server lags (nil: as it is).
+        var shown: Bool?
+        /// Deleted in the admin console: gone from every other node's peers (it still runs, signed
+        /// out, for itself).
+        var deleted = false
+        /// Started from its cached state: Running with no login until its control server answers
+        /// (its first status read), which says it's signed out (`answerStale`).
+        var staleRunning = false
         var os: String { kind == .mac ? "macOS" : kind == .box ? "linux" : "android" }
         var online: Bool { state == .running }
+        /// Online as the other nodes' status and bus say.
+        var listed: Bool { shown ?? online }
     }
 
     private struct State {
@@ -49,8 +62,10 @@ final class SharedTailnet: Sendable {
         var buses: [String: [Int: AsyncStream<TailnetEvent>.Continuation]] = [:]
         var nextBus = 0
         /// Every connection's two descriptors' far ends, by node, so a node's death cuts them.
-        var links: [(a: String, b: String, fds: [FDRef])] = []
+        var links: [(a: String, b: String, fds: [FDRef], relay: Relay?)] = []
         var dials = 0
+        /// Box connections go through a relay (`Relay`) that can go quiet as a cut path does.
+        var relays = false
     }
 
     private let state = Mutex(State())
@@ -65,6 +80,36 @@ final class SharedTailnet: Sendable {
     }
 
     func node(_ ip: String) -> Node? { state.withLock { $0.nodes[ip] } }
+
+    /// Box connections from now on are relayed, so a cut can be silent (no end, no answer).
+    func relayBoxes() { state.withLock { $0.relays = true } }
+
+    /// The node's data plane cut while its control server still lists it (iptables on the box,
+    /// a node removed that peers still show): its relayed links go quiet both ways, never ending,
+    /// and a dial to it fails at its bound.
+    func darken(_ ip: String) {
+        let quiet = state.withLock { s -> [Relay] in
+            s.nodes[ip]?.dark = true
+            return s.links.filter { $0.a == ip || $0.b == ip }.compactMap(\.relay)
+        }
+        for relay in quiet { relay.silence() }
+        pulse()
+    }
+
+    /// Its data plane back (links that went quiet stay dead, as a real connection would).
+    func lighten(_ ip: String) {
+        update(ip) { $0.dark = false }
+        pulse()
+    }
+
+    /// Other nodes keep seeing it as they do now (its control server lagging) until `thaw`.
+    func freeze(_ ip: String) { update(ip) { $0.shown = $0.online } }
+
+    /// The control server catches up: every node hears it as it is.
+    func thaw(_ ip: String) {
+        update(ip) { $0.shown = nil }
+        push(changed: ip)
+    }
     func node(named name: String) -> Node? { state.withLock { $0.nodes.values.first { $0.name == name } } }
 
     func update(_ ip: String, _ change: (inout Node) -> Void) {
@@ -94,17 +139,53 @@ final class SharedTailnet: Sendable {
             var selfNode = TailnetStatus.SelfNode(
                 publicKey: me.nodeKey, tailscaleIPs: me.state == .running ? [me.bindIP] : [], userID: me.user, dnsName: me.name + ".tail.ts.net.")
             selfNode.hostName = me.name
-            let peers = me.state == .running ? s.nodes.values.filter { $0.ip != ip }.sorted { $0.ip < $1.ip }.map(Self.peer) : []
+            let peers = me.state == .running ? s.nodes.values.filter { $0.ip != ip && !$0.deleted }.sorted { $0.ip < $1.ip }.map(Self.peer) : []
             // Waiting for its sign-in: the page, as tsnet's status carries it.
             let page = me.state == .needsLogin ? "https://login.example/a/\(me.name)" : nil
             var status = TailnetStatus(backendState: me.state, selfNode: selfNode, peers: peers, authURL: page)
-            if me.state == .running { status.logins[me.user] = "me@example.com" }
+            if me.state == .running, !me.staleRunning { status.logins[me.user] = "me@example.com" }
             return status
         }
     }
 
+    /// The control server answers a node started from its cached state: signed out (removed, or
+    /// its key ran out), waiting for a sign-in. Its bus hears it.
+    func answerStale(_ ip: String) {
+        let was = state.withLock { s -> Bool in
+            guard s.nodes[ip]?.staleRunning == true, s.nodes[ip]?.state == .running else { return false }
+            s.nodes[ip]?.staleRunning = false
+            return true
+        }
+        if was { setState(ip, .needsLogin) }
+    }
+
+    /// Deleted in the admin console while it runs: every other node's control server says it's
+    /// removed (`PeersRemoved`: a node id, no key), its links go quiet both ways (nothing ends
+    /// them), and the node itself waits for a sign-in (its page: kore-tailnet asks for one).
+    func delete(_ ip: String) {
+        let (quiet, buses) = state.withLock { s -> ([Relay], [String: [Int: AsyncStream<TailnetEvent>.Continuation]]) in
+            s.nodes[ip]?.deleted = true
+            s.nodes[ip]?.dark = true
+            s.nodes[ip]?.state = .needsLogin
+            return (s.links.filter { $0.a == ip || $0.b == ip }.compactMap(\.relay), s.buses)
+        }
+        for relay in quiet { relay.silence() }
+        for (owner, list) in buses {
+            let status = status(of: owner)
+            for bus in list.values {
+                if owner == ip {
+                    bus.yield(.state(status.backendState))
+                } else {
+                    bus.yield(.peer(nodeID: 0, key: nil, online: false))
+                }
+                bus.yield(.status(status))
+            }
+        }
+        pulse()
+    }
+
     static func peer(_ n: Node) -> TailnetStatus.Peer {
-        let json = #"{"PublicKey":"\#(n.nodeKey)","TailscaleIPs":["\#(n.ip)"],"Online":\#(n.online),"UserID":\#(n.user),"HostName":"\#(n.name)","OS":"\#(n.os)","CurAddr":"\#(n.ip):41641"}"#
+        let json = #"{"PublicKey":"\#(n.nodeKey)","TailscaleIPs":["\#(n.ip)"],"Online":\#(n.listed),"UserID":\#(n.user),"HostName":"\#(n.name)","OS":"\#(n.os)","CurAddr":"\#(n.ip):41641"}"#
         return try! JSONDecoder().decode(TailnetStatus.Peer.self, from: Data(json.utf8))
     }
 
@@ -143,7 +224,7 @@ final class SharedTailnet: Sendable {
                     bus.yield(.state(status.backendState))
                     bus.yield(.status(status))
                 } else {
-                    bus.yield(.peer(nodeID: 0, key: node?.nodeKey, online: node?.online ?? false))
+                    bus.yield(.peer(nodeID: 0, key: node?.nodeKey, online: node?.listed ?? false))
                     bus.yield(.status(status))
                 }
             }
@@ -212,13 +293,24 @@ final class SharedTailnet: Sendable {
         let (me, target) = state.withLock { ($0.nodes[ip], $0.nodes[address]) }
         guard let me, me.state == .running else { throw TailnetError.notRunning(me?.state ?? .noState) }
         guard let target, target.online else { throw TailnetError.sidecar("\(address) is offline") }
-        let (client, server) = try Self.tcpPair()
+        // A cut path: the connect runs out its bound.
+        if target.dark || me.dark { throw SocketError.timedOut }
+        let relaying = target.kind == .box && state.withLock { $0.relays }
+        var (client, server) = try Self.tcpPair()
+        var relay: Relay?
+        if relaying {
+            // The Mac's end ↔ relay ↔ the box's end.
+            let (inner, boxEnd) = try Self.tcpPair()
+            relay = Relay(mac: server, box: inner, pulse: pulse)
+            server = boxEnd
+        }
         // Both ends, by descriptor and socket identity, to cut them should either node die.
         let refs = [FDRef(client), FDRef(server)].compactMap { $0 }
         state.withLock {
-            $0.links.append((ip, address, refs))
+            $0.links.append((ip, address, refs, relay))
             $0.dials += 1
         }
+        relay?.start()
         defer { pulse() }
         switch target.kind {
         case .mac:
@@ -269,7 +361,11 @@ final class SharedTailnet: Sendable {
             s.links.removeAll { $0.a == ip || $0.b == ip }
             let h = s.nodes[ip]?.handoffs ?? []
             s.nodes[ip]?.handoffs = []
-            return (hit.flatMap(\.fds), h)
+            // A quiet link to a box that dies: only the box's end goes; the dialler hears nothing.
+            let fds = hit.flatMap { link -> [FDRef] in
+                link.relay?.silenced == true && link.b == ip ? Array(link.fds.dropFirst()) : link.fds
+            }
+            return (fds, h)
         }
         // Shut, never closed: the descriptors are their owners' to close.
         for ref in gone { ref.shut() }
@@ -282,6 +378,7 @@ final class SharedTailnet: Sendable {
     func closeAll() {
         let (refs, handoffs, buses) = state.withLock { s -> ([FDRef], [Int32], [AsyncStream<TailnetEvent>.Continuation]) in
             let all = s.links.flatMap(\.fds)
+            for relay in s.links.compactMap(\.relay) { relay.silence() }
             let handoffs = s.nodes.values.flatMap(\.handoffs)
             let buses = s.buses.values.flatMap(\.values)
             s.links = []
@@ -337,9 +434,79 @@ final class NodeNet: Tailnet {
         self.ip = ip
     }
 
-    func status() throws -> TailnetStatus { net.status(of: ip) }
+    func status() throws -> TailnetStatus {
+        let status = net.status(of: ip)
+        // Started from its cached state: its control server answers after this first look.
+        if net.node(ip)?.staleRunning == true {
+            let (net, ip) = (net, ip)
+            DispatchQueue.global().async { net.answerStale(ip) }
+        }
+        return status
+    }
     func whois(_ address: String) throws -> TailnetWhoIs { try net.whois(address, from: ip) }
     func events() -> AsyncStream<TailnetEvent> { net.events(of: ip) }
     func listen(port: UInt16) throws -> [TailnetListenSocket] { try net.listen(ip) }
     func dial(_ address: String, port: UInt16) throws -> Int32 { try net.dial(from: ip, to: address) }
+}
+
+/// Bytes between a dialler and a box, both ways, until either end goes; once silenced, whatever
+/// comes is read and dropped and an end on the box's side isn't passed on (a cut path: the
+/// dialler's connection stays up and hears nothing, as over a real tailnet with no RST).
+final class Relay: Sendable {
+    private let mac: Int32
+    private let box: Int32
+    private let pulse: @Sendable () -> Void
+    private let quiet = Mutex(false)
+
+    init(mac: Int32, box: Int32, pulse: @escaping @Sendable () -> Void) {
+        self.mac = mac
+        self.box = box
+        self.pulse = pulse
+    }
+
+    var silenced: Bool { quiet.withLock { $0 } }
+    func silence() { quiet.withLock { $0 = true } }
+
+    func start() {
+        let thread = Thread { [self] in run() }
+        thread.stackSize = 256 << 10
+        thread.start()
+    }
+
+    private func run() {
+        var buffer = [UInt8](repeating: 0, count: 64 << 10)
+        var boxOpen = true
+        defer {
+            Sockets.closeFD(mac)
+            Sockets.closeFD(box)
+        }
+        while true {
+            var fds = [pollfd(fd: mac, events: Int16(POLLIN), revents: 0)]
+            if boxOpen { fds.append(pollfd(fd: box, events: Int16(POLLIN), revents: 0)) }
+            guard poll(&fds, nfds_t(fds.count), 200) >= 0 else { return }
+            if fds[0].revents != 0 {
+                let n = read(mac, &buffer, buffer.count)
+                if n <= 0 {
+                    // The dialler closed: the box hears it unless the path is cut.
+                    if !silenced { Sockets.shutdownBoth(box) }
+                    return
+                }
+                if !silenced, boxOpen { _ = buffer.withUnsafeBytes { write(box, $0.baseAddress, n) } }
+                pulse()
+            }
+            if boxOpen, fds.count > 1, fds[1].revents != 0 {
+                let n = read(box, &buffer, buffer.count)
+                if n <= 0 {
+                    boxOpen = false
+                    if !silenced {
+                        Sockets.shutdownBoth(mac)
+                        return
+                    }
+                    continue
+                }
+                if !silenced { _ = buffer.withUnsafeBytes { write(mac, $0.baseAddress, n) } }
+                pulse()
+            }
+        }
+    }
 }

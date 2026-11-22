@@ -103,10 +103,16 @@ package final class HostDaemon {
     /// Kore's own as last heard (`BoxOwnTailnet.swift`), its key's expiry timer, and its node
     /// while it signs in beside running Tailscale.
     lazy var ownRecord: BoxOwnRecord? = BoxOwnRecord.read(paths)
+    /// Installed Tailscale's node key as last seen up here: still this box's while Kore's own
+    /// carries it (the Mac dials it again once Tailscale is back).
+    var installedNodeKey: String?
     var ownExpiryTimer: DispatchWorkItem?
     var ownStandby: (@Sendable () -> Void)?
     var ownStandbyWatch: Task<Void, Never>?
     var ownPreparing = false
+    /// Port 22 on Kore's own node while it carries the box (`OwnSSHForward`); tests: none.
+    var ownSSH: OwnSSHForward?
+    package var forwardsSSH = !KoreLog.isTestProcess
     /// Tests: each choice applied, and each Kore's own tailnet stopped.
     nonisolated(unsafe) package static var tailnetChosen: ((String) -> Void)?
     /// KoreNet's port (tests take the kernel's pick, 0).
@@ -529,6 +535,9 @@ package final class HostDaemon {
         let connection = LinkClient(wire: wire, host: self, device: device, peer: peer, route: route)
         connections.append(connection)
         connection.begin()
+        // Installed Tailscale's peers looked at again (one LocalAPI read): Kore's own node removed
+        // in the admin console meanwhile is heard here (`ownStillListed`), with no bus held.
+        if route == .tailnet, net?.userspace == false, ownRecord?.own.signedIn == true { net?.rebind() }
     }
 
     /// `net.sock` for `attach --proto 2` always; the tailnet port while the box is on KoreNet.
@@ -596,9 +605,16 @@ package final class HostDaemon {
         case .kore(let tailnet, let alive, let stop, let beside):
             koreTailnet = (alive, stop)
             net.join(tailnet, userspace: true)
+            if forwardsSSH {
+                let forward = OwnSSHForward(tailnet: tailnet)
+                ownSSH = forward
+                forward.start()
+            }
             HostJournal.note("korenet on", ["tailnet": "kore", "beside": beside == nil ? "no" : "tailscale"])
             Self.tailnetChosen?("kore")
-            if let beside, let box = boxTailnet { watchBeside(box, beside) }
+            // Beside a stopped Tailscale its bus and socket; with none installed its socket's
+            // folder too (Tailscale installed later takes over, one node at a time).
+            if let box = boxTailnet, !box.forced { watchBeside(box, beside) }
         case .unavailable(let why):
             net.unavailable(why)
             HostJournal.note("korenet tailnet unavailable", ["reason": why])
@@ -612,9 +628,9 @@ package final class HostDaemon {
     /// Its looks' spacing (tests: at once).
     package var besideWait: @Sendable (Int) -> TimeInterval = TailscaleBesideWatch.wait
 
-    private func watchBeside(_ box: BoxTailnet, _ local: any Tailnet) {
+    private func watchBeside(_ box: BoxTailnet, _ local: (any Tailnet)?) {
         besideWatch?.stop()
-        let watch = TailscaleBesideWatch(installed: box.installed, after: besideWait) { [weak self] in
+        let watch = TailscaleBesideWatch(installed: box.installed, after: besideWait, appears: box.appears) { [weak self] in
             DispatchQueue.main.async { MainActor.assumeIsolated { self?.chooseTailnetAgain("tailscale up again") } }
         }
         besideWatch = watch
@@ -626,6 +642,9 @@ package final class HostDaemon {
     @discardableResult
     package func installedTailscaleWentDown() -> Bool {
         guard let box = boxTailnet, box.helper() != nil, !box.forced, config.netOn, net?.tailnet != nil else { return false }
+        // Kore's own takes over even when it was never signed in: only a running node has a
+        // sign-in page for the row's "Sign in", and once signed in it carries the box. Tailscale
+        // back, the box moves back at once (`appears`).
         chooseTailnetAgain("tailscale went down")
         return true
     }
@@ -638,14 +657,19 @@ package final class HostDaemon {
         HostJournal.note("korenet choose again", ["why": why])
         besideWatch?.stop()
         besideWatch = nil
+        // `restart`, never `quit`, and while the old node still carries it: the box is back within
+        // seconds on its other node, and Macs and phones dial again from their shortest wait (a
+        // `quit` reads asleep: minutes).
+        for connection in connections where connection.route == .tailnet && connection.peer != nil { connection.end(.restart) }
         net.leave()
         stopKoreTailnet()
-        for connection in connections where connection.route == .tailnet && connection.peer != nil { connection.end(.quit) }
         startNet()
     }
 
     /// Kore's own tailnet ends (off the main thread: its stop is a round trip on its socket).
     private func stopKoreTailnet(wait: Bool = false) {
+        ownSSH?.stop()
+        ownSSH = nil
         guard let kore = koreTailnet else { return }
         koreTailnet = nil
         if wait {

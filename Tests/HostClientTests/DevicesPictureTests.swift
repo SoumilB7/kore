@@ -87,6 +87,48 @@ struct DevicesPictureTests {
         #expect(DevicesWords.macDetail(expired) == DevicesWords.ownOut)
     }
 
+    /// The first page's line (owner, 0.3.8): this Mac's or a box's Kore's tailnet not signed in →
+    /// one line with Sign in, and the icon's needs-you dot; signed in → no line, no dot.
+    @Test func koresTailnetOnTheFirstPage() {
+        let status = Self.status(peers: [Self.peer("nodekey:box", name: "mybox")])
+        func mac(_ state: NetState, _ status: TailnetStatus?, own: NetNodeWire.Own?, ownSignIn: String? = nil, signingIn: Bool = false) -> DevicesPicture {
+            DevicesPicture.make(
+                net: NetFacts(on: true, state: state, status: status, ownSignIn: ownSignIn, own: own), macName: "MacBook", boxes: [], phones: [], addUntil: nil,
+                refusals: [], signingIn: signingIn, nudge: false, now: Self.now)
+        }
+        let notSignedIn = OwnCue("Kore's tailnet: not signed in", .signIn)
+        // The Mac's node, never signed in; beside running Tailscale, never signed in; expired.
+        let node = mac(.sidecar, Self.status(.needsLogin), own: .signedOut(.never))
+        #expect(DevicesWords.macCue(node, signedInNow: false) == notSignedIn && Self.look(node).dot == .accent)
+        let beside = mac(.installed, status, own: .signedOut(.never, page: "https://p"), ownSignIn: "https://p")
+        #expect(DevicesWords.macCue(beside, signedInNow: false) == notSignedIn && Self.look(beside).dot == .accent)
+        let expired = mac(.installed, status, own: .signedOut(.expired))
+        #expect(DevicesWords.macCue(expired, signedInNow: false) == OwnCue("Kore's tailnet: signed out · key expired", .signIn))
+        #expect(Self.look(expired) == NetIconLook(dimmed: false, dot: .accent, line: "Kore's tailnet signed out on this Mac"))
+        // Signing in: the line follows it, Cancel on it; a moment after: "signed in as …"; then nothing.
+        #expect(DevicesWords.macCue(mac(.sidecar, Self.status(.needsLogin), own: .signedOut(.never), signingIn: true), signedInNow: false)?.action == .cancel)
+        let signedIn = mac(.installed, status, own: .signedIn("me@x.com"))
+        #expect(DevicesWords.macCue(signedIn, signedInNow: true) == OwnCue("Kore's tailnet: signed in as me@x.com", nil))
+        #expect(DevicesWords.macCue(signedIn, signedInNow: false) == nil && Self.look(signedIn).dot != .accent)
+        #expect(DevicesWords.macCue(Self.picture(on: false), signedInNow: false) == nil)
+        // A box: NeedsLogin with its page → line + Sign in, the icon's dot names it; taken
+        // offline → nothing; followed → the follow's line; signed in → nothing.
+        var box = Self.box()
+        box.entry?.own = .signedOut(.never, page: "https://login.tailscale.com/a/box")
+        var picture = Self.picture(status: status, boxes: [box])
+        #expect(DevicesWords.boxCue(picture.devices[0]) == notSignedIn)
+        #expect(Self.look(picture) == NetIconLook(dimmed: false, dot: .accent, line: "Kore's tailnet signed out on mybox"))
+        box.paused = true
+        #expect(DevicesWords.boxCue(Self.picture(status: status, boxes: [box]).devices[0]) == nil)
+        box.paused = false
+        box.ownStep = "Kore's tailnet on mybox · finish signing in, it's open in your browser"
+        #expect(DevicesWords.boxCue(Self.picture(status: status, boxes: [box]).devices[0]) == OwnCue(box.ownStep!, nil))
+        box.ownStep = nil
+        box.entry?.own = .signedIn("me@x.com")
+        picture = Self.picture(status: status, boxes: [box])
+        #expect(DevicesWords.boxCue(picture.devices[0]) == nil && Self.look(picture).dot != .accent)
+    }
+
     @Test func allConnectedIsQuiet() {
         let status = Self.status(peers: [Self.peer("nodekey:box", name: "mybox")])
         let picture = Self.picture(status: status, boxes: [Self.box()], phones: [Self.phone])
@@ -223,7 +265,7 @@ struct DevicesPictureTests {
         let needsLogin = Self.status(.needsLogin, authURL: "https://login.tailscale.com/a/1f2e")
         let a = Self.picture(state: .sidecar, status: needsLogin)
         #expect(a.net == .notJoined && !a.net.adds)
-        #expect(Self.look(a) == NetIconLook(dimmed: true, dot: nil, line: "Sign in to Kore's tailnet"))
+        #expect(Self.look(a) == NetIconLook(dimmed: true, dot: .accent, line: "Sign in to Kore's tailnet"))
         let b = Self.picture(state: .sidecar, status: needsLogin, signingIn: true)
         #expect(b.signingIn && Self.look(b).line == "Finish signing in — it's open in your browser")
         let c = Self.picture(state: .sidecar, status: Self.status(), signingIn: true, nudge: true)

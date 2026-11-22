@@ -118,6 +118,15 @@ final class NetRig {
     /// `pinned` false: the device's own book doesn't hold the box (it hangs up at the challenge).
     func dial(_ device: Device, route: Binding.Route = .tailnet, whois: TailnetWhoIs? = nil, enroll: NetControl.Enroll? = nil, pinned: Bool = true) throws -> Dialled {
         let (a, b) = try Sockets.pair()
+        let session = try client(device, fd: a, route: route, enroll: enroll, pinned: pinned)
+        let who = whois ?? FakeTailnet.who(key: device.nodeKey)
+        let facts = route == .ssh ? NetPeerFacts.ssh : HostNet.facts(who)
+        net.greet(b, route: route, facts: facts, whois: route == .ssh ? nil : who)
+        return session
+    }
+
+    /// The device's end of a link on `fd` (connected however the test likes: a real port).
+    func client(_ device: Device, fd a: Int32, route: Binding.Route = .tailnet, enroll: NetControl.Enroll? = nil, pinned: Bool = true) throws -> Dialled {
         let book = DeviceBook(url: rig.root.appendingPathComponent("macs/\(device.id.uuidString).json"))
         var box = boxRecord
         if route == .ssh { box.nodeKeys = [Binding.Route.sshNodeKey] }
@@ -127,11 +136,7 @@ final class NetRig {
         let local = NetLocal(device: device.id, kind: device.kind, nodeKey: own, signer: device.key)
         var setup = NetSession.Client(local: local, route: route, peer: peer, book: book, server: identity.device, service: "link")
         setup.enroll = enroll
-        let session = Dialled(NetSession(fd: a, role: .client(setup), clock: { [clock] in clock.now }))
-        let who = whois ?? FakeTailnet.who(key: device.nodeKey)
-        let facts = route == .ssh ? NetPeerFacts.ssh : HostNet.facts(who)
-        net.greet(b, route: route, facts: facts, whois: route == .ssh ? nil : who)
-        return session
+        return Dialled(NetSession(fd: a, role: .client(setup), clock: { [clock] in clock.now }))
     }
 }
 

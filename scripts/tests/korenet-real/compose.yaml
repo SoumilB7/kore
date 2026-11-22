@@ -1,0 +1,40 @@
+# The rig's control plane: Headscale (control) and one DERP relay, on the rig's own network.
+# Everything is labelled com.kore.rig=1; run.sh removes only what carries that label. The rig
+# stays within 4 CPUs and 4 GB: these two 0.5 CPU / 256 MB, each box 1.5 CPU / 1 GB, two boxes at most.
+name: kore-rig
+services:
+  headscale:
+    image: headscale/headscale:latest
+    command: serve
+    labels: [com.kore.rig=1]
+    cpus: 0.5
+    mem_limit: 256m
+    volumes:
+      - ./headscale:/etc/headscale:ro
+    tmpfs:
+      - /var/lib/headscale
+      - /var/run/headscale
+    # The Mac's own nodes (its userspace tailscaled, Kore's kore-tailnet) reach it here.
+    ports: ["127.0.0.1:18080:8080"]
+    networks: [rig]
+  derper:
+    image: kore-rig-box:1
+    entrypoint: ["/usr/local/bin/derper", "-a", ":3340", "-certmode", "manual", "-certdir", "/rig/certs",
+                 "-hostname", "localhost", "-stun=false", "-http-port", "-1"]
+    labels: [com.kore.rig=1]
+    cpus: 0.5
+    mem_limit: 256m
+    volumes:
+      - ${RIG_RUN:?}/certs:/rig/certs:ro
+    # One region for every node: "localhost:13340" is this port on the Mac, and a socat forward
+    # to derper:3340 inside each box (rig-forward.service).
+    ports: ["127.0.0.1:13340:3340"]
+    networks: [rig]
+networks:
+  rig:
+    labels: [com.kore.rig=1]
+    enable_ipv6: true
+    ipam:
+      config:
+        - subnet: 172.30.77.0/24
+        - subnet: fd00:6b6f:7265::/64

@@ -34,12 +34,19 @@ package protocol NetRouter: AnyObject {
     /// The box said `bye unknown` to this Mac over KoreNet and has no SSH route: the line saying
     /// what to run there; nil when SSH can still reach it.
     func oldKeyOnNet(_ connection: HostConnection) -> String?
+    /// A known node of the box other than the one its link is on is online, as last heard.
+    func otherNodeOnline(_ connection: HostConnection) -> Bool
+    /// Whether `transport(for:)` would dial now, as last heard (this Mac's tailnet running, a
+    /// node of the box known): cheap, nothing changes.
+    func canDial(_ connection: HostConnection) -> Bool
 }
 
 extension NetRouter {
     package func sshTransport(for connection: HostConnection) -> (any HostTransport)? { nil }
     package func forgotten(_ connection: HostConnection) -> Bool { false }
     package func oldKeyOnNet(_ connection: HostConnection) -> String? { nil }
+    package func otherNodeOnline(_ connection: HostConnection) -> Bool { false }
+    package func canDial(_ connection: HostConnection) -> Bool { true }
 }
 
 extension HostConnection {

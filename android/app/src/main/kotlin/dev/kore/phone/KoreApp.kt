@@ -42,6 +42,15 @@ class KoreApp : Application() {
     }
 
     private var started = 0
+    /**
+     * Kore sent the owner to the camera or a picker for a result: off screen meanwhile is a short
+     * trip, not leaving, so the links stay up through it ([PICK_GRACE_MS]) and nothing reconnects
+     * on the way back. Cleared when a Kore screen shows again.
+     */
+    @Volatile private var picking = false
+
+    /** Called just before opening the camera, the photo picker or the file picker. */
+    fun awayForPick() { picking = true }
     private val main = Handler(Looper.getMainLooper())
     /** Off screen for a moment (a rotation, a hop between screens) isn't off screen. */
     private val offScreen = Runnable {
@@ -74,6 +83,7 @@ class KoreApp : Application() {
             override fun onActivityPostCreated(a: Activity, b: Bundle?) = dev.kore.phone.ui.fitBars(a)
             override fun onActivityStarted(a: Activity) {
                 if (started++ == 0) {
+                    picking = false
                     main.removeCallbacks(offScreen)
                     log.info("screen", "on" to true)
                     mesh.onScreen(true)
@@ -87,7 +97,7 @@ class KoreApp : Application() {
             override fun onActivityPaused(a: Activity) { if (front?.get() === a) front = null }
             override fun onActivityStopped(a: Activity) {
                 started = maxOf(0, started - 1)
-                if (started == 0) main.postDelayed(offScreen, OFF_SCREEN_GRACE_MS)
+                if (started == 0) main.postDelayed(offScreen, if (picking) PICK_GRACE_MS else OFF_SCREEN_GRACE_MS)
             }
             override fun onActivitySaveInstanceState(a: Activity, b: Bundle) = Unit
             override fun onActivityDestroyed(a: Activity) = Unit
@@ -96,6 +106,8 @@ class KoreApp : Application() {
 
     companion object {
         const val OFF_SCREEN_GRACE_MS = 5_000L
+        /** Off screen in the camera or a picker Kore opened: longer than a photo takes; past it the link goes as usual. */
+        const val PICK_GRACE_MS = 120_000L
     }
 }
 

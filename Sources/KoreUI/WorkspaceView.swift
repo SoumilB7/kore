@@ -430,6 +430,8 @@ struct TabBar: View {
                 .truncationMode(.middle)
                 .layoutPriority(-1)
                 .help(workspace.box?.label ?? workspace.folder.path)
+            // Kore's tailnet of this window's device not signed in: one quiet line, Sign in on it.
+            OwnCueLine(box: workspace.box?.alias, story: StoryID.Net.titleCue(workspace.box?.alias)).layoutPriority(-1)
             // A Mac folder synced with a box folder that has chats open there: one quiet line.
             if let paired = workspace.paired { PairedBoxCue(paired: paired) }
             if let chat = workspace.activeTab.chat {
@@ -1194,7 +1196,7 @@ private struct GhostTab: View {
 
     var body: some View {
         HStack(spacing: Space.md) {
-            ProviderLogo(provider: chat.provider, size: Size.logoTab)
+            ChatLogo(chat: chat, size: Size.logoTab)
             Text(chat.title).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(1)
             Spacer(minLength: 0)
         }
@@ -1293,10 +1295,6 @@ private struct TabItem: View {
                     .allowsHitTesting(false)
                     .storyMark(storyKey.part(.selected))
             }
-        }
-        .overlay {
-            // Its chat has Arsenal on: the tab takes the option popups' corners, in Arsenal's blue.
-            if tab.agent == nil, let chat = tab.chat { ArsenalCorners(chat: chat, story: storyKey) }
         }
         .overlay {
             if let color = groupTarget {
@@ -1568,16 +1566,16 @@ private struct TabMark: View {
             } else if running, tab.agent == nil, TabWork.kind(chat) == .background {
                 // Only background commands run: ">_", the amber point on it while an approval waits.
                 let needsYou = !chat.approvals.pending.isEmpty
-                BackgroundPrompt(provider: chat.provider, needsYou: needsYou)
+                BackgroundPrompt(provider: chat.provider, needsYou: needsYou, arsenal: chat.arsenal)
                     .storyMark(story.part(.background))
                     .overlay { if needsYou { Color.clear.storyMark(story.part(.needsYou)) } }
             } else if running {
                 // The system spinner is grey: multiplied, it takes the CLI's colour.
                 ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
-                    .colorMultiply(WorkingSpinner.tint(chat.provider))
+                    .colorMultiply(WorkingSpinner.tint(chat.provider, arsenal: chat.arsenal))
                     .storyMark(story.part(.working))
             } else {
-                ProviderLogo(provider: chat.provider, size: Size.logoTab)
+                ChatLogo(chat: chat, size: Size.logoTab, story: story)
             }
         } else if let board = tab.board {
             BoardMark(board: board, active: active, story: story)
@@ -1605,12 +1603,12 @@ private struct BoardMark: View {
             let running = board.orderedChats.filter { TabWork.running($0) }
             if running.allSatisfy({ TabWork.kind($0) == .background }) {
                 // Every running chat only waits on background commands.
-                BackgroundPrompt(provider: running.first?.provider ?? .claude)
+                BackgroundPrompt(provider: running.first?.provider ?? .claude, arsenal: running.first?.arsenal)
                     .storyMark(story.part(.background))
             } else {
                 let lead = running.first { TabWork.kind($0) == .working }
                 ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
-                    .colorMultiply(WorkingSpinner.tint(lead?.provider ?? .claude))
+                    .colorMultiply(WorkingSpinner.tint(lead?.provider ?? .claude, arsenal: lead?.arsenal))
                     .storyMark(story.part(.working))
             }
         case .stuck:

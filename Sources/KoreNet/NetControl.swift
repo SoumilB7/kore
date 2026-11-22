@@ -161,6 +161,9 @@ package enum NetControl: Equatable, Sendable {
         package static let off = "off"
         /// The Mac is going to sleep: back when it wakes.
         package static let sleep = "sleep"
+        /// The Mac moves to another tailnet node (Tailscale started or stopped there): back in
+        /// seconds on the new one (a phone tries again from its quick waits).
+        package static let restart = "restart"
         package static let service = "service"
         package static let version = "version"
         package static let timeout = "timeout"

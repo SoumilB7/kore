@@ -335,6 +335,41 @@ struct KoreNetSystemTests {
         }
     }
 
+    /// The owner's log (0.3.8, 09:16): Sign in pressed while Kore's own is the Mac's node, then
+    /// Tailscale comes up before the browser's sign-in is done. Kore's own goes on running beside
+    /// it (the same node, its page the one opened), the line and the icon's needs-you dot stay
+    /// until it's signed in; then it stops, Tailscale carrying the Mac. One page, never a second.
+    @Test func signInWhileTailscaleComesUpKeepsKoresOwnUntilSignedIn() async throws {
+        try await play("S21b Sign in kept running across Tailscale coming up") { w in
+            var opened: [URL] = []
+            let openURL = Devices.shared.openURL
+            Devices.shared.openURL = { opened.append($0) }
+            defer { Devices.shared.openURL = openURL }
+            w.net.setState(w.mac.installedIP, .stopped)
+            await w.koreNetOn()
+            await w.step("Kore's own is the Mac's node, not signed in", .event("first run"), until: {
+                w.mac.switcher.state == .sidecar && Devices.shared.look().line == DevicesWords.signIn && Devices.shared.look().dot == .accent
+                    && Devices.shared.macCue()?.action == .signIn
+            }) {}
+            await w.step("Sign in pressed", .event("sign in"), until: { opened.count == 1 && Devices.shared.signingIn }) {
+                if let cue = Devices.shared.macCue() { Devices.shared.cueAction(cue, box: nil) }
+            }
+            await w.step("Tailscale comes up mid-sign-in", .event("Tailscale on"), until: {
+                w.mac.switcher.state == .installed && Devices.shared.picture().ownSignIn
+            }) { w.net.setState(w.mac.installedIP, .running) }
+            #expect(w.net.node(w.mac.ownIP)?.state == .needsLogin, "Kore's own stopped mid-sign-in: \(String(describing: w.net.node(w.mac.ownIP)?.state))")
+            #expect(Devices.shared.signingIn, "the sign-in ended without signing in")
+            #expect(Devices.shared.look().dot == .accent && Devices.shared.macCue()?.action == .cancel)
+            await w.step("signed in in the browser, Kore's own stops", .event("signed in"), until: {
+                let picture = Devices.shared.picture()
+                return !Devices.shared.signingIn && picture.own?.signedIn == true && !picture.ownSignIn && w.net.node(w.mac.ownIP)?.state == .stopped
+                    && w.mac.switcher.state == .installed
+            }) { w.mac.signInOwnTailnet() }
+            #expect(opened.count == 1, "\(opened)")
+            #expect(Devices.shared.look().dot != .accent)
+        }
+    }
+
     /// No Tailscale anywhere: the Mac's first run signs Kore's own in, the box's Kore's own
     /// signs in from its row (its page opens on the Mac), and the box, the phone and the links
     /// all run on it. Signed out later (logged out, removed in the admin console), on the box or

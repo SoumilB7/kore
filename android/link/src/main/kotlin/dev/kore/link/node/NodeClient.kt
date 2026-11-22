@@ -271,6 +271,9 @@ class NodeClient(
             Internal.Enrolling -> machine.on(NodeMachine.Event.Enrolling, clock())
             is Internal.Record -> {
                 val was = deviceFlow.value.paused
+                // A node key it didn't have (a box's other node: Kore's own beside Tailscale, or the
+                // one it moved to): an Away node is dialled again now, on the new key too.
+                val newKey = event.record.nodeKeys.any { it !in deviceFlow.value.nodeKeys }
                 if (event.record != deviceFlow.value) deviceFlow.value = event.record
                 if (event.record.paused && !was) {
                     session?.close()
@@ -280,6 +283,11 @@ class NodeClient(
                     machine.on(NodeMachine.Event.Ended("paused"), clock())
                 } else if (!event.record.paused && was) {
                     machine.on(NodeMachine.Event.Trigger, clock())
+                } else if (newKey && !event.record.paused && !parked) {
+                    val s = stateFlow.value
+                    if (s is NodeMachine.State.Away && s.why != NodeMachine.AwayWhy.OFF && s.why != NodeMachine.AwayWhy.NET_OFF) {
+                        machine.on(NodeMachine.Event.Trigger, clock())
+                    }
                 }
             }
             Internal.Parked -> if (session != null) {

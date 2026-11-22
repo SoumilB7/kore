@@ -1,0 +1,66 @@
+{
+ "t": "tx.page",
+ "chatId": "6E1F0C2A-0000-4000-8000-000000000011",
+ "txRev": 1,
+ "hasEarlier": false,
+ "turns": [
+  {
+   "id": "turn-1",
+   "finished": true,
+   "outcome": "completed",
+   "startedAt": 1794869124216,
+   "duration": 31.0
+  },
+  {
+   "id": "turn-2",
+   "finished": true,
+   "outcome": "completed",
+   "startedAt": 1794869664216,
+   "duration": 12.0
+  }
+ ],
+ "entries": [
+  {
+   "id": "B1",
+   "kind": "user",
+   "text": "Which box should I buy for the chats and Next.js builds?",
+   "done": true,
+   "inTurn": false,
+   "isError": false,
+   "stopped": false,
+   "textLen": 56
+  },
+  {
+   "id": "B2",
+   "kind": "answer",
+   "text": "Here's what fits your workload (several AI chats plus Next.js builds, running 24/7), compared with your current box (2 slow cores, 3.4 GB):\n\n| Pick | Example | CPU vs now | RAM | Idle power | Price (India, approx.) |\n|---|---|---|---|---|---|\n| **Best value** | **ASUS NUC 14 Essential (Intel N150)** | ~3–4× faster (4 cores) | 16 GB DDR5 | ~6 W | **~₹18–20k** |\n| **Big jump** | Ryzen 7 **5825U / 7735HS** mini PC (e.g. GMKtec Nucbox M5 Plus) | ~8–10× (8 cores / 16 threads) | 16–32 GB | ~8–10 W | ~₹35–55k |\n| **Top pick for builds** | Ryzen 7 **8745HS / 8845HS** (Beelink SER8, Minisforum UM880) | ~12× | 32 GB | 7–10 W | ~₹55–75k |\n\n**My recommendation:**\n- **If it's mostly chats with an occasional build:** the **N150 NUC with 16 GB**. It's cheap, nearly silent, uses almost no power, and holds about 4× the chats. Builds take minutes instead of crashing. The catch: it has **one RAM slot, 16 GB maximum**.\n- **If you build often or run several builds at once:** the **8745HS with 32 GB**.",
+   "done": true,
+   "inTurn": false,
+   "isError": false,
+   "stopped": false,
+   "textLen": 995,
+   "turn": "turn-1"
+  },
+  {
+   "id": "B3",
+   "kind": "user",
+   "text": "And how do I set it up?",
+   "done": true,
+   "inTurn": false,
+   "isError": false,
+   "stopped": false,
+   "textLen": 23
+  },
+  {
+   "id": "B4",
+   "kind": "answer",
+   "text": "## Setting it up\n\n1. Flash **Ubuntu 24.04** to a USB stick.\n2. Install, then:\n   - enable *SSH* with `sudo systemctl enable --now ssh`\n   - add the box to Kore (~~Tailscale~~ Kore's own tailnet)\n\n> **Tip:** keep the old box as a ~~backup~~ build cache.\n\n```sh\ncurl -fsSL https://kore.dev/install | sh\n```\n\n---\n\n| Step | Time |\n|:--|--:|\n| Install | ~20 min |\n| First build | `4m 10s` |\n\nSee [the setup guide](https://kore.dev/docs/box) for more.",
+   "done": true,
+   "inTurn": false,
+   "isError": false,
+   "stopped": false,
+   "textLen": 445,
+   "turn": "turn-2"
+  }
+ ]
+}

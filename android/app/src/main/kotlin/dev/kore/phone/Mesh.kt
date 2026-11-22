@@ -80,9 +80,14 @@ class Mesh(private val app: KoreApp) {
                 app.log.info("tailnet", "state" to if (signedIn) "up" else "signed-out")
                 troubled = false
                 nodesFlow.value.forEach { it.start(); it.post(if (signedIn) NodeMachine.Event.SignedIn else NodeMachine.Event.SignedOut) }
+                // A node waiting for its peer hears it come online (the tailnet's bus, no poll).
+                if (peerFollow == null) peerFollow = peerWatch.follow(nodes)
             },
             onDown = {
                 app.log.info("tailnet", "state" to "down")
+                peerFollow?.cancel()
+                peerFollow = null
+                peerWatch.stop()
                 nodesFlow.value.forEach(NodeClient::stop)
             },
             onTrouble = { e ->
@@ -94,6 +99,8 @@ class Mesh(private val app: KoreApp) {
             })
     }
     @Volatile private var troubled = false
+    private val peerWatch by lazy { dev.kore.link.node.PeerWatch(tailnet, app.scope, { nodesFlow.value }) }
+    @Volatile private var peerFollow: kotlinx.coroutines.Job? = null
 
     private val nodesFlow = MutableStateFlow<List<NodeClient>>(emptyList())
     /** One client per known device, Macs first. */

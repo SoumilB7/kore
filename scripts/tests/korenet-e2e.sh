@@ -15,7 +15,7 @@
 # link idle 30 s while the box daemon's RSS and CPU are read from /proc. Everything on the box and
 # the scratch folder goes at the end, pass or fail.
 #
-# KORE_E2E_BOX (mybox), KORE_E2E_IDLE (30), KORE_E2E_HOST_BIN (a kore-host already built for the
+# KORE_E2E_BOX (mybox), KORE_E2E_SSH_CONFIG (an ssh config for -F), KORE_E2E_KEEP_LOG (the box log's copy), KORE_E2E_IDLE (30), KORE_E2E_HOST_BIN (a kore-host already built for the
 # box: skips the Linux build), KORE_LINUX_SWIFT (the swift.org toolchain).
 #
 # EMBEDDED mode (KORE_E2E_EMBEDDED=1): this Mac's tailnet is Kore's own `kore-tailnet` (built by
@@ -45,6 +45,8 @@ embedded=${KORE_E2E_EMBEDDED:-}
 lan=${KORE_E2E_SSH_HOST:-}
 # The box over its LAN address when given: the alias's own known-hosts entry, ~/.ssh/config as is.
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=5)
+# KORE_E2E_SSH_CONFIG: an ssh config of the run's own (`-F`; ~/.ssh/config never read then).
+[[ -n ${KORE_E2E_SSH_CONFIG:-} ]] && ssh_opts=(-F "$KORE_E2E_SSH_CONFIG" "${ssh_opts[@]}")
 [[ -n $lan ]] && ssh_opts+=(-o "HostName=$lan" -o "HostKeyAlias=$box")
 ssh_box=(ssh "${ssh_opts[@]}" "$box")
 # Everything the test daemon sees: its own folders and port, no CLI on PATH, nothing inherited.
@@ -79,6 +81,8 @@ cleanup() {
         print "--- box daemon log (last 25 lines)"
         "${ssh_box[@]}" "tail -25 $dir/daemon.log" 2>/dev/null
     fi
+    # KORE_E2E_KEEP_LOG=<file>: the box daemon's whole log kept on this Mac (a proof folder).
+    [[ -n ${KORE_E2E_KEEP_LOG:-} ]] && "${ssh_box[@]}" "cat $dir/daemon.log $dir/join.log" > "$KORE_E2E_KEEP_LOG" 2>/dev/null
     "${ssh_box[@]}" "$remote_cleanup" 2>/dev/null
     rm -rf "$scratch"
     lap "cleaned up ($box:$dir, $scratch)"
@@ -132,6 +136,7 @@ lap "test daemon up on $box (pid ${got[pid]}, ${got[ip]}:$port)"
 # 4–5. The Mac end, with the round trips, resume, dedupe and the idle numbers.
 extra=()
 [[ -n $lan ]] && extra+=(--ssh-host "$lan")
+[[ -n ${KORE_E2E_SSH_CONFIG:-} ]] && extra+=(--ssh-config "$KORE_E2E_SSH_CONFIG")
 [[ $embedded == 1 ]] && extra+=(--embedded "$helper" --state "$dir/state")
 "$client" --ssh "$box" --remote "$remote" --grant e2e --box-ip "${got[ip]}" --port $port --box-device "${got[device]}" \
     --box-key "${got[key]}" --folder "$dir" --pid "${got[pid]}" --idle "$idle" "${extra[@]}"

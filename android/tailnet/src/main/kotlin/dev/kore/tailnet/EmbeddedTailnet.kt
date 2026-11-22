@@ -51,6 +51,8 @@ class EmbeddedTailnet(private val context: Context, private val hostname: String
     override fun self(): TailnetNode? = if (running) TailnetNode.parse(Go.self()) else null
     override fun peers(): List<TailnetNode> = if (running) TailnetNode.parseList(Go.peers()) else emptyList()
     override fun whois(ip: String): TailnetNode? = if (running) TailnetNode.parse(Go.whoIs(ip)) else null
+    override fun onlinePeers(): String = if (running) Go.onlinePeers() else ""
+    override fun waitPeers(known: String, timeoutMs: Long): String? = if (running) Go.waitPeers(known, timeoutMs) else null
 
     override fun dial(address: String, port: Int, timeoutMs: Long): ByteConn {
         check(running) { "tailnet off" }

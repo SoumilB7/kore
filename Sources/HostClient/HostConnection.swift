@@ -26,9 +26,10 @@ package protocol HostFollower: AnyObject {
 /// results, and the box's local copy. Asleep until a window on the box opens (`retain`), and
 /// asleep again once the last one closes: no process, timer or socket.
 ///
-/// While the box can't be reached, commands wait in order and go once it's back; a ping every 15 s
-/// notices a link that died quietly (two without a word from the box), and it dials again, waiting
-/// longer each time.
+/// While the box can't be reached, commands wait in order and go once it's back. A link that
+/// died quietly is noticed by a command's watchdog (10 s, then a probe's 5 s), and while a window
+/// shows the box by a probe every 15 s (`onScreen`); off screen and idle, nothing runs. A dead
+/// tailnet link goes to SSH at once; otherwise it dials again, waiting longer each time.
 @MainActor @Observable
 package final class HostConnection {
     package enum Phase: Equatable, Sendable {
@@ -145,6 +146,8 @@ package final class HostConnection {
     /// box's ledger now, and (set by the link at launch) each paired Mac's.
     package static var usageCatchUp: @MainActor @Sendable () async -> Void = { await HostConnection.catchUpBoxUsage() }
     @ObservationIgnored private var skipNet = false
+    /// KoreNet was wanted while this Mac's tailnet couldn't dial the box (`preferNet`).
+    @ObservationIgnored private var netWhenDialable = false
     /// KoreNet dials that failed in a row: the first falls back to SSH and the next `net.node`
     /// tries again; from the second, SSH holds and one more try comes after `netRetryAfter` (a
     /// tailnet that refuses never flaps the link between routes). A KoreNet link up, a relink or
@@ -165,10 +168,21 @@ package final class HostConnection {
     /// Done backing off (`triesAtLongest` at the longest wait): only an event dials again.
     @ObservationIgnored package private(set) var parked = false
     package static let triesAtLongest = 3
+    /// The route being dialled while the link is down (the reconnect card says which).
+    package private(set) var trying: HostRoute?
+    /// The routes tried since the link was last up, in order (`net`, `ssh`).
+    package private(set) var tried: [String] = []
+    /// Given up: past its backoff, or `giveUpDials` dials failed since it was last up (events that
+    /// start the backoff again can't keep it trying for ever). Only an event or Try again dials.
+    package private(set) var gaveUp = false
+    package static let giveUpDials = 16
+    @ObservationIgnored private var failedDials = 0
     @ObservationIgnored private var wantsNet = false
     @ObservationIgnored private var switching = false
     @ObservationIgnored private var dials = 0
     @ObservationIgnored private var transportDial = 0
+    /// The dial whose link last carried the box's `net.node`.
+    @ObservationIgnored private var nodeDial: Int?
     @ObservationIgnored private var ownUp = 0
     /// Frames heard on any link so far (a probe's answer is any of them).
     @ObservationIgnored package private(set) var heardCount = 0
@@ -183,6 +197,27 @@ package final class HostConnection {
     @ObservationIgnored private var heldWrites = false
     /// Probes sent (tests).
     @ObservationIgnored package private(set) var probes = 0
+    /// The windows showing the box now (on screen, not hidden or covered), by key: only while one
+    /// does, an idle link is checked every `onScreenCheck`. Off screen, nothing runs.
+    @ObservationIgnored private var shownBy: Set<String> = []
+    @ObservationIgnored private var looker: Task<Void, Never>?
+    /// How often a link a window shows is checked while it's up (a probe: any word back).
+    @ObservationIgnored package var onScreenCheck: Duration = .seconds(15)
+    /// How long its probe waits for any word: shorter than `probeWait`, so a dead tailnet is left
+    /// within 20 s of going quiet (the beat, this wait, SSH's dial).
+    @ObservationIgnored package var onScreenWait: Duration = .seconds(2)
+    /// A probe went unanswered on KoreNet: the tailnet to the box is dead, so the next dial is
+    /// SSH at once and KoreNet is held off (a box node coming online lifts it).
+    @ObservationIgnored private var netDead = false
+    /// After a box's `restart` while on KoreNet: the waits (from the restart) before each dial
+    /// of every node it's known on at once, whatever the tailnet says of them (its control
+    /// server is seconds late with a node coming online). SSH only after the last.
+    package static let restartDials: [Duration] = [.zero, .seconds(1), .seconds(2), .seconds(5)]
+    /// The waits left, each from the dial before.
+    @ObservationIgnored private var restartWaits: [Duration] = []
+    @ObservationIgnored private var everyNodeNext = false
+    /// The dial under way tries every known node of the box at once (`restartDials`).
+    @ObservationIgnored package private(set) var everyNode = false
 
     /// A test's transport; nil dials SSH with the grant and command as they are then.
     @ObservationIgnored private let makeTransport: (@MainActor () -> any HostTransport)?
@@ -396,6 +431,8 @@ package final class HostConnection {
     package var netPeer: NetPeer? { (transport as? NetTransport)?.peer }
     /// Which dial the link is on now: a link that dropped and came back is another.
     package var dialNumber: Int { transportDial }
+    /// The box said who it is (`net.node`) on the link up now.
+    package var nodeHeardOnLink: Bool { transport != nil && nodeDial == transportDial }
 
     /// A link that takes a merging `devices.set` is ready (every route, every time): an owner Mac
     /// catches the box up on what it issued (KoreLink's `MacNet`).
@@ -655,13 +692,27 @@ package final class HostConnection {
         if phase != .offline { phase = .connecting }
         let useNet = !skipNet
         skipNet = false
+        // Every known node at once only for a dial of the restart's.
+        everyNode = useNet && everyNodeNext
+        everyNodeNext = false
         let transport: any HostTransport
         if useNet, let net = activeRouter?.transport(for: self) {
             transport = net
             route = .net
+        } else if makeTransport == nil, NodeDirectory.isNodeKey(alias), NodeDirectory.shared.sshAlias(forKey: alias) == nil {
+            // A box claimed over the tailnet (New box…) has no SSH route: never `ssh <its id>`.
+            // The link waits for the tailnet (a peer coming online, a wake, a network change).
+            transport = ClosedTransport("no SSH route: \(name) is reached over KoreNet only")
+            route = .ssh(alias: sshAlias, grant: grant)
         } else {
             transport = sshRouter?.sshTransport(for: self) ?? makeTransport?() ?? SSHTransport(alias: alias, grant: grant, command: command)
             route = .ssh(alias: sshAlias, grant: grant)
+        }
+        if !ready, phase != .online {
+            let word = route == .net ? "net" : "ssh"
+            if trying != route { trying = route }
+            if tried.last != word, !tried.contains(word) { tried.append(word) }
+            if gaveUp { gaveUp = false }
         }
         dials += 1
         transportDial = dials
@@ -702,6 +753,8 @@ package final class HostConnection {
         redial?.cancel()
         redial = nil
         clearNetHold()
+        restartWaits = []
+        netDead = false
         let transport = transport
         if ready { transport?.send(HostWire.bye()) }
         if linkUp != nil { endLink("stopped") }
@@ -721,10 +774,14 @@ package final class HostConnection {
     }
 
     private func teardown() {
+        // SSH to the box no longer follows this link's node.
+        if route == .net { SSHTailnetRoute.linked(sshAlias, node: nil) }
         pump?.cancel()
         pinger?.cancel()
         probing?.cancel()
         watchdog?.cancel()
+        looker?.cancel()
+        looker = nil
         pump = nil
         pinger = nil
         probing = nil
@@ -765,13 +822,22 @@ package final class HostConnection {
         // KoreNet that never came up: SSH at once (`NetPaths`: tailnet, then SSH). A switch of
         // route, or a stale route's `replaced`, dials again at once too. A tailnet dial this Mac
         // ended itself (a relink, a switch) didn't fail: it isn't held off.
-        let netFailed = route == .net && !ready && !redialNow && !switching
-        let now = redialNow || netFailed || switching
+        // A tailnet link that went quiet (a probe unanswered) failed as a dial would: SSH now,
+        // KoreNet held off. A dial of a box's restart isn't a failure while its waits last.
+        let quietNet = netDead && route == .net
+        netDead = false
+        // Another node of the box is up (it moved there): that one, with the rest, before SSH.
+        let moved = quietNet && activeRouter?.otherNodeOnline(self) == true
+        let dead = quietNet && !moved
+        let restarting = route == .net && !restartWaits.isEmpty && !ready
+        let netFailed = route == .net && (!ready || dead) && !redialNow && !switching && !restarting
+        let now = redialNow || netFailed || switching || moved
+        if moved { everyNodeNext = true }
         let quiet = switching
         redialNow = false
         switching = false
         if netFailed { skipNet = true }
-        if netFailed, netFailures >= 1 {
+        if netFailed, netFailures >= 1 || dead {
             netHeldOff = true
             netRetry?.cancel()
             let sleep = sleep, after = netRetryAfter
@@ -817,12 +883,32 @@ package final class HostConnection {
             lastReason = reason
             for watcher in Array(linkWatchers.values) { watcher(false) }
         }
+        if !quiet, !restarting, restartWaits.isEmpty { failedDials += 1 }
         guard users > 0 else { return }
-        if now { return dial() }
+        // A box restarting while on KoreNet: every node it's known on, at 0, 1, 2 and 5 s after.
+        if !restartWaits.isEmpty, !skipNet {
+            let wait = restartWaits.removeFirst()
+            if wait == .zero {
+                everyNodeNext = true
+                return dial()
+            }
+            let sleep = sleep
+            redial = Task { [weak self] in
+                await sleep(wait)
+                guard !Task.isCancelled, let self else { return }
+                self.everyNodeNext = true
+                self.dial()
+            }
+            return
+        }
+        if now, failedDials < Self.giveUpDials { return dial() }
         // Tried at the longest wait a few times: no timer any more; a wake, a network change or
         // the box coming online on the tailnet (`probe`, `peerOnline`) dials it again.
-        if attempts >= backoff.count - 1 + Self.triesAtLongest {
+        if attempts >= backoff.count - 1 + Self.triesAtLongest || failedDials >= Self.giveUpDials {
             parked = true
+            failedDials = 0
+            if trying != nil { trying = nil }
+            if !gaveUp { gaveUp = true }
             HostLog.note(alias, "waiting", "for a wake, a network change or the box online")
             return
         }
@@ -899,6 +985,18 @@ package final class HostConnection {
             // backoff starts again from its shortest wait.
             case .restart:
                 attempts = 0
+                // On the tailnet: every node it's known on, at once and again shortly (it may be
+                // moving between them), before SSH.
+                if route == .net {
+                    var at = Duration.zero
+                    restartWaits = Self.restartDials.map { mark in
+                        defer { at = mark }
+                        return mark - at
+                    }
+                }
+                // Moving tailnets too: its first dials can land before it listens again, and
+                // aren't failures to hold KoreNet off for.
+                netFailures = 0
                 drop("\(NodeNames.name(alias)) is restarting")
             default: drop("\(NodeNames.name(alias)) said \(reason.rawValue)")
             }
@@ -978,7 +1076,10 @@ package final class HostConnection {
         case .unknown(let type) where type == UsageWire.page:
             if let page = try? JSONDecoder().decode(UsageWire.Page.self, from: raw) { usageWaits.removeValue(forKey: page.id)?.resume(returning: page) }
         case .unknown(let type) where type == NetNodeWire.type:
-            if let node = NetNodeWire.decode(raw) { activeRouter?.said(node, on: self) }
+            if let node = NetNodeWire.decode(raw) {
+                nodeDial = transportDial
+                activeRouter?.said(node, on: self)
+            }
         case .unknown(let type) where type == NetSwitchWire.result:
             if let result = DevicesWire.decode(NetSwitchWire.Result.self, raw) {
                 netSwitchWaits.removeValue(forKey: result.id)?.resume(returning: result)
@@ -1003,6 +1104,12 @@ package final class HostConnection {
     private func becameReady() {
         guard !ready else { return }
         ready = true
+        failedDials = 0
+        restartWaits = []
+        everyNode = false
+        if trying != nil { trying = nil }
+        if !tried.isEmpty { tried = [] }
+        if gaveUp { gaveUp = false }
         (linkId, linkUp) = (LogTurns.make(), Date())
         if route == .net {
             clearNetHold()
@@ -1039,6 +1146,7 @@ package final class HostConnection {
             transport?.send(payload)
         }
         armWatchdog()
+        look()
         // Waits reset only once the link has stayed up a while: one that drops at once backs off.
         pinger?.cancel()
         let stable = stableAfter
@@ -1083,6 +1191,7 @@ package final class HostConnection {
 
     private func refuse(_ reason: Refused) {
         phase = .refused(reason)
+        restartWaits = []
         let why = reason.line(name)
         let transport = transport
         if linkUp != nil { endLink("refused") }
@@ -1138,25 +1247,50 @@ package final class HostConnection {
 
     /// Over SSH with KoreNet now possible (the upgrade came up, the box's peer came online): the
     /// link moves to KoreNet once nothing is in flight. A failed KoreNet dial falls back to SSH
-    /// at once.
-    package func preferNet() {
-        guard users > 0, ready, case .ssh? = route, activeRouter != nil, !netHeldOff, !refusedOnNet else { return }
+    /// at once. False only when this Mac's tailnet can't dial the box now (it moves once it can).
+    @discardableResult
+    package func preferNet() -> Bool {
+        guard users > 0, ready, case .ssh? = route, let router = activeRouter, !netHeldOff, !refusedOnNet else { return true }
+        // This Mac's tailnet can't dial the box now (Kore's own waiting for its sign-in, the box
+        // known on no node): a move would only come back over SSH, hear the box, and move again,
+        // over and over. Its next status says when it can (`netDialable`).
+        guard router.canDial(self) else {
+            netWhenDialable = true
+            return false
+        }
+        netWhenDialable = false
         // A `net.set` waiting on its answer counts as in flight: the box's node key can come just
         // ahead of it (Join), and dropping the link would lose the answer.
         guard inFlight.isEmpty, outbox.isEmpty, uploadWaits.isEmpty, netSwitchWaits.isEmpty else {
             wantsNet = true
-            return
+            return true
         }
         wantsNet = false
         switching = true
         HostLog.note(alias, "korenet", "moving the link to KoreNet")
         drop("moving to KoreNet")
+        return true
+    }
+
+    /// This Mac's tailnet status changed: a link that wanted KoreNet while it couldn't dial moves now
+    /// if it can.
+    package func netDialable() {
+        guard netWhenDialable else { return }
+        preferNet()
     }
 
     /// The box's peer came online on the tailnet (the IPN bus): a link waiting to dial again
     /// dials now, from the shortest wait; one up over SSH moves to KoreNet.
     package func peerOnline() {
         guard users > 0 else { return }
+        // A node of the box online is news the hold on KoreNet (failed dials before it) didn't
+        // have: it's tried again now, not after `netRetryAfter`.
+        if netHeldOff {
+            netHeldOff = false
+            netRetry?.cancel()
+            netRetry = nil
+            netFailures = 0
+        }
         if transport == nil {
             redial?.cancel()
             redial = nil
@@ -1174,11 +1308,14 @@ package final class HostConnection {
         ownUp = dials
     }
 
-    /// An on-demand check that the link still works (no periodic pings): the app came to the
-    /// front, the user acted, the Mac woke, a command went unanswered. Waiting to dial again, it
+    /// An on-demand check that the link still works (no periodic pings while no window shows the
+    /// box): the app came to the front, the user acted, the Mac woke, a command went unanswered,
+    /// a window showing the box (its beat, `onScreen`). Waiting to dial again, it
     /// dials now; up, it asks the box something small and drops the link when nothing at all
     /// comes back within `probeWait`.
-    package func probe(_ why: String) {
+    package func probe(_ why: String) { probe(why, wait: probeWait) }
+
+    private func probe(_ why: String, wait: Duration) {
         guard users > 0 else { return }
         guard let transport else {
             if redial != nil || parked {
@@ -1194,14 +1331,50 @@ package final class HostConnection {
         probes += 1
         let heard = heardCount
         transport.send(HostWire.foldersList(id: "p\(serial)"))
-        let (sleep, wait) = (sleep, probeWait)
+        let sleep = sleep
         probing = Task { [weak self] in
             await sleep(wait)
             guard let self, !Task.isCancelled, self.transport === transport else { return }
             self.probing = nil
             guard self.heardCount == heard else { return }
             HostLog.note(self.alias, "probe unanswered", why)
+            // Quiet on the tailnet (cut, or the node it's on gone while its control server still
+            // lists it): SSH next, not the same dead node again.
+            if self.route == .net { self.netDead = true }
             self.drop("no answer to a check (\(why))")
+        }
+    }
+
+    /// A window showing the box came on screen (true) or left it (hidden, minimised, covered, or
+    /// closed): while any shows it, the link is checked every `onScreenCheck` while up, so a link
+    /// that died quietly is noticed within that and a probe's wait, with no command needed.
+    package func onScreen(_ key: String, _ shown: Bool) {
+        let before = !shownBy.isEmpty
+        if shown { shownBy.insert(key) } else { shownBy.remove(key) }
+        guard before != !shownBy.isEmpty else { return }
+        if shownBy.isEmpty {
+            looker?.cancel()
+            looker = nil
+        } else {
+            // Back on screen: looked at now, then on the beat.
+            probe("on screen")
+            look()
+        }
+    }
+
+    /// Whether a window shows the box now.
+    package var shown: Bool { !shownBy.isEmpty }
+
+    /// The on-screen beat: one timer while the link is up and shown, none otherwise.
+    private func look() {
+        guard looker == nil, ready, !shownBy.isEmpty, let transport else { return }
+        let (sleep, every) = (sleep, onScreenCheck)
+        looker = Task { [weak self] in
+            while !Task.isCancelled {
+                await sleep(every)
+                guard !Task.isCancelled, let self, self.transport === transport, self.ready, !self.shownBy.isEmpty else { return }
+                self.probe("on screen", wait: self.onScreenWait)
+            }
         }
     }
 
@@ -1333,10 +1506,11 @@ package final class HostConnection {
         // A KoreNet dial under way hears `net.node` anew on its welcome (on SSH too, should it fail).
         if route == .net, !ready { return }
         // Up over SSH: it moves the way a tailnet coming back moves it, once nothing is in
-        // flight and without showing offline in between (`preferNet`).
+        // flight and without showing offline in between (`preferNet`). This Mac's tailnet can't
+        // dial it now: it dials again over SSH below, so the box is heard anew all the same.
         if case .ssh? = route, ready, activeRouter != nil {
             HostLog.note(alias, "relink", why)
-            return preferNet()
+            if preferNet() { return }
         }
         redialNow = true
         drop(why)
@@ -1454,7 +1628,11 @@ package enum HostLog {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
     }
 
+    /// Each note as it's written (the KoreNet system tests trace them).
+    nonisolated(unsafe) package static var tap: (@Sendable (String) -> Void)?
+
     package static func note(_ alias: String, _ what: String, _ detail: String?) {
+        tap?([alias, what, detail].compactMap { $0 }.joined(separator: " "))
         log.write(what, ["host": alias, "reason": detail.flatMap(word)])
     }
 

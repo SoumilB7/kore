@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 #if canImport(Darwin)
 import Darwin
 #elseif canImport(Glibc)
@@ -106,6 +107,15 @@ package enum HostService {
     ) throws -> [String] {
         switch kind {
         case .systemd:
+            // Without linger, the user's systemd stops about 10 s after their last login, and a
+            // unit with it: the daemon would die between Kore's SSH sessions (KoreNet gone the
+            // moment the upgrade's session ends). It runs on its own instead, outliving every
+            // login; after a restart Kore starts it over SSH. Linger turned on later makes it a
+            // service at the next Set up or update.
+            if let note = linger(user: user, run: run), note.hasPrefix("linger is off") {
+                if FileManager.default.fileExists(atPath: unitFile(home: home).path) { _ = uninstall(home: home, run: run) }
+                return [Self.lingerOff(user)] + (try onDemand(executable: executable, paths: paths, run: run))
+            }
             let lines = try install(executable: executable, home: home, user: user, run: run)
             try? FileManager.default.removeItem(at: paths.serviceKind)
             return lines
@@ -143,6 +153,11 @@ package enum HostService {
         }
         lines.append("kore-host is running (\(executable))")
         return lines
+    }
+
+    /// Linger off and not ours to turn on: what `install-service` says (Set up's card warns).
+    package static func lingerOff(_ user: String) -> String {
+        "linger is off, so kore-host can't start at boot: it runs on its own now, and Kore starts it after a restart (`sudo loginctl enable-linger \(user)` makes it a service)"
     }
 
     /// Linger on, so the user's services run without a login: nothing when it's on already, one
@@ -230,8 +245,35 @@ package enum HostService {
             try? FileManager.default.removeItem(at: log)
         }
         let script = #"if command -v setsid >/dev/null 2>&1; then setsid nohup "$0" run; else nohup "$0" run; fi >>"$1" 2>&1 </dev/null &"#
+        #if os(Linux)
+        if spawnsDetached { return detached(["/bin/sh", "-c", script, executable, log.path]) }
+        #endif
         _ = run(["sh", "-c", script, executable, log.path])
     }
+
+    /// Linux: the daemon's shell started with nothing of this process's open but stdio. Through
+    /// Foundation's `Process` the daemon would inherit the socket by which Foundation hears its
+    /// child end, and the waiting `install-service`, `start` or `attach` would never return
+    /// while the daemon runs. Tests: through `run`.
+    nonisolated(unsafe) package static var spawnsDetached = !KoreLog.isTestProcess
+
+    #if os(Linux)
+    static func detached(_ argv: [String]) {
+        var actions = posix_spawn_file_actions_t()
+        posix_spawn_file_actions_init(&actions)
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        let open = ((try? FileManager.default.contentsOfDirectory(atPath: "/proc/self/fd")) ?? []).compactMap { Int32($0) }
+        for fd in Set(open) where fd > 2 { posix_spawn_file_actions_addclose(&actions, fd) }
+        var args: [UnsafeMutablePointer<CChar>?] = argv.map { strdup($0) } + [nil]
+        defer { for arg in args { free(arg) } }
+        var env: [UnsafeMutablePointer<CChar>?] = ProcessInfo.processInfo.environment.map { strdup("\($0.key)=\($0.value)") } + [nil]
+        defer { for item in env { free(item) } }
+        var pid: pid_t = 0
+        guard posix_spawn(&pid, argv[0], &actions, nil, &args, &env) == 0 else { return }
+        var status: Int32 = 0
+        while waitpid(pid, &status, 0) < 0, errno == EINTR {}
+    }
+    #endif
 
     /// Stops the on-demand daemon, when one holds its lock, and waits for it to let go.
     static func stopOnDemand(_ paths: HostPaths) {

@@ -8,6 +8,7 @@ import android.text.style.ForegroundColorSpan
 import android.text.style.StrikethroughSpan
 import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
+import android.text.style.URLSpan
 import android.view.View
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
@@ -18,8 +19,8 @@ import kotlinx.serialization.json.JsonObject
 /**
  * The Mac's render tree as real views: paragraphs read at 15sp with room between lines, code and
  * tables scroll sideways in their own box instead of wrapping into mush, and lists keep their
- * indent. No markdown parser on the phone; Kore sends the tree. Its text, a table's cells too,
- * picks (`TextPick`).
+ * indent. The Mac sends the tree; a box's text is parsed here ([Markdown]). Its text, a table's
+ * cells too, picks (`TextPick`); a link opens on a tap.
  */
 object DocViews {
     private const val BODY = 15f
@@ -32,9 +33,15 @@ object DocViews {
     private const val LINE = 1.4f
     private val CODE = Tone.code
 
+    /** Blocks whose views are already there, the same block at the same place, keep them: a streaming answer builds only its end. */
     fun build(ctx: Context, blocks: List<JsonObject>, into: LinearLayout, color: Int = K.text) {
-        into.removeAllViews()
-        blocks.forEachIndexed { i, b -> into.addView(block(ctx, b, color), gap(ctx, if (i == 0) 0 else spacing(b))) }
+        var keep = 0
+        while (keep < blocks.size && keep < into.childCount && into.getChildAt(keep).tag == blocks[keep]) keep++
+        if (into.childCount > keep) into.removeViews(keep, into.childCount - keep)
+        for (i in keep until blocks.size) {
+            val b = blocks[i]
+            into.addView(block(ctx, b, color).apply { tag = b }, gap(ctx, if (i == 0) 0 else spacing(b)))
+        }
     }
 
     private fun spacing(b: JsonObject) = when (b.str("k")) { "heading" -> 14; "code", "table" -> 10; else -> 8 }
@@ -68,6 +75,13 @@ object DocViews {
         setTextColor(color)
         setLineSpacing(0f, LINE)
         picks()
+        links()
+    }
+
+    /** A text with a link: picks as before, and a tap on the link opens it. */
+    private fun TextView.links() {
+        val t = text as? Spanned ?: return
+        if (t.getSpans(0, t.length, URLSpan::class.java).isNotEmpty()) movementMethod = android.text.method.LinkMovementMethod.getInstance()
     }
 
     /** A fenced block (spec §5): the well, radius 12, a hair edge, Mono, scrolling sideways so lines never wrap. */
@@ -113,7 +127,8 @@ object DocViews {
     private fun table(ctx: Context, b: JsonObject): View {
         val header = (b["header"] as? JsonArray)?.map { spans(cellSpans(it)) }.orEmpty()
         val rows = (b["rows"] as? JsonArray)?.map { row -> (row as? JsonArray)?.map { spans(cellSpans(it)) }.orEmpty() }.orEmpty()
-        return TableBox(ctx, header, rows)
+        val align = (b["align"] as? JsonArray)?.map { (it as? kotlinx.serialization.json.JsonPrimitive)?.takeIf { p -> p.isString }?.content }.orEmpty()
+        return TableBox(ctx, header, rows, align)
     }
 
     /** The table [v] is in (or is), as "Copy table" copies it ([TableCopy]); null outside one. */
@@ -126,7 +141,9 @@ object DocViews {
         return null
     }
 
-    private class TableBox(ctx: Context, val header: List<CharSequence>, val rows: List<List<CharSequence>>) : LinearLayout(ctx) {
+    private class TableBox(
+        ctx: Context, val header: List<CharSequence>, val rows: List<List<CharSequence>>, private val align: List<String?> = emptyList(),
+    ) : LinearLayout(ctx) {
         private var builtFor = -1
         private val pad = ctx.dp(10)
 
@@ -166,13 +183,15 @@ object DocViews {
             }
         }
 
-        private fun cell(text: CharSequence, bold: Boolean) = TextView(context).apply {
+        private fun cell(text: CharSequence, bold: Boolean, column: Int) = TextView(context).apply {
             this.text = text
             textSize = CELL_SP
             setTextColor(if (bold) K.text else K.dim)
             if (bold) setTypeface(typeface, Typeface.BOLD)
             setPadding(pad, context.dp(7), pad, context.dp(7))
+            gravity = when (align.getOrNull(column)) { "center" -> android.view.Gravity.CENTER_HORIZONTAL; "right" -> android.view.Gravity.END; else -> android.view.Gravity.START }
             picks()
+            links()
         }
 
         private fun grid(widths: List<Int>) {
@@ -182,7 +201,7 @@ object DocViews {
                 if (cells.isEmpty()) return@forEachIndexed
                 addView(LinearLayout(context).apply {
                     orientation = HORIZONTAL
-                    widths.forEachIndexed { c, w -> addView(cell(cells.getOrNull(c) ?: "", bold), LayoutParams(w, LayoutParams.WRAP_CONTENT)) }
+                    widths.forEachIndexed { c, w -> addView(cell(cells.getOrNull(c) ?: "", bold, c), LayoutParams(w, LayoutParams.WRAP_CONTENT)) }
                 })
                 if (i < all.lastIndex) addView(View(context).apply { setBackgroundColor(Tone.hair) }, LayoutParams(LayoutParams.MATCH_PARENT, 1))
             }
@@ -213,6 +232,7 @@ object DocViews {
                         type(Type.BodyMedium)
                         setTextColor(Tone.text)
                         picks()
+                        links()
                     })
                     for (c in 1 until columns()) {
                         val value = row.getOrNull(c)?.takeIf { it.isNotEmpty() } ?: continue
@@ -231,6 +251,7 @@ object DocViews {
                                 textSize = CELL_SP
                                 setTextColor(Tone.text)
                                 picks()
+                                links()
                             }, if (above) LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT)
                             else LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
                         })
@@ -257,7 +278,14 @@ object DocViews {
                 setSpan(TypefaceSpan("monospace"), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 setSpan(ForegroundColorSpan(CODE), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
             }
-            if (s.str("link") != null) setSpan(ForegroundColorSpan(K.accent), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+            val link = s.str("link")
+            if (link != null) {
+                setSpan(ForegroundColorSpan(K.accent), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                // Web and mail links open; anything else (a file path, a custom scheme) stays text.
+                if (link.startsWith("http://", true) || link.startsWith("https://", true) || link.startsWith("mailto:", true)) {
+                    setSpan(URLSpan(link), start, end, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                }
+            }
         }
     }
 }

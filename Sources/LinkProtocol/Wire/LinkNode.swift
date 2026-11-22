@@ -28,12 +28,17 @@ package enum NetNodeWire {
         /// Kore's own tailnet there, in use or kept signed in beside Tailscale. Nil from a box
         /// before it said, or one with no `kore-tailnet`.
         package var own: Own?
+        /// Every tailnet node this box has, the one it listens on first: its installed
+        /// Tailscale's and Kore's own (`<host>-kore`, signed in beside it or carrying it), so a
+        /// Mac knows both before the box moves between them. Nil from a box before it said.
+        package var nodeKeys: [String]?
 
         package init(
             device: UUID, identityKey: Data, name: String, on: Bool, nodeKey: String? = nil, enrolled: UUID? = nil, os: String? = nil, tailnet: String? = nil,
-            own: Own? = nil
+            own: Own? = nil, nodeKeys: [String]? = nil
         ) {
             self.own = own
+            self.nodeKeys = nodeKeys
             self.os = os
             self.tailnet = tailnet
             self.device = device
@@ -120,11 +125,17 @@ package enum NetNodeWire {
         }
 
         /// What a running node's status says (nil: still starting, nothing to say yet). A
-        /// signed-in node whose key has expired is signed out.
+        /// signed-in node whose key has expired is signed out. Running with no login is a start
+        /// from its cached state that its control server hasn't answered yet (it may say removed
+        /// or expired): nothing yet. Running with a sign-in page is one its control server asks to
+        /// sign in again (its key ran out there): signed out, that page.
         package static func heard(running: Bool, needsLogin: Bool, login: String?, page: String?, keyExpiry: Date?, before: Own?, now: Date) -> Own? {
             if running {
                 if let keyExpiry, keyExpiry <= now { return .signedOut(.expired, page: page) }
-                return .signedIn(login ?? before?.login)
+                if page == nil {
+                    guard let login, !login.isEmpty else { return nil }
+                    return .signedIn(login)
+                }
             }
             guard needsLogin || page != nil else { return nil }
             // It was signed in and now isn't: logged out, removed, or its key ran out.

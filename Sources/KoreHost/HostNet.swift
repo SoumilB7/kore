@@ -350,6 +350,8 @@ package final class HostNet {
             return
         }
         if userspace { return applyUserspace(status, want: want, keyChanged: keyChanged, listened: listened) }
+        if status.backendState == .running, let key = selfNode?.publicKey, key != host.installedNodeKey { host.installedNodeKey = key }
+        if status.backendState == .running { host.ownStillListed(status) }
         noteChoice(TailnetChooser.choose(.state(status.backendState)))
         let index = interfaceIndex()
         if Self.keeps(want: want, bound: bound, listening: !listeners.isEmpty, boundIndex: boundIndex, index: index) {
@@ -532,7 +534,7 @@ package final class HostNet {
                 guard let self else { return }
                 switch event {
                 // It answered: the next try, if one is needed, starts from the first wait.
-                case .state: self.busTries = 0
+                case .state, .loginFinished: self.busTries = 0
                 // Kore's own: its addresses can come after its state says Running.
                 case .status where self.userspace && !self.listening: break
                 default: continue
@@ -685,6 +687,10 @@ package final class HostNet {
         case .established(let peer):
             shake.cancel()
             handshakes[key] = nil
+            // Proven as a device the book holds: not the pre-auth traffic the limit is for. A Mac
+            // following this box between its nodes dials it several times a minute, and must
+            // never be turned away unread for that.
+            if let remote = shake.remote { limiter.refund(remote) }
             established(shake, peer)
         }
         greetWaiting()

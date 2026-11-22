@@ -80,6 +80,16 @@ interface Tailnet {
      */
     fun logout()
 
+    /** The node keys of the peers online now, sorted and comma-joined; "" while not running. */
+    fun onlinePeers(): String = ""
+
+    /**
+     * Blocks until the peers online differ from [known] ([onlinePeers]' form) or [timeoutMs]
+     * passes, and returns the set then: the IPN bus's word, never a poll. Null: this tailnet has no
+     * such events (nothing watches it).
+     */
+    fun waitPeers(known: String, timeoutMs: Long): String? = null
+
     companion object {
         const val RUNNING = "Running"
         const val NEEDS_LOGIN = "NeedsLogin"

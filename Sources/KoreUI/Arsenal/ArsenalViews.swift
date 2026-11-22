@@ -6,7 +6,7 @@ extension Theme {
         /// Tiers follow the mode ladder: deeper blue as a tier does more.
         static let watch = Blue.b200
         static let own = Blue.b400
-        /// A tab's corner marks while its chat has Arsenal on, whatever the tier: which chats have it, at a glance.
+        /// A chat's CLI logo while it has Arsenal on, whatever the tier: which chats have it, at a glance.
         static let mark = Blue.b300
 
         static func color(_ tier: ArsenalTier) -> Color {
@@ -72,27 +72,5 @@ struct RefusalSettings: View {
                 .storyID(StoryID.Composer.refusalSwitch, press: { fallback.on.toggle() })
         }
         .help("A turn the model's safeguards refuse goes on with an earlier model, as the CLI picks")
-    }
-}
-
-/// A chat tab's corner marks while its chat has Arsenal on, at any tier: the option popups' frame
-/// (`cornerMarks`) on the tab's own radius, in `Theme.Arsenal.mark`, each arm by its own edge so
-/// they fit every tab width. Whole at once, as a state: no draw-in. The tier is read here, so
-/// turning Arsenal on or off redraws these and nothing else of the tab. `story`: the tab's name;
-/// its `.arsenal` part is there while drawn.
-struct ArsenalCorners: View {
-    let chat: Chat
-    let story: StoryID
-
-    /// The marks' colour at `tier`: Arsenal's one blue at any tier; nil (off) draws none.
-    static func color(_ tier: ArsenalTier?) -> Color? { tier == nil ? nil : Theme.Arsenal.mark }
-
-    var body: some View {
-        if let color = Self.color(chat.arsenal) {
-            Color.clear
-                .cornerMarks(color, radius: Radius.control, fit: .eachSide, grows: false)
-                .allowsHitTesting(false)
-                .storyMark(story.part(.arsenal))
-        }
     }
 }

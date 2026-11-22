@@ -26,6 +26,26 @@ extension HostTransport {
     package func drain(timeout: TimeInterval) {}
 }
 
+/// A route that isn't there: it ends as it starts, with why.
+package final class ClosedTransport: HostTransport, @unchecked Sendable {
+    package let events: AsyncStream<TransportEvent>
+    private let continuation: AsyncStream<TransportEvent>.Continuation
+    private let reason: String
+
+    package init(_ reason: String) {
+        self.reason = reason
+        (events, continuation) = AsyncStream.makeStream(of: TransportEvent.self)
+    }
+
+    package func start() throws {
+        continuation.yield(.closed(reason))
+        continuation.finish()
+    }
+
+    package func send(_ payload: Data) {}
+    package func close() { continuation.finish() }
+}
+
 /// Frames over a pair of file handles: a pipe pair, a socketpair, or a process's stdio.
 package final class PipeTransport: HostTransport, @unchecked Sendable {
     package let events: AsyncStream<TransportEvent>
@@ -120,7 +140,10 @@ package final class PipeTransport: HostTransport, @unchecked Sendable {
 /// named by its path. BatchMode keeps SSH from asking for anything; the user's own SSH config and
 /// agent do the rest.
 package final class SSHTransport: HostTransport, @unchecked Sendable {
-    package static let ssh = "/usr/bin/ssh"
+    /// The ssh and scp Kore runs (the rig, `scripts/tests/korenet-real`, points them at
+    /// `ssh -F <its own config>`; Kore never changes them).
+    nonisolated(unsafe) package static var ssh = "/usr/bin/ssh"
+    nonisolated(unsafe) package static var scp = "/usr/bin/scp"
 
     private let process = Process()
     private let pipe: PipeTransport
@@ -137,8 +160,38 @@ package final class SSHTransport: HostTransport, @unchecked Sendable {
         // SSH notices a dead link itself (two missed keepalives, 15 s apart): the box never
         // wakes for a ping.
         let address = BoxAddress(alias)
-        return ["-T", "-o", "BatchMode=yes", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"] + (address?.options ?? [])
-            + ["--", address?.host ?? alias, command, "attach", "--as", grant]
+        // ConnectTimeout: a host that doesn't answer (a tailnet address gone) costs 5 s a try, not 20+.
+        return ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"] + (address?.options ?? [])
+            + SSHTailnetRoute.options(for: alias) + ["--", address?.host ?? alias, command, "attach", "--as", grant]
+    }
+
+    /// The host an alias reaches, as `ssh -G` resolves it (its `HostName`); nil when ssh can't
+    /// say within 3 s. Local only: ssh reads its config, nothing goes on the network.
+    package static func hostName(alias: String) -> String? {
+        let target = BoxAddress(alias)?.host ?? alias
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: ssh)
+        process.arguments = (BoxAddress(alias)?.options ?? []) + ["-G", "--", target]
+        let out = Pipe()
+        process.standardOutput = out
+        process.standardError = FileHandle.nullDevice
+        process.standardInput = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return nil }
+        let timer = DispatchWorkItem { if process.isRunning { process.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 3, execute: timer)
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        timer.cancel()
+        return parseHostName(String(decoding: data, as: UTF8.self))
+    }
+
+    /// `hostname <h>` from `ssh -G`'s lines.
+    package static func parseHostName(_ text: String) -> String? {
+        for line in text.split(whereSeparator: \.isNewline) where line.hasPrefix("hostname ") {
+            let host = line.dropFirst("hostname ".count).trimmingCharacters(in: .whitespaces)
+            return host.isEmpty ? nil : host
+        }
+        return nil
     }
 
     package convenience init(alias: String, grant: String, command: String = defaultCommand) {

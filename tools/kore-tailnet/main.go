@@ -3,6 +3,7 @@
 // Unix socket for this user alone and hands tailnet connections over as descriptors.
 //
 //	kore-tailnet -socket <path> -state <dir> [-hostname <name>] [-ephemeral] [-v]
+//	kore-tailnet nc -socket <path> <addr> <port>     (ssh's ProxyCommand over the running one)
 //
 // It prints "ready" once the socket listens, waits for a `start` carrying the 32-byte state key
 // (never argv or env), and ends when the connection that sent it closes, on `stop`, or on
@@ -28,6 +29,9 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "nc" {
+		os.Exit(runNC(os.Args[2:]))
+	}
 	socket := flag.String("socket", "", "control socket path (its folder should be 0700)")
 	state := flag.String("state", "", "state folder")
 	hostname := flag.String("hostname", "", "tailnet node name (default: this machine's)")

@@ -53,7 +53,7 @@ class DemoStart : ContentProvider() {
 /**
  * [scenario] (the text in files/demo): "" the normal demo; `waiting` the Mac never answers (no
  * snapshot); `no-windows` the Mac has none open; `no-devices` this phone knows none; `asleep` the
- * Mac says it's going to sleep; `usage-near` its logins past 80 % (amber), `usage-limit` at a
+ * Mac says it's going to sleep; `cold` each dial takes 4 s (a tailnet starting cold); `usage-near` its logins past 80 % (amber), `usage-limit` at a
  * limit (red). Each device pushes its logins' usage (link 1.14) with resets from now.
  */
 class Demo(private val context: Context, private val scenario: String = "") : StandIn {
@@ -82,6 +82,8 @@ class Demo(private val context: Context, private val scenario: String = "") : St
     @Volatile var logsRead = -1
 
     override val dialer = NodeDialer { device, _, _ ->
+        // `cold`: every dial takes as long as the phone's tailnet starting from cold.
+        if (scenario == "cold") kotlinx.coroutines.delay(4_000)
         val dir = if (device.kind == NodeKind.MAC) "mac" else "box"
         DemoLink(device, dir).also { links[dir] = it }
     }

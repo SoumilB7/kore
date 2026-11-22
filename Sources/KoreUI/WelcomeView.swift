@@ -51,6 +51,9 @@ struct WelcomeView: View {
                             .font(Chrome.body)
                             .foregroundStyle(Theme.secondary)
                     }
+                    // Kore's tailnet here or there not signed in: one quiet line, Sign in on it.
+                    OwnCueLine(box: place, story: StoryID.Net.welcomeCue(place))
+                        .frame(maxWidth: Layout.Welcome.contentWidth)
                 }
                 .id(place ?? "")
                 .transition(.opacity)

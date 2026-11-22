@@ -34,8 +34,13 @@ extension World {
     /// A box set up over SSH before KoreNet (link 1.x, `attach --as laptop`): its window was open
     /// once, so Kore knows it, and closed.
     @discardableResult
-    func sshBox(_ alias: String, tailscale: BackendState = .running, own: Bool = false) async throws -> BoxNode {
-        let box = try box(alias, tailscale: tailscale, own: own)
+    func sshBox(
+        _ alias: String, tailscale: BackendState = .running, own: Bool = false, beside: Bool = false, ownSignedIn: Bool = false, sshOverTailnet: Bool = false,
+        tailscaleInstalled: Bool = true
+    ) async throws -> BoxNode {
+        let box = try box(alias, tailscale: tailscale, own: own, beside: beside, ownSignedIn: ownSignedIn, tailscaleInstalled: tailscaleInstalled)
+        // Its alias's host: the box's installed Tailscale address (mybox's ~/.ssh/config), or the LAN.
+        if sshOverTailnet { mac.ssh.setHost(alias, box.ip) }
         mac.addSSHBox(box)
         await step("\(alias) set up over SSH", until: { self.mac.link(box)?.isOnline == true }) { mac.openWindow(box) }
         await step("\(alias)'s window closes") { mac.closeWindow(box) }
@@ -178,8 +183,12 @@ extension World {
         }
         let look = Devices.shared.look()
         // The Add device window the owner opened keeps its accent dot until it ends.
-        let adding = look.dot == .accent && Devices.shared.picture().addUntil != nil
-        if look.dimmed || (look.dot != nil && !adding) { out.append("Mac icon: \(look.line) (dimmed \(look.dimmed), dot \(String(describing: look.dot)))") }
+        let picture = Devices.shared.picture()
+        let adding = look.dot == .accent && picture.addUntil != nil
+        // Kore's own tailnet never signed in beside running Tailscale: its needs-you dot stays
+        // until it is (owner, 2026-11-23), the link settled all the same.
+        let signIn = look.dot == .accent && !look.dimmed && (DevicesWords.macNeedsSignIn(picture) || picture.devices.contains(where: DevicesWords.boxNeedsSignIn))
+        if look.dimmed || (look.dot != nil && !adding && !signIn) { out.append("Mac icon: \(look.line) (dimmed \(look.dimmed), dot \(String(describing: look.dot)))") }
         return out
     }
 }

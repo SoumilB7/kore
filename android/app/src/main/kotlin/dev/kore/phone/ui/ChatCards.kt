@@ -53,13 +53,13 @@ fun android.app.Activity.bindChatCard(v: LinearLayout, row: DeviceList.Row, open
         logo.imageTintList = android.content.res.ColorStateList.valueOf(Tone.dim)
     } else {
         logo.setImageResource(providerLogo(row.provider))
-        logo.imageTintList = null
+        logo.imageTintList = logoTint(row.arsenal)?.let { android.content.res.ColorStateList.valueOf(it) }
     }
     logo.visibility = if (working || row.prompt) View.INVISIBLE else View.VISIBLE
     spinner.visibility = if (working && !row.prompt) View.VISIBLE else View.GONE
     prompt.visibility = if (row.prompt) View.VISIBLE else View.GONE
     prompt.needsYou = row.prompt && row.cue == DeviceList.Cue.NEEDS
-    spinner.tint = if (row.provider == "codex") Tone.spinCodex else Tone.spinClaude
+    spinner.tint = workTint(row.provider, row.arsenal)
     prompt.tint = spinner.tint
     title.text = row.title
     val strong = row.unread || working || row.cue == DeviceList.Cue.NEEDS

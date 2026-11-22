@@ -455,7 +455,7 @@ package final class BoxNetJoinRun: BoxNetJoinRunner {
             guard net.state.reaches else { return failed(join, BoxNetJoin.macLine(net.state)) }
             guard let report = await upgrade(join, mine), live(mine) else { return }
             join.started(version: report.version)
-            if report["linger"] == "off" { join.warn("\(join.name) stops kore-host when you log out") }
+            if report["linger"] == "off" { join.warn("\(join.name) doesn't start kore-host at boot") }
             let outcome = BoxNetJoin.outcome(report, name: join.name, macAccount: net.status?.login)
             join.take(outcome, report: report)
             switch outcome {
@@ -620,11 +620,42 @@ package final class BoxNetJoinRun: BoxNetJoinRunner {
         }
         if holdingLink {
             holdingLink = false
-            connection.release()
+            releaseLink(joined: join.ending == .done || join.ending == .relayed)
         }
         guard told != run else { return }
         told = run
         ended?(join)
+    }
+
+    /// What `start` held goes. Joined on the tailnet before the box said who it is there
+    /// (`net.node` comes just after the link is up): held until it does, a few seconds at most, so
+    /// its nodes (Kore's own among them) reach this Mac even when nothing else holds the link.
+    private func releaseLink(joined: Bool) {
+        let connection = connection
+        guard joined, connection.route == .net, connection.isOnline, !connection.nodeHeardOnLink else { return connection.release() }
+        let key = connection.alias
+        let released = Released()
+        let letGo = { @MainActor [weak net] in
+            guard !released.done else { return }
+            released.done = true
+            if released.watching { net?.watchNode(key, nil) }
+            connection.release()
+        }
+        // Only when nothing else follows this box's `net.node` here (one watcher per key).
+        if !net.watchesNode(key) {
+            released.watching = true
+            net.watchNode(key) { _ in letGo() }
+        }
+        let sleep = sleep
+        Task { @MainActor in
+            await sleep(.seconds(5))
+            letGo()
+        }
+    }
+
+    @MainActor private final class Released {
+        var done = false
+        var watching = false
     }
 
     package func cancel(_ join: BoxNetJoin) {
@@ -696,8 +727,14 @@ extension KoreNetSwitch {
         }
     }
 
-    /// Node keys this Mac knows as boxes.
-    package var knownNodeKeys: Set<String> { Set(directory.all.values.compactMap(\.nodeKey)) }
+    /// Node keys this Mac knows as boxes: each entry's now and last, and every key its book
+    /// keeps for a box (up to 3: installed Tailscale's node and Kore's own). A known box's other
+    /// node is never offered as a new box.
+    package var knownNodeKeys: Set<String> {
+        var keys = Set(directory.all.values.flatMap { [$0.nodeKey, $0.lastNodeKey].compactMap { $0 } })
+        if let env, let devices = try? book(env).read().devices { keys.formUnion(devices.filter { $0.kind == .box }.flatMap(\.nodeKeys)) }
+        return keys
+    }
 
     /// The candidates that answer on KoreNet's port, probed once each (a connect, closed at once),
     /// off the main actor: when the Welcome "+" list opens, at no other time.

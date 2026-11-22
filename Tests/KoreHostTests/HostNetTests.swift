@@ -340,6 +340,31 @@ struct HostNetTests {
         #expect(answered == 3)
     }
 
+    /// A device the box knows, proven, spends none of its source's three pre-auth connections a
+    /// minute: a Mac following a box between its nodes (stop, move, `restart`) dials it 4–6 times
+    /// in a minute, and was turned away unread until the minute ran out (the rig's box-ts-stops:
+    /// 40 s back on Tailscale).
+    @Test func aProvenDeviceSpendsNoPreAuthSlot() async throws {
+        let rig = try await NetRig.make()
+        defer { rig.finish() }
+        let mac = Device("mac")
+        try rig.allow(mac)
+        let clock = HandClock()
+        let tailnet = FakeTailnet(status: FakeTailnet.status(.running, ips: ["127.0.0.1"]))
+        tailnet.state.withLock { $0.whois["127.0.0.1"] = FakeTailnet.who(key: mac.nodeKey) }
+        let net = HostNet(host: rig.rig.host, identity: rig.identity, port: 0, limiter: PreAuthLimiter(clock: { clock.now }))
+        net.join(tailnet)
+        await net.settled()
+        defer { net.stop() }
+        let port = try #require(net.listenerPort)
+        for i in 0..<5 {
+            let link = try rig.client(mac, fd: try Sockets.connectTCP(try #require(IPAddress("127.0.0.1")), port: port))
+            try await link.until { link.up || link.closed != nil }
+            #expect(link.up, "link \(i + 1) turned away: \(link.closed ?? "")")
+            link.session.close("quit")
+        }
+    }
+
     @Test func aTailnetLinkReplacesAnSSHOneNeverTheReverse() async throws {
         let rig = try await NetRig.make()
         defer { rig.finish() }

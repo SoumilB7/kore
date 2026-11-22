@@ -158,9 +158,12 @@ final class World {
     // MARK: Cast
 
     @discardableResult
-    func box(_ alias: String, tailscale: BackendState = .running, own: Bool = false) throws -> BoxNode {
+    func box(
+        _ alias: String, tailscale: BackendState = .running, own: Bool = false, beside: Bool = false, ownSignedIn: Bool = false, tailscaleInstalled: Bool = true
+    ) throws -> BoxNode {
         let box = try BoxNode(
-            alias: alias, root: root.appendingPathComponent(alias), ip: "100.64.0.\(10 + boxes.count)", net: net, pulse: pulse, tailscale: tailscale, own: own)
+            alias: alias, root: root.appendingPathComponent(alias), ip: "100.64.0.\(10 + boxes.count)", net: net, pulse: pulse, tailscale: tailscale, own: own,
+            beside: beside, ownSignedIn: ownSignedIn, tailscaleInstalled: tailscaleInstalled)
         boxes.append(box)
         return box
     }
@@ -250,7 +253,8 @@ final class World {
                 let toUp = dials.contains { link in boxes.contains { $0.alias == link.alias && $0.up } }
                 dialing = dials.isEmpty ? 0 : dialing + 1
                 if dials.isEmpty { dialSince = nil } else if dialSince == nil { dialSince = .now }
-                let waiting = toUp ? ContinuousClock.now - (dialSince ?? .now) < .seconds(5) : dialing < 30
+                // 15 s: on a Mac busy with other builds, a dial's off-main work outran 5 s.
+                let waiting = toUp ? ContinuousClock.now - (dialSince ?? .now) < .seconds(15) : dialing < 30
                 // Bytes on a link not read yet are work under way too: time waits for them, a few
                 // seconds at most (an end that never reads is a stuck node, which the scenario says).
                 let sent = net.inFlight
@@ -261,7 +265,10 @@ final class World {
                 // A phone's handshake the Mac is still working through (not one waiting on the
                 // owner's card) counts too: moving time on would run its 2 s pre-auth window out
                 // before a busy Mac got to the hello, and the phone would knock again and again.
+                // A box's tailnet handshake under way too (its hello read on its main queue): time
+                // moved on past it once ran the Mac's 20 s handshake limit out on a busy Mac.
                 let busy = pulse.busy || (mac.macNet?.handshakesRunning ?? 0) > 0 || RelayCLI.anyBusy
+                    || boxes.contains(where: \.handshaking)
                 if busy { busySince = busySince ?? .now } else { busySince = nil }
                 let working = busy && ContinuousClock.now - (busySince ?? .now) < .seconds(5)
                 if working || reading || (!dials.isEmpty && waiting) {

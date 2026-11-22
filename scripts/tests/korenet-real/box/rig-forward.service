@@ -1,0 +1,8 @@
+# The rig's one DERP region is "localhost:13340": inside a box that's this forward to derper.
+[Unit]
+Description=rig DERP forward
+[Service]
+ExecStart=/usr/bin/socat TCP-LISTEN:13340,bind=127.0.0.1,fork,reuseaddr TCP:derper:3340
+Restart=always
+[Install]
+WantedBy=multi-user.target

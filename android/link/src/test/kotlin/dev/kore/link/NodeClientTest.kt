@@ -6,6 +6,9 @@ import dev.kore.link.node.NodeDialer
 import dev.kore.link.node.NodeMachine
 import dev.kore.link.node.NodeMachine.State
 import dev.kore.link.node.PeerOffline
+import dev.kore.link.net.Tailnet
+import dev.kore.link.net.TailnetNode
+import kotlinx.coroutines.test.StandardTestDispatcher
 import dev.kore.link.node.RaiseSigner
 import dev.kore.link.node.SingleFlight
 import dev.kore.link.trust.Raise
@@ -93,6 +96,77 @@ class NodeClientTest {
         rig.client.named()
         runCurrent()
         assertEquals(1, rig.dials.size)
+    }
+
+    /** C28: the Mac's directory gives a waiting box a key it didn't have (its other node): dialled now. */
+    @Test fun aRecordThatGainsANodeKeyDialsAnAwayBoxAtOnce() = runTest {
+        val link = FakeLink(box(), { testScheduler.currentTime })
+        val rig = Rig(this, listOf({ PeerOffline() }, { link }), device = box())
+        rig.client.start()
+        runCurrent()
+        assertEquals(NodeMachine.AwayWhy.OFFLINE, (rig.client.state.value as State.Away).why)
+        advanceTimeBy(100)
+        // The same record again: nothing.
+        rig.client.recordChanged(box())
+        runCurrent()
+        assertEquals(1, rig.dials.size)
+        rig.client.recordChanged(box().copy(nodeKeys = listOf("nodekey:box", "nodekey:box-kore")))
+        runCurrent()
+        assertEquals(State.Up, rig.client.state.value)
+        assertEquals(listOf(0L, 100L), rig.dials)
+    }
+
+    /** Item 6: the tailnet's bus says a key came online; the box waiting on it dials now, others don't. */
+    @Test fun aPeerComingOnlineOnTheBusWakesTheNodeThatWaitsForIt() = runTest {
+        val link = FakeLink(box(), { testScheduler.currentTime })
+        val rig = Rig(this, listOf({ PeerOffline() }, { link }), device = box())
+        val up = Rig(this, listOf({ link() }))
+        rig.client.start()
+        up.client.start()
+        runCurrent()
+        assertEquals(NodeMachine.AwayWhy.OFFLINE, (rig.client.state.value as State.Away).why)
+        val net = FakeTailnet(Tailnet.RUNNING).apply {
+            onlineNow = "nodekey:mac"
+            // Another node first (nothing), then the box's.
+            peerSets.addAll(listOf("nodekey:mac,nodekey:other", "nodekey:box,nodekey:mac,nodekey:other"))
+        }
+        val watch = dev.kore.link.node.PeerWatch(net, backgroundScope, { listOf(rig.client, up.client) }, io = StandardTestDispatcher(testScheduler))
+        watch.kick()
+        runCurrent()
+        assertEquals(State.Up, rig.client.state.value)
+        assertEquals(2, rig.dials.size)
+        // The Mac was up all along: never dialled again.
+        assertEquals(1, up.dials.size)
+    }
+
+    /** A box that moved to a node no record holds (`mybox-kore`): the bus's new key, named after it, wakes it. */
+    @Test fun aMovedBoxIsWokenByItsNewNodeByName() = runTest {
+        val link = FakeLink(box(), { testScheduler.currentTime })
+        val rig = Rig(this, listOf({ PeerOffline() }, { link }), device = box())
+        rig.client.start()
+        runCurrent()
+        val me = TailnetNode("p.tail.ts.net.", "p", "android", true, 7, null, "nodekey:p", listOf("100.64.1.1"))
+        val net = FakeTailnet(Tailnet.RUNNING).apply {
+            this.me = me
+            others = listOf(TailnetNode("mybox-kore.tail.ts.net.", "mybox-kore", "linux", true, 7, null, "nodekey:new", listOf("100.113.194.5")))
+            peerSets.add("nodekey:new")
+        }
+        val watch = dev.kore.link.node.PeerWatch(net, backgroundScope, { listOf(rig.client) }, io = StandardTestDispatcher(testScheduler))
+        watch.kick()
+        runCurrent()
+        assertEquals(State.Up, rig.client.state.value)
+    }
+
+    /** Nothing waits: the watch never starts (no bus held). */
+    @Test fun thePeerWatchRunsOnlyWhileANodeWaits() = runTest {
+        val up = Rig(this, listOf({ link() }))
+        up.client.start()
+        runCurrent()
+        val net = FakeTailnet(Tailnet.RUNNING).apply { peerSets.add("nodekey:x") }
+        val watch = dev.kore.link.node.PeerWatch(net, backgroundScope, { listOf(up.client) }, io = StandardTestDispatcher(testScheduler))
+        watch.kick()
+        runCurrent()
+        assertEquals(0, net.peerWaits)
     }
 
     @Test fun aNamedNodeThatIsUpIsLeftAlone() = runTest {

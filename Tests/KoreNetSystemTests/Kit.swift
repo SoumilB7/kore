@@ -214,13 +214,17 @@ final class DaemonTransport: HostTransport, @unchecked Sendable {
     private var nonce: String?
     private var helloSent = false
 
-    init(path: String, grant: Grant) {
+    private let reachable: @Sendable () -> Bool
+
+    init(path: String, grant: Grant, reachable: @escaping @Sendable () -> Bool = { true }) {
         self.path = path
         self.grant = grant
+        self.reachable = reachable
         (events, continuation) = AsyncStream.makeStream()
     }
 
     func start() throws {
+        guard reachable() else { throw SocketError.failed("ssh: connect to host", ETIMEDOUT) }
         try MainActor.assumeIsolated {
             let socket = try HostListener.connect(to: path)
             self.socket = socket

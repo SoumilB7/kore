@@ -116,6 +116,21 @@ final class BoxBinding {
     /// one that keeps syncing with no window, `SyncPairList.keep`).
     private(set) var sync: HostSync?
     private var focus: NSObjectProtocol?
+    private var occlusion: NSObjectProtocol?
+
+    /// The window is on screen or not (shown, hidden, minimised, covered): while it shows, its
+    /// link is checked on a beat (`HostConnection.onScreen`); off screen, nothing runs for it.
+    func watchScreen(_ window: NSWindow) {
+        if let occlusion { NotificationCenter.default.removeObserver(occlusion) }
+        connection.onScreen(key, window.occlusionState.contains(.visible))
+        occlusion = NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) {
+            [weak self, weak window] _ in
+            MainActor.assumeIsolated {
+                guard let self, let window else { return }
+                self.connection.onScreen(self.key, window.occlusionState.contains(.visible))
+            }
+        }
+    }
 
     func windowOpened() {
         BoxBinding.opened(alias: alias, folder: folder)
@@ -138,6 +153,9 @@ final class BoxBinding {
         connection.onChatMeta(key, nil)
         if filesMade { files.stop() }
         stopSync()
+        if let occlusion { NotificationCenter.default.removeObserver(occlusion) }
+        occlusion = nil
+        connection.onScreen(key, false)
         connection.release()
         Workspace.boxLinkChanged(alias)
     }

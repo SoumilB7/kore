@@ -522,6 +522,44 @@ package enum DevicesWords {
     /// A row's detail while Kore's own tailnet there (or here) is signed out.
     package static let ownOut = "Kore's tailnet signed out · Sign in"
 
+    // MARK: The first page's cue
+
+    /// Kore's own tailnet on this Mac needs its sign-in: never signed in (as the Mac's node, or
+    /// beside running Tailscale), or signed out since.
+    package static func macNeedsSignIn(_ picture: DevicesPicture) -> Bool {
+        if picture.net == .notJoined || picture.ownSignIn { return true }
+        guard let own = picture.own, !own.signedIn else { return false }
+        return picture.net == .running || picture.net.tailscaleOff
+    }
+
+    /// A box whose Kore's own tailnet waits for a sign-in (reached, not taken offline).
+    package static func boxNeedsSignIn(_ row: DeviceRow) -> Bool {
+        guard row.kind == .box, !row.paused, let own = row.own, !own.signedIn else { return false }
+        return row.status != .offline
+    }
+
+    /// This Mac's line on the Welcome and in its folder windows' title row: only while Kore's own
+    /// tailnet isn't signed in, or its sign-in is followed ("finish signing in", then "signed in
+    /// as …" a moment). Signed in, nothing (its hover and Devices say it).
+    package static func macCue(_ picture: DevicesPicture, signedInNow: Bool) -> OwnCue? {
+        switch picture.net {
+        case .off, .starting, .unavailable: return nil
+        default: break
+        }
+        if picture.signingIn { return OwnCue("Kore's tailnet: finish signing in, it's open in your browser", .cancel) }
+        if signedInNow, let own = picture.own, own.signedIn { return OwnCue(own.line, nil) }
+        guard macNeedsSignIn(picture) else { return nil }
+        return OwnCue(picture.own.map { $0.signedIn ? NetNodeWire.Own.signedOut(.never).line : $0.line } ?? NetNodeWire.Own.signedOut(.never).line, .signIn)
+    }
+
+    /// A box's line, the same way: its sign-in followed from here says how it goes.
+    package static func boxCue(_ row: DeviceRow) -> OwnCue? {
+        guard row.kind == .box, !row.paused else { return nil }
+        if let step = row.ownStep { return OwnCue(step, nil) }
+        guard boxNeedsSignIn(row), let own = row.own else { return nil }
+        return OwnCue(own.line, row.ownPage != nil || row.koreTailnet ? .signIn : nil)
+    }
+
     /// This Mac's row: its detail ("this Mac", or signed out) and its hover.
     package static func macDetail(_ picture: DevicesPicture) -> String {
         if let own = picture.own, !own.signedIn, !picture.ownSignIn, picture.net == .running || picture.net.tailscaleOff { return ownOut }
@@ -558,6 +596,29 @@ package enum DevicesWords {
 
     /// "at mybox · 3 min ago".
     package static func waitingDetail(_ row: PendingRow, now: Date) -> String { "at \(row.at) · " + ago(row.device.lastSeen, now: now) }
+}
+
+/// One quiet line on the first page while a device's Kore's tailnet isn't signed in: "Kore's
+/// tailnet: not signed in · Sign in", its action right there.
+package struct OwnCue: Equatable, Sendable {
+    package enum Action: Equatable, Sendable {
+        case signIn, cancel
+
+        package var title: String {
+            switch self {
+            case .signIn: "Sign in"
+            case .cancel: "Cancel"
+            }
+        }
+    }
+
+    package var line: String
+    package var action: Action?
+
+    package init(_ line: String, _ action: Action?) {
+        self.line = line
+        self.action = action
+    }
 }
 
 // MARK: The icon
@@ -603,10 +664,17 @@ package struct NetIconLook: Equatable, Sendable {
         case .stopped: return NetIconLook(dimmed: true, dot: .ring, line: "Tailscale is off on this Mac")
         case .signedOut: return NetIconLook(dimmed: true, dot: .ring, line: "Tailscale is signed out on this Mac")
         case .unavailable: return NetIconLook(dimmed: true, dot: .ring, line: "Kore's tailnet couldn't start")
-        case .notJoined: return NetIconLook(dimmed: true, dot: nil, line: picture.signingIn ? DevicesWords.finishSignIn : DevicesWords.signIn)
+        case .notJoined: return NetIconLook(dimmed: true, dot: .accent, line: picture.signingIn ? DevicesWords.finishSignIn : DevicesWords.signIn)
         default: break
         }
-        if picture.ownSignIn { return NetIconLook(dimmed: false, dot: nil, line: picture.signingIn ? DevicesWords.finishSignIn : DevicesWords.signIn) }
+        // A sign-in Kore's tailnet waits for, here or on a box: the needs-you dot until it's done.
+        if picture.ownSignIn { return NetIconLook(dimmed: false, dot: .accent, line: picture.signingIn ? DevicesWords.finishSignIn : DevicesWords.signIn) }
+        if DevicesWords.macNeedsSignIn(picture) {
+            return NetIconLook(dimmed: false, dot: .accent, line: picture.signingIn ? DevicesWords.finishSignIn : "Kore's tailnet signed out on this Mac")
+        }
+        if let box = picture.devices.first(where: DevicesWords.boxNeedsSignIn) {
+            return NetIconLook(dimmed: false, dot: .accent, line: "Kore's tailnet signed out on \(box.name)")
+        }
         if picture.lockedOut { return NetIconLook(dimmed: false, dot: .ring, line: "This Mac waits for a Tailnet Lock signature") }
         if let expiry = picture.macKeyExpiry, expiry.timeIntervalSince(now) < 86400 {
             return NetIconLook(dimmed: false, dot: .ring, line: "This Mac's Tailscale key expires " + DevicesWords.expiresIn(expiry, now: now))

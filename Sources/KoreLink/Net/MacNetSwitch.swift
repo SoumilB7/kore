@@ -72,6 +72,7 @@ package enum MacNetSwitch {
         net.directoryChanged = { [weak mac] in mac?.pushDirectory() }
         net.issuedChanged = { [weak mac] in mac?.phonesChanged() }
         net.phonesLook = { [weak mac] in mac?.refresh() }
+        net.willMove = { [weak mac] in mac?.moving() }
         watch(net, mac)
         apply(net.state, to: mac)
         return mac

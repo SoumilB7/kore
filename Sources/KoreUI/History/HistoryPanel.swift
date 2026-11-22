@@ -52,6 +52,9 @@ struct HistoryPanel: View {
     @StateObject private var lit = Local<Int?>(nil)
     @StateObject private var window = Held<NSWindow?>(nil)
     @StateObject private var search = Held(ChatSearch())
+    /// Every chat's kept Arsenal tier (`ArsenalMemory`), read once per list load: a closed chat's
+    /// row shows its Arsenal as its tab did, with no read while scrolling.
+    @StateObject private var kept = Local<[String: ArsenalTier]>([:])
     @FocusState private var searchFocused: Bool
 
     /// Chats named by the query, then those whose words hold it, each newest first.
@@ -62,6 +65,13 @@ struct HistoryPanel: View {
         let hits = search.value.hits
         let named = listed.filter { $0.title.lowercased().contains(q) }
         return named + listed.filter { hits[$0.id] != nil && !$0.title.lowercased().contains(q) }
+    }
+
+    /// A row's open chat, else its kept tier. Hidden, the panel reads no tabs: it stays mounted
+    /// while closed.
+    private func arsenal(_ row: SessionSummary, on alias: String?) -> (live: Chat?, kept: ArsenalTier?) {
+        guard isOpen else { return (nil, nil) }
+        return workspace.historyArsenal(row, on: alias, kept: kept.value)
     }
 
     /// What the search reads: the panel's list, whatever the query.
@@ -79,6 +89,8 @@ struct HistoryPanel: View {
                 ScrollView {
                     LazyVStack(spacing: Space.xxs) {
                         ForEach(Array(matches.enumerated()), id: \.element.id) { index, chat in
+                            let elsewhere = workspace.boxRowPlace(chat.id)
+                            let arsenal = arsenal(chat, on: elsewhere)
                             HistoryRow(
                                 session: chat,
                                 hit: search.value.hits[chat.id],
@@ -95,7 +107,9 @@ struct HistoryPanel: View {
                                     Task { chat.archived ? await workspace.unarchive(chat) : await workspace.archive(chat) }
                                 },
                                 locked: workspace.historyLocked(chat),
-                                elsewhere: workspace.boxRowPlace(chat.id),
+                                elsewhere: elsewhere,
+                                live: arsenal.live,
+                                kept: arsenal.kept,
                                 clip: { cut in ChatPasting.clip(chat, in: workspace, cut: cut) },
                                 paste: ChatClipboard.shared.clip == nil ? nil : { paste() })
                             .highlightRow(StoryID.History.row(chat.id), lit: (lit.value ?? 0) == index) { lit.value = index }
@@ -134,7 +148,11 @@ struct HistoryPanel: View {
             lit.value = nil
             searchChats()
         }
-        .onChange(of: workspace.chats) { if isOpen { searchChats() } }
+        .onChange(of: workspace.chats) {
+            guard isOpen else { return }
+            kept.value = ArsenalMemory.all()
+            searchChats()
+        }
         .onChange(of: isOpen, initial: true) { _, open in
             lit.value = nil
             if open {
@@ -143,6 +161,7 @@ struct HistoryPanel: View {
                 monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { event in
                     handle(event)
                 }
+                kept.value = ArsenalMemory.all()
                 searchChats()
                 Task { await workspace.refresh() }
                 workspace.historyOpened()
@@ -306,6 +325,10 @@ private struct HistoryRow: View {
     var locked: String? = nil
     /// A paired box's chat: the box it's on.
     var elsewhere: String? = nil
+    /// Its chat while a tab has it open: the logo shows its Arsenal.
+    var live: Chat? = nil
+    /// Its Arsenal tier kept since its tab closed (`ArsenalMemory`): the logo shows it too.
+    var kept: ArsenalTier? = nil
     /// Copy (false) or Cut (true) the row's chat; Paste the held one into this window.
     var clip: (Bool) -> Void = { _ in }
     var paste: (() -> Void)? = nil
@@ -335,10 +358,20 @@ private struct HistoryRow: View {
         .accessibilityAction(named: session.archived ? "Unarchive" : "Archive", toggleArchive)
     }
 
+    @ViewBuilder private var logo: some View {
+        let story = StoryID.History.row(session.id)
+        if let live {
+            ChatLogo(chat: live, size: Size.logoRow, story: story)
+        } else {
+            ProviderLogo(provider: Registry.provider(for: session.agent), size: Size.logoRow, arsenal: kept)
+                .overlay { if ProviderLogo.tint(kept) != nil { Color.clear.storyMark(story.part(.arsenal)) } }
+        }
+    }
+
     private var title: some View {
         Button(action: open) {
             HStack(spacing: Space.md) {
-                ProviderLogo(provider: Registry.provider(for: session.agent), size: Size.logoRow)
+                logo
                 VStack(alignment: .leading, spacing: Space.xxs) {
                     titleLine
                     if let hit { snippet(hit) }
@@ -394,7 +427,7 @@ private struct HistoryRow: View {
 
     private var renameField: some View {
         HStack(spacing: Space.md) {
-            ProviderLogo(provider: Registry.provider(for: session.agent), size: Size.logoRow)
+            logo
             TextField("Name", text: $draft.value)
                 .textFieldStyle(.plain)
                 .font(Chrome.body)

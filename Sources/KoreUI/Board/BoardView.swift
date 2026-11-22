@@ -360,7 +360,7 @@ private struct DropPreviewView: View {
 
     private func name(_ chat: Chat, color: Color) -> some View {
         HStack(spacing: Space.sm) {
-            ProviderLogo(provider: chat.provider, size: Size.logoTab)
+            ChatLogo(chat: chat, size: Size.logoTab)
             Text(chat.title).font(TextStyle.bodyMedium).foregroundStyle(color).lineLimit(1)
         }
         .padding(.horizontal, Space.md)

@@ -173,10 +173,13 @@ struct NetLinkTests {
         let box = FakeNetBox(root: root)
         var entry = NodeDirectory.Entry(device: box.device, name: "box-1", ssh: "route-box", nodeKey: box.nodeKey, identityKey: box.identity.publicKey)
         directory.upsert(entry)
+        // The box is a node on whichever tailnet carries the Mac (no node of it listed: straight to SSH).
+        let json = #"{"PublicKey":"\#(box.nodeKey)","TailscaleIPs":["100.64.0.20"],"Online":true,"UserID":7,"HostName":"box-1","OS":"linux"}"#
+        let peers = [try JSONDecoder().decode(TailnetStatus.Peer.self, from: Data(json.utf8))]
         let (switcher, settled) = netSwitch(defaults, root: root, directory: directory) {
             // The installed Tailscale's own status says what its state does (a read follows it).
-            let local: FakeTailnet = if case .state(let backend) = installed { FakeTailnet(backend) } else { FakeTailnet() }
-            return fakeEnv(installed, local: local, sidecar: FakeTailnet(), root: root, defaults: defaults, calls: calls)
+            let local: FakeTailnet = if case .state(let backend) = installed { FakeTailnet(backend, peers: peers) } else { FakeTailnet(peers: peers) }
+            return fakeEnv(installed, local: local, sidecar: FakeTailnet(peers: peers), root: root, defaults: defaults, calls: calls)
         }
         switcher.set(true)
         await settled.next { $0 == "chose" }

@@ -22,7 +22,7 @@ package enum ArsenalMemory {
 
     static func key(box alias: String, chat id: String) -> String { "box:" + alias + ":" + id }
 
-    static func key(cli: String, session: String) -> String { cli + ":" + session }
+    package static func key(cli: String, session: String) -> String { cli + ":" + session }
 
     /// `[key, tier]` pairs, oldest first.
     private static var entries: [[String]] {
@@ -34,6 +34,13 @@ package enum ArsenalMemory {
 
     package static func tier(key: String) -> ArsenalTier? {
         entries.last { $0[0] == key }.flatMap { ArsenalTier(rawValue: $0[1]) }
+    }
+
+    /// Every kept tier by its key, read once: a list's rows (History) look theirs up here.
+    package static func all() -> [String: ArsenalTier] {
+        var tiers: [String: ArsenalTier] = [:]
+        for entry in entries { tiers[entry[0]] = ArsenalTier(rawValue: entry[1]) }
+        return tiers
     }
 
     /// The chat's tier now: kept under its session (and the one it was kept under before, when the

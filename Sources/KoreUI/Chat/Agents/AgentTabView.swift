@@ -274,7 +274,7 @@ private struct CrumbLink: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: Space.xs) {
-                ProviderLogo(provider: chat.provider, size: Size.logoRow)
+                ChatLogo(chat: chat, size: Size.logoRow)
                 Text(chat.title)
                     .font(TextStyle.label)
                     .foregroundStyle(hovered.value ? Theme.text : Theme.secondary)

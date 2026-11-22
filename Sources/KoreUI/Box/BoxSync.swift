@@ -345,8 +345,13 @@ struct BoxOfflineDialog: View {
                 }
             } else {
                 HStack(spacing: Space.sm) {
-                    Circle().fill(Theme.accent).frame(width: Size.statusPoint, height: Size.statusPoint)
-                        .pulse(low: Motion.blinkLow, period: Motion.blinkPeriod)
+                    // Trying: the dot pulses. Given up: it stays still (nothing runs until an event or Try again).
+                    if connection.gaveUp {
+                        Circle().fill(Theme.tertiary).frame(width: Size.statusPoint, height: Size.statusPoint)
+                    } else {
+                        Circle().fill(Theme.accent).frame(width: Size.statusPoint, height: Size.statusPoint)
+                            .pulse(low: Motion.blinkLow, period: Motion.blinkPeriod)
+                    }
                     Text(Self.status(box, note: note)).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(2)
                     Spacer(minLength: Space.sm)
                     Button("Try again") { connection.retry() }.smallButton()
@@ -365,10 +370,12 @@ struct BoxOfflineDialog: View {
         NodeNames.name(box.alias) + " disconnected" + ((box.connection.lastHeard ?? box.linkCard.lastHeard).map { " · last update " + BoxBinding.when($0) } ?? "")
     }
 
-    /// The line by the pulsing dot: "Reconnecting…", or that the box keeps dropping.
+    /// The line by the dot: which way it's trying ("Reconnecting over Kore's tailnet · mybox-kore"),
+    /// that the box keeps dropping, or, given up, what it tried (`ReconnectWords`).
     @MainActor static func status(_ box: BoxBinding, note: BoxList.Note?) -> String {
-        if box.linkCard.keepsDropping { return NodeNames.name(box.alias) + " keeps dropping · Reconnecting…" }
-        guard let note, !(note.action == .tryAgain && note.line == "Can't reach \(NodeNames.name(box.alias))") else { return "Reconnecting…" }
+        let connection = box.connection
+        if box.linkCard.keepsDropping, !connection.gaveUp { return NodeNames.name(box.alias) + " keeps dropping · Reconnecting…" }
+        guard let note, !(note.action == .tryAgain && note.line == "Can't reach \(NodeNames.name(box.alias))") else { return connection.reconnectLine }
         return note.line
     }
 

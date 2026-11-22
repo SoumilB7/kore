@@ -58,6 +58,32 @@ struct LocalAPITests {
         #expect(!BusNotify.mayCarry([]))
     }
 
+    /// A sign-in page that comes after the state (kore-tailnet's ask), a node deleted in the admin
+    /// console, and a finished sign-in are news: each line is read, never skipped.
+    @Test func aLaterPageAndARemovedNodeAreRead() throws {
+        let page = #"{"BrowseToURL":"https://login.tailscale.com/a/1"}"#
+        let removed = #"{"PeersRemoved":[42]}"#
+        #expect(BusNotify.mayCarry(Array(page.utf8)) && BusNotify.mayCarry(Array(removed.utf8)))
+        #expect(try JSONDecoder().decode(BusNotify.self, from: Data(page.utf8)).events == [.state(.needsLogin)])
+        #expect(try JSONDecoder().decode(BusNotify.self, from: Data(removed.utf8)).events == [.peer(nodeID: 42, key: nil, online: false)])
+        // A sign-in that finished while the node stayed Running: its status is read again.
+        let finished = #"{"LoginFinished":{}}"#
+        #expect(BusNotify.mayCarry(Array(finished.utf8)))
+        #expect(try JSONDecoder().decode(BusNotify.self, from: Data(finished.utf8)).events == [.loginFinished])
+    }
+
+    /// After a finished sign-in: Starting as someone, or Running, with no page asked, is signed in.
+    @Test func aFinishedSignInIsSignedInOnceItSaysWho() {
+        let me = TailnetStatus.SelfNode(publicKey: "nodekey:1", tailscaleIPs: [], userID: 3)
+        var starting = TailnetStatus(backendState: .starting, selfNode: me)
+        #expect(!starting.loggedIn)
+        starting.logins[3] = "me@x.com"
+        #expect(starting.loggedIn && !starting.signedIn)
+        #expect(TailnetStatus(backendState: .running, selfNode: me).loggedIn)
+        #expect(!TailnetStatus(backendState: .running, selfNode: me, authURL: "https://login.example/a/1").loggedIn)
+        #expect(!TailnetStatus(backendState: .needsLogin, selfNode: me).loggedIn)
+    }
+
     @Test func statusDecodesOnlyWhatsUsed() throws {
         let script = Script(answers: [FakeHTTPServer.ok(statusJSON)])
         let status = try TailnetLocal(api: script.client).status()
@@ -216,7 +242,7 @@ struct DiscoveryTests {
     @Test(arguments: [
         (TailnetChooser.Installed.state(.running), TailnetChooser.Choice.installed),
         (.state(.starting), .installed),
-        (.state(.needsMachineAuth), .installed),
+        (.state(.needsMachineAuth), .signedOut),
         (.state(.stopped), .stopped),
         (.state(.needsLogin), .signedOut),
         (.state(.noState), .signedOut),

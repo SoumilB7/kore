@@ -162,7 +162,7 @@ package struct SyncBox: Sendable {
     /// `ssh <alias>`, the user's own config and agent. Nil for an alias that isn't one.
     package static func ssh(_ alias: String) -> SyncBox? {
         guard validAlias(alias), let address = BoxAddress(alias) else { return nil }
-        return SyncBox(alias: alias, base: nil, ssh: ["/usr/bin/ssh"] + sshOptions + address.options)
+        return SyncBox(alias: alias, base: nil, ssh: [SSHTransport.ssh] + sshOptions + address.options)
     }
 
     /// The host ssh and rsync are given: the alias, or a typed destination's host (its user and

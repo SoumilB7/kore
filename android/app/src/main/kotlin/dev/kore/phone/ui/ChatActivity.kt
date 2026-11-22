@@ -162,6 +162,8 @@ class ChatActivity : NodeActivity() {
 
     override fun onStart() {
         super.onStart()
+        // The composer's kept attachments (back from the camera, maybe in a new process) show at once.
+        actions.shown()
         val link = link ?: return
         // Subscribed before the open goes out: the transcript flow keeps no replay, so a late
         // collector would miss the first page.
@@ -375,8 +377,10 @@ class ChatActivity : NodeActivity() {
         barAfter.showWaiting(if (prompt) waiting?.let { w -> Waiting(w.agents, 0).takeIf { it.agents > 0 } } else waiting)
         leadPrompt.visibility = if (prompt) View.VISIBLE else View.GONE
         leadPrompt.needsYou = prompt && chat?.str("state") == "needsYou"
+        val arsenal = arsenalOn(chat?.str("arsenal"))
         provider?.let { leadLogo.setImageResource(providerLogo(it)) }
-        leadSpin.tint = if (provider == "codex") Tone.spinCodex else Tone.spinClaude
+        leadLogo.imageTintList = logoTint(arsenal)?.let { android.content.res.ColorStateList.valueOf(it) }
+        leadSpin.tint = workTint(provider, arsenal)
         leadPrompt.tint = leadSpin.tint
         leadPrompt.ring = Tone.bg
         leadLogo.visibility = if (working || prompt) View.INVISIBLE else View.VISIBLE
@@ -624,7 +628,7 @@ class ChatActivity : NodeActivity() {
                     }
                 }
                 is Item.One -> {
-                    val doc = item.e.objs("doc")
+                    val doc = formatted(item.e)
                     if (item.e.str("kind") in setOf("answer", "plan") && doc.isNotEmpty()) {
                         v.visibility = View.GONE
                         docBox.visibility = View.VISIBLE
@@ -674,6 +678,17 @@ class ChatActivity : NodeActivity() {
          * The running turn's current step, one quiet line by the spinner: the newest line of a
          * thought, or a tool or sub-agent as its short name · its target.
          */
+        /**
+         * An answer's, plan's or summary's render tree: the Mac's (`doc`), or a box's raw text
+         * parsed here, only its last block again while it streams ([Markdown.cache]).
+         */
+        private fun formatted(e: JsonObject): List<JsonObject> {
+            val doc = e.objs("doc")
+            if (doc.isNotEmpty()) return doc
+            val text = e.str("text")?.takeIf { it.isNotEmpty() } ?: return emptyList()
+            return Markdown.cache.blocks(e.str("id") ?: return emptyList(), text, streaming = !e.bool("done"))
+        }
+
         private fun bindLive(v: TextView, spin: Spinner, item: Item.Live) {
             val line = LiveWork.line(item.e)
             v.text = if (line.thought) line.what else listOfNotNull(line.what, line.on).joinToString(" · ")
@@ -856,7 +871,7 @@ class ChatActivity : NodeActivity() {
                         setSpan(android.text.style.RelativeSizeSpan(0.85f), 0, length, 0)
                         append("\n")
                         val start = length
-                        append(e.str("text").orEmpty())
+                        append(Doc.render(formatted(e)))
                         setSpan(android.text.style.QuoteSpan(K.line, dp(2), dp(10)), start, length, 0)
                         setSpan(android.text.style.ForegroundColorSpan(K.dim), start, length, 0)
                     }

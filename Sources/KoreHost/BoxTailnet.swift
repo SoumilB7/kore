@@ -59,17 +59,29 @@ package struct BoxTailnet: Sendable {
     package var key: @Sendable () throws -> Data
     /// Kore's own whatever is installed (`KORE_HOST_TAILNET=kore`: the live test's second node).
     package var forced = false
+    /// Calls its closure each time installed Tailscale's daemon may have come back (its socket's
+    /// folder changed); gives back how to stop. Nil: nothing to watch here.
+    package var appears: @Sendable (@escaping @Sendable () -> Void) -> (@Sendable () -> Void)? = { _ in nil }
+    /// Installed Tailscale's daemon on its way up (boot): its socket waited for, at most
+    /// `bootGrace` (moving back once it's up is `appears`'s).
+    package var comingUp: @Sendable () -> Bool = { false }
+    /// How long a starting tailscaled is waited for.
+    package static let bootGrace: TimeInterval = 45
 
     package init(
         installed: @escaping @Sendable () -> (TailnetChooser.Installed, (any Tailnet)?), helper: @escaping @Sendable () -> URL?,
         start: @escaping @Sendable (URL, Data) throws -> (tailnet: any Tailnet, alive: @Sendable () -> Bool, stop: @Sendable () -> Void),
-        key: @escaping @Sendable () throws -> Data, forced: Bool = false
+        key: @escaping @Sendable () throws -> Data, forced: Bool = false,
+        appears: @escaping @Sendable (@escaping @Sendable () -> Void) -> (@Sendable () -> Void)? = { _ in nil },
+        comingUp: @escaping @Sendable () -> Bool = { false }
     ) {
+        self.appears = appears
         self.installed = installed
         self.helper = helper
         self.start = start
         self.key = key
         self.forced = forced
+        self.comingUp = comingUp
     }
 
     /// The helper's name beside kore-host (`~/.local/bin/kore-tailnet`).
@@ -85,7 +97,22 @@ package struct BoxTailnet: Sendable {
     /// Chooses, and starts Kore's own when that's the choice. Blocks while it starts (up to its
     /// helper's `ready` and the node's start): run it off the main thread.
     package func choose() -> Pick {
-        let (found, local) = installed()
+        var (found, local) = installed()
+        // At boot kore-host can start before tailscaled has its socket: installed Tailscale
+        // that is starting (its unit activating, or enabled and the machine just booted) is
+        // waited for, never taken as stopped (Kore's own would start beside it: two nodes).
+        // Its LocalAPI answers NoState for a moment as it starts (before its state is read):
+        // that's still starting, not signed out.
+        let starting: (TailnetChooser.Installed) -> Bool = { $0 == .state(.stopped) || $0 == .state(.noState) }
+        if !forced, starting(found), comingUp() {
+            let end = Date().addingTimeInterval(Self.bootGrace)
+            HostJournal.note("korenet tailscale starting", ["wait": "\(Int(Self.bootGrace))s"])
+            while Date() < end {
+                usleep(250_000)
+                (found, local) = installed()
+                if !starting(found) || !comingUp() { break }
+            }
+        }
         let choice = forced ? .sidecar : TailnetChooser.chooseBeside(found)
         guard choice.startsSidecar else { return .installed(local ?? TailnetLocal(), choice) }
         // Beside a stopped or signed-out Tailscale and Kore's own can't run: that node, waited for.
@@ -120,7 +147,29 @@ package struct BoxTailnet: Sendable {
                 return (sidecar.tailnet, { sidecar.running }, { sidecar.stop() })
             },
             key: { try key(paths) },
-            forced: forced(environment))
+            forced: forced(environment), appears: { TailscaledAppears.watch($0) }, comingUp: { tailscaledStarting() })
+    }
+
+    /// Linux: tailscaled's unit is activating, active with its LocalAPI not up yet, or enabled
+    /// and this machine booted moments ago (its unit not started yet). A stopped unit on a
+    /// machine up for a while is stopped.
+    package static func tailscaledStarting(
+        run: (String) -> String = { HostService.system(["systemctl", "is-active", $0]).output },
+        enabled: (String) -> String = { HostService.system(["systemctl", "is-enabled", $0]).output }, uptime: () -> Double? = bootUptime
+    ) -> Bool {
+        #if os(Linux)
+        let active = run("tailscaled.service").trimmingCharacters(in: .whitespacesAndNewlines)
+        if active == "activating" || active == "reloading" || active == "active" { return true }
+        guard active == "inactive", enabled("tailscaled.service").trimmingCharacters(in: .whitespacesAndNewlines) == "enabled" else { return false }
+        return (uptime() ?? .infinity) < 180
+        #else
+        return false
+        #endif
+    }
+
+    /// Seconds since boot (`/proc/uptime`).
+    package static func bootUptime() -> Double? {
+        (try? String(contentsOfFile: "/proc/uptime", encoding: .utf8)).flatMap { $0.split(separator: " ").first.flatMap { Double($0) } }
     }
 
     /// `kore-tailnet` beside this kore-host, else `KORE_TAILNET_BIN`.

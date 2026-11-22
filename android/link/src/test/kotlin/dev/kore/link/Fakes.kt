@@ -90,6 +90,15 @@ class FakeTailnet(var state: String = Tailnet.NEEDS_LOGIN) : Tailnet {
     var startFails: Exception? = null
     var listening: (String) -> Boolean = { false }
     private var before: String? = null
+    /** The online peer sets the bus says next, in order ([waitPeers]); none left: no more events. */
+    val peerSets = ArrayDeque<String>()
+    var onlineNow = ""
+    var peerWaits = 0
+    override fun onlinePeers() = onlineNow
+    override fun waitPeers(known: String, timeoutMs: Long): String? {
+        peerWaits++
+        return peerSets.removeFirstOrNull()?.also { onlineNow = it }
+    }
 
     override fun state() = state
     override fun authUrl() = url.takeIf { state == Tailnet.NEEDS_LOGIN }

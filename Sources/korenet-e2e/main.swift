@@ -23,7 +23,7 @@ import Tailnet
 let usage = """
     usage: korenet-e2e --ssh <alias> --remote '<env…> <kore-host>' --grant <name> --box-ip <100.x> --port <n>
                        --box-device <uuid> --box-key <base64 scalar> --folder <served folder> --pid <daemon pid> [--idle <s>]
-                       [--embedded <kore-tailnet>] [--ssh-host <ip>] [--state <box state folder>] [--sign-in-wait <s>]
+                       [--embedded <kore-tailnet>] [--ssh-host <ip>] [--ssh-config <file>] [--state <box state folder>] [--sign-in-wait <s>]
     """
 
 var options: [String: String] = [:]
@@ -56,7 +56,7 @@ let idle = Double(options["idle"] ?? "30") ?? 30
 let embeddedHelper = options["embedded"]
 /// ssh's own options for the box: its LAN address when given (`-o HostName`), the alias's
 /// known-hosts entry kept (`HostKeyAlias`).
-let sshOptions: [String] = ["-o", "BatchMode=yes"] + (options["ssh-host"].map { ["-o", "HostName=\($0)", "-o", "HostKeyAlias=\(alias)"] } ?? [])
+let sshOptions: [String] = (options["ssh-config"].map { ["-F", $0] } ?? []) + ["-o", "BatchMode=yes"] + (options["ssh-host"].map { ["-o", "HostName=\($0)", "-o", "HostKeyAlias=\(alias)"] } ?? [])
 let boxState = options["state"]
 let signInWait = Double(options["sign-in-wait"] ?? "600") ?? 600
 guard let port = UInt16(need("port")), let boxDevice = UUID(uuidString: need("box-device")),

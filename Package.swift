@@ -17,6 +17,7 @@ let package = Package(
         .executable(name: "kore-fake-cli", targets: ["kore-fake-cli"]),
         .executable(name: "kore-power-bench", targets: ["kore-power-bench"]),
         .executable(name: "korenet-e2e", targets: ["korenet-e2e"]),
+        .executable(name: "korenet-rig", targets: ["korenet-rig"]),
     ],
     dependencies: [
         .package(url: "https://github.com/migueldeicaza/SwiftTerm.git", revision: "caa1bdd3f1396c5b0ed66121f299d1c8b42bc94c"),
@@ -93,6 +94,9 @@ let package = Package(
         // The Mac end of `scripts/tests/korenet-e2e.sh`: KoreNet's own code against an isolated
         // kore-host over real Tailscale. Not part of Kore.app.
         .executableTarget(name: "korenet-e2e", dependencies: ["KoreNet", "KoreTrust", "Tailnet"]),
+        // The Mac end of `scripts/tests/korenet-real`: Kore.app's HostClient without its UI,
+        // against Docker boxes on a local Headscale. Not part of Kore.app.
+        .executableTarget(name: "korenet-rig", dependencies: ["HostClient", "KoreCore", "KoreNet", "KoreTrust", "Tailnet", "LinkProtocol"]),
         // `swift test`: Swift Testing, in the Command Line Tools (phase 12's core layer).
         .testTarget(name: "KoreCoreTests", dependencies: ["KoreCore", "AgentTools", "kore-fake-cli"]),
         .testTarget(name: "KoreUITests", dependencies: ["KoreUI", "src", "KoreCore", "kore-fake-cli"]),

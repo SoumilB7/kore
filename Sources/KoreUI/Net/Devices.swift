@@ -264,17 +264,65 @@ package final class Devices {
     /// doesn't cancel). A second press while it waits opens nothing more: never a loop of tabs.
     /// Kore's own tailnet signed in: as the Mac's node it runs; signing in while Tailscale runs,
     /// its page is gone (it signed in and stopped).
+    /// Signed in as it says so: the Mac's node running, or Kore's own beside Tailscale signed in
+    /// (a choice made again meanwhile, its state choosing, is no sign-in).
     private var signInDone: Bool {
         guard let facts = net?.facts, facts.on else { return true }
         if facts.state == .sidecar { return facts.status?.backendState == .running }
-        return facts.ownSignIn == nil
+        return facts.own?.signedIn == true && facts.ownSignIn == nil
+    }
+
+    /// Signed in a moment ago from the first page's line: it says "signed in as …" this long.
+    package private(set) var signedInNow = false
+    @ObservationIgnored private var signedInNowEnd: Task<Void, Never>?
+
+    /// This Mac's line on the first page (the Welcome, a folder window's title row).
+    package func macCue() -> OwnCue? {
+        _ = revision
+        guard net?.facts.on == true else { return nil }
+        return DevicesWords.macCue(picture(), signedInNow: signedInNow)
+    }
+
+    /// A box's line there: by any key it goes by (its alias, or its KoreNet id).
+    package func boxCue(_ key: String) -> OwnCue? {
+        _ = revision
+        guard net?.facts.on == true, let row = boxRow(key) else { return nil }
+        return DevicesWords.boxCue(row)
+    }
+
+    private func boxRow(_ key: String) -> DeviceRow? {
+        var keys: Set<String> = [key, HostConnection.current(key)]
+        if let entry = NodeDirectory.shared.entry(forKey: key) {
+            keys.insert(entry.id.raw)
+            if let ssh = entry.ssh { keys.insert(ssh) }
+        }
+        return picture().devices.first { $0.kind == .box && keys.contains($0.id) }
+    }
+
+    /// The line's action.
+    package func cueAction(_ cue: OwnCue, box key: String?) {
+        switch cue.action {
+        case .signIn?: if let key { signInBox(key) } else { signIn() }
+        case .cancel?: cancelSignIn()
+        case nil: break
+        }
+    }
+
+    /// A box's Sign in on its first page: its page opens here (or it signs in afresh), and its
+    /// line follows it to "signed in as …" (`BoxOwnFollow`, as after a claim).
+    package func signInBox(_ key: String) {
+        guard let row = boxRow(key) else { return }
+        let open = openURL
+        BoxOwnFollow.shared.follow(row.id, name: row.name, own: row.own) { open($0) }
+        if row.ownPage == nil, row.koreTailnet { relogin(row) }
+        changed()
     }
 
     package func signIn() {
         guard let net, !signingIn else { return }
         signingIn = true
         signInOpened = false
-        net.hold("signin", true)
+        net.hold(KoreNetSwitch.signInHold, true)
         if let page = net.authURL.flatMap(URL.init(string:)) {
             openURL(page)
             signInOpened = true
@@ -292,7 +340,8 @@ package final class Devices {
             }
             guard signingIn else { return }
             signingIn = false
-            net.hold("signin", false)
+            net.hold(KoreNetSwitch.signInHold, false)
+            showSignedIn()
             if !defaults.bool(forKey: Self.nudgedKey) {
                 defaults.set(true, forKey: Self.nudgedKey)
                 nudge = true
@@ -303,8 +352,22 @@ package final class Devices {
     package func cancelSignIn() {
         guard signingIn else { return }
         signingIn = false
-        net?.hold("signin", false)
+        net?.hold(KoreNetSwitch.signInHold, false)
     }
+
+    /// "Kore's tailnet: signed in as …" for a moment, then the line goes.
+    private func showSignedIn() {
+        signedInNow = true
+        signedInNowEnd?.cancel()
+        signedInNowEnd = Task { @MainActor [weak self] in
+            await self?.sleepShown()
+            guard !Task.isCancelled else { return }
+            self?.signedInNow = false
+        }
+    }
+
+    /// How "signed in as …" waits (storylines: at once, or held).
+    @ObservationIgnored package var sleepShown: @MainActor () async -> Void = { try? await Task.sleep(for: .seconds(BoxOwnFollow.shownFor)) }
 
     /// The nudge shows once: the popup closing after it was seen ends it.
     package func nudgeSeen() { nudge = false }

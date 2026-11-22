@@ -576,6 +576,12 @@ package final class MacNet {
         if was { changed?("closed") }
     }
 
+    /// This Mac leaves its tailnet node for another: every phone is told `restart` while the old
+    /// node still carries it, and dials again on the new one from its quick waits.
+    package func moving() {
+        for phone in Array(phones.values) { phone.end(NetControl.Reason.restart) }
+    }
+
     /// Another listener takes over (the switch started again in this process): this one stops
     /// for good, whatever still asks it to look.
     package func retire() {

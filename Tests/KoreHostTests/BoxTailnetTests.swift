@@ -359,8 +359,11 @@ final class HandoffTailnet: Tailnet, @unchecked Sendable {
         for fd in held.withLock({ $0 }) { Sockets.closeFD(fd) }
     }
 
+    /// Running and signed in, as tsnet says once its control server answered (its login among its users).
     func status() throws -> TailnetStatus {
-        TailnetStatus(backendState: .running, selfNode: .init(publicKey: "nodekey:box", tailscaleIPs: ["100.64.0.2"], userID: 7))
+        var status = TailnetStatus(backendState: .running, selfNode: .init(publicKey: "nodekey:box", tailscaleIPs: ["100.64.0.2"], userID: 7))
+        status.logins[7] = "me@example.com"
+        return status
     }
     func whois(_ address: String) throws -> TailnetWhoIs { throw TailnetError.notTailnet(address) }
     func events() -> AsyncStream<TailnetEvent> { AsyncStream { _ in } }

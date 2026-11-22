@@ -126,6 +126,22 @@ class NetDialerTest {
         assertEquals(listOf("macbook-1", "aaa"), NetDialer.movedMacs(record, peers, phone).map { it.hostName })
     }
 
+    /** A box that moved to Kore's own (`mybox-kore`) or back: nodes named after it, of this user. */
+    @Test fun aMovedBoxIsLookedForByItsName() {
+        val box = Device(UUID.randomUUID(), "mybox", NodeKind.BOX, macKey.publicKey, listOf("nodekey:mybox"), "")
+        val peers = listOf(
+            peer("mybox", "100.91.66.71", "nodekey:mybox", online = false, os = "linux"),
+            peer("mybox-kore", "100.113.194.5", os = "linux"),
+            peer("mybox-kore", "100.64.0.8", "nodekey:other", os = "linux", user = 9),
+            peer("myboxer", "100.64.0.2", os = "linux"),
+            peer("mybox-1", "100.64.0.3", os = "linux", tags = listOf("tag:ci")),
+            peer("mybox-2", "100.64.0.4", os = "linux"),
+        )
+        assertEquals(listOf("mybox-kore", "mybox-2"), NetDialer.movedBoxes(box, peers, phone).map { it.hostName })
+        assertEquals(emptyList<TailnetNode>(), NetDialer.movedBoxes(box, peers, null))
+        assertEquals(emptyList<TailnetNode>(), NetDialer.movedBoxes(box.copy(name = ""), peers, phone))
+    }
+
     /** Only this phone's user's online, untagged Macs, never a node the record holds or itself. */
     @Test fun onlyThisUsersMacsAreTried() {
         val peers = listOf(

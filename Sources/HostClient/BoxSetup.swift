@@ -28,7 +28,7 @@ package struct BoxShell: Sendable {
     package var ssh: String
     package var scp: String
 
-    package init(ssh: String = SSHTransport.ssh, scp: String = "/usr/bin/scp") {
+    package init(ssh: String = SSHTransport.ssh, scp: String = SSHTransport.scp) {
         self.ssh = ssh
         self.scp = scp
     }
@@ -38,20 +38,23 @@ package struct BoxShell: Sendable {
     /// `command` run by the box's shell, in its home; `input` on its stdin.
     package func run(_ alias: String, _ command: String, input: String? = nil) async -> BoxRan {
         let address = BoxAddress(alias)
-        return await Self.process(ssh, Self.options + (address?.options ?? []) + ["--", address?.host ?? alias, command], input: input)
+        let route = await SSHTailnetRoute.options(forAlias: alias)
+        return await Self.process(ssh, Self.options + (address?.options ?? []) + route + ["--", address?.host ?? alias, command], input: input)
     }
 
     /// An sh script run on the box (`sh -s`, the script on stdin): the same whatever the login
     /// shell is. `limit` ends a run that takes longer (an install whose download hangs).
     package func script(_ alias: String, _ script: String, limit: Duration? = nil) async -> BoxRan {
         let address = BoxAddress(alias)
-        return await Self.process(ssh, Self.options + (address?.options ?? []) + ["--", address?.host ?? alias, "sh -s"], input: script, limit: limit)
+        let route = await SSHTailnetRoute.options(forAlias: alias)
+        return await Self.process(ssh, Self.options + (address?.options ?? []) + route + ["--", address?.host ?? alias, "sh -s"], input: script, limit: limit)
     }
 
     /// Copies a file to a path under the box's home.
     package func copy(_ file: URL, to alias: String, path: String) async -> BoxRan {
         let address = BoxAddress(alias)
-        return await Self.process(scp, ["-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"] + (address?.options ?? []) + ["--", file.path, (address?.host ?? alias) + ":" + path])
+        let route = await SSHTailnetRoute.options(forAlias: alias)
+        return await Self.process(scp, ["-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"] + (address?.options ?? []) + route + ["--", file.path, (address?.host ?? alias) + ":" + path])
     }
 
     /// Runs `ssh` (whatever program it names) with `arguments`.
@@ -286,7 +289,7 @@ package struct BoxSetup: Sendable {
         }
         var found = machine
         found.koreHost = checked.output.split(whereSeparator: \.isNewline).first { $0.hasPrefix("kore-host ") }.map(String.init)
-        let warning = installed.output.contains("linger is off") ? "\(NodeNames.name(alias)) stops kore-host when you log out · sudo loginctl enable-linger" : nil
+        let warning = installed.output.contains("linger is off") ? "\(NodeNames.name(alias)) doesn't start kore-host at boot · sudo loginctl enable-linger" : nil
         let own = signInOwn ? await ownStep(step: step) : nil
         return Done(machine: found, warning: warning, own: own)
     }

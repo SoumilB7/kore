@@ -2,6 +2,34 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
+## [0.3.9] - 2026-11-24
+
+### Changed
+- Kore's own tailnet and your boxes stay connected whatever happens to Tailscale or SSH:
+  - a box tells the Mac every node it has, and the Mac tries them all, online ones first;
+  - when a box's Tailscale stops, the Mac follows it onto Kore's tailnet in seconds and back
+    when Tailscale returns;
+  - a link that stops answering is noticed in about 15 s while its window is open, then SSH
+    takes over;
+  - SSH itself rides Kore's tailnet when Tailscale is gone, so plain SSH, Tailscale IPs,
+    MagicDNS, Tailscale SSH, jump hosts and other ports all keep working;
+  - "Reconnecting…" says which route it's trying, and stops with "Can't reach <box> · tried the
+    tailnet and SSH" instead of spinning.
+- Kore's tailnet sign-in shows on the first page (Welcome and the title row) with Sign in right
+  there, and the network icon gets a dot while a device needs it. A sign-in that's removed or
+  expires says so within seconds.
+- Arsenal on shows the chat's logo, spinner and `>_` in Arsenal blue again (not tab corners), in
+  History too, closed chats included.
+
+### Fixed
+- Setting up a box no longer hangs on boxes where kore-host's start inherited a socket, and
+  kore-host keeps running on boxes without systemd linger.
+- A box starting before its Tailscale waits for it instead of starting a second node.
+- Phone: box chats render Markdown (tables, bold, lists, code, links) and links open on a tap.
+- Phone: taking a photo or picking a file no longer drops the link, and the attachment is never
+  lost, even if Android closes the app meanwhile.
+- Phone: a box that changes tailnets is redialled at once, not after minutes.
+
 ## [0.3.8] - 2026-11-23
 
 ### Added

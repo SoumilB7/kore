@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Camera shots for one upload: the app's cache, removed after sending. -->
+<!-- Camera shots for one upload, and a chat's kept attachments (PendingFiles): the app's cache, removed after sending. -->
 <paths>
     <cache-path name="shots" path="shots/" />
+    <cache-path name="attach" path="attach/" />
 </paths>

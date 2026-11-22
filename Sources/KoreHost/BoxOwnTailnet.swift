@@ -13,10 +13,15 @@ extension HostPaths {
 package struct BoxOwnRecord: Codable, Equatable, Sendable {
     package var own: NetNodeWire.Own
     package var expiry: Date?
+    /// Its node's key as last seen running (signed in beside Tailscale, or carrying the box):
+    /// told to the owner's Macs in `net.node`, so they know that node is this box before the
+    /// box moves onto it. Kept while it's stopped; replaced when it signs in as a new node.
+    package var nodeKey: String?
 
-    package init(own: NetNodeWire.Own, expiry: Date? = nil) {
+    package init(own: NetNodeWire.Own, expiry: Date? = nil, nodeKey: String? = nil) {
         self.own = own
         self.expiry = expiry
+        self.nodeKey = nodeKey
     }
 
     package static func read(_ paths: HostPaths) -> BoxOwnRecord? {
@@ -95,12 +100,14 @@ extension HostDaemon {
         // A fresh sign-in after the key change keeps saying why until it's signed in.
         var said = own
         if !own.signedIn, before?.why == .unreadable { said.why = .unreadable }
-        ownHeard(said, expiry: own.signedIn ? status.selfNode?.keyExpiry : nil)
+        let key = status.backendState == .running ? status.selfNode?.publicKey : nil
+        ownHeard(said, expiry: own.signedIn ? status.selfNode?.keyExpiry : nil, nodeKey: key)
     }
 
-    /// Kore's own changed: kept, journaled, and every full link hears `net.node` again at once.
-    package func ownHeard(_ own: NetNodeWire.Own, expiry: Date? = nil) {
-        let next = BoxOwnRecord(own: own, expiry: own.signedIn ? (expiry ?? ownRecord?.expiry) : nil)
+    /// Kore's own changed: kept, journaled, and every full link hears `net.node` again at once
+    /// (its node key among the box's, the moment it's known).
+    package func ownHeard(_ own: NetNodeWire.Own, expiry: Date? = nil, nodeKey: String? = nil) {
+        let next = BoxOwnRecord(own: own, expiry: own.signedIn ? (expiry ?? ownRecord?.expiry) : nil, nodeKey: nodeKey ?? ownRecord?.nodeKey)
         guard next != ownRecord else { return }
         let was = ownRecord?.own
         ownRecord = next
@@ -110,6 +117,10 @@ extension HostDaemon {
         }
         armOwnExpiry()
         netNodeChanged()
+        // Signed out while installed Tailscale carries the box (its key ran out, or it was
+        // logged out): it signs in again on standby at once, so it's ready the moment it's
+        // needed; its page reaches the owner's Macs in `net.node`.
+        if was?.signedIn == true, !own.signedIn, koreTailnet == nil, net?.tailnet != nil { prepareOwn() }
     }
 
     /// A signed-in node's key running out is a sign-out, said when it happens (no polling).
@@ -130,6 +141,21 @@ extension HostDaemon {
         DispatchQueue.main.asyncAfter(deadline: .now() + min(wait, 400 * 86400), execute: timer)
     }
 
+    /// Installed Tailscale's peers, while it overrides: Kore's own node, signed in and stopped,
+    /// is listed among them; gone from the list, it was removed in the admin console. Then it's
+    /// signed out (said to the owner's Macs at once) and starts to sign in again, its page
+    /// reaching the Mac. Never on an empty list (a status still filling in).
+    func ownStillListed(_ status: TailnetStatus) {
+        guard let record = ownRecord, record.own.signedIn, let key = record.nodeKey, !status.peers.isEmpty,
+              koreTailnet == nil, ownStandby == nil, !ownPreparing, config.netOn, boxTailnet?.forced != true,
+              !status.peers.contains(where: { $0.publicKey == key })
+        else { return }
+        HostJournal.note("korenet own", ["state": "removed", "node": key])
+        ownRecord = BoxOwnRecord(own: record.own)
+        ownHeard(.signedOut(.loggedOut))
+        prepareOwn()
+    }
+
     // MARK: Signed in beside installed Tailscale
 
     /// Installed Tailscale runs and Kore's own isn't signed in here: Kore's own starts only to
@@ -137,7 +163,9 @@ extension HostDaemon {
     /// state kept. It listens for nothing meanwhile: one node carries traffic (Tailscale's).
     func prepareOwn() {
         guard let box = boxTailnet, !box.forced, ownStandby == nil, !ownPreparing, config.netOn else { return }
-        if ownRecord?.own.signedIn == true { return }
+        // Signed in and its node known: nothing to do. Signed in before its key was kept (0.3.8):
+        // started once to read it, so the owner's Macs know that node before the box needs it.
+        if ownRecord?.own.signedIn == true, ownRecord?.nodeKey != nil { return }
         guard let helper = box.helper() else { return }
         ownPreparing = true
         let mine = tailnetChoices
@@ -179,19 +207,41 @@ extension HostDaemon {
                 let status: TailnetStatus?
                 switch event {
                 case .status(let said): status = said
-                case .state: status = await Task.detached { try? tailnet.status() }.value
+                case .state, .loginFinished: status = await Task.detached { try? tailnet.status() }.value
                 default: continue
                 }
-                if self.ownStandbyHeard(status) { return }
+                guard case .loginFinished = event else {
+                    if self.ownStandbyHeard(status) { return }
+                    continue
+                }
+                if self.ownStandbyLoggedIn(status) { return }
+                // Not running yet: read again shortly, a few times.
+                for wait in TailnetEvent.signInRereads {
+                    try? await Task.sleep(for: wait)
+                    guard !Task.isCancelled, mine == self.tailnetChoices else { return }
+                    if self.ownStandbyLoggedIn(await Task.detached { try? tailnet.status() }.value) { return }
+                }
             }
         }
+    }
+
+    /// After a finished sign-in (`loginFinished`): signed in once its status says so
+    /// (`TailnetStatus.loggedIn`). True once signed in (and stopping).
+    private func ownStandbyLoggedIn(_ status: TailnetStatus?) -> Bool {
+        guard let status else { return false }
+        if ownStandbyHeard(status) { return true }
+        guard status.loggedIn else { return false }
+        ownHeard(.signedIn(status.login), expiry: status.selfNode?.keyExpiry, nodeKey: status.selfNode?.publicKey)
+        HostJournal.note("korenet own", ["standby": "signed in · stopped while tailscale runs"])
+        if let stop = takeOwnStandby() { DispatchQueue.global(qos: .utility).async { stop() } }
+        return true
     }
 
     /// True once it's signed in (and stopping).
     private func ownStandbyHeard(_ status: TailnetStatus?) -> Bool {
         guard let status else { return false }
         ownStatus(status)
-        guard status.backendState == .running else { return false }
+        guard status.signedIn else { return false }
         HostJournal.note("korenet own", ["standby": "signed in · stopped while tailscale runs"])
         if let stop = takeOwnStandby() { DispatchQueue.global(qos: .utility).async { stop() } }
         return true

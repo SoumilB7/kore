@@ -140,6 +140,16 @@ extension HostDaemon {
         return NetNodeWire.Node(
             device: identity.device, identityKey: identity.signer.publicKey, name: name, on: config.netOn, nodeKey: nodeKey, enrolled: enrolled,
             os: BoxOS.here.rawValue, tailnet: net?.tailnet == nil ? nil : (net?.userspace == true ? "kore" : "tailscale"),
-            own: ownTailnet)
+            own: ownTailnet, nodeKeys: nodeKeys(listening: nodeKey))
+    }
+
+    /// Every node this box has, the one it listens on first: Kore's own (signed in), then
+    /// installed Tailscale's as last seen. Nil while it knows none.
+    func nodeKeys(listening: String?) -> [String]? {
+        var keys: [String] = []
+        for key in [listening, ownRecord?.own.signedIn == true ? ownRecord?.nodeKey : nil, installedNodeKey] {
+            if let key, !key.isEmpty, !keys.contains(key) { keys.append(key) }
+        }
+        return keys.isEmpty ? nil : keys
     }
 }

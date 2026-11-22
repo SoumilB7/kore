@@ -35,6 +35,14 @@ struct BoxOwnTailnetTests {
         #expect(heard(true, false, expiry: now.addingTimeInterval(-1), before: .signedIn("me@x.com")) == .signedOut(.expired))
         // Still starting: nothing to say yet.
         #expect(Own.heard(running: false, needsLogin: false, login: nil, page: nil, keyExpiry: nil, before: nil, now: now) == nil)
+        // Running from its cached state, its control server not heard yet (no login): not signed
+        // in, whatever it was before (it may be removed or expired).
+        #expect(Own.heard(running: true, needsLogin: false, login: nil, page: nil, keyExpiry: nil, before: .signedOut(.expired), now: now) == nil)
+        #expect(Own.heard(running: true, needsLogin: false, login: "", page: nil, keyExpiry: nil, before: .signedIn("me@x.com"), now: now) == nil)
+        // Running while its control server asks for a sign-in (its key ran out there): signed
+        // out, that page; the reason already said stays.
+        #expect(Own.heard(running: true, needsLogin: false, login: "me@x.com", page: page, keyExpiry: nil, before: .signedOut(.expired), now: now) == .signedOut(.expired, page: page))
+        #expect(Own.heard(running: true, needsLogin: false, login: "me@x.com", page: page, keyExpiry: nil, before: .signedIn("me@x.com"), now: now) == .signedOut(.loggedOut, page: page))
         // A reason already said stays until it's signed in.
         #expect(heard(false, true, before: .signedOut(.unreadable)) == .signedOut(.unreadable, page: page))
     }
@@ -154,8 +162,8 @@ struct BoxOwnTailnetTests {
         let rig = try rig(box)
         defer { rig.finish() }
         rig.host.besideWait = { _ in 3600 }
-        // Signed in before, while Tailscale ran: no standby now.
-        rig.host.ownHeard(.signedIn("me@x.com"))
+        // Signed in before, while Tailscale ran, its node kept: no standby now.
+        rig.host.ownHeard(.signedIn("me@x.com"), nodeKey: "nodekey:own")
         try rig.host.start()
         await until("on Tailscale") { rig.host.net?.tailnet != nil && rig.host.net?.userspace == false }
         #expect(calls.starts.withLock { $0.count } == 0)

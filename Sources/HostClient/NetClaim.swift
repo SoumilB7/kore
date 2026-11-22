@@ -81,9 +81,17 @@ package enum NetClaim {
             return .failure(.unreachable("\(error)"))
         }
         let end = handshake(session)
+        if case .established(let peer) = end {
+            // The box still trusts this Mac (it forgot the box, or this is the box's other node):
+            // it's this Mac's box, and its Allow card pins it (the next dial checks its proof).
+            session.close("quit")
+            return .success(BoxClaim(
+                device: peer.record.id, identityKey: peer.record.identityKey, nodeKey: facts.who.node.key, userId: facts.who.userId, name: name,
+                fqdn: facts.who.node.name, address: facts.address))
+        }
         guard case .closed(let reason) = end else {
             session.close(NetControl.Reason.refused)
-            return .failure(.unreachable("welcomed while learning"))
+            return .failure(.unreachable("handshake"))
         }
         switch reason {
         case "bye " + NetControl.Reason.claim:
@@ -203,6 +211,19 @@ extension KoreNetSwitch {
 
     /// A claimed box: in this Mac's directory, enrolled, reached over the tailnet by its id.
     package func claimed(_ claim: BoxClaim) {
+        if directory.all[claim.device.uuidString.lowercased()] != nil {
+            // Known already (its other node, or claimed again): its SSH alias and name stay; it's
+            // reached at this node from now on.
+            directory.update { entries in
+                guard var entry = entries[claim.device.uuidString.lowercased()] else { return }
+                if entry.nodeKey != claim.nodeKey { entry.lastNodeKey = entry.nodeKey }
+                entry.nodeKey = claim.nodeKey
+                entry.enrolled = true
+                entries[entry.id.raw] = entry
+            }
+            HostLog.note(claim.id.raw, "korenet claim", "known box · node updated")
+            return
+        }
         directory.upsert(
             NodeDirectory.Entry(
                 device: claim.device, name: claim.name, ssh: nil, nodeKey: claim.nodeKey, identityKey: claim.identityKey, enrolled: true, rekeyed: true))

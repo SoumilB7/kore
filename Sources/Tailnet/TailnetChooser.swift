@@ -39,7 +39,9 @@ package enum TailnetChooser {
         case .missing: .sidecar
         case .state(let state):
             switch state {
-            case .running, .starting, .needsMachineAuth, .unknown: .installed
+            case .running, .starting, .unknown: .installed
+            // Waiting for an admin's approval (or a Tailnet Lock signature): it carries nothing yet.
+            case .needsMachineAuth: .signedOut
             case .stopped: .stopped
             // Signed out, never set up, or held by another user of this machine.
             case .needsLogin, .noState, .inUseOtherUser: .signedOut
@@ -100,7 +102,7 @@ package enum TailnetChooser {
                     switch event {
                     case .state(let s): state = s
                     case .status(let status): state = status.backendState
-                    case .peer, .error: continue
+                    case .peer, .error, .loginFinished: continue
                     }
                     let next = choose(.state(state))
                     if next != last {

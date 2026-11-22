@@ -25,6 +25,10 @@ package final class NodeDirectory: Sendable {
         package var on: Bool
         /// The node key it last listened on, kept while its Tailscale is off.
         package var lastNodeKey: String?
+        /// Every node key this box has been on or said it has (installed Tailscale's, Kore's own),
+        /// newest first, at most `maxNodeKeys`: the dialer tries each online one.
+        package var nodeKeys: [String] = []
+        package static let maxNodeKeys = 3
         /// It said another identity key under the same id: refused until it's forgotten.
         package var identityChanged = false
         /// What this Mac last pushed there and the box took (`devices.set{merge}`): a box link that
@@ -54,6 +58,7 @@ package final class NodeDirectory: Sendable {
             self.rekeyed = rekeyed
             self.on = on ?? (nodeKey != nil)
             lastNodeKey = nodeKey
+            nodeKeys = nodeKey.map { [$0] } ?? []
         }
 
         package init(from decoder: any Decoder) throws {
@@ -68,6 +73,7 @@ package final class NodeDirectory: Sendable {
             // Kept before these were: a node key meant on and listening.
             on = try c.decodeIfPresent(Bool.self, forKey: .on) ?? (nodeKey != nil)
             lastNodeKey = try c.decodeIfPresent(String.self, forKey: .lastNodeKey) ?? nodeKey
+            nodeKeys = try c.decodeIfPresent([String].self, forKey: .nodeKeys) ?? [nodeKey, lastNodeKey].compactMap { $0 }
             identityChanged = try c.decodeIfPresent(Bool.self, forKey: .identityChanged) ?? false
             pushed = try c.decodeIfPresent(Pushed.self, forKey: .pushed)
             pending = try c.decodeIfPresent([PendingDevice].self, forKey: .pending)
@@ -81,7 +87,24 @@ package final class NodeDirectory: Sendable {
         package var listening: Bool { on && nodeKey != nil }
         /// A tailnet peer with `key` is this box: its node key now, or the last one while its
         /// Tailscale is off (the peer coming online is the box coming back).
-        package func isPeer(_ key: String) -> Bool { (nodeKey ?? lastNodeKey) == key }
+        package func isPeer(_ key: String) -> Bool { knownKeys.contains(key) }
+
+        /// Its node keys to dial, best first: the one it listens on now, then every other known.
+        package var knownKeys: [String] {
+            var out: [String] = []
+            for key in [nodeKey].compactMap({ $0 }) + nodeKeys + [lastNodeKey].compactMap({ $0 }) where !out.contains(key) && key != "ssh" { out.append(key) }
+            return out
+        }
+
+        /// A node key heard for it (said, or proven by a dial): first, the oldest past the cap goes.
+        package mutating func know(_ keys: [String]) {
+            var next = nodeKeys
+            for key in keys.reversed() where !key.isEmpty && key != "ssh" {
+                next.removeAll { $0 == key }
+                next.insert(key, at: 0)
+            }
+            nodeKeys = Array(next.prefix(Self.maxNodeKeys))
+        }
     }
 
     /// What a box's `net.node` changes here (`KoreNetSwitch.said`).
@@ -250,6 +273,13 @@ package final class NodeDirectory: Sendable {
         update { $0[entry.id.raw]?.pending = list.isEmpty ? nil : list }
     }
 
+    /// A node key the box was reached on (its proof held): kept with its others.
+    package func know(_ key: String, device: UUID) {
+        let id = device.uuidString.lowercased()
+        guard let entry = all[id], entry.nodeKeys.first != key else { return }
+        update { $0[id]?.know([key]) }
+    }
+
     /// Notes what the box took of this Mac's push.
     package func notePushed(_ pushed: Pushed?, device: UUID) {
         let key = device.uuidString.lowercased()
@@ -274,6 +304,8 @@ extension NodeDirectory.Entry {
         entry.on = node.on
         entry.nodeKey = node.on ? node.nodeKey : nil
         if let key = entry.nodeKey { entry.lastNodeKey = key }
+        // Every node it has (Kore's own signed in beside Tailscale too): known before it moves.
+        entry.know((node.nodeKeys ?? []) + [entry.nodeKey].compactMap { $0 })
         if let os = node.os { entry.os = os }
         if let tailnet = node.tailnet { entry.tailnet = tailnet }
         entry.own = node.own

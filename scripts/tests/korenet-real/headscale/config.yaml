@@ -1,0 +1,40 @@
+# Headscale for scripts/tests/korenet-real: plain http on the rig network. server_url is only the
+# prefix of sign-in pages (https:// as Tailscale's are, so Kore treats them as it does real ones);
+# the rig's "browser" reads the auth id from it and registers the node with the CLI.
+server_url: https://hs.kore-rig.invalid
+listen_addr: 0.0.0.0:8080
+metrics_listen_addr: 127.0.0.1:9090
+grpc_listen_addr: 127.0.0.1:50443
+grpc_allow_insecure: false
+noise:
+  private_key_path: /var/lib/headscale/noise_private.key
+prefixes:
+  v4: 100.64.0.0/10
+  v6: fd7a:115c:a1e0::/48
+  allocation: sequential
+derp:
+  server:
+    enabled: false
+  urls: []
+  paths:
+    - /etc/headscale/derp.yaml
+  auto_update_enabled: false
+disable_check_updates: true
+ephemeral_node_inactivity_timeout: 30m
+database:
+  type: sqlite
+  sqlite:
+    path: /var/lib/headscale/db.sqlite
+log:
+  level: info
+dns:
+  magic_dns: true
+  base_domain: rig.example
+  override_local_dns: false
+  nameservers:
+    global: []
+unix_socket: /var/run/headscale/headscale.sock
+unix_socket_permission: "0770"
+policy:
+  mode: file
+  path: /etc/headscale/policy.hujson
