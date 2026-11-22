@@ -57,12 +57,44 @@ package final class KoreAsk {
     @ObservationIgnored private weak var returnResponder: NSResponder?
     @ObservationIgnored private var host: NSView?
     @ObservationIgnored private var monitor: Any?
-    @ObservationIgnored private var observers: [NSObjectProtocol] = []
+    /// Windows that closed: a closed one can live on, its content with it (whatever holds it).
+    @ObservationIgnored private let closed = NSHashTable<NSWindow>.weakObjects()
+    /// Tests: the window to ask in, and what asks with none.
+    @ObservationIgnored var frontWindow: @MainActor () -> NSWindow? = KoreAsk.front
+    @ObservationIgnored var windowless: @MainActor (AskQuestion) -> AskAnswer = KoreAsk.alert
     @ObservationIgnored private var answering: CheckedContinuation<AskAnswer, Never>?
     @ObservationIgnored private var waiting: [CheckedContinuation<Void, Never>] = []
 
+    /// Made at launch (`AppDelegate`), before any window: while a card is up its window's keys and
+    /// presses are the card's, not the tabs' or the chat's (monitors aren't run in a fixed order,
+    /// so those that act on a window's keys also ask `holds`). It also has to have seen a window
+    /// close to know not to ask in it.
+    init() {
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]) { [weak self] event in
+            guard let self, question != nil else { return event }
+            return handle(event)
+        }
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: nil, queue: nil) { [weak self] note in
+            let window = note.object as? NSWindow
+            MainActor.assumeIsolated { self?.windowClosed(window) }
+        }
+    }
+
+    func windowClosed(_ window: NSWindow?) {
+        guard let window else { return }
+        closed.add(window)
+        if window === owner { cancel() }
+    }
+
+    /// A window a card can be seen in: not a closed one (shown again, it's open again).
+    private func canAsk(in window: NSWindow) -> Bool {
+        window.contentView != nil && (window.isVisible || !closed.contains(window))
+    }
+
     /// A question is up.
     package var isOpen: Bool { question != nil }
+    /// A question is up over `window`: its keys are the card's.
+    func holds(_ window: NSWindow) -> Bool { question != nil && owner === window }
     /// Storylines: the key of the question up now.
     package static var storyOpen: String? { shared.question?.key }
     /// Storylines: the question's line, and its answers' words.
@@ -73,13 +105,26 @@ package final class KoreAsk {
     /// ask in (every one closed while work runs), macOS's alert asks instead: never unasked, never
     /// stuck.
     func ask(_ question: AskQuestion, in window: NSWindow? = nil) async -> AskAnswer {
-        let cancel = Self.cancelIndex(question)
+        await ask(in: window) { question } ?? AskAnswer(choice: Self.cancelIndex(question), text: question.field ?? "", ticked: false)
+    }
+
+    /// The same, the question made when its turn comes (one before it may have settled it): nil
+    /// asks nothing. A window that closed meanwhile isn't asked in: the front one is.
+    func ask(in window: NSWindow? = nil, _ make: () -> AskQuestion?) async -> AskAnswer? {
         // A storyline host answering instead (`StorylineSeams.confirm`): yes is the preferred.
         if let seam = StorylineSeams.confirm {
-            return AskAnswer(choice: seam(question.key) ? question.preferred : cancel, text: question.field ?? "", ticked: false)
+            return make().map { AskAnswer(choice: seam($0.key) ? $0.preferred : Self.cancelIndex($0), text: $0.field ?? "", ticked: false) }
         }
         while isOpen { await withCheckedContinuation { waiting.append($0) } }
-        guard let window = window ?? Self.front(), let content = window.contentView else { return Self.alert(question) }
+        // Whatever ends this without a card wakes the next in line, as an answer does.
+        guard let question = make() else { wakeNext(); return nil }
+        guard let window = window.flatMap({ canAsk(in: $0) ? $0 : nil }) ?? frontWindow(), canAsk(in: window), let content = window.contentView else {
+            let answer = windowless(question)
+            wakeNext()
+            return answer
+        }
+        // Put away in the Dock, its card couldn't be seen.
+        if window.isMiniaturized { window.deminiaturize(nil) }
         OptionsMenu.shared.close()
         self.question = question
         text = question.field ?? ""
@@ -94,12 +139,6 @@ package final class KoreAsk {
         content.addSubview(host)
         self.host = host
         if question.field == nil { window.makeFirstResponder(host) }
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown, .scrollWheel]) { [weak self] event in
-            self?.handle(event) ?? event
-        }
-        observers.append(NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.answer(cancel) }
-        })
         UILog.event("ask-open", ["key": question.key])
         return await withCheckedContinuation { answering = $0 }
     }
@@ -112,6 +151,10 @@ package final class KoreAsk {
         self.answering = nil
         close()
         answering.resume(returning: result)
+        wakeNext()
+    }
+
+    private func wakeNext() {
         if !waiting.isEmpty { waiting.removeFirst().resume() }
     }
 
@@ -132,10 +175,6 @@ package final class KoreAsk {
     private func close() {
         host?.removeFromSuperview()
         host = nil
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
-        for observer in observers { NotificationCenter.default.removeObserver(observer) }
-        observers = []
         if let owner, let view = returnResponder as? NSView, view.window === owner { owner.makeFirstResponder(view) }
         owner = nil
         returnResponder = nil
@@ -246,14 +285,19 @@ extension KoreAsk {
     enum SaveAnswer { case save, discard, cancel }
 
     /// Save (all), Don't Save, or Cancel, before edits are lost.
-    static func saveChanges(_ names: [String], key: String, in window: NSWindow? = nil) async -> SaveAnswer {
-        let title = names.count == 1
-            ? "Do you want to save the changes you made to \(names[0])?"
-            : "Do you want to save the changes you made to \(names.count) files?"
-        let choices = [AskChoice("Don't Save", .danger), AskChoice("Cancel", .cancel), AskChoice(names.count == 1 ? "Save" : "Save All", .accent)]
-        let answer = await shared.ask(
-            AskQuestion(title: title, detail: "Your changes will be lost if you don't save them.", choices: choices, preferred: 2, key: key),
-            in: window)
+    /// `names`: the files still unsaved when its turn comes; none, and nothing's asked (discard:
+    /// there's nothing to lose).
+    static func saveChanges(_ names: () -> [String], key: String, in window: NSWindow? = nil) async -> SaveAnswer {
+        let answer = await shared.ask(in: window) {
+            let names = names()
+            guard !names.isEmpty else { return nil }
+            let title = names.count == 1
+                ? "Do you want to save the changes you made to \(names[0])?"
+                : "Do you want to save the changes you made to \(names.count) files?"
+            let choices = [AskChoice("Don't Save", .danger), AskChoice("Cancel", .cancel), AskChoice(names.count == 1 ? "Save" : "Save All", .accent)]
+            return AskQuestion(title: title, detail: "Your changes will be lost if you don't save them.", choices: choices, preferred: 2, key: key)
+        }
+        guard let answer else { return .discard }
         return switch answer.choice {
         case 2: .save
         case 0: .discard

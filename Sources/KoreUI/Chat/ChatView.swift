@@ -205,7 +205,7 @@ struct ChatView: View {
         guard stopKey.value == nil else { return }
         let workspace = workspace, shown = shown
         stopKey.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard let window = workspace.window, event.window === window,
+            guard let window = workspace.window, event.window === window, !KoreAsk.shared.holds(window),
                 event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
                 event.charactersIgnoringModifiers == ".", let chat = shown.value, chat.isBusy
             else { return event }

@@ -57,6 +57,9 @@ final class ChatClipboard {
         var cut: Bool
         /// Its transcript on this Mac, when the listing said.
         var known: String?
+
+        /// The chat it is, wherever it's pasted.
+        var key: String { "\(spot)/\(provider)/\(id)" }
     }
 
     private(set) var clip: Clip?
@@ -167,6 +170,9 @@ enum ChatPasting {
     /// A box's link by its alias (tests give a stand-in box's).
     static var connection: (String) -> HostConnection = { BoxBinding.connection($0) }
 
+    /// Cuts on their way: their chats.
+    private static var moving: Set<String> = []
+
     // MARK: Clips
 
     /// Copy or Cut on a History row of `workspace`.
@@ -236,6 +242,8 @@ enum ChatPasting {
     /// working chat stops it first (asked once).
     static func paste(into workspace: Workspace, after: ChatTab? = nil, stop: Bool = false) {
         guard let clip = ChatClipboard.shared.clip, workspace.chatPaste == nil else { return }
+        // A cut is one move: a second ⌘V while it's on its way would copy the chat again.
+        guard !clip.cut || !moving.contains(clip.key) else { return }
         let target = workspace.spot
         let held: MovedChat? = if case .mac = clip.spot { ChatPlaces.shared.store.session(clip.id) } else { nil }
         let open: Bool = if case .box(let alias, _) = clip.spot { connection(alias).chats[clip.id] != nil } else { false }
@@ -272,7 +280,11 @@ enum ChatPasting {
                 ChatClipboard.shared.put(clip)
                 paste(into: workspace, after: after)
             })
-        Task { [weak after] in await run(plan, clip, to: target, in: workspace, after: after, transfer: transfer, stopper: stopper) }
+        if clip.cut { moving.insert(clip.key) }
+        Task { [weak after] in
+            defer { if clip.cut { moving.remove(clip.key) } }
+            await run(plan, clip, to: target, in: workspace, after: after, transfer: transfer, stopper: stopper)
+        }
     }
 
     /// The box a paste waits on when its bytes are measured as they land: a box's chat pulled to

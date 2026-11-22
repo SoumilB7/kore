@@ -210,7 +210,7 @@ struct BoardView: View {
         let workspace = workspace, tab = tab, model = model
         BoardKeys.storyMonitors += 1
         keys.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard let window = workspace.window, event.window === window, workspace.activeTab === tab, !workspace.hasOverlay,
+            guard let window = workspace.window, event.window === window, workspace.activeTab === tab, !workspace.hasOverlay, !KoreAsk.shared.holds(window),
                 OptionsMenu.shared.items.isEmpty
             else { return event }
             return BoardKeys.handle(event, workspace: workspace, tab: tab, model: model) ? nil : event

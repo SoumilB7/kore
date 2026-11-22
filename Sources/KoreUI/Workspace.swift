@@ -734,6 +734,9 @@ package final class Workspace {
         tabs.first { $0.chat === chat && $0.agent == nil }
     }
 
+    /// Tabs whose unsaved file is being asked about.
+    @ObservationIgnored private var askingClose: Set<UUID> = []
+
     /// Ends the tab's chat, and closes its agents' tabs with it. Closing an agent tab only
     /// closes the view. Closing the last tab leaves a fresh empty one.
     func close(_ tab: ChatTab, remember: Bool = true, asked: Bool = false) {
@@ -741,7 +744,10 @@ package final class Workspace {
         tab.file?.flushAutoSave()
         // Unsaved edits ask first (Kore's own question); the tab closes once it's answered.
         if !asked, let file = tab.file, file.isDirty {
+            // Asked already: a second question, answered Save, would write what the first let go.
+            guard askingClose.insert(tab.id).inserted else { return }
             Task { @MainActor in
+                defer { self.askingClose.remove(tab.id) }
                 if await Self.confirmClose(file, in: self.window) { self.close(tab, remember: remember, asked: true) }
             }
             return
@@ -1204,7 +1210,7 @@ package final class Workspace {
 
     /// Save, don't save, or cancel; true when the tab may close.
     private static func confirmClose(_ file: FileDocument, in window: NSWindow?) async -> Bool {
-        switch await KoreAsk.saveChanges([file.name], key: "save-tab", in: window) {
+        switch await KoreAsk.saveChanges({ file.isDirty ? [file.name] : [] }, key: "save-tab", in: window) {
         case .save: return file.save()
         case .discard: return true
         case .cancel: return false

@@ -320,7 +320,7 @@ struct TerminalKeys: ViewModifier {
             guard monitor.value == nil else { return }
             monitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                 let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
-                guard event.window === workspace.window,
+                guard let window = workspace.window, event.window === window, !KoreAsk.shared.holds(window),
                       event.charactersIgnoringModifiers == "`" || event.charactersIgnoringModifiers == "~",
                       flags == .control || flags == [.control, .shift] else { return event }
                 guard !event.isARepeat else { return nil }

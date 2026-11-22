@@ -15,6 +15,18 @@ final class PinchZoomGesture: ChatStoryline {
     }
 }
 
+/// The same at ⌘+'s 110%, where the page is a little taller than the view.
+final class PinchZoomGestureLarger: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var script: CLIScript { PinchZoomGesture.script }
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Do("Text at 110%") { _ in PinchZoom.storyRestoreScale(1.1) },
+            Send("Show some text"), TurnFinished(1), ExercisePinch(), Snapshot("pinch-finished"),
+        ]
+    }
+}
+
 /// Magnified at the chat's end by a pinch right of centre (the page moved to its right side),
 /// the view stays put through the composer growing (three ⇧↩), its side and top as they were.
 /// A send takes it to the end and the reply streams in: the end is pinned up and down only, the
@@ -233,6 +245,14 @@ private struct ExercisePinch: Step {
     var timeout: Duration? { .seconds(30) }
 
     func run(_ story: StoryContext) async throws {
+        try await UnloadStoryline.GlideEnds().run(story)
+        // A glide cut short leaves the native document as tall as it was mid-glide (at 110%, 725
+        // for content SwiftUI lays out in 664) until the view next moves: a reader's scroll up
+        // and back, so the height measured is the content's.
+        let resting = try story.activeChat().storyTranscript.scrollView?.documentView?.bounds.height ?? 0
+        try await Scroll(.answer(turn: 1), to: .by(-20)).run(story)
+        try await Scroll(.answer(turn: 1), to: .bottom).run(story)
+        try await story.idle()
         let spot = Spot(row: .answer(1), path: [3], offset: 40)
         let (window, point) = try await spot.point(story)
         defer { _ = PinchZoom.storySample(in: window, amount: 0, phase: .cancelled, at: point) }
@@ -360,7 +380,12 @@ private struct ExercisePinch: Step {
                 abs(activeDocument.bounds.width - layoutSize.width) < 1 &&
                 abs(activeDocument.bounds.height - layoutSize.height) < 1
         }
-        let (restoredWindow, restoredPoint) = try await spot.point(story)
+        // The middle of the page (the paragraph pinched at first may be scrolled off at a larger text size).
+        guard let restored = StoryElement(StoryID.Transcript.answer(entry))?.registeredView?.enclosingScrollView else {
+            throw StoryFailure.modelMissing("the restored page")
+        }
+        let restoredWindow = window
+        let restoredPoint = restored.convert(CGPoint(x: restored.bounds.midX, y: restored.bounds.midY), to: nil)
         let otherChat = workspace.tabs[otherIndex].chat
         guard PinchZoom.storySample(in: restoredWindow, amount: 0.08, phase: .began, at: restoredPoint) else {
             throw StoryFailure.other("the restored page did not start another pinch")
@@ -388,7 +413,7 @@ private struct ExercisePinch: Step {
         try await story.until("switch cancellation preserves the original committed page factor") {
             PinchZoom.storyPageScale(in: window) == committed && story.app.chat === chat
         }
-        let note = "\(story.name): samples=120 previews=120 pageCommits=1 globalFontChanges=0 reflow=false zoomedCopy=true tabIsolation=true switchCancelled=true idleCpuMs=\(String(format: "%.2f", idleCPUMs)) idleWallMs=\(String(format: "%.2f", idleWallMs)) cpuMs=\(String(format: "%.2f", cpuMs)) wallMs=\(String(format: "%.2f", wallMs)) anchorDx=\(String(format: "%.2f", dx)) anchorDy=\(String(format: "%.2f", dy)) horizontalClamped=\(placement.horizontalClamped) anchorResidual=\(String(format: "%.2f", residual))\n"
+        let note = "\(story.name): samples=120 previews=120 pageCommits=1 globalFontChanges=0 reflow=false zoomedCopy=true tabIsolation=true switchCancelled=true idleCpuMs=\(String(format: "%.2f", idleCPUMs)) idleWallMs=\(String(format: "%.2f", idleWallMs)) cpuMs=\(String(format: "%.2f", cpuMs)) wallMs=\(String(format: "%.2f", wallMs)) documentAtRest=\(resting) documentMeasured=\(layoutSize.height) anchorDx=\(String(format: "%.2f", dx)) anchorDy=\(String(format: "%.2f", dy)) horizontalClamped=\(placement.horizontalClamped) anchorResidual=\(String(format: "%.2f", residual))\n"
         try note.write(to: story.outputs.appendingPathComponent(story.name + ".pinch.notes"), atomically: true, encoding: .utf8)
     }
 

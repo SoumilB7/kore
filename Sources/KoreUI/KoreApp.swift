@@ -98,6 +98,12 @@ package struct KoreApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     let app = AppModel()
 
+    override init() {
+        super.init()
+        // Before any window: it sees every window close.
+        _ = KoreAsk.shared
+    }
+
     /// Chats still working, then unsaved file edits, in any window, are asked about first.
     /// Asked in Kore's own card over the front window (`KoreAsk`), so the answer comes later:
     /// AppKit waits (`terminateLater`) and hears it by `reply(toApplicationShouldTerminate:)`.
@@ -118,7 +124,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         quitAsking = true
         Task { @MainActor in
             var quit = await Self.confirmQuit(working: working, terminals: terminals, transfers: transfers)
-            if quit { quit = await UnsavedGuard.confirm(files, saveAll: { workspaces.forEach { $0.saveAll() } }) }
+            if quit { quit = await UnsavedGuard.confirm({ workspaces.flatMap(\.unsavedFiles) }, saveAll: { workspaces.forEach { $0.saveAll() } }) }
             if quit {
                 Workspace.ending = true
                 workspaces.forEach { $0.persistNow() }

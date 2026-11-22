@@ -38,7 +38,7 @@ final class UnsavedGuard: NSObject, NSWindowDelegate {
                 Task { @MainActor [weak self, weak sender] in
                     guard let self else { return }
                     var go = await TerminalPanel.confirm(working: working, in: sender)
-                    if go { go = await Self.confirm(files, saveAll: workspace.saveAll, in: sender) }
+                    if go { go = await Self.confirm({ workspace.unsavedFiles }, saveAll: workspace.saveAll, in: sender) }
                     self.asking = false
                     guard go, let sender else { return }
                     self.answered = true
@@ -64,13 +64,14 @@ final class UnsavedGuard: NSObject, NSWindowDelegate {
         original?.responds(to: selector) == true ? original : super.forwardingTarget(for: selector)
     }
 
-    /// Save all, cancel, or discard; true when it may go ahead.
-    static func confirm(_ files: [FileDocument], saveAll: () -> Void, in window: NSWindow? = nil) async -> Bool {
-        guard !files.isEmpty else { return true }
-        switch await KoreAsk.saveChanges(files.map(\.name), key: "save-files", in: window) {
+    /// Save all, cancel, or discard the files unsaved when its turn comes (a tab's own question
+    /// before it may have settled one); true when it may go ahead.
+    static func confirm(_ files: () -> [FileDocument], saveAll: () -> Void, in window: NSWindow? = nil) async -> Bool {
+        guard !files().isEmpty else { return true }
+        switch await KoreAsk.saveChanges({ files().map(\.name) }, key: "save-files", in: window) {
         case .save:
             saveAll()
-            return files.allSatisfy { !$0.isDirty }
+            return files().isEmpty
         case .discard:
             return true
         case .cancel:

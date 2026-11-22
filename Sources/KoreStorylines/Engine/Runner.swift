@@ -75,6 +75,8 @@ final class Runner {
 
     func run() async -> RunReport {
         var report = RunReport()
+        // Made before any window, as the app's delegate makes it: it sees every window close.
+        _ = KoreAsk.shared
         do {
             try modes.installRun()
         } catch {

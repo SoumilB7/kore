@@ -50,11 +50,13 @@ final class HistoryCurrentRow: ChatStoryline {
         }
 
         @MainActor static func color(at point: CGPoint, _ story: StoryContext) -> NSColor? {
-            guard let window = story.window, let png = snapshot(window), let picture = NSBitmapImageRep(data: png) else { return nil }
-            let scale = CGFloat(picture.pixelsWide) / window.frame.width
-            let (px, py) = (Int(point.x * scale), Int((window.frame.height - point.y) * scale))
-            guard px >= 0, py >= 0, px < picture.pixelsWide, py < picture.pixelsHigh else { return nil }
-            return picture.colorAt(x: px, y: py)?.usingColorSpace(.sRGB)
+            // Only that spot is drawn: a picture of the whole window at every read held the main
+            // thread, and the panel's fade with it, so a slow Mac read it half in until time ran out.
+            guard let frame = story.window?.contentView?.superview else { return nil }
+            let spot = CGRect(x: point.x.rounded(.down), y: frame.isFlipped ? frame.bounds.height - point.y.rounded(.up) : point.y.rounded(.down), width: 2, height: 2)
+            guard frame.bounds.contains(spot), let rep = frame.bitmapImageRepForCachingDisplay(in: spot) else { return nil }
+            frame.cacheDisplay(in: spot, to: rep)
+            return rep.colorAt(x: 0, y: 0)?.usingColorSpace(.sRGB)
         }
     }
 
