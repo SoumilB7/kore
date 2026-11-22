@@ -232,7 +232,7 @@ extension HostDaemon {
             id: hc.id, short: AgentRefs.short(hc.id), title: Self.title(hc.title), provider: hc.provider.id, folder: Self.shownFolder(hc.record.folder),
             window: URL(fileURLWithPath: hc.record.folder).lastPathComponent, state: Self.state(meta), mode: mode,
             modeLabel: hc.provider.modes.first { $0.id == mode }?.label, planOn: meta.mode.planOn, model: meta.model, queued: meta.queued,
-            cards: meta.cards.count, own: hc.id == own ? true : nil)
+            cards: meta.cards.count, own: hc.id == own ? true : nil, alwaysAllowed: hc.chat?.alwaysAllowed == true ? true : nil)
     }
 
     private func detail(_ hc: HostChat, own: String?) -> AgentChatDetail {
@@ -332,7 +332,7 @@ extension HostDaemon {
     /// Act unlimited reaches a chat at or below its own mode (`AgentChannel.drivable`).
     private func drivable(_ target: HostChat, _ hc: HostChat) -> Data? {
         guard tier(hc) >= .drive else { return Self.failed(.notOwn, "Act limited changes only this chat.") }
-        guard noFreer(target, than: hc) else { return Self.failed(.notOwn, "That chat's mode is above this one's: only you drive it.") }
+        guard noFreer(target, than: hc) else { return Self.failed(.notOwn, Chat.freerLine(always: rank(target).always && !rank(hc).always)) }
         return nil
     }
 

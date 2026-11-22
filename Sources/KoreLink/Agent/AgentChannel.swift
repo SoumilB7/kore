@@ -896,7 +896,8 @@ package final class AgentChannel {
             return targetId
         }
         guard target.noFreer(than: asker) else {
-            refuseLine(asker, client, id, "asked", "\(name)'s mode lets it do more on its own than this chat's")
+            let always = target.alwaysAllowed && !asker.alwaysAllowed
+            refuseLine(asker, client, id, "asked", always ? "\(name) was told Always allow and this chat wasn't" : "\(name)'s mode lets it do more on its own than this chat's")
             return targetId
         }
         let shared = ArsenalAsks.shared
@@ -1087,7 +1088,7 @@ package final class AgentChannel {
             return nil
         }
         guard chat.noFreer(than: own) else {
-            fail(client, id, .notOwn, "That chat's mode is above this one's: only you drive it.")
+            fail(client, id, .notOwn, chat.freerLine(than: own))
             return nil
         }
         return chat
@@ -1294,7 +1295,10 @@ package final class AgentChannel {
             guard let self, let client, AgentChannel.current === self, self.tier(client) >= .drive else { return }
             guard let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }), chat === own || chat.noFreer(than: own),
                 let window = AgentReads.workspace(of: chat)
-            else { return self.fail(client, id, .notOwn, "That chat's mode is above this one's: only you drive it.") }
+            else {
+                let own = client.chat.flatMap { AgentReads.chatsByID()[$0] }
+                return self.fail(client, id, .notOwn, own.map { chat.freerLine(than: $0) } ?? Chat.freerLine(always: false))
+            }
             guard self.roomForNew(client, id) else { return }
             let opened: Result<Chat, ArsenalRefusal>
             if let across {

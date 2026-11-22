@@ -66,7 +66,8 @@ enum AgentReads {
             folder: workspace?.boxFolder ?? LinkSnapshot.homeRelative(folder.path),
             window: folder.lastPathComponent, state: state(chat), mode: chat.controls.mode, modeLabel: mode?.label,
             planOn: chat.provider.planToggle != nil ? chat.controls.planMode : nil, model: chat.controls.currentModel?.name,
-            queued: chat.queuedCount, cards: LinkSnapshot.cards(chat).count, own: id == own ? true : nil)
+            queued: chat.queuedCount, cards: LinkSnapshot.cards(chat).count, own: id == own ? true : nil,
+            alwaysAllowed: chat.alwaysAllowed ? true : nil)
     }
 
     /// Every chat this caller may read, window by window, tab order; `scope`: one window's.

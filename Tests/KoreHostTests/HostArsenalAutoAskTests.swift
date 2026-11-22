@@ -80,5 +80,11 @@ extension HostArsenalTests {
         #expect(theirs.alwaysAllowed && !pending().contains("r-apt"))
         #expect(theirs.transcriptView.entries.contains { $0.kind == .notice && $0.text.hasPrefix("Arsenal · always allowed “sudo apt install …” · by ") })
         #expect(pending().contains("r-plain") && pending().contains("r-rm"))
+        // Out of reach for that reason, said as it is (not as a mode), and the list shows it.
+        let after = await answer("r-plain")
+        #expect(!after.ok && after.text.contains("That chat was told Always allow and this one wasn't: only you drive it."), "\(after.text)")
+        let list = Self.data(await ask("kore_list_chats", me, socket: socket, [:]).text)
+        let row = (list["chats"] as? [[String: Any]])?.first { $0["short"] as? String == short }
+        #expect(row?["alwaysAllowed"] as? Bool == true, "\(list)")
     }
 }

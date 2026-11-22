@@ -228,6 +228,7 @@ package enum Reads {
             var line = "\(str(chat["short"]))  \(pad(str(chat["state"]), state))  \(pad(str(chat["provider"]), provider))  \(str(chat["title"]))"
             line += "  · \(str(chat["window"]))"
             if let cards = chat["cards"] as? Int, cards > 0 { line += cards == 1 ? "  · 1 card" : "  · \(cards) cards" }
+            if chat["alwaysAllowed"] as? Bool == true { line += "  · always allow" }
             if chat["own"] as? Bool == true { line += "  (this chat)" }
             say(line)
         }
@@ -245,6 +246,7 @@ package enum Reads {
         rows.append(("cli", cli))
         var mode = (chat["modeLabel"] as? String) ?? str(chat["mode"])
         if chat["planOn"] as? Bool == true { mode += " · plan" }
+        if chat["alwaysAllowed"] as? Bool == true { mode += " · always allow" }
         rows.append(("mode", mode))
         rows.append(("folder", str(chat["folder"])))
         if let context = data["context"] as? Object, let used = context["used"] as? Int {

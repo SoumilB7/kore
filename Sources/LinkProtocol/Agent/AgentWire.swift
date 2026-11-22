@@ -353,8 +353,13 @@ package struct AgentChat: Encodable, Sendable, Equatable {
     package var cards: Int
     /// The caller's own chat.
     package var own: Bool?
+    /// Told Always allow on a card since its CLI started: a chat not told so doesn't drive it.
+    package var alwaysAllowed: Bool?
 
-    package init(id: String, short: String, title: String, provider: String, folder: String, window: String, state: String, mode: String, modeLabel: String? = nil, planOn: Bool? = nil, model: String? = nil, queued: Int, cards: Int, own: Bool? = nil) {
+    package init(
+        id: String, short: String, title: String, provider: String, folder: String, window: String, state: String, mode: String, modeLabel: String? = nil, planOn: Bool? = nil,
+        model: String? = nil, queued: Int, cards: Int, own: Bool? = nil, alwaysAllowed: Bool? = nil
+    ) {
         self.id = id
         self.short = short
         self.title = title
@@ -369,6 +374,7 @@ package struct AgentChat: Encodable, Sendable, Equatable {
         self.queued = queued
         self.cards = cards
         self.own = own
+        self.alwaysAllowed = alwaysAllowed
     }
 }
 

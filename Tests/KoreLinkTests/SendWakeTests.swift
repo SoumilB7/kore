@@ -289,6 +289,33 @@ extension AgentChannelTests {
             #expect(rig.tabs.count == 2)
         }
 
+        /// Two chats in Auto: one told Always allow is out of reach of one that wasn't, the refusal
+        /// says so (not a mode), and `chats.list` shows the flag.
+        @Test func alwaysAllowedIsSaidAndListed() async throws {
+            let rig = try Rig([])
+            defer { rig.finish() }
+            let tab = ChatTab()
+            let target = Chat(provider: try #require(Registry.provider("claude")), folder: rig.home.folder)
+            tab.chat = target
+            rig.home.tabs.append(tab)
+            target.status.name = "Remote rig"
+            for chat in [rig.caller, target] { chat.setMode("auto", remember: false) }
+            target.alwaysAllowed = true
+            let refused = try await rig.send("Remote rig", "hello")
+            #expect(!refused.ok && refused.code == "not_own" && refused.message == "That chat was told Always allow and this one wasn't: only you drive it.", "\(refused)")
+            let channel = try #require(AgentChannel.current)
+            let line = await channel.boxCall(chat: rig.caller.id.uuidString, "chats.list", [:])
+            let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] ?? [:]
+            let rows = ((object["data"] as? [String: Any])?["chats"] as? [[String: Any]]) ?? []
+            let row = rows.first { $0["id"] as? String == target.id.uuidString }
+            #expect(row?["alwaysAllowed"] as? Bool == true && row?["mode"] as? String == "auto", "\(rows)")
+            #expect(rows.first { $0["own"] as? Bool == true }?["alwaysAllowed"] == nil)
+            // A caller told Always allow too reaches it.
+            rig.caller.alwaysAllowed = true
+            let sent = try await rig.send("Remote rig", "hello")
+            #expect(sent.code != "not_own", "\(sent)")
+        }
+
         /// Act unlimited only, as `chat.open` then `chat.send`; never above the caller's mode.
         @Test func tiersAndModesAreChatOpensThenChatSends() async throws {
             let rig = try Rig([Self.login, Self.thread])
