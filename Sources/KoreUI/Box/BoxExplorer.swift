@@ -949,7 +949,7 @@ extension Workspace {
             tabs = [tab]
         } else {
             let index = tabs.firstIndex { $0.id == activeID } ?? tabs.count - 1
-            tabs.insert(tab, at: index + 1)
+            tabs.insert(tab, at: newTabIndex(index + 1, from: activeTab))
         }
         select(tab)
     }

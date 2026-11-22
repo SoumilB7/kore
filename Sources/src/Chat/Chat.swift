@@ -74,6 +74,8 @@ package final class Chat: Identifiable {
     /// while a Mac drives it: that Mac's chat does both, once.
     @ObservationIgnored package var automatic = true
     private var backend: (any ChatBackend)? { engine.backend }
+    /// Storylines: the CLI's backend now (the same one while the chat isn't reloaded).
+    package var storyBackend: AnyObject? { backend }
     @ObservationIgnored private let resume: SessionSummary?
     /// When the session it resumed was last written (nil for a new chat).
     package var resumedUpdated: Date? { resume?.updated }

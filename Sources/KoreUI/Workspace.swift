@@ -402,7 +402,7 @@ package final class Workspace {
 
     func newTab() {
         let tab = ChatTab()
-        tabs.append(tab)
+        tabs.insert(tab, at: newTabIndex(tabs.count, from: activeTab))
         activeID = tab.id
     }
 
@@ -428,7 +428,7 @@ package final class Workspace {
             tab = activeTab
         } else {
             tab = ChatTab()
-            tabs.append(tab)
+            tabs.insert(tab, at: newTabIndex(tabs.count, from: activeTab))
         }
         start(provider, in: tab)
         // Before its view appears and starts the CLI: it launches with this model.
@@ -436,7 +436,8 @@ package final class Workspace {
         return tab.chat
     }
 
-    /// A new chat of the provider in a tab of its own at the end, from outside the window (the
+    /// A new chat of the provider in a tab of its own at the end (past the front tab's group, as
+    /// `newTabIndex` puts new tabs), from outside the window (the
     /// local link): the tab the owner is on stays selected, and the chat starts in the
     /// provider's first mode (Manual). Nil for an unknown provider.
     package func startChatFromLink(provider id: String) -> Chat? {
@@ -445,7 +446,7 @@ package final class Workspace {
         let chat = Chat(provider: provider, folder: folder)
         Self.linkStarts(chat)
         tab.chat = chat
-        tabs.append(tab)
+        tabs.insert(tab, at: newTabIndex(tabs.count, from: activeTab))
         return chat
     }
 
@@ -461,11 +462,14 @@ package final class Workspace {
         tab.chat = chat
         let lone = tabs.count == 1 && tabs[0].isEmpty
         if lone { tabs.removeAll() }
-        tabs.insert(tab, at: min(max(index, 0), tabs.count))
+        // At the end (a new one): as any new tab, past the front tab's group; else where it was,
+        // never splitting a group.
+        tabs.insert(tab, at: index >= tabs.count ? newTabIndex(tabs.count, from: lone ? nil : activeTab) : newTabIndex(index))
         if !quiet || lone { activeID = tab.id }
     }
 
-    /// A past chat of this Mac's in a tab of its own at the end, the tab in front left there
+    /// A past chat of this Mac's in a tab of its own at the end (past the front tab's group), the
+    /// tab in front left there
     /// (`kore open --silent`); its tab when it's open already.
     func openQuietly(_ session: SessionSummary) {
         if tab(for: session.id, provider: Registry.provider(for: session.agent).id) != nil { return }
@@ -475,7 +479,7 @@ package final class Workspace {
         }
         let tab = ChatTab()
         tab.chat = chat(session)
-        tabs.append(tab)
+        tabs.insert(tab, at: newTabIndex(tabs.count, from: activeTab))
     }
 
     /// Shows a chat: its tab if already open, else the empty active tab or a new one.
@@ -543,6 +547,8 @@ package final class Workspace {
         tab.chat = chat
         tab.agent = id
         let family = tabs.indices.filter { tabs[$0].chat === chat }
+        // In its chat's group, if it has one: beside its chat, the group whole.
+        if let parent = family.first, let group = tabGroups.member[tabs[parent].id] { tabGroups.set(tab.id, to: group) }
         tabs.insert(tab, at: (family.last ?? tabs.count - 1) + 1)
         activeID = tab.id
     }
@@ -666,8 +672,9 @@ package final class Workspace {
         }
         let tab = ChatTab()
         tab.chat = fork
-        let index = tabs.firstIndex { $0.chat === chat && $0.agent == nil } ?? tabs.count - 1
-        tabs.insert(tab, at: index + 1)
+        let from = tabs.firstIndex { $0.chat === chat && $0.agent == nil }
+        let index = from ?? tabs.count - 1
+        tabs.insert(tab, at: newTabIndex(index + 1, from: from.map { tabs[$0] }))
         activeID = tab.id
         if arsenal, let tier = chat.arsenal { Self.carryArsenal(tier, to: fork) }
     }
@@ -970,7 +977,7 @@ package final class Workspace {
             tabs = [tab]
         } else {
             let index = tabs.firstIndex { $0.id == activeID } ?? tabs.count - 1
-            tabs.insert(tab, at: index + 1)
+            tabs.insert(tab, at: newTabIndex(index + 1, from: activeTab))
         }
         select(tab)
     }
@@ -1703,7 +1710,7 @@ package final class Workspace {
             if let draft = value.draft { tab.chat?.restoreComposerDraft(draft, keeping: attachments) }
         }
         if tabs.count == 1, tabs[0].isEmpty { tabs.removeAll() }
-        tabs.insert(tab, at: min(max(entry.index, 0), tabs.count))
+        tabs.insert(tab, at: newTabIndex(entry.index))
         activeID = tab.id
         if tab.file != nil { _ = filesStore() }
         return true

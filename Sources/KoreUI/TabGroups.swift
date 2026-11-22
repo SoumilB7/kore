@@ -179,6 +179,21 @@ extension Workspace {
 
     package func members(of group: UUID) -> [ChatTab] { tabs.filter { tabGroups.member[$0.id] == group } }
 
+    /// Where a new tab goes (owner, 0.3.10): at `wanted`, but a group stays whole. Opened from a
+    /// tab in a group (`from`: a file from the explorer, Go to File or a link, a new chat, a
+    /// fork), right after that group's last member, outside it; at a place inside a group (between
+    /// two of its tabs), right after that group. Its members keep their order, fold and chats.
+    /// An Arsenal `group` puts the tab in afterwards (`add(_:to:)`); a drag places it itself.
+    func newTabIndex(_ wanted: Int, from anchor: ChatTab? = nil) -> Int {
+        let wanted = min(max(wanted, 0), tabs.count)
+        let group = anchor.flatMap { tabGroups.member[$0.id] }
+            ?? (wanted > 0 && wanted < tabs.count ? tabGroups.member[tabs[wanted - 1].id].flatMap { group in
+                tabGroups.member[tabs[wanted].id] == group ? group : nil
+            } : nil)
+        guard let group, let last = tabs.lastIndex(where: { tabGroups.member[$0.id] == group }) else { return wanted }
+        return last + 1
+    }
+
     /// A tab held on another and dropped: they're grouped, the held one after the other. Onto a
     /// tab already in a group, it joins that group. Returns the group when it's a new one.
     @discardableResult
