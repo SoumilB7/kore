@@ -78,8 +78,10 @@ extension HostDaemon {
             // Another folder (Act device): one this box serves here; any other the Mac's, as its
             // windows open folders.
             if let folder = args["folder"] as? String { return tier < .device || historyFolder(folder, of: hc) != nil || !mac }
+            // A tab group is the Mac window's: the Mac opens it there, in the box's folder.
+            if args["group"] != nil, mac { return false }
             return (args["place"] as? String).map { $0 != "mac" } ?? true
-        // Forks, opens from History, asks and their replies, files and tabs: the Mac's.
+        // Forks, opens from History, asks and their replies, files, tabs and their groups: the Mac's.
         default: return false
         }
     }
@@ -135,7 +137,8 @@ extension HostDaemon {
         case AgentCommand.caps.name:
             return Self.ok(AgentCaps(tier: tier(hc), commands: AgentCommand.allowed(tier(hc)).map(\.name)))
         case AgentCommand.chats.name:
-            return Self.ok(AgentChats(chats: readable(hc).map { agentChat($0, own: hc.id) }))
+            // Windows and their tab groups are the Mac's: with no Mac, none.
+            return Self.ok(AgentChats(chats: readable(hc).map { agentChat($0, own: hc.id) }, windows: []))
         case AgentCommand.cards.name:
             let shown: [HostChat]
             if args.chat != nil {

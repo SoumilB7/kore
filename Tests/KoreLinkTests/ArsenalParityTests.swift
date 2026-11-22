@@ -152,6 +152,7 @@ extension AgentChannelTests {
             Call(tool: "kore_fetch", args: ["path": ".env"]), Call(tool: "kore_close", args: ["chat": "zzzzzzzz"]),
             Call(tool: "kore_open_chat", args: ["session": "no-such-session"]), Call(tool: "kore_fork", args: ["chat": "."]),
             Call(tool: "kore_new_chat", args: [:]), Call(tool: "kore_send", args: ["chat": "{target}", "text": "hello"]),
+            Call(tool: "kore_arrange", args: ["tabs": ["zzzzzzzz"], "to": "end"]),
         ]
 
         /// Fills in a side's tokens.

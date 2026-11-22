@@ -426,7 +426,12 @@ package final class AgentChannel {
             let tier = tier(client)
             send(client, AgentResult(id: id, ok: true, data: AgentCaps(tier: tier, commands: AgentCommand.allowed(tier).map(\.name))))
         case AgentCommand.chats.name:
-            send(client, AgentResult(id: id, ok: true, data: AgentChats(chats: AgentReads.chats(own: own))))
+            let windows = AgentReads.windows(own: own, scope: args.window)
+            if let scope = args.window, windows.isEmpty {
+                fail(client, id, .noWindow, "No Kore window is called \(scope.prefix(64)).")
+                return nil
+            }
+            send(client, AgentResult(id: id, ok: true, data: AgentChats(chats: AgentReads.chats(own: own, scope: args.window), windows: windows)))
         case AgentCommand.cards.name:
             let chats: [Chat]
             if args.chat != nil {
@@ -517,6 +522,8 @@ package final class AgentChannel {
             return replyAsk(args, client, id)
         case AgentCommand.fetch.name:
             return fetchFile(args, client, id)
+        case AgentCommand.arrange.name:
+            return arrangeTabs(args, client, id)
         case AgentCommand.showTab.name:
             guard let chat = changeable(args, client, id) else { return nil }
             guard let workspace = AgentReads.workspace(of: chat), workspace.arsenalShow(chat) else {
@@ -1125,7 +1132,7 @@ package final class AgentChannel {
     /// A new chat's answer: counted, its first message sent, its short id back.
     private func made(_ chat: Chat, _ lead: String, _ args: AgentArgs, _ client: Client, _ id: String) -> String {
         spentNew(chat, client)
-        var message = lead
+        var message = lead + grouped(chat, args, client)
         if let text = args.text, !text.isEmpty {
             switch chat.arsenalSend(text, from: callerName(client)) {
             case .success: message += " Sent."
@@ -1135,6 +1142,35 @@ package final class AgentChannel {
         let chatId = chat.id.uuidString
         send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chatId, message: message, short: AgentReads.short(chatId))))
         return chatId
+    }
+
+    /// A tab an agent opened, put in the group it named (`group`): what its answer adds.
+    private func grouped(_ chat: Chat, _ args: AgentArgs, _ client: Client) -> String {
+        guard let group = args.group, let own = callerChat(client), let window = AgentReads.workspace(of: chat) else { return "" }
+        switch window.arsenalJoin(chat, group: group, by: own, front: args.silent != true) {
+        case .success(let line): return " " + line
+        case .failure(let refusal): return " " + refusal.message
+        }
+    }
+
+    /// The caller's window's tabs and groups arranged (`Workspace.arsenalArrange`): layout only,
+    /// in its own window; a tab another window has is refused with that reason.
+    private func arrangeTabs(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
+        guard let own = callerChat(client), let home = AgentReads.workspace(of: own) else {
+            fail(client, id, .noWindow, "Only a chat in Kore arranges tabs, in its own window.")
+            return nil
+        }
+        let tabs = args.tabs ?? []
+        guard tabs.allSatisfy({ $0.utf8.count <= 64 }), [args.group, args.to, args.name].allSatisfy({ ($0 ?? "").utf8.count <= 256 }) else {
+            fail(client, id, .invalid, "Tab ids, group names and places are short.")
+            return own.id.uuidString
+        }
+        let ask = ArsenalArrange(
+            tabs: tabs, group: args.group, to: args.to, fold: args.fold, name: args.name, ungroup: args.ungroup ?? false, show: args.show ?? false,
+            asked: args.asked ?? false)
+        let others = AgentReads.workspaces().filter { $0 !== home }
+        done(home.arsenalArrange(ask, by: own, elsewhere: { ref in others.contains { $0.arsenalTab(ref) != nil } }), own, client, id)
+        return own.id.uuidString
     }
 
     /// The lowest tier that opens a chat in another folder's window (the owner, 2026-11-22).
@@ -1264,7 +1300,7 @@ package final class AgentChannel {
                 self.fail(client, id, .refused, refusal.message)
             case .success(let fork):
                 self.spentNew(fork, client)
-                var said = across == nil ? "Forked it." : "Forked it into \(fork.provider.name)."
+                var said = (across == nil ? "Forked it." : "Forked it into \(fork.provider.name).") + self.grouped(fork, args, client)
                 if let message {
                     switch fork.arsenalSend(message, from: self.callerName(client)) {
                     case .success: said += " Sent."
@@ -1431,7 +1467,7 @@ package final class AgentChannel {
             case .success(let (chat, opened)):
                 if opened { self.spentNew(chat, client) }
                 let chatId = chat.id.uuidString
-                let message = opened ? "Opened “\(AgentReads.title(chat.title))”." : args.silent == true ? "It was open." : "It was open: in front."
+                let message = (opened ? "Opened “\(AgentReads.title(chat.title))”." : args.silent == true ? "It was open." : "It was open: in front.") + self.grouped(chat, args, client)
                 self.send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chatId, message: message, short: AgentReads.short(chatId))))
             }
         }

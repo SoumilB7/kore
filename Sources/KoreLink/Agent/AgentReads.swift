@@ -69,9 +69,37 @@ enum AgentReads {
             queued: chat.queuedCount, cards: LinkSnapshot.cards(chat).count, own: id == own ? true : nil)
     }
 
-    /// Every chat this caller may read, window by window, tab order.
-    static func chats(own: String?) -> [AgentChat] {
-        readable(own: own).map { chat($0, in: workspace(of: $0), own: own) }
+    /// Every chat this caller may read, window by window, tab order; `scope`: one window's.
+    static func chats(own: String?, scope: String? = nil) -> [AgentChat] {
+        readable(own: own).compactMap { chat in
+            let window = workspace(of: chat)
+            guard window.map({ named($0, scope) }) ?? (scope == nil) else { return nil }
+            return Self.chat(chat, in: window, own: own)
+        }
+    }
+
+    /// Each window's strip as `chats.list` gives it: the caller's own whole, another only the
+    /// tabs of the chats it may read (no files, boards or sub-agents' tabs). `scope`: one window.
+    static func windows(own: String?, scope: String? = nil) -> [AgentWindow] {
+        let shown = Set(readable(own: own).map(ObjectIdentifier.init))
+        let home = own.flatMap { chatsByID()[$0] }.flatMap(workspace(of:))
+        return workspaces().compactMap { window in
+            guard named(window, scope) else { return nil }
+            let here = window === home
+            let view = window.arsenalView(whole: here) { shown.contains(ObjectIdentifier($0)) }
+            guard here || !view.tabs.isEmpty else { return nil }
+            let groups = view.groups.map { AgentWindow.Group(name: $0.name, by: $0.by, folded: $0.folded ? true : nil, tabs: $0.tabs) }
+            return AgentWindow(
+                name: view.name, selected: view.selected, tabs: view.tabs, groups: groups.isEmpty ? nil : groups,
+                other: view.other.isEmpty ? nil : view.other, here: here ? true : nil)
+        }
+    }
+
+    /// A window `scope` names (its name, or its folder as listed); every one when nil.
+    static func named(_ window: Workspace, _ scope: String?) -> Bool {
+        guard let scope = scope?.trimmingCharacters(in: .whitespaces).lowercased(), !scope.isEmpty else { return true }
+        let folder = window.boxFolder ?? LinkSnapshot.homeRelative(window.folder.path)
+        return window.folder.lastPathComponent.lowercased() == scope || folder.lowercased() == scope
     }
 
     static func detail(_ chat: Chat, own: String?) -> AgentChatDetail {

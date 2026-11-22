@@ -8,12 +8,16 @@ package struct TabGroup: Identifiable, Equatable, Codable {
     package var name: String
     package var color: TabGroupColor
     package var folded: Bool
+    /// The chat whose agent made it (its id), or nil for the user's own. Arsenal leaves the user's
+    /// groups as they are unless the user asked for it in that chat (`arsenalArrange`).
+    package var madeBy: String?
 
-    package init(id: UUID = UUID(), name: String = "", color: TabGroupColor, folded: Bool = false) {
+    package init(id: UUID = UUID(), name: String = "", color: TabGroupColor, folded: Bool = false, madeBy: String? = nil) {
         self.id = id
         self.name = name
         self.color = color
         self.folded = folded
+        self.madeBy = madeBy
     }
 }
 
@@ -241,13 +245,20 @@ extension Workspace {
         tabGroups.normalize(order: tabs.map(\.id))
     }
 
+    /// The user's rename: a group a chat made is the user's from then on.
     package func rename(group: UUID, to name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        tabGroups.update(group) { $0.name = trimmed }
+        tabGroups.update(group) {
+            $0.name = trimmed
+            $0.madeBy = nil
+        }
     }
 
     package func recolor(group: UUID, _ color: TabGroupColor) {
-        tabGroups.update(group) { $0.color = color }
+        tabGroups.update(group) {
+            $0.color = color
+            $0.madeBy = nil
+        }
     }
 
     /// The chip's click: folded to the chip, or open again.
