@@ -12,7 +12,10 @@ import Foundation
 /// the one recorded at `+`, so a pid reused by another program is never signalled.
 package final class ChildReaper: @unchecked Sendable {
     /// The one every `StdioProcess` reports to, started with the first child.
-    package static let shared = ChildReaper(grace: .seconds(5))
+    package static let shared = ChildReaper(grace: graceAfterTerm)
+    /// How long a child has after SIGTERM before it and its tree are killed: within this of Kore
+    /// going, none of its CLIs is left (Resume after a close waits it out after a relaunch).
+    package static let graceAfterTerm: Duration = .seconds(5)
 
     private let grace: Duration
     private let lock = NSLock()

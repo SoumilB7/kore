@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import KoreCore
 import KoreUI
@@ -43,8 +44,9 @@ class WorkResumeStoryline: ChatStoryline {
     }
 
     func setUp(helper: Bool) -> [any Step] {
-        [Do("Kore started by its installer (its windows are kept)") { _ in
+        [Do("Kore started by its installer (its windows are kept), long after the last one went") { _ in
             Workspace.storyLaunch = ["KORE_BUILD_SHA": "6d23295", "KORE_RELEASE_TAG": "v0.3.9", "KORE_SIGN_IDENTITY": "Kore"]
+            Workspace.sinceLaunch = { .seconds(3600) }
         }] + super.steps() + [
             Send("Fix the build"),
             Expect("the first chat working") { story in try story.activeChat().isBusy },
@@ -115,6 +117,34 @@ final class ResumeDismissed: WorkResumeStoryline {
             Expect("no cue the next time") { story in
                 guard try Self.workspace(story).window?.isVisible == true else { return false }
                 return try Self.workspace(story).resumeOffer == nil && StoryElement(StoryID.Titlebar.resume) == nil
+            },
+        ]
+    }
+}
+
+/// Quit asked with a chat working, through the app's own quit (`applicationShouldTerminate`),
+/// then Cancel on Kore's card: nothing is marked as ending, so the note goes on following the
+/// chat; only a confirmed Quit (or one with nothing to ask) keeps it as it was.
+final class ResumeQuitCancelled: WorkResumeStoryline {
+    override func steps() -> [any Step] {
+        [Do("Kore started by its installer (its windows are kept)") { _ in
+            Workspace.storyLaunch = ["KORE_BUILD_SHA": "6d23295", "KORE_RELEASE_TAG": "v0.3.9", "KORE_SIGN_IDENTITY": "Kore"]
+        }] + super.steps() + [
+            Send("Fix the build"),
+            Expect("the chat working") { story in try story.activeChat().isBusy },
+            Do("⌘Q: the app's own quit asks") { _ in
+                Workspace.ending = false
+                guard let delegate = NSApp.delegate else { throw StoryFailure.modelMissing("the app's delegate") }
+                let reply = delegate.applicationShouldTerminate?(NSApp)
+                guard reply == .terminateLater else { throw StoryFailure.expectation("the quit didn't ask: \(String(describing: reply))") }
+            },
+            WaitForElement(.id(StoryID.Ask.choice("Cancel"))),
+            Expect("asking: nothing marked as ending yet") { _ in !Workspace.ending },
+            Press(.id(StoryID.Ask.choice("Cancel"))),
+            ExpectElement(.id(StoryID.Ask.card), .absent),
+            Expect("Cancel: nothing marked as ending, the chat still noted as working") { story in
+                guard !Workspace.ending else { return false }
+                return try Self.notes(story).first.map { $0 != nil } == true && story.activeChat().isBusy
             },
         ]
     }

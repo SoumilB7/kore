@@ -161,12 +161,25 @@ struct ResumeAfterCloseTests {
         backend.sink.yield(.turnFinished("t2", .completed, duration: nil))
         try await until { !chat.isBusy }
         w.resumeOffer = ResumeOffer(items: [.init(tab: w.tabs[0].id, agents: 1, commands: 2)])
+        let age = Workspace.sinceLaunch
+        Workspace.sinceLaunch = { .seconds(60) }
+        defer { Workspace.sinceLaunch = age }
         w.resumeWork()
         try await until { !backend.sent.isEmpty }
         #expect(backend.sent == [
             "Kore closed while you were working. Continue where you left off. Your sub-agents were stopped too; start them again where they were. Background commands stopped; rerun any you still need."
         ])
         #expect(w.resumeOffer == nil)
+    }
+
+    /// A crash leaves the old CLIs to the reaper, gone within its grace: a Resume that soon after
+    /// a relaunch waits it out; later, none.
+    @Test func aResumeSoonAfterARelaunchWaitsForTheLastKoresCLIsToEnd() {
+        #expect(ChildReaper.graceAfterTerm == .seconds(5))
+        #expect(Workspace.reaperWait(sinceLaunch: .seconds(1)) == .seconds(5))
+        #expect(Workspace.reaperWait(sinceLaunch: .seconds(6)) == .zero)
+        #expect(Workspace.reaperWait(sinceLaunch: .seconds(600)) == .zero)
+        #expect(Workspace.processAge() > .zero)
     }
 
     @Test func theNoteIsShortAndTheSameForEitherCLI() {
