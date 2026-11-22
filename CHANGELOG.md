@@ -104,6 +104,8 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
   answered; a box that can't be reached isn't waited on twice.
 - Check again on a box that's on KoreNet asks it over KoreNet first, so an SSH address nothing
   answers (an old LAN one) isn't waited on. Host key, Trust and Set up lines still check over SSH.
+- Copying part of the composer's text (⌘C, Edit ▸ Copy or right-click Copy) works after the keys
+  were elsewhere, such as text selected in the chat: a press in the composer gives it the keys.
 
 ## [0.3.9] - 2026-11-24
 
