@@ -95,6 +95,8 @@ package final class HostDaemon {
     var rateLimits: [String: HostLimits] = [:]
     /// Phase 18: the devices this box trusts and those waiting (`devices/`).
     package let devices: DeviceStore
+    /// Link 1.16: rsync over KoreNet (`HostPipes`), its rsync found on first use (tests set their own).
+    package lazy var pipes = HostPipes(home: HostPaths.home().path)
     /// The KoreNet listener (`HostNet`), while Tailscale is up; nil in tests that don't ask.
     package private(set) var net: HostNet?
     /// The tailnet KoreNet listens on, made at once while the box is on KoreNet (`config.net`):
@@ -796,7 +798,7 @@ package final class HostDaemon {
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
             caps: ["tx", "attn", "commands", "control", "box", BoxTools.deviceCap] + (control != .watch ? ["history", "blob", "diff"] : [])
-                + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, LinkFiles.bytesCap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap, LinkPolicy.alwaysAllowCap, LinkPolicy.fullAccessCap] : []))
+                + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, LinkFiles.bytesCap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap, LinkPolicy.alwaysAllowCap, LinkPolicy.fullAccessCap] + (pipes.available ? [LinkPipe.cap] : []) : []))
     }
 
     /// Whether a served folder's window is closed (`window.close`); one with a chat shows anyway.

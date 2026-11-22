@@ -154,8 +154,8 @@ struct BoxSyncButton: View {
             pairing.value = BoxPairing(place: place, state: other.map { .blocked(why, $0, mac) } ?? .failed(why))
             return
         }
-        guard let ssh = SyncBox.ssh(box.alias) else {
-            pairing.value = BoxPairing(place: place, state: .failed("\(NodeNames.name(box.alias)) isn't an SSH alias Kore can use"))
+        guard let ssh = SyncBox.box(box.connection) ?? SyncBox.ssh(box.alias) else {
+            pairing.value = BoxPairing(place: place, state: .failed("\(NodeNames.name(box.alias)) has no way to copy files yet: no KoreNet link, no SSH alias"))
             return
         }
         pairing.value = BoxPairing(place: place, state: .checking(SyncPairs.shown(mac: mac.path)))

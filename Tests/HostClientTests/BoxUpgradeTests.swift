@@ -443,6 +443,10 @@ struct BoxUpgradeTests {
         // Nothing after it can come: the test ends here, not in waits that never would.
         guard joined else { return switcher.set(false) }
         #expect(upgrades.started == 1)
+        // The node the link reached is kept under the box's id, not the alias it was dialled by
+        // (a pipe dials it; korenet-rig `pipe-no-sshd`, 2026-11-25).
+        #expect(await holds { connection.alias != alias && switcher.linkNode[connection.alias] == "nodekey:box" })
+        #expect(switcher.linkNode[alias] == nil)
         let entry = try #require(directory.entry(forKey: connection.alias))
         #expect(entry.enrolled && entry.nodeKey == "nodekey:box")
         #expect(host.config.netOn && host.net?.listening == true)

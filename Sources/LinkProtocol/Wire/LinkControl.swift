@@ -117,9 +117,15 @@ package enum ControlKind: String, Sendable, CaseIterable {
     case accountImport = "account.import"
     case accountExport = "account.export"
     case accountFingerprints = "account.fingerprints"
+    /// 1.16: rsync over KoreNet (`LinkPipe`): a ticket for one pipe session to this node, its
+    /// remote command checked (`pipe.open`); a ticket another box's pipe will bring, from the
+    /// Mac (`pipe.expect`); and a copy this box makes to another over a pipe (`pipe.send`).
+    case pipeOpen = "pipe.open"
+    case pipeExpect = "pipe.expect"
+    case pipeSend = "pipe.send"
 
     /// A file command (1.7, 1.8, 1.12's `sync.apply`): answered with a `FilesResult`, full grants only.
-    package var onFiles: Bool { rawValue.hasPrefix("fs.") || self == .syncApply }
+    package var onFiles: Bool { rawValue.hasPrefix("fs.") || rawValue.hasPrefix("pipe.") || self == .syncApply }
 
     /// It acts on a CLI's account.
     package var onAccount: Bool { rawValue.hasPrefix("account.") }
@@ -277,6 +283,11 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     package var offset: Int64?
     /// `chat.copyVia` (cap "copyVia"): the copy asked for.
     package var copy: CopyAsk?
+    /// 1.16 (`LinkPipe`): the remote command rsync gave its remote shell (`pipe.open`,
+    /// `pipe.expect`), a pipe's ticket (base64), and the other box's device id.
+    package var argv: [String]?
+    package var ticket: String?
+    package var device: String?
 
     package init(
         chatId: String? = nil, windowId: String? = nil, title: String? = nil, force: Bool? = nil, modelId: String? = nil,

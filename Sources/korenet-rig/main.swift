@@ -11,6 +11,7 @@ import Darwin
 import Foundation
 import HostClient
 import KoreCore
+import LinkProtocol
 import Tailnet
 
 @MainActor
@@ -294,6 +295,7 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     ("forgotten", "a box forgotten on this Mac (Remove) and added again → a first add: Set up, the upgrade, the link on KoreNet; no duplicate own node", forgotten),
     ("fresh-box", "scripts/tests/fresh-box.sh: backup → wipe (Kore has never seen the box, the box has no kore-host) → Set up from scratch → restore → the original box back", freshBox),
     ("fresh-phase", "(a step of fresh-box, run as its own Kore)", freshPhase),
+    ("pipe-no-sshd", "a box set up over SSH, then its sshd stopped: copies both ways and the sync run over kore pipe on KoreNet, no SSH at all", pipeNoSSHD),
     ("interrupted", "the upgrade interrupted at each step (SSH killed mid-install, mid-join, mid-sign-in) → a retry completes, one own node, nothing stuck", interrupted),
 ]
 
@@ -852,8 +854,8 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
 /// tailnet: the sync (a pair, both ways), a copy's rsync (as moves, copies and carries run it) and
 /// a shell over SSH ride the same route (0.3.10: they went to the dead address and paused on
 /// "rsync: unexpected end of file").
-@MainActor func filesThroughKore(_ r: Run, _ alias: String) async {
-    guard let link = r.kore.link(alias), let box = SyncBox.ssh(alias) else { return r.check("\(alias)'s link and SSH alias", false, "") }
+@MainActor func filesThroughKore(_ r: Run, _ alias: String, shell: Bool = true) async {
+    guard let link = r.kore.link(alias), let box = SyncBox.box(link) else { return r.check("\(alias)'s link and SSH alias", false, "") }
     let home = "/home/kore"
     // A copy's rsync and a shell, as ChatMoves, ChatCopies and FileCarry run them.
     let local = r.places.scratch.appendingPathComponent("carry-\(alias)")
@@ -861,8 +863,17 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     try? "carried".write(to: local.appendingPathComponent("carried.txt"), atomically: true, encoding: .utf8)
     let pushed = await SyncProcess.run("/usr/bin/rsync", ["-a"] + box.rsyncOptions(false) + [local.path + "/", box.spec(home + "/carry/")])
     r.check("a copy's rsync to \(alias) rides Kore's tailnet", pushed.status == 0, pushed.said)
-    let read = await box.shell(#"cat "$1""#, [home + "/carry/carried.txt"])
-    r.check("a shell over SSH reads it back", read.status == 0 && read.out.contains("carried"), read.said)
+    if shell {
+        let read = await box.shell(#"cat "$1""#, [home + "/carry/carried.txt"])
+        r.check("a shell over SSH reads it back", read.status == 0 && read.out.contains("carried"), read.said)
+    } else {
+        let there = await Boxes.exec(alias, "[ \"$(cat \(home)/carry/carried.txt)\" = carried ]", user: "kore")
+        r.check("the copy landed on \(alias)", there.ok, there.out)
+        let back = r.places.scratch.appendingPathComponent("back-\(alias)")
+        let pulled = await SyncProcess.run("/usr/bin/rsync", ["-a"] + box.rsyncOptions(false) + [box.spec(home + "/carry/"), back.path + "/"])
+        let landed = (try? String(contentsOf: back.appendingPathComponent("carried.txt"), encoding: .utf8)) ?? ""
+        r.check("a copy's rsync from \(alias) rides the pipe back", pulled.status == 0 && landed == "carried", pulled.said)
+    }
     // The sync: a pair, a file each way.
     _ = await Boxes.exec(alias, "mkdir -p \(home)/pair", user: "kore")
     _ = await link.addFolder(home + "/pair")
@@ -927,6 +938,28 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     r.check("SSH still reaches b1", ssh.ok, ssh.out)
     r.check("sign-in pages opened: this Mac's once, b1's once", r.kore.browser.opened.count == 2, "\(r.kore.browser.opened.count) opened")
     r.logRow("b1")
+}
+
+/// Cell B: no sshd once set up. The link on KoreNet, every copy goes over `kore pipe` (owner,
+/// 2026-11-24); none waits on the alias, which now answers nothing.
+@MainActor func pipeNoSSHD(_ r: Run) async {
+    guard await r.box(BoxSpec(name: "b26", sshPort: 22126)) else { return }
+    RigSSH.write([RigSSH.Host(alias: "b26", lines: ["HostName 127.0.0.1", "Port 22126", "User kore", "ConnectTimeout 5"])], places: r.places)
+    guard await r.launch(installed: false) else { return }
+    guard await r.setUp("b26") else { return }
+    guard await r.linkOnNet("b26") else { return }
+    _ = await Boxes.exec("b26", "systemctl stop ssh.socket ssh 2>/dev/null; systemctl stop ssh")
+    let ssh = await RigSSH.exec("b26", "true", places: r.places, timeout: 10)
+    r.check("b26's sshd is off", !ssh.ok, ssh.out)
+    await r.works("b26", "KoreNet, sshd off")
+    if let link = r.kore.link("b26") {
+        r.check("b26 serves pipes", link.caps.contains(LinkPipe.cap), "\(link.caps)")
+        r.check("its copies choose the pipe", SyncBox.box(link)?.overPipe == true)
+    }
+    let t0 = now()
+    await filesThroughKore(r, "b26", shell: false)
+    r.note(String(format: "copies and the sync over the pipe in %.1fs", now() - t0))
+    r.logRow("b26")
 }
 
 // MARK: Main

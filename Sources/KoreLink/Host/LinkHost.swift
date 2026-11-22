@@ -304,6 +304,7 @@ package final class LinkHost {
         case .accountImport, .accountExport: "Moved a login"
         case .chatCopyVia: "Copied a chat"
         case .accountFingerprints: "Read the logins"
+        case .pipeOpen, .pipeExpect, .pipeSend: "Copied files"
         }
     }
 

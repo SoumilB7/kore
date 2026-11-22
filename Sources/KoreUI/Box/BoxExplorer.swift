@@ -712,7 +712,8 @@ private struct BoxDrop: DropDelegate {
             }
             // A local tree's drag carries its whole choice.
             let places = TreeDrag.expand(dropped).map { FilePlace.mac(realPath($0.path)) }
-            guard SyncBox.ssh(store.alias) == nil else {
+            // A carry goes over a pipe (the link on KoreNet) or SSH; with neither, an upload.
+            guard SyncBox.box(BoxBinding.connection(store.alias)) == nil else {
                 return FilePaste.carry(places, into: into, move: act == .move, done: landed)
             }
             await Self.upload(places.map { URL(fileURLWithPath: $0.path) }, into: folder, store: store)

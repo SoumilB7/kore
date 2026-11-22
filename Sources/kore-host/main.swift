@@ -7,6 +7,7 @@ import Glibc
 import Musl
 #endif
 import KoreHost
+import KoreNet
 import KoreTrust
 import LinkProtocol
 import Tailnet
@@ -87,6 +88,9 @@ func runningPid() -> String {
 }
 
 switch arguments.first {
+case "pipe":
+    // rsync's remote shell for a copy to another box (`pipe.send`): its pipe from this daemon.
+    exit(PipeClient.run(Array(arguments.dropFirst())))
 case "run":
     signal(SIGPIPE, SIG_IGN)
     if let problem = paths.runtimeProblem { fail("kore-host: \(problem)") }

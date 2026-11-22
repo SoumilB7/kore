@@ -79,6 +79,9 @@ extension HostDaemon {
     /// Every link whose device (or whose grant's device) has gone from the book ends now.
     func endRevoked() {
         for connection in provenClients where connection.deviceId != nil { _ = connection.current() }
+        // A revoked or paused device's pipes too, mid-copy: its carry pauses on the Mac.
+        let live = Dictionary(devices.all().map { ($0.id, $0.isPaused) }, uniquingKeysWith: { a, _ in a })
+        pipes.stop { live[$0] ?? true }
     }
 
     /// The pending list to one owner Mac (on its connect, when there's any).

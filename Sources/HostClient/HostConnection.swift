@@ -128,6 +128,8 @@ package final class HostConnection {
     /// This connection's own router (tests); a connection with a test transport uses no other.
     @ObservationIgnored package var router: (any NetRouter)?
     private var activeRouter: (any NetRouter)? { router ?? (makeTransport == nil ? Self.net : nil) }
+    /// A pipe's own session to the box, while its link is on the tailnet (`BoxPipe`).
+    package var pipeDial: (@Sendable () throws -> NetTransport.Opened)? { activeRouter?.pipeDial(for: self) }
     /// The SSH route's chooser, KoreNet on or off (an enrolled box is reached with this Mac's
     /// identity); nil: today's `attach` with the grant.
     package static var sshNet: (any NetRouter)?

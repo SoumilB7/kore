@@ -39,6 +39,9 @@ package protocol NetRouter: AnyObject {
     /// Whether `transport(for:)` would dial now, as last heard (this Mac's tailnet running, a
     /// node of the box known): cheap, nothing changes.
     func canDial(_ connection: HostConnection) -> Bool
+    /// A pipe's own session to the box (KoreNet service "pipe", `BoxPipe`): the node its link is
+    /// on now, dialled when the returned closure runs (off the main actor). Nil: no pipe now.
+    func pipeDial(for connection: HostConnection) -> (@Sendable () throws -> NetTransport.Opened)?
 }
 
 extension NetRouter {
@@ -47,6 +50,7 @@ extension NetRouter {
     package func oldKeyOnNet(_ connection: HostConnection) -> String? { nil }
     package func otherNodeOnline(_ connection: HostConnection) -> Bool { false }
     package func canDial(_ connection: HostConnection) -> Bool { true }
+    package func pipeDial(for connection: HostConnection) -> (@Sendable () throws -> NetTransport.Opened)? { nil }
 }
 
 extension HostConnection {

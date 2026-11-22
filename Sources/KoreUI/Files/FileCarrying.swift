@@ -85,7 +85,7 @@ final class FileCarries {
     /// Makes the boxes a carry reaches (tests: their own).
     @ObservationIgnored var reach: (String) -> (connection: HostConnection, box: CarryBox) = { alias in
         let connection = BoxBinding.connection(alias)
-        return (connection, CarryBox(alias: alias, files: connection, ssh: SyncBox.ssh(alias)))
+        return (connection, CarryBox(alias: alias, files: connection, ssh: SyncBox.box(connection)))
     }
     @ObservationIgnored private var sleepWatch: [NSObjectProtocol] = []
 

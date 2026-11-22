@@ -160,6 +160,19 @@ package struct SyncBox: Sendable {
     /// The ssh program and Kore's options; `extra` goes after the alias's options and the route.
     private let program: [String]
     private let extra: [String]
+    /// The box's link, for rsync over KoreNet (`BoxPipe`): asked at each spawn. Nil: SSH only.
+    package var pipe: PipeLink?
+
+    /// A box's pipe as a spawn asks it: whether one goes now, and rsync's `-e` for one.
+    package struct PipeLink: Sendable {
+        package var usable: @MainActor @Sendable () -> Bool
+        package var eCommand: @MainActor @Sendable () -> String?
+
+        package init(usable: @escaping @MainActor @Sendable () -> Bool, eCommand: @escaping @MainActor @Sendable () -> String?) {
+            self.usable = usable
+            self.eCommand = eCommand
+        }
+    }
 
     package static let sshOptions = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 
@@ -169,6 +182,27 @@ package struct SyncBox: Sendable {
         guard validAlias(alias), BoxAddress(alias) != nil else { return nil }
         return SyncBox(alias: alias, base: nil, routed: true, program: [program] + sshOptions, extra: [])
     }
+
+    /// The box a connection reaches: over a pipe while its link is on KoreNet (owner, 2026-11-24:
+    /// then always, even where SSH would work), else over its SSH alias. A box with no SSH alias
+    /// (claimed over the tailnet) copies only over a pipe. Nil: neither could ever reach it.
+    @MainActor package static func box(_ connection: HostConnection) -> SyncBox? {
+        let link = PipeLink(
+            usable: { [weak connection] in connection.map(BoxPipe.usable) ?? false },
+            eCommand: { [weak connection] in connection.flatMap(BoxPipe.eCommand) })
+        let sshAlias = NodeDirectory.isNodeKey(connection.alias) ? NodeDirectory.shared.sshAlias(forKey: connection.alias) : connection.alias
+        if let sshAlias, var box = ssh(sshAlias) {
+            box.pipe = link
+            return box
+        }
+        guard NodeDirectory.isNodeKey(connection.alias) else { return nil }
+        var box = SyncBox(alias: connection.alias, base: nil, routed: false, program: ["/usr/bin/false"], extra: [])
+        box.pipe = link
+        return box
+    }
+
+    /// Whether this spawn would go over a pipe: no SSH master, shell or alias is needed then.
+    @MainActor package var overPipe: Bool { pipe?.usable() ?? false }
 
     /// The ssh program and its options, before `--` and the alias: for a real box, `BoxSSH`'s
     /// words now (its route decided as this is read: each spawn reads it once).
@@ -194,7 +228,10 @@ package struct SyncBox: Sendable {
 
     /// `remoteTimeout`: the box's rsync gives up after that many seconds without I/O too (the
     /// Mac's openrsync never passes its own `--timeout` on to the box's).
-    package func rsyncOptions(_ low: Bool, remoteTimeout: Int? = nil) -> [String] {
+    /// Over a pipe: the box runs its rsync niced with its own timeout, and takes no `--rsync-path`.
+    @MainActor package func rsyncOptions(_ low: Bool, remoteTimeout: Int? = nil) -> [String] {
+        // A pipe that can't be had ends at once: never SSH instead (its alias may name a dead address).
+        if let pipe, pipe.usable() { return ["-e", pipe.eCommand() ?? "/usr/bin/false"] }
         let path = (low ? "nice -n 10 " : "") + "rsync" + (remoteTimeout.map { " --timeout=\($0)" } ?? "")
         return ["-e", sshCommand] + (low || remoteTimeout != nil ? ["--rsync-path=" + path] : [])
     }
@@ -211,7 +248,9 @@ package struct SyncBox: Sendable {
     /// Through a master connection's socket (`SyncChannel`): each ssh this box runs rides it, no
     /// key exchange of its own. With no master there (not up yet, or gone), ssh connects itself.
     func through(socket: String) -> SyncBox {
-        SyncBox(alias: alias, base: base, routed: routed, program: program, extra: extra + ["-o", "ControlMaster=no", "-o", "ControlPath=" + socket])
+        var box = SyncBox(alias: alias, base: base, routed: routed, program: program, extra: extra + ["-o", "ControlMaster=no", "-o", "ControlPath=" + socket])
+        box.pipe = pipe
+        return box
     }
 
     /// The master connection's command: `ssh -M` on `socket`, its one session a remote `cat` that
@@ -595,7 +634,7 @@ package final class HostSync {
 
     /// Nil for a pair whose alias isn't one (`SyncBox.validAlias`).
     package init?(pair: SyncPair, connection: HostConnection, box: SyncBox? = nil, root: URL = HostCache.root(), defaults: UserDefaults = .standard) {
-        guard let box = box ?? .ssh(pair.alias) else { return nil }
+        guard let box = box ?? .box(connection) ?? .ssh(pair.alias) else { return nil }
         self.pair = pair
         self.connection = connection
         self.box = box
@@ -640,7 +679,8 @@ package final class HostSync {
             }
             self.gathered()
         }
-        if heldConnection { channel = SyncChannel.open(box, folder: channelFolder) }
+        // Over a pipe there's no SSH to hold (and an alias may lead nowhere while KoreNet is up).
+        if heldConnection, !box.overPipe { channel = SyncChannel.open(box, folder: channelFolder) }
         connection.onSync(pair.box) { [weak self] raw in self?.received(raw) }
         connection.onSnapshot(key) { [weak self] in
             // The link came (back): a held connection from before a drop may be dead.
@@ -924,7 +964,7 @@ package final class HostSync {
         }
         // Each rsync and shell of the round through the box's held connection.
         var box = self.box
-        if let channel { box = await channel.box() }
+        if let channel, !box.overPipe { box = await channel.box() }
         let mac = tree.root.path + "/", remote = box.spec(pair.box + "/")
         let rsync = Self.rsyncArguments(box, low: low)
         // rename(2): a case-only rename on a volume that ignores case.

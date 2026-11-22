@@ -201,6 +201,60 @@ struct CarryResumeTests {
         #expect(CarryCount.mac(source) == count)
     }
 
+    /// Over a pipe (the link on KoreNet, no SSH), the box revokes this Mac mid-copy: its pipe
+    /// ends at once, the carry stops where it was (interrupted, its landing and checkpoint kept,
+    /// the source untouched), and once it may again it goes on from there and lands whole.
+    @Test func aRevokeMidCarryOverAPipeStopsItWhereItWasAndItGoesOnAfter() async throws {
+        let b = try await box("one")
+        let mac = try scratch()
+        let pipe = try PipeRig(home: b.rig.root, pipes: HostPipes(home: b.rig.root.path, rsync: "/usr/bin/rsync", forced: PipeRig.macForced))
+        defer {
+            finish(b)
+            pipe.finish()
+            try? FileManager.default.removeItem(atPath: mac)
+        }
+        let source = mac + "/proj"
+        try FileManager.default.createDirectory(atPath: source, withIntermediateDirectories: true)
+        try bytes(32 << 20, seed: 5).write(to: URL(fileURLWithPath: source + "/big.bin"))
+        try Data("hello\n".utf8).write(to: URL(fileURLWithPath: source + "/a.txt"))
+        let count = try #require(CarryCount.mac(source))
+        let journals = CarryJournals(directory: URL(fileURLWithPath: mac + "/transfers"))
+        let work = b.work
+        let pipes = pipe.pipes
+        // Revoked once the landing holds a few MB.
+        let revoke = Task.detached {
+            let end = Date().addingTimeInterval(20)
+            while Date() < end {
+                let landings = ((try? FileManager.default.contentsOfDirectory(atPath: work)) ?? []).filter { $0.hasPrefix(".proj.kore-") }
+                let landed = landings.reduce(0) { sum, name in
+                    let walk = FileManager.default.enumerator(atPath: work + "/" + name)
+                    var size = 0
+                    while let file = walk?.nextObject() as? String { size += (walk?.fileAttributes?[.size] as? Int) ?? 0; _ = file }
+                    return sum + size
+                }
+                if landed > 2 << 20 { return pipes.stop { _ in true } }
+                try? await Task.sleep(for: .milliseconds(1))
+            }
+        }
+        let first = FileCarry(items: [CarryItem(source: .mac(source))], into: .box(alias: "one", path: work), move: false,
+            boxes: ["one": b.carry(pipe.syncBox())], journals: journals)
+        let stopped = await first.run()
+        await revoke.value
+        #expect(stopped.interrupted && !stopped.cancelled && stopped.landed.isEmpty)
+        #expect(CarryCount.mac(source) == count)
+        let checkpoint = try #require(journals.load(first.id))
+        #expect(checkpoint.state == .running && checkpoint.done == 0 && checkpoint.items[0].count == count)
+        let partial = CarryCount.mac(checkpoint.landing(0).path)?.bytes ?? 0
+        #expect(partial > 0 && partial < count.bytes, "\(partial)")
+
+        let second = FileCarry(resuming: checkpoint, boxes: ["one": b.carry(pipe.syncBox())], journals: journals)
+        let done = await second.run()
+        #expect(done.failure == nil && done.landed == [.box(alias: "one", path: work + "/proj")])
+        #expect(FileManager.default.contentsEqual(atPath: source + "/big.bin", andPath: work + "/proj/big.bin"))
+        #expect(journals.load(first.id) == nil)
+        #expect(pipe.asked.withLock { $0.count } >= 2)
+    }
+
     /// Pause keeps what landed and says paused on disk; Resume goes on; Cancel and remove takes
     /// the partial copy and the checkpoint away, the source untouched.
     @Test func pauseKeepsTheLandingAndCancelRemovesIt() async throws {

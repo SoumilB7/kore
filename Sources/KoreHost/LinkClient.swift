@@ -693,6 +693,7 @@ final class LinkClient {
         let home = HostPaths.home().path
         let files = HostFiles(home: home, served: host.config.folders)
         if kind == .fsWatch { return sendRaw(StreamWire.encode(watch(args.folders ?? [], files: files, id: id))) }
+        if kind == .pipeOpen || kind == .pipeExpect || kind == .pipeSend { return pipe(kind, args, id: id) }
         if kind == .fsCancel {
             let copy = args.copyId.flatMap { copies[$0] }
             copy?.cancel()
@@ -766,6 +767,44 @@ final class LinkClient {
                 default: break
                 }
             }
+        }
+    }
+
+    // MARK: Pipes (1.16)
+
+    /// `pipe.open`: a device's own pipe session will bring the ticket (`HostPipes`). `pipe.expect`
+    /// and `pipe.send`, box to box, from an owner Mac only.
+    private func pipe(_ kind: ControlKind, _ args: ControlArgs, id: String) {
+        func answer(_ result: Result<Data?, HostPipes.Refusal>) {
+            switch result {
+            case .success(let ticket):
+                var done = FilesResult(id: id, ok: true)
+                done.ticket = ticket?.base64EncodedString()
+                sendRaw(StreamWire.encode(done))
+            case .failure(let refusal):
+                sendRaw(StreamWire.encode(FilesResult.refused(id, refusal.code, refusal.message)))
+            }
+        }
+        guard let device = deviceId, peer != nil else {
+            return answer(.failure(HostPipes.Refusal(code: .deniedControl, message: "Copies over KoreNet need this device on KoreNet.")))
+        }
+        let who = device.uuidString.lowercased()
+        switch kind {
+        case .pipeOpen:
+            let opened = host.pipes.open(argv: args.argv ?? [], device: device, served: host.config.folders)
+            if case .failure(let refusal) = opened { HostJournal.audit("pipe", ["device": who, "refused": refusal.message]) }
+            answer(opened.map { $0 })
+        case .pipeExpect:
+            guard ownerMac else { return answer(.failure(HostPipes.Refusal(code: .deniedControl, message: "Only an owner Mac sets up a copy between boxes."))) }
+            guard let ticket = args.ticket.flatMap({ Data(base64Encoded: $0) }), let from = args.device.flatMap(UUID.init(uuidString:)) else {
+                return answer(.failure(HostPipes.Refusal(code: .invalid, message: "Name the ticket and the box.")))
+            }
+            answer(host.pipes.expect(ticket: ticket, device: from, path: args.path ?? "", served: host.config.folders).map { nil })
+        case .pipeSend:
+            guard ownerMac else { return answer(.failure(HostPipes.Refusal(code: .deniedControl, message: "Only an owner Mac sets up a copy between boxes."))) }
+            host.pipeSend(args, id: id, from: self)
+        default:
+            break
         }
     }
 

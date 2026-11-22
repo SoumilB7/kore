@@ -123,7 +123,7 @@ final class MoveSheet: Identifiable {
 enum ChatMoving {
     /// The engine for a box (tests give a stand-in box's).
     static var engine: (HostConnection) -> ChatMoves? = { connection in
-        SyncBox.ssh(connection.alias).map { ChatMoves(connection: connection, box: $0) }
+        SyncBox.box(connection).map { ChatMoves(connection: connection, box: $0) }
     }
     /// Where places are kept (tests use their own).
     static var places: ChatPlaces { .shared }
@@ -404,7 +404,9 @@ enum ChatMoving {
         else { return }
         let pairs = SyncPairList.shared
         if let why = pairs.refusal(mac: mac, alias: alias, box: boxFolder) { return sheet.sync = .failed(why) }
-        guard let ssh = SyncBox.ssh(alias) else { return sheet.sync = .failed("\(NodeNames.name(alias)) isn't an SSH alias Kore can use") }
+        guard let ssh = link.flatMap(SyncBox.box) ?? SyncBox.ssh(alias) else {
+            return sheet.sync = .failed("\(NodeNames.name(alias)) has no way to copy files yet: no KoreNet link, no SSH alias")
+        }
         sheet.sync = .checking
         Task {
             switch await pairs.check(mac: mac, alias: alias, box: boxFolder, via: ssh, link: link) {

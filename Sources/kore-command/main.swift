@@ -1,6 +1,7 @@
 import AgentTools
 import Darwin
 import Foundation
+import KoreNet
 
 // `kore`, the command inside Kore.app. Opening Kore or a folder, `kore setup` and `kore update` are the zsh
 // script beside it (Resources/kore.zsh), run as they always were; the reads go to the running
@@ -35,6 +36,9 @@ case "hook" where arguments.dropFirst().first == "pretool":
     exit(KoreAskList.runHook(Array(arguments.dropFirst(2))))
 case "mcp":
     exit(MCPServer.run())
+case "pipe":
+    // rsync's remote shell for a copy to or from a box over KoreNet: Kore hands it the pipe.
+    exit(PipeClient.run(Array(arguments.dropFirst())))
 case let first? where Reads.names.contains(first):
     exit(Reads.run(first, Array(arguments.dropFirst()), unreachable: MCPServer.unreachableLine) { () throws(AgentFailure) in try AgentClient() })
 default:

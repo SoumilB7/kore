@@ -47,7 +47,8 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM
 
 # 1. Binaries: tailscaled + tailscale (darwin: the Mac's "installed" one; linux: the boxes'),
-# derper, kore-tailnet -tags koretest (both), kore-host for Linux (static musl), korenet-rig.
+# derper, kore-tailnet -tags koretest (both), kore-host for Linux (static musl), korenet-rig and
+# kore-command beside it (`kore pipe`, as Kore.app's Helpers/kore).
 export CGO_ENABLED=0 GOFLAGS=-mod=mod
 ts=$(go env GOMODCACHE)/tailscale.com@$ts_version
 [[ -d $ts ]] || (cd "$root/tools/kore-tailnet" && go mod download tailscale.com)
@@ -65,7 +66,7 @@ cp "$RIG_BIN/kore-tailnet-linux" "$RIG_HOSTBIN/kore-tailnet-linux-aarch64"
 linux=(--package-path "$root" --swift-sdk aarch64-swift-linux-musl -c release --product kore-host --scratch-path "$root/.build-linux")
 swiftwait; bound 2400 nice -n 10 "$root/scripts/one-build.sh" "$swift_linux" build "${linux[@]}" -Xlinker --strip-all >"$RIG_RUN/linux.log" 2>&1 || { tail -20 "$RIG_RUN/linux.log"; exit 1; }
 cp "$root/.build-linux/release/kore-host" "$RIG_HOSTBIN/kore-host-linux-aarch64"
-swiftwait; bound 1200 nice -n 10 "$root/scripts/one-build.sh" swift build --package-path "$root" --product korenet-rig >"$RIG_RUN/rig.log" 2>&1 || { tail -20 "$RIG_RUN/rig.log"; exit 1; }
+swiftwait; bound 1200 nice -n 10 "$root/scripts/one-build.sh" zsh -c 'swift build --package-path "$1" --product korenet-rig && swift build --package-path "$1" --product kore-command' _ "$root" >"$RIG_RUN/rig.log" 2>&1 || { tail -20 "$RIG_RUN/rig.log"; exit 1; }
 rig="$(swift build --package-path "$root" --product korenet-rig --show-bin-path)/korenet-rig"
 lap "built"
 

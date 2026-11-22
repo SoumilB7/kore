@@ -22,19 +22,32 @@ struct ChatCopyClientTests {
         var real: String { SessionFiles.real(rig.folder.path) }
         var projects: URL { rig.root.appendingPathComponent("boxclaude/projects").appendingPathComponent(ClaudeHistory.projectKey(for: rig.folder)) }
         var end: CopyEnd { .box(moves, folder: folder) }
+        /// Its rsync over a pipe (`box(pipe: true)`).
+        var pipe: PipeRig?
+        @MainActor func finish() {
+            rig.finish()
+            pipe?.finish()
+        }
     }
 
-    func box() async throws -> Box {
+    /// `pipe`: the copy's rsync over KoreNet (`kore pipe` to this kore-host's `HostPipes`), no SSH.
+    func box(pipe: Bool = false) async throws -> Box {
         let rig = try BoxRig()
         rig.host.sessionEnv = ["CLAUDE_CONFIG_DIR": rig.root.appendingPathComponent("boxclaude").path, "HOME": rig.root.path]
         let connection = rig.connection()
         connection.retain()
         #expect(await until { connection.isOnline })
         #expect(connection.copiesChats)
+        var piped: PipeRig?
+        if pipe {
+            let made = try PipeRig(home: rig.root, pipes: HostPipes(home: rig.root.path, rsync: "/usr/bin/rsync", forced: PipeRig.macForced))
+            rig.host.pipes = made.pipes
+            piped = made
+        }
         let moves = ChatMoves(
-            connection: connection, box: try fakeSSH(rig.root), staging: rig.root.appendingPathComponent("staging"), name: "MacBook",
+            connection: connection, box: try piped?.syncBox() ?? fakeSSH(rig.root), staging: rig.root.appendingPathComponent("staging"), name: "MacBook",
             store: MovedChats(root: rig.root.appendingPathComponent("cache")))
-        return Box(rig: rig, connection: connection, moves: moves)
+        return Box(rig: rig, connection: connection, moves: moves, pipe: piped)
     }
 
     struct Mac {
@@ -55,6 +68,60 @@ struct ChatCopyClientTests {
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         let env = ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("macclaude").path, "HOME": root.path]
         return Mac(root: root, env: env, copies: ChatCopies(env: env, staging: root.appendingPathComponent("staging"), trash: root.appendingPathComponent("trash")))
+    }
+
+    /// A Codex rollout in `folder` for `session`, as codex writes one.
+    static func codexRows(_ folder: String, _ session: String) -> String {
+        [
+            #"{"timestamp":"2026-11-10T06:29:00.000Z","type":"session_meta","payload":{"id":"\#(session)","timestamp":"2026-11-10T06:29:00.000Z","cwd":"\#(folder)","originator":"codex_cli_rs","cli_version":"0.159.3","source":"vscode","model_provider":"openai"}}"#,
+            #"{"timestamp":"2026-11-10T06:29:02.000Z","type":"turn_context","payload":{"cwd":"\#(folder)","approval_policy":"on-request","model":"gpt-6-luna","effort":"low"}}"#,
+        ].joined(separator: "\n")
+    }
+
+    /// The rollout under `sessions` that holds `session`'s id, read.
+    func rollout(_ sessions: URL, _ session: String) -> String? {
+        let walk = FileManager.default.enumerator(at: sessions, includingPropertiesForKeys: nil)
+        while let url = walk?.nextObject() as? URL {
+            if url.lastPathComponent.hasSuffix("\(session).jsonl") { return try? read(url) }
+        }
+        return nil
+    }
+
+    /// Over a pipe (link on KoreNet, no SSH): a Claude chat and a Codex chat each copied to the
+    /// box and back, as over SSH.
+    @Test(arguments: ["claude", "codex"])
+    func chatsCopyBothWaysOverAPipe(_ provider: String) async throws {
+        let (b, m) = (try await box(pipe: true), try mac())
+        defer { b.finish(); m.finish() }
+        let folder = try m.folder("app"), real = SessionFiles.real(folder)
+        let sessions = { (env: [String: String]) in SessionFiles.codexSessions(env) }
+        let boxEnv = b.rig.host.sessionEnv
+        if provider == "claude" {
+            try write(Self.rows(real), m.projects(folder).appendingPathComponent("\(Self.session).jsonl"))
+        } else {
+            try write(Self.codexRows(real, Self.session), sessions(m.env).appendingPathComponent("2026/11/10/rollout-2026-11-10T06-29-00-\(Self.session).jsonl"))
+        }
+        let there = SessionCopy.newId()
+        let made = try await m.copies.copy(CopySource(end: .mac(folder), id: Self.session, provider: provider, title: "Repos"), to: b.end, as: there).get()
+        let chat = try #require(b.rig.host.chat(made.chatId ?? ""))
+        #expect(chat.record.session == there)
+        if provider == "claude" {
+            #expect(try read(b.projects.appendingPathComponent("\(there).jsonl")) == Self.rows(b.real, there))
+        } else {
+            #expect(rollout(sessions(boxEnv), there) == Self.codexRows(b.real, there))
+        }
+        // And back, from the box's chat to another folder here.
+        let back = try m.folder("back"), backReal = SessionFiles.real(back)
+        let home = SessionCopy.newId()
+        let returned = try await m.copies.copy(CopySource(end: b.end, id: chat.id, provider: provider, title: "Repos"), to: .mac(back), as: home).get()
+        #expect(returned.session == home)
+        if provider == "claude" {
+            #expect(try read(m.projects(back).appendingPathComponent("\(home).jsonl")) == Self.rows(backReal, home))
+        } else {
+            #expect(rollout(sessions(m.env), home) == Self.codexRows(backReal, home))
+        }
+        // Every rsync went over the pipe: the box was asked for each.
+        #expect((b.pipe?.asked.withLock { $0.count } ?? 0) >= 2)
     }
 
     func write(_ text: String, _ url: URL) throws {

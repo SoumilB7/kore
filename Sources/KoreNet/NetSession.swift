@@ -48,6 +48,15 @@ package struct NetPeer: Equatable, Sendable {
     package var ticket: Data
     /// Client side: the server's device book rev, as its welcome said (an owner Mac's catch-up).
     package var devicesRev: Int? = nil
+
+    package init(record: DeviceRecord, abilities: Ability, service: String, resumed: Bool, ticket: Data, devicesRev: Int? = nil) {
+        self.record = record
+        self.abilities = abilities
+        self.service = service
+        self.resumed = resumed
+        self.ticket = ticket
+        self.devicesRev = devicesRev
+    }
 }
 
 package enum NetSessionError: Error, Equatable {
@@ -144,6 +153,9 @@ package final class NetSession {
     package enum Role {
         case server(Server)
         case client(Client)
+        /// Established on another process's side and handed over with its descriptor
+        /// (`handedOver`): no handshake here, the peer as that side proved it.
+        case handedOver
     }
 
     /// What a server makes of a hello from a device it has no record of.
@@ -228,12 +240,37 @@ package final class NetSession {
         switch role {
         case .server: deadline = clock().addingTimeInterval(Self.preAuthWindow)
         case .client(let client): deadline = clock().addingTimeInterval(client.window)
+        case .handedOver: deadline = nil
         }
+    }
+
+    /// A session another process established and handed over (`detach`): `fd` as it left it,
+    /// with the stream credit the peer had granted it. The peer is the one that side proved.
+    package convenience init(handedOver fd: Int32, peer: NetPeer, credit: Int, clock: @escaping () -> Date = { Date() }) {
+        self.init(fd: fd, role: .handedOver, clock: clock)
+        decoder.preAuth = false
+        scheduler.grant(credit)
+        state = .established(peer)
+    }
+
+    /// Lets go of the descriptor without a `bye`, for another process to carry on
+    /// (`init(handedOver:)`): only once established, nothing waiting to go, nothing half read.
+    /// Its stream credit goes with it; this session is closed after.
+    package func detach() -> (fd: Int32, credit: Int)? {
+        guard case .established = state, out.isEmpty, scheduler.isEmpty, decoder.pending == 0, decoder.partialBytes == 0 else { return nil }
+        let credit = scheduler.credit
+        state = .closed("handed over")
+        held = nil
+        deadline = nil
+        return (fd, credit)
     }
 
     deinit {
         if case .closed = state {} else { Sockets.closeFD(fd) }
     }
+
+    /// Whether this side ended it by handing the descriptor over.
+    package var handedOff: Bool { state == .closed("handed over") }
 
     /// The server's challenge goes out; a client waits for it.
     package func start() {
@@ -246,8 +283,14 @@ package final class NetSession {
 
     /// Reads what's there, answers the handshake, writes what the socket takes; the messages
     /// that arrived for the service above.
-    package func pump() -> [NetMessage] {
+    /// `reading` false: only writes what waits, nothing read (a receiver whose own output is
+    /// full takes no more off the socket, and so gives no more credit back).
+    package func pump(reading: Bool = true) -> [NetMessage] {
         guard !isClosed else { return [] }
+        guard reading else {
+            flush()
+            return []
+        }
         if let deadline, clock() >= deadline {
             fail(NetControl.Reason.timeout)
             return []
