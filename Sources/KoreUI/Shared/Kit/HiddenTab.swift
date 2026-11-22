@@ -1,6 +1,16 @@
 import AppKit
 import SwiftUI
 
+/// Whether a window is on screen, as a chat's drawing reads it.
+@MainActor
+package enum WindowSight {
+    /// The storyline harness keeps its windows off every screen, where AppKit calls them covered:
+    /// its stories count them as on screen, but those that test covered windows.
+    package static var offscreenShows = false
+
+    static func shows(_ window: NSWindow) -> Bool { offscreenShows || window.occlusionState.contains(.visible) }
+}
+
 /// Under another tab (a kept chat's transcript, the chats under a file): live marks hold still
 /// until it shows, so a hidden chat draws nothing frame by frame.
 struct HiddenTabKey: EnvironmentKey {

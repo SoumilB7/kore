@@ -96,6 +96,7 @@ final class Runner {
         var result = RunReport.StoryResult(name: type.storyName, variant: variant.name)
         let started = ContinuousClock.now
         let story = type.init()
+        WindowSight.offscreenShows = !type.seesOcclusion
         story.variant = variant
         if type.tags.contains(.realInput), !flags.realInput {
             result.steps = [.init(label: "Needs --real-input", outcome: .skip)]

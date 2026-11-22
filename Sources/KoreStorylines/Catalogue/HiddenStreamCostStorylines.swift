@@ -8,6 +8,7 @@ import src
 /// from are measured by the same code (run it under load to see what the owner's Mac sees).
 final class HiddenStreamCost: Storyline {
     override class var tags: Set<Tag> { [.chat] }
+    override class var seesOcclusion: Bool { true }
 
     static let chats = 8
 

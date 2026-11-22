@@ -687,7 +687,7 @@ package final class TranscriptStore {
 
     /// Every window that shows it is off screen (covered, minimised, ordered out).
     private var windowsCovered: Bool {
-        !seenIn.isEmpty && !seenIn.values.contains { $0.window?.occlusionState.contains(.visible) == true }
+        !seenIn.isEmpty && !seenIn.values.contains { $0.window.map(WindowSight.shows) == true }
     }
 
     isolated deinit {

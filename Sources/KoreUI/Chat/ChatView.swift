@@ -54,7 +54,7 @@ struct ChatView: View {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { note in
                     guard let changed = note.object as? NSWindow, changed === window else { return }
-                    let covered = !changed.occlusionState.contains(.visible)
+                    let covered = !WindowSight.shows(changed)
                     if occluded.value != covered { occluded.value = covered }
                 }
                 // The notification only says when it changes: a chat that opens in a window
@@ -84,7 +84,7 @@ struct ChatView: View {
     /// still opening says so by notification once it shows).
     private func syncCovered(_ window: NSWindow?) {
         guard let window, window.isVisible else { return }
-        let covered = !window.occlusionState.contains(.visible)
+        let covered = !WindowSight.shows(window)
         if occluded.value != covered { occluded.value = covered }
     }
 
