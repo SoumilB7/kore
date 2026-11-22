@@ -260,6 +260,7 @@ package final class ClaudeBackend: ChatBackend {
             throw CancellationError()
         }
         self.session = session
+        options.started?()
         opening = nil
         bypassReady = launch.permissionMode == .bypassPermissions
         launchedMode = launch.permissionMode.rawValue

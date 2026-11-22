@@ -174,6 +174,9 @@ package struct BackendOptions {
     package var environment: (@MainActor () throws -> [String: String])?
     /// Where the plan's windows a turn reports go besides the log (the app's usage mark).
     package var planWindows: (@MainActor @Sendable (PlanSnapshot?) -> Void)?
+    /// Its CLI is up, whatever started it (a send, or a call that needs it: an earlier page, a
+    /// fork, a rename): a resting chat is awake again.
+    package var started: (@MainActor @Sendable () -> Void)?
 
     package init(
         folder: URL, resume: SessionSummary? = nil, mode: String, planMode: Bool = false, model: String? = nil,
@@ -348,6 +351,11 @@ package struct RemoteControlUnavailable: LocalizedError {
 
 /// Said once in the chat when an account switch ends its remote control.
 package let remoteEndedForAccount = "Remote control is off: the account changed."
+
+/// A reset asked of a chat with no CLI up: it isn't worth starting one, which could be on another login.
+package struct ResetNeedsMessage: LocalizedError {
+    package var errorDescription: String? { "send a message first, then use the reset" }
+}
 
 package struct UsageUnavailable: LocalizedError {
     package init() {}

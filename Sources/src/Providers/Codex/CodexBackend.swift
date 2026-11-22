@@ -207,6 +207,7 @@ package final class CodexBackend: ChatBackend {
             throw CancellationError()
         }
         self.session = session
+        options.started?()
         opening = nil
         pump = Task {
             for await event in session.events {
@@ -374,8 +375,12 @@ package final class CodexBackend: ChatBackend {
 
     /// A confirmed reset stays on this server's account. If it dies during an account switch,
     /// fail and let the user retry after a fresh reading; a new server could use another login.
+    /// A resting chat starts none for it: the user sends a message first.
     package func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome {
-        guard let session else { throw CodexAppServer.Failure.notRunning }
+        guard let session else {
+            if accountBlocked || accountClosing != nil { throw CodexAppServer.Failure.notRunning }
+            throw ResetNeedsMessage()
+        }
         return try await session.useReset(credit: credit, attempt: attempt)
     }
 
@@ -891,6 +896,9 @@ package final class CodexBackend: ChatBackend {
             try await session.setServiceTier(fastTier(id))
             options.fastMode = true
             reportFast(await session.serviceTier)
+        } else if session == nil, options.fastMode == nil, fastReported == true {
+            // Picked while its CLI rests: the preference survives as above, for the next launch.
+            options.fastMode = true
         }
         options.model = id
         await session?.setModel(id)

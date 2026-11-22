@@ -63,6 +63,10 @@ package final class HostDaemon {
         await provider.pastPage(id, folder)
     }
     var readingPast: Set<String> = []
+    /// When a chat's past page last came back with nothing: not asked again for `pastRetry` (a
+    /// Codex read starts an app-server).
+    var pastFailed: [String: Date] = [:]
+    package var pastRetry: TimeInterval = 600
     /// `kore-host mcp`'s binary: this one (a test runs the built one).
     package var mcpCommand = URL(fileURLWithPath: HostService.executable())
     package static let version = HostVersion.string

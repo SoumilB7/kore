@@ -595,6 +595,7 @@ package final class Chat: Identifiable {
                 model: launchModel, effort: launchEffort, fork: fork, forkTitle: fork == nil ? nil : status.name)
             options.fastMode = launchFastMode
             options.environment = launchEnvironment
+            options.started = { [weak self] in self?.noteActive() }
             if services.agentTools {
                 options.agentPass = agentPass
             } else if let server = services.agentServer(self) {

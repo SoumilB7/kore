@@ -96,6 +96,42 @@ struct PastSessionTests {
         #expect(!hc.neverLogged)
     }
 
+    /// How often the reader was asked, from any thread.
+    private final class Asked: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        var value: Int { lock.withLock { count } }
+        func add() { lock.withLock { count += 1 } }
+    }
+
+    /// A page that comes back with nothing isn't asked for at every open: again only after
+    /// `pastRetry`. A watch-only client never starts Codex's reader, and Claude's reads a file.
+    @Test(arguments: ["claude", "codex"])
+    func nothingReadIsntAskedAgainAtEachOpenNorByAWatcher(provider: String) async throws {
+        let rig = try rig(provider, StreamStandIn())
+        defer { rig.finish() }
+        let asked = Asked()
+        rig.host.pastPage = { _, _, _ in
+            asked.add()
+            return nil
+        }
+        var clock = Date()
+        rig.host.now = { clock }
+        let hc = try #require(rig.host.newChat(folder: rig.folder.path, provider: provider, modelId: nil, title: "Slack", session: "past1"))
+        rig.host.readInPast(hc, watch: true)
+        try await until { rig.host.readingPast.isEmpty }
+        #expect(asked.value == (provider == "claude" ? 1 : 0))
+        for _ in 0..<3 {
+            rig.host.readInPast(hc)
+            try await until { rig.host.readingPast.isEmpty }
+        }
+        #expect(asked.value == 1)
+        clock += rig.host.pastRetry + 1
+        rig.host.readInPast(hc)
+        try await until { rig.host.readingPast.isEmpty }
+        #expect(asked.value == 2)
+    }
+
     // MARK: The readers
 
     /// Claude's: the transcript's newest page as events, a long file read from its end.

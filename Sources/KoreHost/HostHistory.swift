@@ -139,16 +139,27 @@ extension HostDaemon {
 
     /// A chat resuming a session the box never logged: its newest page read in without a CLI
     /// (`HostChat.readIn`), so it opens with its history rather than empty until a send. Once
-    /// per chat at a time; a chat with a log, a fork, or one moved away is left as it is.
-    func readInPast(_ hc: HostChat) {
-        guard let session = hc.record.session, hc.ownedHere, hc.neverLogged, readingPast.insert(hc.id).inserted else { return }
+    /// per chat at a time; a chat with a log, a fork, or one moved away is left as it is. One that
+    /// gave nothing waits `pastRetry`. Codex's reader starts a process, so a watch-only client
+    /// (`watch`) never starts it; Claude's only reads a file.
+    func readInPast(_ hc: HostChat, watch: Bool = false) {
+        guard let session = hc.record.session, hc.ownedHere, hc.neverLogged, !watch || hc.record.provider == "claude" else { return }
+        if let failed = pastFailed[hc.id], now().timeIntervalSince(failed) < pastRetry { return }
+        guard readingPast.insert(hc.id).inserted else { return }
         let read = pastPage
         let provider = hc.provider
         let folder = hc.folderURL
         Task {
             let page = await read(provider, session, folder)
             readingPast.remove(hc.id)
-            guard let page, chats.contains(where: { $0 === hc }), hc.readIn(page) else { return }
+            let kept = Set(chats.map(\.id))
+            pastFailed = pastFailed.filter { kept.contains($0.key) }
+            guard chats.contains(where: { $0 === hc }) else { return }
+            guard let page, hc.readIn(page) else {
+                pastFailed[hc.id] = now()
+                return
+            }
+            pastFailed[hc.id] = nil
             HostJournal.note("history read in", ["chat": hc.id, "events": "\(page.events.count)", "earlier": "\(page.more)"])
         }
     }
