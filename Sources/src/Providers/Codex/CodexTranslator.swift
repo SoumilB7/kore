@@ -493,6 +493,16 @@ package final class CodexTranslator {
             if agent == .main, !turnItems.contains(where: { if case .message(item.id) = $0 { true } else { false } }) {
                 turnItems.append(.message(item.id))
             }
+        case "exitedReviewMode":
+            // A /review's findings (`review/start`): the turn's answer.
+            if agent == .main, let text = item.raw["review"]?.string, !text.isEmpty {
+                if !finalMarked {
+                    finalMarked = true
+                    out.append(.finalAnswer(item.id))
+                }
+                out.append(.text(item.id, .answer, text, agent: agent))
+                turnItems.append(.message(item.id))
+            }
         case "commandExecution":
             let aggregated = item.raw["aggregatedOutput"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             if failed, item.exitCode == -1 {

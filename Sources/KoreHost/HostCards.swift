@@ -47,7 +47,8 @@ enum HostMeta {
         let commands = hc.commands
         return LinkPolicy.ChatFacts(
             level: current, planOn: planOn(hc), modes: modes, cards: cards,
-            commands: Set(commands.filter { $0.kind != .kore }.map(\.name)), koreEntries: Set(commands.filter { $0.kind == .kore }.map(\.name)))
+            commands: Set(commands.filter { $0.kind != .kore }.map(\.name)), koreEntries: Set(commands.filter { $0.kind == .kore }.map(\.name)),
+            planToggle: provider.planToggle != nil)
     }
 
     /// The composer's controls (sent with full control): the live chat's, else as it last had
@@ -118,7 +119,7 @@ enum HostMeta {
             else if chat?.isWorking == true { .working }
             else { .idle }
         let commands = hc.commands
-            .filter { $0.kind != .kore && !LinkPolicy.koreOnly.contains($0.name) }
+            .filter { $0.kind != .kore && LinkPolicy.listed($0.name) }
             .prefix(200)
             .map { LinkSlash(name: $0.name, description: String($0.description.prefix(100)), kind: $0.kind == .skill ? .skill : .command) }
         var made = ChatMeta(

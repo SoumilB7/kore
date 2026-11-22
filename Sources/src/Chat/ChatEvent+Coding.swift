@@ -44,6 +44,9 @@ extension ChatEvent: Codable {
         case .sessionIdentified(let id):
             var t = try Tagged(encoder, "sessionIdentified")
             try t.put("id", id)
+        case .conversationReset(let id):
+            var t = try Tagged(encoder, "conversationReset")
+            try t.put("id", id)
         case .titleChanged(let title, let rename):
             var t = try Tagged(encoder, "titleChanged")
             if rename { try t.put("rename", true) }
@@ -235,6 +238,7 @@ extension ChatEvent: Codable {
         let u = try Untagged(decoder)
         switch u.type {
         case "sessionIdentified": self = .sessionIdentified(try u.get("id"))
+        case "conversationReset": self = .conversationReset(try u.get("id"))
         case "titleChanged": self = .titleChanged(try u.get("title"), rename: try u.opt("rename") ?? false)
         case "controlsLoaded": self = .controlsLoaded(try u.get("controls"))
         case "modeChanged": self = .modeChanged(try u.get("change"))

@@ -285,6 +285,69 @@ package final class Chat: Identifiable {
         if !name.isEmpty { rename(name) }
     }
 
+    /// A typed `/model`, `/effort` or `/fast`: Kore's own switch, as its pickers make it, so they
+    /// never go stale (the CLI's own would switch without telling Kore). `/fast` is broken through
+    /// the claude CLI headless anyway.
+    package enum TypedControl: Equatable {
+        case model(String), effort(String), fast(String)
+    }
+
+    package nonisolated static func typedControl(_ text: String) -> TypedControl? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else { return nil }
+        let name = String(trimmed.dropFirst().prefix { !$0.isWhitespace })
+        let rest = trimmed.dropFirst(1 + name.count).trimmingCharacters(in: .whitespacesAndNewlines)
+        switch name {
+        case "model": return .model(rest)
+        case "effort": return .effort(rest)
+        case "fast": return .fast(rest.lowercased())
+        default: return nil
+        }
+    }
+
+    /// The model `name` picks from the CLI's list: by id, name or the model it resolves to.
+    package nonisolated static func model(named name: String, in models: [ModelOption]) -> ModelOption? {
+        let same = { (a: String) in a.caseInsensitiveCompare(name) == .orderedSame }
+        return models.first { same($0.id) } ?? models.first { same($0.name) } ?? models.first { same($0.resolved) }
+    }
+
+    private func controlTyped(_ typed: TypedControl) {
+        let line = ChatEvent.notice(typedControlLine(typed))
+        if awaitingHistory { hold(line) } else { dispatch(line) }
+    }
+
+    /// Does what it says, when the chat offers it; the line saying what happened, or how to use it.
+    private func typedControlLine(_ typed: TypedControl) -> String {
+        switch typed {
+        case .model(let name):
+            let models = controls.models
+            guard !models.isEmpty else { return "The models aren't listed yet; try again once the chat has started." }
+            let names = models.map(\.id).joined(separator: ", ")
+            guard !name.isEmpty else { return "Usage: /model <name>, one of: \(names)" }
+            guard let option = Self.model(named: name, in: models) else { return "No model \(name) here; one of: \(names)" }
+            setModel(option)
+            return "Model set to \(option.name)"
+        case .effort(let level):
+            let offered = controls.currentModel?.efforts ?? []
+            guard !offered.isEmpty else { return "This model takes no effort level." }
+            let match = offered.first { $0.caseInsensitiveCompare(level) == .orderedSame }
+            guard let match else { return "Usage: /effort <level>, one of: \(offered.joined(separator: ", "))" }
+            setEffort(match)
+            return "Effort set to \(match)"
+        case .fast(let arg):
+            let on: Bool
+            switch arg {
+            case "": on = !controls.fastMode
+            case "on": on = true
+            case "off": on = false
+            default: return "Usage: /fast [on|off]"
+            }
+            guard controls.fastModeEnabled, backend != nil else { return "Fast mode isn't available here now." }
+            setFastMode(on)
+            return on ? "Fast mode on" : "Fast mode off"
+        }
+    }
+
     // MARK: Events
 
     /// Every event goes to every store; each takes what it shows. `own`: the chat made it, not its backend.
@@ -294,6 +357,10 @@ package final class Chat: Identifiable {
         if case .historyReplaced(let events) = event {
             replaceHistory(events)
             services.tap(self, event)
+            return
+        }
+        if case .conversationReset(let id) = event {
+            resetConversation(to: id)
             return
         }
         let start = services.timeReplay && Self.isReplay(event) ? ContinuousClock.now : nil
@@ -903,6 +970,11 @@ package final class Chat: Identifiable {
             renameTyped(name)
             return
         }
+        if sent.isEmpty, let typed = Self.typedControl(text) {
+            (draft, command) = ("", nil)
+            controlTyped(typed)
+            return
+        }
         // Sent during a compaction: it waits for it, shown queued (a typed /compact has nothing to add).
         if context.compacting {
             guard !sent.isEmpty || Self.compactCommand(text) == nil else { return }
@@ -945,6 +1017,11 @@ package final class Chat: Identifiable {
         guard !closed, !accountRestartPending else { return false }
         if let name = typedRename(text, files: !files.isEmpty) {
             renameTyped(name)
+            done?(.success(false))
+            return true
+        }
+        if files.isEmpty, let typed = Self.typedControl(text) {
+            controlTyped(typed)
             done?(.success(false))
             return true
         }
@@ -1599,6 +1676,17 @@ package final class Chat: Identifiable {
         dispatch(.historyReplaced(events))
         dispatch(.earlierHistory(more))
         services.rolledBack(self, to: events, more: more)
+    }
+
+    /// The CLI cleared the conversation (Claude's /clear): a fresh transcript on its new session,
+    /// as a rollback to nothing is. The old session stays in History. A box starts its log again
+    /// (`ChatServices.rolledBack`), then logs the new id, so every follower takes both.
+    private func resetConversation(to id: String) {
+        sinceReplay = []
+        dispatch(.historyReplaced([]))
+        dispatch(.earlierHistory(false))
+        services.rolledBack(self, to: [], more: false)
+        dispatch(.sessionIdentified(id))
     }
 
     /// The rollback is over, done or not: what was sent meanwhile goes now, after its rows.

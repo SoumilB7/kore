@@ -3,7 +3,8 @@ import Foundation
 /// `/rename <name>` typed in a chat: Kore's own rename, the one the tab's Rename and Arsenal's
 /// `kore_rename` make, so the chat's title and its CLI's session title (Claude's custom title,
 /// Codex's thread name) never differ, and a box chat's sleeping CLI takes it at its next start.
-/// Kore lists it itself: Claude's headless list leaves it out (a TUI built-in).
+/// Kore lists it itself for every CLI that renames (`withRename`, `ControlsStore.offered`), as a
+/// CLI's own list, live or kept, may leave it out.
 extension SlashCommand {
     package static let rename = SlashCommand(name: "rename", description: "Rename this chat", hint: "<name>", kind: .command)
     package static let renameUsage = "Usage: /rename <name>"

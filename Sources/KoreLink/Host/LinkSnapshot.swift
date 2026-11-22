@@ -190,7 +190,7 @@ enum LinkSnapshot {
         return LinkPolicy.ChatFacts(
             level: current, planOn: chat.provider.planToggle != nil && chat.controls.planMode, modes: modes, cards: waiting,
             commands: Set(all.filter { $0.kind != .kore }.map(\.name)), koreEntries: Set(all.filter { $0.kind == .kore }.map(\.name)),
-            arsenalUnavailable: Arsenal.unavailable(chat))
+            arsenalUnavailable: Arsenal.unavailable(chat), planToggle: chat.provider.planToggle != nil)
     }
 
     /// The most commands, and the longest description, a chat's meta carries.
@@ -201,7 +201,7 @@ enum LinkSnapshot {
     /// policy refuses.
     static func commands(_ chat: Chat) -> [LinkSlash] {
         chat.controls.linkCommands
-            .filter { $0.kind != .kore && !LinkPolicy.koreOnly.contains($0.name) }
+            .filter { $0.kind != .kore && LinkPolicy.listed($0.name) }
             .prefix(commandsMax)
             .map { LinkSlash(name: $0.name, description: String($0.description.prefix(descriptionCap)), kind: $0.kind == .skill ? .skill : .command) }
     }

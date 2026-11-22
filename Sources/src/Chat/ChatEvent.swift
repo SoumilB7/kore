@@ -13,6 +13,9 @@ package enum ChatEvent: Sendable {
     /// `system/session_title_changed`, Codex's `thread/name/updated`), which replaces any title;
     /// otherwise a generated one (Claude, after the first prompt), taken only while there's none.
     case titleChanged(String, rename: Bool = false)
+    /// The CLI discarded the conversation (Claude's /clear): it goes on as this session id, on a
+    /// fresh transcript; the old session stays in History.
+    case conversationReset(String)
     /// Models, current model and effort, and `/` commands, once the CLI has started.
     case controlsLoaded(ChatControls)
     /// The mode changed (Claude permission mode / Codex permissions preset), with who changed it.

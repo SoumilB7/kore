@@ -463,6 +463,7 @@ public actor ClaudeSession {
         default:
             let event = ClaudeEvent(message: message)
             if case .sessionStarted(let info) = event { sessionId = info.sessionId }
+            if case .conversationReset(let id, _) = event { sessionId = id }
             sink.yield(event)
         }
     }

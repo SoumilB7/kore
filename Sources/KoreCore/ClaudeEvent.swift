@@ -38,6 +38,10 @@ public enum ClaudeEvent: Sendable {
     /// `system/peer_message_hold`: a cross-session message the CLI's receive-side policy held
     /// rather than queued, and how that hold ended (`z-docs/design/cli-wiring.md`).
     case peerHold(PeerHold)
+    /// `conversation_reset`: /clear (or its /reset, /new), a plan's exit with a clear context and
+    /// the like discarded the conversation; it goes on as `newSessionId`, a fresh transcript.
+    /// `trigger`: what discarded it ("clear", "plan_mode_exit", ...), when the CLI says.
+    case conversationReset(newSessionId: String, trigger: String?)
     /// End of a turn. The process stays alive for the next `send`.
     case turnCompleted(TurnResult)
     /// The API refused the login (an assistant message with `error: "authentication_failed"`):
@@ -265,6 +269,12 @@ extension ClaudeEvent {
                 return
             }
             self = .peerHold(hold)
+        case "conversation_reset":
+            guard let id = json["new_conversation_id"]?.string, !id.isEmpty else {
+                self = .raw(json)
+                return
+            }
+            self = .conversationReset(newSessionId: id, trigger: json["trigger"]?.string)
         case "system" where json["subtype"]?.string == "bridge_state":
             self = .bridgeState(state: json["state"]?.string ?? "", detail: json["detail"]?.string)
         case "system" where json["subtype"]?.string == "status" && json["permissionMode"]?.string != nil:

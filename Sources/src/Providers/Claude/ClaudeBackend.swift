@@ -326,15 +326,24 @@ package final class ClaudeBackend: ChatBackend {
         return controls
     }
 
-    /// The "/" commands as the CLI lists them, and Kore's /rename besides: the CLI renames
-    /// headless too (`rename_session`), but doesn't list it.
+    /// The "/" commands as the CLI lists them, without the ones that do nothing useful here
+    /// (`hidden`), and with Kore's /rename (`SlashCommand.withRename`) when the list lacks it.
     package nonisolated static func commands(_ list: [JSONValue]) -> [SlashCommand] {
         SlashCommand.withRename(list.compactMap { json -> SlashCommand? in
-            guard let name = json["name"]?.string else { return nil }
+            guard let name = json["name"]?.string, !hidden(name, description: json["description"]?.string ?? "") else { return nil }
             return SlashCommand(
                 name: name, description: json["description"]?.string ?? "",
                 hint: json["argumentHint"]?.string ?? "", kind: .command)
         })
+    }
+
+    /// Entries the CLI lists that are broken or internal headless: its TUI's focus view and
+    /// colour, a heap dump, its own `__` and workflow plumbing, and ones it marks "(removed)".
+    /// (/fast stays: Kore's own fast switch takes it, `Chat.typedControl`.)
+    package nonisolated static let hiddenNames: Set<String> = ["focus", "color", "heapdump", "workflow-launch-exec"]
+
+    package nonisolated static func hidden(_ name: String, description: String) -> Bool {
+        hiddenNames.contains(name) || name.hasPrefix("__") || description.localizedCaseInsensitiveContains("(removed)")
     }
 
     /// The CLI names a model by its version ("Opus 5.5") or, with some of its catalogs, by its
@@ -564,6 +573,10 @@ package final class ClaudeBackend: ChatBackend {
             PlanQuietReads.shared.ended("claude", account: planAccount) { [weak self] in await self?.quietRead() }
         case .stderr(let text):
             stderrTail.append(text)
+        case .conversationReset(let id, _):
+            // /clear: a new session, nothing to cut back to; Kore's record follows it.
+            if rollbackAt != nil { forgetRollbackPoint() }
+            KoreSessions.shared.record(cli: "claude", session: id, folder: options.folder, launch: "cleared", account: planAccount)
         case .bridgeState(let state, let detail):
             bridge(state, detail)
         case .permissionModeChanged(let mode):

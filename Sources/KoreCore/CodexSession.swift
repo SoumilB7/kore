@@ -544,6 +544,29 @@ public actor CodexSession {
         _ = try await server.request("thread/goal/set", ["threadId": .string(threadId), "objective": .string(objective)])
     }
 
+    /// The thread's goal (`thread/goal/get`): nil when it has none.
+    public func goal() async throws -> JSONValue? {
+        let result = try await server.request("thread/goal/get", ["threadId": .string(threadId)])
+        guard let goal = result["goal"], goal["objective"]?.string != nil else { return nil }
+        return goal
+    }
+
+    /// Clears the thread's goal as its user (`thread/goal/clear`): false when it had none.
+    public func clearGoal() async throws -> Bool {
+        let result = try await server.request("thread/goal/clear", ["threadId": .string(threadId), "origin": "user"])
+        return result["cleared"]?.bool ?? false
+    }
+
+    /// A review of the changes, inline on this thread as a turn (`review/start`): `target` is a
+    /// `ReviewTarget` ({"type": "uncommittedChanges"}, {"type": "custom", "instructions": …}).
+    @discardableResult
+    public func review(_ target: JSONValue) async throws -> String? {
+        let started = try await server.request("review/start", ["threadId": .string(threadId), "target": target, "delivery": "inline"])
+        let id = started["turn"]?["id"]?.string
+        if let id, id != finishedTurnId { activeTurnId = id }
+        return id
+    }
+
     public func close() async {
         await server.close()
     }

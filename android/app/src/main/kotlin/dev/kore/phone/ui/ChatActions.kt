@@ -759,9 +759,11 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
     private fun showSlash() {
         if (!hasCap("commands")) { slashList.removeAllViews(); slashList.visibility = View.GONE; return }
         val text = field.text.toString()
-        val match = Commands.filter(chat?.objs("commands").orEmpty().mapNotNull { c ->
+        val listed = chat?.objs("commands").orEmpty()
+        val match = Commands.filter(listed.mapNotNull { c ->
             c.str("name")?.let { it to (c.str("description") ?: "") }
         }, text)
+        val kinds = listed.mapNotNull { c -> c.str("name")?.let { it to c.str("kind") } }.toMap()
         slashList.removeAllViews()
         for ((name, description) in match) {
             slashList.addView(LinearLayout(activity).apply {
@@ -771,7 +773,7 @@ class ChatActions(private val activity: Activity, private val chatId: String, pr
                 addView(activity.label("/$name").apply { type(Type.Mono); setTextColor(Tone.text) })
                 if (description.isNotEmpty()) addView(activity.label(description).apply { type(Type.Caption); setTextColor(Tone.faint); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END })
                 setOnClickListener {
-                    field.setText("/$name ")
+                    field.setText(Commands.insertion(name, kinds[name]))
                     field.setSelection(field.text.length)
                 }
             })

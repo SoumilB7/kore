@@ -416,13 +416,95 @@ package final class CodexBackend: ChatBackend {
         }
     }
 
-    /// Codex's own "/" commands, before its skills.
+    /// Codex's own "/" commands, before its skills. Its TUI's /clear starts another thread, which
+    /// the app-server has no request for: not listed.
     package nonisolated static let builtinCommands = [
         SlashCommand(name: "plan", description: "Plan mode", hint: "", kind: .command),
         SlashCommand(name: "compact", description: "Summarize the thread to free up context", hint: "", kind: .command),
-        SlashCommand(name: "goal", description: "Set a goal Codex keeps working toward until it is done", hint: "objective", kind: .command),
+        SlashCommand(name: "goal", description: "Set a goal Codex keeps working toward until it is done", hint: "[objective|clear]", kind: .command),
+        SlashCommand(name: "review", description: "Review the uncommitted changes", hint: "[instructions]", kind: .command),
+        SlashCommand(name: "init", description: "Create an AGENTS.md file with instructions for Codex", hint: "", kind: .command),
         .rename,
     ]
+
+    /// A typed "/" command Codex runs itself rather than as a prompt.
+    package enum Typed: Equatable {
+        case plan, compact
+        case rename(String)
+        case goal(String), goalShow, goalClear
+        /// `review/start`'s target: the uncommitted changes, or the instructions given.
+        case review(JSONValue)
+        /// Sent as this prompt instead (/init's, as Codex's TUI sends it).
+        case prompt(String)
+    }
+
+    package nonisolated static func typed(_ text: String) -> Typed? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else { return nil }
+        let name = String(trimmed.dropFirst().prefix { !$0.isWhitespace })
+        let rest = trimmed.dropFirst(1 + name.count).trimmingCharacters(in: .whitespacesAndNewlines)
+        switch name {
+        case "plan" where rest.isEmpty: return .plan
+        case "compact" where rest.isEmpty: return .compact
+        case "rename": return .rename(rest)
+        case "goal": return rest.isEmpty ? .goalShow : rest == "clear" ? .goalClear : .goal(rest)
+        case "review": return .review(rest.isEmpty ? ["type": "uncommittedChanges"] : ["type": "custom", "instructions": .string(rest)])
+        case "init" where rest.isEmpty: return .prompt(initPrompt)
+        default: return nil
+        }
+    }
+
+    /// The thread's goal as one line, or how to set one.
+    package nonisolated static func goalLine(_ goal: JSONValue?) -> String {
+        guard let objective = goal?["objective"]?.string else { return "No goal set. Usage: /goal <objective>, or /goal clear" }
+        let status = goal?["status"]?.string.map { " (\($0))" } ?? ""
+        return "Goal: \(objective)\(status)"
+    }
+
+    /// Codex's TUI's /init prompt (codex-cli 0.170.0), word for word.
+    package nonisolated static let initPrompt = """
+        Generate a file named AGENTS.md that serves as a contributor guide for this repository.
+        Before writing, check whether AGENTS.md already exists in the current working directory. If it does, do not overwrite or modify it.
+        Your goal is to produce a clear, concise, and well-structured document with descriptive headings and actionable explanations for each section.
+        Follow the outline below, but adapt as needed — add sections if relevant, and omit those that do not apply to this project.
+
+        Document Requirements
+
+        - Title the document "Repository Guidelines".
+        - Use Markdown headings (#, ##, etc.) for structure.
+        - Keep the document concise. 200-400 words is optimal.
+        - Keep explanations short, direct, and specific to this repository.
+        - Provide examples where helpful (commands, directory paths, naming patterns).
+        - Maintain a professional, instructional tone.
+
+        Recommended Sections
+
+        Project Structure & Module Organization
+
+        - Outline the project structure, including where the source code, tests, and assets are located.
+
+        Build, Test, and Development Commands
+
+        - List key commands for building, testing, and running locally (e.g., npm test, make build).
+        - Briefly explain what each command does.
+
+        Coding Style & Naming Conventions
+
+        - Specify indentation rules, language-specific style preferences, and naming patterns.
+        - Include any formatting or linting tools used.
+
+        Testing Guidelines
+
+        - Identify testing frameworks and coverage requirements.
+        - State test naming conventions and how to run tests.
+
+        Commit & Pull Request Guidelines
+
+        - Summarize commit message conventions found in the project’s Git history.
+        - Outline pull request requirements (descriptions, linked issues, screenshots, etc.).
+
+        (Optional) Add other sections if relevant, such as Security & Configuration Tips, Architecture Overview, or Agent-Specific Instructions.
+        """
 
     private func controls(_ session: CodexSession) async -> ChatControls {
         let list = (try? await session.models()) ?? []
@@ -652,35 +734,49 @@ package final class CodexBackend: ChatBackend {
     package func noteNextTurn(_ note: String) { turnNote = note }
 
     package func send(_ text: String, files: [Attachments.File], queued: String?, id: String?) async throws -> Bool {
+        var text = text
+        let typed = files.isEmpty ? Self.typed(text) : nil
         // The Codex extension's /plan is a local toggle: nothing is sent.
-        if text == "/plan" && files.isEmpty {
+        if typed == .plan {
             await setPlanMode(!options.planMode)
             return false
         }
         try await start()
         guard let session else { return false }
-        // Its own slash commands map to RPCs (as in t3code); anything else is a prompt.
-        if text == "/compact" && files.isEmpty {
+        // Its own slash commands map to RPCs (as in t3code, and Codex's TUI); anything else is a prompt.
+        switch typed {
+        case .compact:
             translator.compactRequested = true
             try await session.compact()
             return true
-        }
-        // The Codex TUI's /rename: the thread's name, set as Kore's own rename sets it.
-        if text == "/rename" || text.hasPrefix("/rename "), files.isEmpty {
-            let name = String(text.dropFirst(7)).trimmingCharacters(in: .whitespacesAndNewlines)
+        case .rename(let name):
+            // The Codex TUI's /rename: the thread's name, set as Kore's own rename sets it.
             guard !name.isEmpty else {
-                yield(.notice("Usage: /rename <name>"))
+                yield(.notice(SlashCommand.renameUsage))
                 return false
             }
             try await rename(name)
             yield(.titleChanged(name, rename: true))
             yield(.notice("Renamed to \(name)"))
             return false
-        }
-        if text.hasPrefix("/goal ") && files.isEmpty {
-            try await session.setGoal(String(text.dropFirst(6)).trimmingCharacters(in: .whitespaces))
+        case .goal(let objective):
+            try await session.setGoal(objective)
             yield(.notice("Goal set"))
             return false
+        case .goalShow:
+            yield(.notice(Self.goalLine(try await session.goal())))
+            return false
+        case .goalClear:
+            yield(.notice(try await session.clearGoal() ? "Goal cleared" : "No goal to clear"))
+            return false
+        case .review(let target):
+            // A turn of its own on this thread; its findings come as the turn's answer.
+            try await session.review(target)
+            return true
+        case .prompt(let prompt):
+            text = prompt
+        case .plan, nil:
+            break
         }
         if mayTitle, titlePrompt == nil {
             titlePrompt = FallbackTitle.from(text)

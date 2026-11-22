@@ -8,6 +8,7 @@ import Foundation
 func tag(_ event: ChatEvent) -> String {
     switch event {
     case .sessionIdentified: "session"
+    case .conversationReset: "reset"
     case .titleChanged: "title"
     case .controlsLoaded: "controls"
     case .controlsSet: "controlsSet"

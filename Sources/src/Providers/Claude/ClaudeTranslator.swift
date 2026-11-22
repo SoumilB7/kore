@@ -294,6 +294,10 @@ package final class ClaudeTranslator {
             model = info.model ?? model
             // Repeated at every turn; it differs only when Kore launched in another mode.
             if let reported = info.permissionMode { setMode(reported, .user, at: .now) }
+        case .conversationReset(let id, _):
+            guard !id.isEmpty, id != sessionId else { break }
+            sessionId = id
+            out.append(.conversationReset(id))
         case .permissionModeChanged(let reported):
             modeReported(reported)
         case .textDelta(let text, nil):

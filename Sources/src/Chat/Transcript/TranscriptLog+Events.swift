@@ -116,7 +116,7 @@ extension TranscriptLog {
             modeChanged(change)
         case .planModeChanged(let change):
             planModeChanged(change)
-        case .sessionIdentified, .titleChanged, .controlsLoaded, .controlsSet, .fastModeChanged, .remoteControl,
+        case .sessionIdentified, .conversationReset, .titleChanged, .controlsLoaded, .controlsSet, .fastModeChanged, .remoteControl,
             .remoteControlUnavailable, .turnOrigin, .planReady, .contextUsage, .requestUsage:
             break
         }

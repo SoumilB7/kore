@@ -37,8 +37,9 @@ extension Chat {
 }
 
 extension ControlsStore {
-    /// The chat's "/" commands, Kore's own entries included (`kind == .kore`).
-    package var linkCommands: [SlashCommand] { commands }
+    /// The chat's "/" commands, Kore's own entries included (`kind == .kore`); before its CLI has
+    /// listed any, its provider's built-ins, as a box chat's (`HostChat.commands`).
+    package var linkCommands: [SlashCommand] { commands.isEmpty ? provider.commands : commands }
 }
 
 extension TranscriptStore {

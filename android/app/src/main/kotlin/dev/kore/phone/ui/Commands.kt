@@ -9,4 +9,7 @@ object Commands {
         val contains = all.filter { it !in starts && query.isNotEmpty() && it.first.lowercase().contains(query) }
         return (starts + contains).take(max)
     }
+
+    /** What picking an entry puts in the message, as the Mac's `SlashCommand.insertion`: a Codex skill is `$name`. */
+    fun insertion(name: String, kind: String?): String = if (kind == "skill") "\$$name " else "/$name "
 }

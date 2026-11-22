@@ -21,6 +21,16 @@ package enum LinkPolicy {
     /// CLI's sign-in, usage and remote commands they stand in for, which only work in a terminal.
     /// Any other command the chat offers may be sent, as on the Mac (owner, 2026-11-01).
     package static let koreOnly: Set<String> = ["usage", "account", "login", "logout", "remote-control"]
+    /// "/" commands the link refuses as reaching past the chat it's sent to: the claude CLI's
+    /// /config (its settings, the default mode of every chat among them) and /heapdump (a dump of
+    /// the CLI's memory on disk). Never listed to the link.
+    package static let refused: Set<String> = ["config", "heapdump"]
+    /// Typed controls Kore takes itself (`Chat.typedControl`): with full control only, as their
+    /// `chat.setModel`, `chat.setEffort` and `chat.setFast`.
+    package static let controlCommands: Set<String> = ["model", "effort", "fast"]
+
+    /// Whether a chat's command is listed to the link.
+    package static func listed(_ name: String) -> Bool { !koreOnly.contains(name) && !refused.contains(name) }
 
     /// One chat as the policy sees it.
     package struct ChatFacts: Sendable, Equatable {
@@ -55,13 +65,16 @@ package enum LinkPolicy {
         package var koreEntries: Set<String>
         /// Why the chat can't have Arsenal now (Codex outside Full access); nil when it can.
         package var arsenalUnavailable: String?
+        /// The chat has a plan switch apart from its modes (Codex): its "/plan" flips it.
+        package var planToggle: Bool
 
         package init(
             level: ModeLevel, planOn: Bool = false, modes: [String: ModeLevel], cards: [String: Card] = [:], commands: Set<String> = [],
-            koreEntries: Set<String> = [], arsenalUnavailable: String? = nil
+            koreEntries: Set<String> = [], arsenalUnavailable: String? = nil, planToggle: Bool = false
         ) {
             self.level = level
             self.planOn = planOn
+            self.planToggle = planToggle
             self.modes = modes
             self.cards = cards
             self.commands = commands
@@ -95,7 +108,7 @@ package enum LinkPolicy {
         }
         guard let chat else { return .deny(.goneChat, "That chat isn't open in Kore any more.") }
         switch command {
-        case .send(_, let text, let blobs):
+        case .send(let chatId, let text, let blobs):
             let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty || !blobs.isEmpty, text.utf8.count <= maxText, blobs.count <= maxBlobs else {
                 return .deny(.invalid, "Nothing to send, or too long.")
@@ -105,6 +118,14 @@ package enum LinkPolicy {
             if trimmed.hasPrefix("/") {
                 let name = String(trimmed.dropFirst().prefix { !$0.isWhitespace })
                 if koreOnly.contains(name) || chat.koreEntries.contains(name) { return .deny(.command, "/\(name) is Kore's own; use it in Kore.") }
+                if refused.contains(name) { return .deny(.command, "/\(name) reaches past this chat; use it where the chat runs, not over the link.") }
+                // A plan switch's "/plan" flips it (`Chat.deliver`): what `chat.setPlan` may do.
+                if name == "plan", chat.planToggle, blobs.isEmpty {
+                    return check(.setPlan(chatId: chatId, on: !chat.planOn), chat, control: control, fullAccess: fullAccess)
+                }
+                if controlCommands.contains(name), blobs.isEmpty {
+                    return control == .full ? .allow : .deny(.deniedControl, "/\(name) changes the chat's settings: that needs a grant with full control.")
+                }
                 // Kore's own rename, every chat's (`SlashCommand.rename`): within what ask may do.
                 if name == SlashCommand.rename.name {
                     guard let title = SlashCommand.renameArgument(trimmed), !title.isEmpty else { return .deny(.invalid, SlashCommand.renameUsage) }

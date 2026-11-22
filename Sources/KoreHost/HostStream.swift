@@ -235,6 +235,9 @@ package final class StreamLog {
             return
         case .historyReplaced where skippingHistory:
             return
+        case .conversationReset:
+            // The chat starts the log again from it (`HostServices.rolledBack`), with the new id.
+            return
         case .earlierHistory:
             skippingHistory = false
         default:

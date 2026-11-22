@@ -2,29 +2,16 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
-## [0.3.8] - 2026-11-22
-
-### Added
-- Your Mac (full control of a box) can put box chats in Full access; phones and other chats stop
-  at Auto. A box running kore-host as root says Full access can't run there.
-- Builds and tests run by chats count as "Kore Dev", not Kore, in Battery and Activity Monitor;
-  a dev build of the app is "Kore Dev" with its own settings, chats and keys.
-
-### Changed
-- Full access is never remembered as the default mode for new chats; Auto and the rest still are.
-
-### Fixed
-- Usage bars show "outside Kore" only when the plan rose with no Kore request from that login on
-  this Mac, a box or a paired Mac.
-- A chat in a window you can't see no longer draws while it streams: several streaming chats cost
-  about twice one, not nine times.
-
 ## [0.3.7] - 2026-11-22
 
 ### Added
 - Claude chats have Full access, as Codex chats do: edits and every command without asking (Claude's
   bypass permissions). Only you put a chat in it: phones and links stop at Auto, and Arsenal never
   raises a chat past the one asking. Picking it starts Claude again in it, between turns.
+- Your Mac (full control of a box) can put box chats in Full access; phones and other chats stop
+  at Auto. A box running kore-host as root says Full access can't run there.
+- Builds and tests run by chats count as "Kore Dev", not Kore, in Battery and Activity Monitor;
+  a dev build of the app is "Kore Dev" with its own settings, chats and keys.
 
 ### Changed
 - Kore makes no Keychain call at all. KoreNet's identity and tailnet keys live in files only you
@@ -41,6 +28,7 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
 - Kore's own tailnet needs signing in again after the key change (its old state can't be opened);
   the Devices line says so, and the old node stays in the Tailscale admin console until removed.
 - "Sign in on mybox" signs in to an account of its own on the box, never the box's main login.
+- Full access is never remembered as the default mode for new chats; Auto and the rest still are.
 
 ### Fixed
 - Set up on a box again no longer locks its Mac out: the box keeps the grant tied to that Mac, and
@@ -66,6 +54,14 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
   retries; "Not connected" before the first welcome.
 - The table Copy button sits beside the table's corner, never over a cell; a tab's "Stop turn?"
   shows at once and Stop works on the first click; an empty `/rename` leaves "/rename " to finish.
+- "/" commands: `/config` and `/heapdump` refused from the phone and boxes; Codex `/plan` from the
+  link checked like the plan switch; typed `/model`, `/effort`, `/fast` move Kore's pickers; `/clear`
+  starts a fresh chat on Claude's new session; Codex gains `/review`, `/init`, `/goal clear`; commands
+  that don't work in Kore are no longer listed; the phone sends Codex skills as `$name`.
+- Usage bars show "outside Kore" only when the plan rose with no Kore request from that login on
+  this Mac, a box or a paired Mac.
+- A chat in a window you can't see no longer draws while it streams: several streaming chats cost
+  about twice one, not nine times.
 
 ## [0.3.6] - 2026-11-21
 
