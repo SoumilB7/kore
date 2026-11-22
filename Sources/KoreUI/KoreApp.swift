@@ -198,6 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        assert(NSApp is KoreApplication, "KoreApplication.install() before KoreApp.main()")
         // Once the windows have their autosave names.
         DispatchQueue.main.asyncAfter(deadline: .now() + 2) { Self.pruneStaleWindowFrames() }
         // Transfers a quit, a crash or a restart stopped go on from their checkpoints.

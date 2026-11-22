@@ -14,6 +14,13 @@ final class Runner {
 
     /// The storyline running now, for the event tap.
     private(set) static var current: StoryContext?
+    /// Exceptions AppKit reported since the last step ended: the step fails with them.
+    private static var exceptions: [String] = []
+
+    static func exceptionReported(_ exception: NSException) {
+        let thrown = exception.callStackSymbols.prefix(12).joined(separator: "\n")
+        exceptions.append("Objective-C exception \(exception.name.rawValue): \(exception.reason ?? "")\n\(thrown)")
+    }
 
     private let selection: Selection
     private let flags: RunFlags
@@ -148,6 +155,10 @@ final class Runner {
             do {
                 if let timeout = step.timeout { context.timeout = timeout } else { context.timeout = .seconds(5) }
                 try await step.run(context)
+                if !Self.exceptions.isEmpty {
+                    defer { Self.exceptions = [] }
+                    throw StoryFailure.expectation(Self.exceptions.joined(separator: "\n"))
+                }
                 result.steps.append(.init(label: step.label, outcome: .pass, ms: ms(since: stepStart), stalledMs: stalled()))
             } catch let skip as StorySkip {
                 skipping = true

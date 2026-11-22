@@ -22,6 +22,12 @@ package enum StorylineHost {
         // Before anything reads them: the run's own Application Support, Logs and Caches, never
         // the owner's (the app's launch work prunes, migrates and forgets in them).
         KoreFolders.place(options.folders)
+        // Kore's NSApp, as the app has it; any Objective-C exception AppKit catches and goes on
+        // from fails the step it came in, with where it was thrown. Not by AppKit's
+        // NSApplicationCrashOnExceptions: with that on, windows scroll otherwise than in the app
+        // (OpenedChatLandsAtEndResized, 2026-11-24).
+        KoreApplication.install()
+        KoreApplication.reported = { Runner.exceptionReported($0) }
         AgentGrants.install()
         if options.list {
             for story in Runner.discover() {
@@ -35,7 +41,8 @@ package enum StorylineHost {
         // file to open: a flag without a value (`--real-input --cassettes <dir>`) pairs with
         // the next flag and leaves that one's value over. Launched to open a file, the app
         // shows no window, so the welcome window never hands over the means to open a folder's.
-        UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": false])
+        // A string: AppKit compares it as one, and a Bool here threw in `finishLaunching`.
+        UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": "NO"])
         // The app's own story registry runs only under a host.
         StoryHost.installed = true
         StorylineSeams.events = { chat, event in Runner.current?.record(chat, event) }
