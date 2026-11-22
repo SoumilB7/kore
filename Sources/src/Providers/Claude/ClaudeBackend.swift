@@ -176,7 +176,12 @@ package final class ClaudeBackend: ChatBackend {
         } else if let instructions = options.instructions {
             launch.extraArgs += ["--append-system-prompt-file", instructions.path]
         }
-        let starting = Task { try await ClaudeSession.start(launch) }
+        // Not on a session the last Kore's CLI may still be on; its past is read and shown meanwhile.
+        let resumed = sessionId
+        let starting = Task { [log] in
+            if let resumed { log.waitedOut("claude", chat: resumed, try await LastKore.shared.value.gone()) }
+            return try await ClaudeSession.start(launch)
+        }
         opening = starting
         launches += 1
         let kind = launches > 1 ? "again" : fork != nil ? "fork" : sessionId != nil ? "resume" : "new"

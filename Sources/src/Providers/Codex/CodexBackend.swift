@@ -128,7 +128,11 @@ package final class CodexBackend: ChatBackend {
                 launch.pathFirst = server.pathFolder
                 launch.developerInstructions = KoreReach.instructions(with: instructions, server)
             }
-            let task = Task { try await CodexSession.launch(launch) }
+            // Not on a thread the last Kore's app-server may still be on.
+            let task = Task { [log] in
+                if let resume { log.waitedOut("codex", chat: resume, try await LastKore.shared.value.gone()) }
+                return try await CodexSession.launch(launch)
+            }
             opening = task
             session = try await task.value
         } catch {

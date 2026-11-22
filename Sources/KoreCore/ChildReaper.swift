@@ -14,7 +14,7 @@ package final class ChildReaper: @unchecked Sendable {
     /// The one every `StdioProcess` reports to, started with the first child.
     package static let shared = ChildReaper(grace: graceAfterTerm)
     /// How long a child has after SIGTERM before it and its tree are killed: within this of Kore
-    /// going, none of its CLIs is left (Resume after a close waits it out after a relaunch).
+    /// going, none of its CLIs is left (a Kore started meanwhile waits for it: `LastKore`).
     package static let graceAfterTerm: Duration = .seconds(5)
 
     private let grace: Duration
@@ -68,7 +68,10 @@ package final class ChildReaper: @unchecked Sendable {
         }
     }
 
-    private static func script(milliseconds: Int) -> String {
+    /// How the script begins, in every Kore's: what a reaper is known by (`LastKore`).
+    static let opening = #"started() { ps -o lstart= -p "$1""#
+
+    static func script(milliseconds: Int) -> String {
         #"""
         started() { ps -o lstart= -p "$1" 2>/dev/null | tr -d ' '; }
         ours() { [ -n "${1#*:}" ] && [ "$(started "${1%%:*}")" = "${1#*:}" ]; }

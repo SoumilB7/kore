@@ -44,9 +44,8 @@ class WorkResumeStoryline: ChatStoryline {
     }
 
     func setUp(helper: Bool) -> [any Step] {
-        [Do("Kore started by its installer (its windows are kept), long after the last one went") { _ in
+        [Do("Kore started by its installer (its windows are kept)") { _ in
             Workspace.storyLaunch = ["KORE_BUILD_SHA": "6d23295", "KORE_RELEASE_TAG": "v0.3.9", "KORE_SIGN_IDENTITY": "Kore"]
-            Workspace.sinceLaunch = { .seconds(3600) }
         }] + super.steps() + [
             Send("Fix the build"),
             Expect("the first chat working") { story in try story.activeChat().isBusy },

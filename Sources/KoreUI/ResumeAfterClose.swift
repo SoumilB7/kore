@@ -1,5 +1,4 @@
 import AppKit
-import KoreCore
 import src
 import SwiftUI
 
@@ -109,47 +108,15 @@ extension Workspace {
     }
 
     /// Resume: each picked chat is sent its note, as if typed (queued if it's busy); the cue goes.
-    /// Kore gone by a crash or a kill leaves its CLIs to its `ChildReaper`: SIGTERM at once, the
-    /// whole tree killed after `graceAfterTerm`. A Resume clicked sooner than that after a relaunch
-    /// waits it out, so a session never has the old CLI and a new one live at once (the old one
-    /// can't be found by session for Codex, whose app-server doesn't name its thread).
+    /// Soon after a crash, each chat's CLI waits out the last Kore's as it starts (`LastKore`).
     package func resumeWork() {
         guard let offer = resumeOffer else { return }
         resumeOffer = nil
         let picked = offer.items.filter(\.picked).compactMap { item in
             tabs.first(where: { $0.id == item.tab })?.chat.map { ($0, Self.resumeText(agents: item.agents, commands: item.commands)) }
         }
-        let send = {
-            let sent = picked.filter { chat, text in chat.sendFromLink(text, done: nil) }.count
-            UILog.event("resume-work", ["chats": String(sent), "offered": String(offer.items.count)])
-        }
-        let wait = Self.reaperWait(sinceLaunch: Self.sinceLaunch())
-        guard wait > .zero else { return send() }
-        UILog.event("resume-work", ["waits-ms": String(Int(wait / .milliseconds(1)))])
-        Task { @MainActor in
-            try? await Task.sleep(for: wait)
-            send()
-        }
-    }
-
-    /// How long a Resume waits, this long after Kore started: until the last Kore's reaper has
-    /// surely ended every CLI it left (its grace and a second more), else not at all.
-    package static func reaperWait(sinceLaunch: Duration) -> Duration {
-        max(.zero, ChildReaper.graceAfterTerm + .seconds(1) - sinceLaunch)
-    }
-
-    /// How long this process has run: the kernel's start time for it (a seam for tests and
-    /// storylines, whose Kore started moments ago but left no CLIs behind).
-    package static var sinceLaunch: @MainActor () -> Duration = processAge
-
-    static func processAge() -> Duration {
-        var info = kinfo_proc()
-        var size = MemoryLayout<kinfo_proc>.stride
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
-        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return .seconds(3600) }
-        let start = info.kp_proc.p_un.__p_starttime
-        let ran = Date().timeIntervalSince1970 - (Double(start.tv_sec) + Double(start.tv_usec) / 1e6)
-        return .milliseconds(Int(max(ran, 0) * 1000))
+        let sent = picked.filter { chat, text in chat.sendFromLink(text, done: nil) }.count
+        UILog.event("resume-work", ["chats": String(sent), "offered": String(offer.items.count)])
     }
 
     /// ×: nothing sent, and the offer never comes back (the next save notes nothing working).

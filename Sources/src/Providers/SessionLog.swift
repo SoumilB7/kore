@@ -23,6 +23,12 @@ package struct SessionLog: Sendable {
         log.write("started", ["cli": cli, "chat": chat ?? "-", "pid": pid.map(String.init) ?? "-", "launch": launch])
     }
 
+    /// The last Kore's CLIs were waited out before this session's started (`LastKore`).
+    package func waitedOut(_ cli: String, chat: String?, _ time: Duration) {
+        guard time > .zero else { return }
+        log.write("waited-out", ["cli": cli, "chat": chat ?? "-", "ms": String(Int(time / .milliseconds(1)))])
+    }
+
     /// `error`'s kind only (`cause`), never its words.
     package func startFailed(_ cli: String, chat: String?, launch: String, error: Error) {
         log.write(.error, "start-failed", ["cli": cli, "chat": chat ?? "-", "launch": launch, "cause": Self.cause(error)])

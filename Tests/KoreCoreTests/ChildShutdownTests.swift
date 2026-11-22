@@ -134,27 +134,36 @@ struct ChildShutdownTests {
         #expect(await gone(reaperPid))
     }
 
-    /// Its grace is the clock's, however many children it looks at on each pass (it counted
-    /// passes once: 50 of them, each a `ps` per child, ran far past 5 s with many chats open).
+    /// Its grace is the clock's, however long each pass takes (it counted passes once: 50 of them,
+    /// each a `ps` per child, ran far past 5 s with many chats open). A `ps` made slow stands in
+    /// for many children: a 1 s grace counted in passes is 10 of them, about 10 s.
     @Test func theGraceIsTimeNotPasses() async throws {
-        // Against one child under the same grace and the same load: a grace counted in passes
-        // grows with the children (each pass checks every one), one counted in time doesn't.
-        let one = try await allGone(1), many = try await allGone(20)
-        #expect(many - one < .milliseconds(1500), "1 child: \(one), 20: \(many)")
-    }
-
-    /// How long a 2 s grace takes to end `count` children that ignore TERM, and their own.
-    private func allGone(_ count: Int) async throws -> Duration {
-        let reaper = ChildReaper(grace: .seconds(2))
-        let children = try (0..<count).map { _ in try spawn(Self.stubborn) }
-        for (child, _) in children { reaper.watch(child.processIdentifier) }
-        let started = ContinuousClock.now
-        reaper.end()
+        let tools = FileManager.default.temporaryDirectory.appendingPathComponent("slow-ps-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tools) }
+        let ps = tools.appendingPathComponent("ps")
+        try "#!/bin/sh\n/bin/sleep 0.3\nexec /bin/ps \"$@\"\n".write(to: ps, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ps.path)
+        let children = try (0..<3).map { _ in try spawn(Self.stubborn) }
+        defer { for (child, tool) in children { kill(child.processIdentifier, SIGKILL); kill(tool, SIGKILL) } }
+        let reaper = Process(), input = Pipe()
+        reaper.executableURL = URL(fileURLWithPath: "/bin/sh")
+        reaper.arguments = ["-c", ChildReaper.script(milliseconds: 1000)]
+        reaper.environment = ["PATH": "\(tools.path):/usr/bin:/bin:/usr/sbin:/sbin"]
+        reaper.standardInput = input
+        reaper.standardError = FileHandle.nullDevice
+        try reaper.run()
+        for (child, _) in children { try input.fileHandleForWriting.write(contentsOf: Data("+ \(child.processIdentifier)\n".utf8)) }
+        let began = ContinuousClock.now
+        try input.fileHandleForWriting.close()
+        // Told of three (0.9 s), one look, the grace and the look that ends it: under 4 s.
         for (child, tool) in children {
-            #expect(await gone(child.processIdentifier))
-            #expect(await gone(tool))
+            #expect(await gone(child.processIdentifier, within: .seconds(20)))
+            #expect(await gone(tool, within: .seconds(20)))
         }
-        return ContinuousClock.now - started
+        let took = ContinuousClock.now - began
+        #expect(took < .seconds(7), "took \(took)")
+        #expect(took > .seconds(1), "took \(took): ended before its grace")
     }
 
     @Test func theReaperLeavesWhatItWasToldEnded() async throws {
