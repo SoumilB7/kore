@@ -10,7 +10,7 @@ import Testing
 /// holds it under the caller's level from its CLI's first start, though its history ends in Full
 /// access. kore-host's own backends, on a stand-in CLI that plays such a history.
 @MainActor
-@Suite("box mode ceilings", .serialized)
+@Suite("box mode ceilings", .ownCeilings, .serialized)
 struct BoxModeCeilingTests {
     /// Claude: each launch's arguments and each mode it's asked for; a message starts a turn.
     private static let claude = #"""

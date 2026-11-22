@@ -9,7 +9,20 @@ package enum ModeCeilings {
     /// Two puts at once each keep theirs.
     private static let lock = NSLock()
 
-    package static func at(_ session: String) -> Int? { all[session] }
+    /// Where they're kept: this machine's defaults, unless a test gives its own (`kept`, its
+    /// suite's `.ownCeilings`), so none it leaves reaches another test or a later run.
+    @TaskLocal package static var store: Store?
+
+    /// A test's own ceilings, in memory; read and written under `lock`.
+    package final class Store: @unchecked Sendable {
+        fileprivate var ceilings: [String: Int] = [:]
+    }
+
+    package static func at(_ session: String) -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        return all[session]
+    }
 
     /// `level` nil: none (any mode its history ends in).
     package static func put(_ level: Int?, for session: String) {
@@ -18,12 +31,24 @@ package enum ModeCeilings {
         var ceilings = all
         guard ceilings[session] != level else { return }
         ceilings[session] = level
-        UserDefaults.standard.set(ceilings, forKey: key)
-        // Written now on a box too: Foundation there keeps it in memory until asked.
-        UserDefaults.standard.synchronize()
+        all = ceilings
     }
 
-    private static var all: [String: Int] { UserDefaults.standard.dictionary(forKey: key) as? [String: Int] ?? [:] }
+    /// Runs `body` with a store of its own, gone after it.
+    package static func kept<R>(_ body: () async throws -> R) async rethrows -> R {
+        try await $store.withValue(Store()) { try await body() }
+    }
+
+    /// Read and written under `lock`.
+    private static var all: [String: Int] {
+        get { store?.ceilings ?? UserDefaults.standard.dictionary(forKey: key) as? [String: Int] ?? [:] }
+        set {
+            if let store { return store.ceilings = newValue }
+            UserDefaults.standard.set(newValue, forKey: key)
+            // Written now on a box too: Foundation there keeps it in memory until asked.
+            UserDefaults.standard.synchronize()
+        }
+    }
 }
 
 extension ProviderDescriptor {

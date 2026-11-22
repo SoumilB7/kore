@@ -10,7 +10,7 @@ import Testing
 /// A box window's tabs follow the box's deltas, and a chat made in the window gets one tab even
 /// when the box lists it before answering `chat.new` (kore-host broadcasts first). The box is a
 /// script over a pipe pair; nothing dials.
-@Suite("box window tabs from deltas") @MainActor
+@Suite("box window tabs from deltas", .ownCeilings) @MainActor
 struct BoxTabsUITests {
     /// The box's end of the pipes: what the Mac sent, and frames sent to it.
     @MainActor final class Script {

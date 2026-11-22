@@ -13,7 +13,7 @@ import Testing
 /// stand-in CLI that plays such a history; without a ceiling the same history does raise it.
 extension HostOverrideTests {
 @MainActor
-@Suite("mode ceilings", .serialized)
+@Suite("mode ceilings", .ownCeilings, .serialized)
 struct ModeCeilingTests {
     /// Claude: each launch's arguments and each mode it's asked for; a message starts a turn.
     private static let claude = #"""

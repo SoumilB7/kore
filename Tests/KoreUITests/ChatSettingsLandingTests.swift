@@ -11,9 +11,9 @@ import Testing
 /// on every fork: model, effort, mode, fast, plan, Plan's allow switch, the auto-compact point,
 /// the draft, the Arsenal tier while the chat can have it here (else off, said once), and a login
 /// this Mac doesn't have said once. Arsenal's memory is a scratch one; no CLI starts.
-@Suite("chat settings where they land", .serialized) @MainActor
+@Suite("chat settings where they land", .ownCeilings, .serialized) @MainActor
 struct ChatSettingsLandingTests {
-    static let session = "7d1e3c40-0000-4000-8000-00000000beef"
+    static let session = "7d1e3c40-0000-4000-8000-00000000c5e7"
 
     struct Rig {
         let root: URL

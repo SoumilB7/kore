@@ -38,6 +38,9 @@ struct ChatMoveWindowTests {
         let mac = root.appendingPathComponent("mac")
         for made in [folder, mac] { try FileManager.default.createDirectory(at: made, withIntermediateDirectories: true) }
         defer { try? FileManager.default.removeItem(at: root) }
+        // Its box chat lands here capped from the box daemon's own threads, outside any test's own store.
+        ModeCeilings.put(nil, for: Self.session)
+        defer { ModeCeilings.put(nil, for: Self.session) }
 
         // The box: a kore-host with one chat whose session file is on its scratch CLI folder.
         let paths = HostPaths(environment: [
@@ -160,6 +163,9 @@ struct ChatMoveWindowTests {
         let mac = root.appendingPathComponent("mac")
         for made in [folder, mac] { try FileManager.default.createDirectory(at: made, withIntermediateDirectories: true) }
         defer { try? FileManager.default.removeItem(at: root) }
+        // Its box chat lands here capped from the box daemon's own threads, outside any test's own store.
+        ModeCeilings.put(nil, for: Self.session)
+        defer { ModeCeilings.put(nil, for: Self.session) }
         let paths = HostPaths(environment: [
             "HOME": root.path, "XDG_STATE_HOME": root.appendingPathComponent("state").path,
             "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,

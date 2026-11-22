@@ -11,9 +11,9 @@ import Testing
 /// it can't copy refused in a line with nothing changed, and a copy into a window here landing as
 /// a tab behind the one shown, the source untouched.
 @MainActor
-@Suite("chat copy at a phone's ask", .serialized)
+@Suite("chat copy at a phone's ask", .ownCeilings, .serialized)
 struct ChatCopyAskTests {
-    static let session = "7d1e3c40-0000-4000-8000-00000000abcd"
+    static let session = "7d1e3c40-0000-4000-8000-00000000c0a5"
 
     static func rows(_ folder: String, _ session: String = session) -> String {
         (0..<3).map { i in
