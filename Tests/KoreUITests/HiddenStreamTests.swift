@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 @testable import src
 import Testing
@@ -104,5 +105,21 @@ struct HiddenStreamTests {
         for event in events { store.apply(event); if drawBuilds(store) { built += 1 } }
         #expect(built > 0, "a view still on it, its draws build")
         #expect(shown(store) == fromScratch(store))
+    }
+
+    /// Its view left it "seen" in a window that is off screen (one never ordered in here): the
+    /// view's flags aren't trusted, the window's own state is, and a window showing it wins.
+    @Test func shownInAWindowOffScreenItBuildsNoRows() throws {
+        let events = try Recorded.events(Recorded.claude[0])
+        let store = TranscriptStore()
+        store.viewsOnScreen = 1
+        let window = NSWindow(contentRect: .init(x: 0, y: 0, width: 100, height: 100), styleMask: [], backing: .buffered, defer: true)
+        store.seen(true, in: window)
+        var built = 0
+        for event in events { store.apply(event); if drawBuilds(store) { built += 1 } }
+        #expect(built == 0, "its window off screen, its draws build nothing")
+        store.seen(false, in: window)
+        store.catchUp()
+        #expect(shown(store) == fromScratch(store), "out of that window, every row built")
     }
 }

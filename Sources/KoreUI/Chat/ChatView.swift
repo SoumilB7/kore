@@ -89,7 +89,8 @@ struct ChatView: View {
     }
 
     private func content(_ chat: Chat, chats: [Chat]) -> some View {
-        VStack(spacing: 0) {
+        let window = workspace.window
+        return VStack(spacing: 0) {
             ZStack {
                 ForEach(chats) { kept in
                     let shown = kept === active
@@ -97,6 +98,7 @@ struct ChatView: View {
                     TranscriptTimeline(store: kept.transcript, actions: actions(kept)).equatable()
                         // Off screen, its stream draws a couple of times a second, not 30.
                         .onChange(of: seen, initial: true) { _, seen in
+                            kept.transcript.seen(shown, in: window)
                             kept.transcript.hidden = !seen
                             kept.transcript.covered = shown && !seen
                             if seen {

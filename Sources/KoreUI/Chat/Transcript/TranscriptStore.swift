@@ -652,7 +652,47 @@ package final class TranscriptStore {
     /// tile on it. Then a stream builds no rows (they're built once, as it shows); only what other
     /// views read of it (its agents, the files its turn touched) follows, a couple of times a
     /// second.
-    var unseen: Bool { (hidden || viewed) && !isOnScreen }
+    var unseen: Bool { (hidden || viewed) && !isOnScreen || windowsCovered }
+
+    /// The windows whose chat view shows it, read at each draw rather than trusted from the view:
+    /// a window off screen runs no SwiftUI updates, so the view's `hidden` and `covered` can stay
+    /// as they were when it last drew (a tab shown once, then left "seen" in a window nobody saw,
+    /// built its rows 30 times a second and its texts were drawn again each time).
+    @ObservationIgnored private var seenIn: [ObjectIdentifier: SeenWindow] = [:]
+
+    private struct SeenWindow {
+        weak var window: NSWindow?
+        let watch: NSObjectProtocol
+    }
+
+    /// Its chat view in `window` shows it (`seen`) or not.
+    func seen(_ seen: Bool, in window: NSWindow?) {
+        guard let window else { return }
+        let key = ObjectIdentifier(window)
+        if !seen {
+            if let gone = seenIn.removeValue(forKey: key) { NotificationCenter.default.removeObserver(gone.watch) }
+            return
+        }
+        guard seenIn[key] == nil else { return }
+        let watch = NotificationCenter.default.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) {
+            [weak self] _ in
+            MainActor.assumeIsolated {
+                // On screen again: what streamed meanwhile is built at once.
+                guard let self, !self.unseen else { return }
+                self.catchUp()
+            }
+        }
+        seenIn[key] = SeenWindow(window: window, watch: watch)
+    }
+
+    /// Every window that shows it is off screen (covered, minimised, ordered out).
+    private var windowsCovered: Bool {
+        !seenIn.isEmpty && !seenIn.values.contains { $0.window?.occlusionState.contains(.visible) == true }
+    }
+
+    isolated deinit {
+        for seen in seenIn.values { NotificationCenter.default.removeObserver(seen.watch) }
+    }
 
     /// Shows again: what streamed meanwhile is built now, at once.
     func catchUp() {
