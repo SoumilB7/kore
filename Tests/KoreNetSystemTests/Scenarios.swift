@@ -248,19 +248,51 @@ struct KoreNetSystemTests {
         }
     }
 
+    /// The owner's rule (2026-11-23): Tailscale quit on the Mac → Kore's own tailnet runs beside
+    /// it, so one app is enough. Its one sign-in, then the box link and the phone move to the
+    /// Mac's own node (each keeps its new key after the proof); Tailscale back on → the Mac moves
+    /// back to the app's node and Kore's own stops; quit again → Kore's own again, no sign-in.
+    /// No Allow card, no re-Join, one row each, and the Mac's node keys kept at both.
     @Test func tailscaleOffOnTheMacThenOn() async throws {
-        try await play("S20 Tailscale off then on · I11") { w in
+        try await play("S20 Tailscale quit, Kore's own beside it, then back · I11 ID2") { w in
+            var opened: [URL] = []
+            let openURL = Devices.shared.openURL
+            Devices.shared.openURL = { opened.append($0) }
+            defer { Devices.shared.openURL = openURL }
             await w.koreNetOn()
             let box = try await w.sshBox("mybox")
             await w.onKoreNet(box)
             await w.plus()
             let pixel = w.phone("Pixel 9")
             await w.joinPhone(pixel)
-            await w.step("Tailscale off on the Mac", .event("Tailscale off"), until: {
-                Devices.shared.look().line == "Tailscale is off on this Mac" && pixel.rows.first?.glyph != "●"
-            }) { w.net.setState(w.mac.ip, .stopped) }
-            await w.step("Tailscale on again", .event("Tailscale on")) { w.net.setState(w.mac.ip, .running) }
-            await w.expectSettled(boxes: [box], phones: [pixel])
+            await w.step("a mybox window opens", .event("window"), until: { w.mac.link(box)?.route == .net }) { w.mac.openWindow(box) }
+            let cards = w.mac.cards.count
+            await w.step("Tailscale quit on the Mac", .event("Tailscale quit"), until: {
+                w.mac.switcher.state == .sidecar && Devices.shared.look().line == DevicesWords.signIn
+            }) { w.net.setState(w.mac.installedIP, .stopped) }
+            await w.step("Sign in pressed", .event("sign in"), until: { opened.count == 1 && Devices.shared.signingIn }) { Devices.shared.signIn() }
+            await w.step("Kore's own tailnet signed in", .event("signed in"), until: {
+                !Devices.shared.signingIn && w.mac.link(box)?.route == .net && pixel.rows.first?.glyph == "●"
+            }) { w.mac.signInOwnTailnet() }
+            await w.expectSettled(boxes: [box], phones: [pixel], "on Kore's own beside the quit app")
+            await w.step("Tailscale on again", .event("Tailscale on"), until: {
+                w.mac.switcher.state == .installed && w.mac.link(box)?.route == .net && pixel.rows.first?.glyph == "●"
+            }) { w.net.setState(w.mac.installedIP, .running) }
+            await w.expectSettled(boxes: [box], phones: [pixel], "back on Tailscale")
+            await w.step("Tailscale quit again", .event("Tailscale quit"), until: {
+                w.mac.switcher.state == .sidecar && w.mac.link(box)?.route == .net && pixel.rows.first?.glyph == "●"
+            }) { w.net.setState(w.mac.installedIP, .stopped) }
+            await w.expectSettled(boxes: [box], phones: [pixel], "Kore's own again, already signed in")
+            w.mac.closeWindow(box)
+            #expect(opened.count == 1, "\(opened)")
+            #expect(w.mac.cards.count == cards, "an Allow card came back")
+            #expect(pixel.step.isJoined && pixel.rows.count == 2, "\(pixel.rows)")
+            // Both of the Mac's nodes kept, at the box and the phone (three at most).
+            let me = w.mac.identity.device
+            let atBox = box.devices.first { $0.id == me }?.nodeKeys ?? []
+            #expect(atBox.contains(w.mac.ownKey) && atBox.contains(w.mac.installedKey) && atBox.count <= 3, "\(atBox)")
+            let atPhone = pixel.record(of: me)?.nodeKeys ?? []
+            #expect(atPhone.contains(w.mac.ownKey) && atPhone.contains(w.mac.installedKey) && atPhone.count <= 3, "\(atPhone)")
         }
     }
 
@@ -285,9 +317,11 @@ struct KoreNetSystemTests {
             // A mybox window is open throughout: its link is the one that moves.
             await w.step("a mybox window opens", .event("window"), until: { w.mac.link(box)?.route == .net }) { w.mac.openWindow(box) }
             let cards = w.mac.cards.count
+            // Quit: Kore's own runs beside it, waiting for its one sign-in.
             await w.step("Tailscale quit on the Mac", .event("Tailscale quit"), until: {
-                Devices.shared.look().line == "Tailscale is off on this Mac" && w.mac.link(box)?.route != .net
+                w.mac.switcher.state == .sidecar && Devices.shared.look().line == DevicesWords.signIn && w.mac.link(box)?.route != .net
             }) { w.net.setState(w.mac.installedIP, .stopped) }
+            // Uninstalled meanwhile: the same node goes on.
             await w.step("Tailscale uninstalled", .event("Tailscale uninstalled"), until: {
                 w.mac.switcher.state == .sidecar && Devices.shared.look().line == DevicesWords.signIn
             }) { w.mac.uninstallTailscale() }

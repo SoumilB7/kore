@@ -222,4 +222,14 @@ class NetDialerBoxTest {
         assertEquals(listOf("100.64.0.2"), net.dials)
         scope.cancel()
     }
+
+    /** A Mac that moved back keeps both keys; the online one is dialed, not the first listed. */
+    @Test fun anOnlineKnownNodeWinsOverAnOfflineOne() {
+        val both = Device(UUID.randomUUID(), "MacBook", NodeKind.MAC, SoftwareIdentity.fresh().publicKey, listOf("nodekey:mac", "nodekey:own"), "macbook.tail.ts.net.")
+        val peers = listOf(
+            TailnetNode("macbook.tail.ts.net.", "macbook", "macOS", false, 7, null, "nodekey:mac", listOf("100.64.0.9")),
+            TailnetNode("kore-mac.tail.ts.net.", "kore-mac", "macOS", true, 7, null, "nodekey:own", listOf("100.64.0.8")),
+        )
+        assertEquals("nodekey:own", NetDialer.known(both, peers)?.nodeKey)
+    }
 }

@@ -6,6 +6,8 @@ import SwiftUI
 /// opens the chat's Account popup, Kore's settings being in the / menu; ⌥⌘K the chat's Arsenal.
 enum TabKey: Equatable {
     case close, reopen, next, previous, number(Int), account, arsenal
+    /// Esc, with no keys held: lets go of the picked tabs, when there are.
+    case escape
 
     /// The tab key a key press is, if any.
     static func of(_ characters: String?, keyCode: UInt16, modifiers: NSEvent.ModifierFlags) -> TabKey? {
@@ -18,6 +20,7 @@ enum TabKey: Equatable {
             default: return nil
             }
         }
+        if keyCode == 53, flags.isEmpty { return .escape }
         if flags == [.command, .shift], characters?.lowercased() == "t" { return .reopen }
         // K's key too, as ⌥ may make another character of it.
         if flags == [.command, .option], characters?.lowercased() == "k" || keyCode == 40 { return .arsenal }
@@ -56,6 +59,10 @@ struct TabKeys: ViewModifier {
                     case .number(let n): workspace.selectNumber(n)
                     case .account: workspace.openAccount()
                     case .arsenal: if !event.isARepeat { workspace.toggleArsenal() }
+                    case .escape:
+                        // Only picked tabs, and no popup over them (its Esc closes it first).
+                        guard !workspace.selection.isEmpty, OptionsMenu.shared.items.isEmpty, workspace.groupEdit == nil, !workspace.hasOverlay else { return event }
+                        workspace.clearSelection()
                     }
                     return nil
                 }

@@ -182,6 +182,8 @@ extension Workspace {
     /// The chip's click: folded to the chip, or open again.
     package func toggleFold(_ group: UUID) {
         guard let folded = tabGroups.group(group)?.folded else { return }
+        // Picked tabs folded out of view would be acted on unseen: the picks go.
+        clearSelection()
         tabGroups.update(group) { $0.folded = !folded }
         UILog.event("tab-group", ["action": folded ? "unfolded" : "folded", "group": group.uuidString])
     }

@@ -31,8 +31,38 @@ struct KoreSendArgumentsTests {
         #expect(Reads.run("send", ["work", "hi", "--folder"], unreachable: "") { Recorder() } == 2)
         // The tool takes the same, and passes folder through.
         let tool = AgentTools.tool("kore_send")!
-        #expect(tool.args.map { $0.0 } == ["chat", "text", "folder"] && tool.required == ["chat", "text"])
+        #expect(tool.args.map { $0.0 } == ["chat", "text", "folder", "silent"] && tool.required == ["chat", "text"])
         #expect(AgentTools.arguments(tool, ["chat": "x", "text": "y", "folder": "z", "other": 1]).keys.sorted() == ["chat", "folder", "text"])
-        #expect(AgentTools.tool("kore_send", box: true)!.args.map { $0.0 } == ["chat", "text", "folder"])
+        #expect(AgentTools.tool("kore_send", box: true)!.args.map { $0.0 } == ["chat", "text", "folder", "silent"])
+    }
+
+    /// `kore new --folder F --silent`, `kore open --silent` and `kore send --silent`: each sent only
+    /// when given; without them, what each sent before.
+    @Test func newOpenAndSendTakeSilentAndNewAFolder() {
+        let plain = Recorder()
+        #expect(Reads.run("new", ["hi"], unreachable: "") { plain } == 0)
+        #expect(plain.calls[0].0 == "chat.new" && plain.calls[0].1.keys.sorted() == ["text"])
+        let folder = Recorder()
+        #expect(Reads.run("new", ["--folder", "~/work", "--codex", "--silent", "hi"], unreachable: "") { folder } == 0)
+        let args = folder.calls[0].1
+        #expect(args.keys.sorted() == ["folder", "provider", "silent", "text"])
+        #expect(args["folder"] as? String == "~/work" && args["silent"] as? Bool == true && args["text"] as? String == "hi")
+        let open = Recorder()
+        #expect(Reads.run("open", ["abc123", "--silent"], unreachable: "") { open } == 0)
+        #expect(open.calls[0].0 == "chat.open" && open.calls[0].1["silent"] as? Bool == true)
+        let opened = Recorder()
+        #expect(Reads.run("open", ["abc123"], unreachable: "") { opened } == 0)
+        #expect(opened.calls[0].1.keys.sorted() == ["session"])
+        let send = Recorder()
+        #expect(Reads.run("send", ["work", "hi", "--silent"], unreachable: "") { send } == 0)
+        #expect(send.calls[0].1["silent"] as? Bool == true)
+        // Usage: --folder takes a folder; still one message at most.
+        #expect(Reads.run("new", ["--folder"], unreachable: "") { Recorder() } == 2)
+        #expect(Reads.run("new", ["--silent", "a", "b"], unreachable: "") { Recorder() } == 2)
+        // The tools take the same.
+        #expect(AgentTools.tool("kore_new_chat")!.args.map { $0.0 } == ["provider", "model", "mode", "text", "folder", "silent"])
+        #expect(AgentTools.tool("kore_new_chat", box: true)!.args.map { $0.0 } == ["provider", "model", "mode", "text", "folder", "silent", "place"])
+        #expect(AgentTools.tool("kore_open_chat")!.args.map { $0.0 } == ["session", "folder", "silent"])
+        #expect(Reads.usage.contains("kore new [--claude|--codex] [--model M] [--mode X] [--folder F] [--silent]"))
     }
 }

@@ -549,8 +549,11 @@ package final class HostNet {
     /// Installed Tailscale's choice as its state says now; a change is journaled.
     private func noteChoice(_ now: TailnetChooser.Choice) {
         guard now != choice else { return }
-        if let was = choice { HostJournal.note("korenet choice", ["tailnet": "tailscale", "choice": "\(now)", "was": "\(was)"]) }
+        let was = choice
+        if let was { HostJournal.note("korenet choice", ["tailnet": "tailscale", "choice": "\(now)", "was": "\(was)"]) }
         choice = now
+        // Up, then down (stopped, signed out): Kore's own takes over beside it.
+        if was == .installed, now == .stopped || now == .signedOut { host.installedTailscaleWentDown() }
     }
 
     // MARK: Accepting

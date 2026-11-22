@@ -404,8 +404,9 @@ extension HostUpgrade {
     /// its socket answers (a sign-in page, its node), or why it couldn't start.
     static func look(paths: HostPaths, box: BoxTailnet, relogin: Bool, kore: (HostPaths, Bool) -> BoxTailnet.Kore = { BoxTailnet.read($0, relogin: $1) }) -> Tailscale {
         let (found, local) = box.installed()
-        let choice = box.forced ? .sidecar : TailnetChooser.choose(found)
-        if choice.startsSidecar { return .kore(kore(paths, relogin)) }
+        let choice = box.forced ? .sidecar : TailnetChooser.chooseBeside(found)
+        // Beside a stopped or signed-out Tailscale, Kore's own runs only with its helper here.
+        if choice == .sidecar || (choice == .beside && box.helper() != nil) { return .kore(kore(paths, relogin)) }
         guard let local else { return .notRunning }
         do {
             let status = try local.status()

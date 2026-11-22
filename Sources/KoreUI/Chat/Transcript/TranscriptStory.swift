@@ -85,6 +85,22 @@ package struct StoryTranscript {
     package func railHover(_ index: Int?) { store.storyRail?.hover(index) }
     /// The bright mark.
     package var railCurrent: Int? { store.storyRail?.current() }
+    /// The drawn ticks: each one's mark, and how far down the rail it is.
+    package var railTicks: [(index: Int, y: CGFloat)] { store.storyRail?.ticks() ?? [] }
+    /// The height the rail may fill.
+    package var railRoom: CGFloat { store.storyRail?.room() ?? 0 }
+    /// A click this far down the rail.
+    package func railClick(atY y: CGFloat) { store.storyRail?.click(y) }
+    /// A user message's place among the marks, while it's in memory.
+    package func railIndex(of entry: UUID) -> Int? {
+        store.messageMarks.firstIndex { mark in
+            switch mark.place {
+            case .built(let section): section == "s-\(entry.uuidString)"
+            case .held(let id): id == entry
+            case .earlier: false
+            }
+        }
+    }
 
     private func rowID(_ entry: UUID) -> String? {
         let id = entry.uuidString

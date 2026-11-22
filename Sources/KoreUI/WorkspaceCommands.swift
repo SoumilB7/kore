@@ -28,7 +28,7 @@ extension Workspace {
         case .reopenClosedTab: reopenClosedTab()
         case .newTab: newTab()
         case .newBoard: newBoard()
-        case .closeTab: requestClose(activeTab, window: isLast(activeTab))
+        case .closeTab: if selection.count > 1 { requestClose(selectedTabs) } else { requestClose(activeTab, window: isLast(activeTab)) }
         case .nextTab: selectAdjacent(1)
         case .previousTab: selectAdjacent(-1)
         case .moveTabRight: moveActive(by: 1)

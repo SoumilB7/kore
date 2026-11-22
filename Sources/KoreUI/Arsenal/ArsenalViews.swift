@@ -6,12 +6,14 @@ extension Theme {
         /// Tiers follow the mode ladder: deeper blue as a tier does more.
         static let watch = Blue.b200
         static let own = Blue.b400
+        /// A chat's CLI logo while it has Arsenal on, whatever the tier: which chats have it, at a glance.
+        static let mark = Blue.b300
 
         static func color(_ tier: ArsenalTier) -> Color {
             switch tier {
             case .watch: watch
             case .own: own
-            case .drive: Blue.b300
+            case .drive: mark
             case .device: Blue.b500
             case .full: Theme.warning
             }

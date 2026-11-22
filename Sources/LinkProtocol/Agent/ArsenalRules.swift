@@ -7,10 +7,12 @@ import Foundation
 package enum ArsenalRules {
     /// A box chat's call before its command runs: why not, in the agent's terms (as `kore mcp`
     /// says it on the Mac); nil when its tier covers the tool.
-    package static func refusal(tool name: String, tier: AgentTier, box: Bool) -> (code: AgentCode, text: String)? {
+    /// `folder`: a `chat.new` for another folder's window, which names Act device as the tier it needs.
+    package static func refusal(tool name: String, tier: AgentTier, box: Bool, folder: Bool = false) -> (code: AgentCode, text: String)? {
         guard tier != .off else { return (.denied, AgentTools.offLine(box: box)) }
         guard let tool = AgentTools.tool(name, box: box) else { return (.unknownCommand, "No such tool: \(name.prefix(64)).") }
         guard AgentCommand.allowed(tier).contains(where: { $0.name == tool.command }) else {
+            if folder, tool.command == AgentCommand.new.name { return (.tier, AgentTools.folderTierLine(has: tier.rawValue)) }
             return (.tier, AgentTools.tierLine(tool.command, has: tier.rawValue))
         }
         return nil

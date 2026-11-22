@@ -61,10 +61,17 @@ package final class Workspace {
         didSet {
             bindTabs(previous: oldValue)
             if !tabGroups.isEmpty { tabGroups.normalize(order: tabs.map(\.id)) }
+            if !selection.isEmpty { keepSelectionTrue() }
         }
     }
     /// Browser-style groups of the tabs (TabGroups.swift).
     package internal(set) var tabGroups = TabGroups()
+    /// Tabs picked together (TabSelection.swift): ⇧-click a range, ⌘-click one at a time. Empty
+    /// while the active tab is the only one; else two or more, the active tab among them.
+    package internal(set) var selection: Set<UUID> = []
+    /// A close of many tabs in progress: each one remembered closed is part of it, so ⇧⌘T
+    /// brings them all back.
+    @ObservationIgnored var closingBatch: UUID?
     /// The local link's mark while a companion is linked; nil otherwise.
     package var linkMark: LinkMark?
     /// A window whose chats live on a box (`BoxBinding`); nil for a folder on this Mac.
@@ -82,6 +89,8 @@ package final class Workspace {
             if window !== oldValue, LinkTaps.on { LinkTaps.layout?() }
             guard let window, window !== oldValue else { return }
             terminals.window = window
+            // Opened quietly (an agent's `--silent`): behind, the window that was key stays key.
+            if Self.quietOpens.remove(windowKey) != nil { ArsenalWindows.lower(window) }
             if let closer { NotificationCenter.default.removeObserver(closer) }
             closer = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) {
                 [weak self] _ in MainActor.assumeIsolated { self?.windowClosed() }
@@ -104,6 +113,12 @@ package final class Workspace {
         pendingRestores[key] = snapshot
         return true
     }
+
+    /// Windows asked to open quietly, by `windowKey`: behind, not key, once they're on screen.
+    static var quietOpens: Set<String> = []
+
+    /// Its key among the open workspaces: a box's, or this Mac's folder path.
+    var windowKey: String { box?.key ?? folder.standardizedFileURL.path }
 
     /// The folder's workspace while its window is open, else a new one with its saved tabs.
     static func forWindow(_ folder: URL, restore: Bool) -> Workspace {
@@ -163,6 +178,7 @@ package final class Workspace {
             // the newly mounted page after layout.
             PinchZoom.selectTab(in: window, id: activeID, openTabs: tabs.map(\.id))
             if closing != nil { closing = nil }
+            if !selection.isEmpty { selection = [] }
             markShown()
         }
     }
@@ -188,7 +204,7 @@ package final class Workspace {
     private(set) var loaded = false
     private var refreshing: Task<Void, Never>?
     /// A running chat's tab asking before its close ends the turn (`requestClose`).
-    private(set) var closing: CloseAsk?
+    var closing: CloseAsk?
     /// The explorer floats over the content (a narrow window), so Esc closes it.
     @ObservationIgnored var explorerFloats = false
     /// The explorer's files; made when the explorer first opens or a file first shows.
@@ -350,6 +366,7 @@ package final class Workspace {
     package var activeTab: ChatTab { tabs.first { $0.id == activeID } ?? tabs[0] }
 
     func select(_ tab: ChatTab) {
+        if !selection.isEmpty { selection = [] }
         // A tab of a folded group, picked from elsewhere (⌘P, History, the »N list): the group opens.
         if tab.id != activeID, let group = tabGroups.group(of: tab.id), group.folded {
             tabGroups.update(group.id) { $0.folded = false }
@@ -378,12 +395,27 @@ package final class Workspace {
     /// Starts a chat of the provider with that id ("claude", "codex") in the active tab, or a new
     /// tab when the active one has a chat. False for an unknown id.
     package func start(provider id: String, model: String? = nil) -> Bool {
-        guard let provider = Registry.provider(id) else { return false }
-        if !activeTab.isEmpty { newTab() }
-        start(provider, in: activeTab)
+        start(provider: id, model: model, select: true) != nil
+    }
+
+    /// `start`, and the chat; with `select` false, a new tab at the end that leaves the tab in
+    /// front where it is (a window's one empty tab takes it, as it shows nothing else).
+    package func start(provider id: String, model: String?, select: Bool) -> Chat? {
+        guard let provider = Registry.provider(id) else { return nil }
+        let tab: ChatTab
+        if activeTab.isEmpty {
+            tab = activeTab
+        } else if select {
+            newTab()
+            tab = activeTab
+        } else {
+            tab = ChatTab()
+            tabs.append(tab)
+        }
+        start(provider, in: tab)
         // Before its view appears and starts the CLI: it launches with this model.
-        if let model { activeTab.chat?.launchModel = model }
-        return true
+        if let model { tab.chat?.launchModel = model }
+        return tab.chat
     }
 
     /// A new chat of the provider in a tab of its own at the end, from outside the window (the
@@ -399,19 +431,33 @@ package final class Workspace {
         return chat
     }
 
-    /// A box's chat back in a tab, at `index` (where it was), selected.
-    private func place(_ chat: Chat, at index: Int) {
+    /// A box's chat back in a tab, at `index` (where it was), selected unless `quiet`.
+    private func place(_ chat: Chat, at index: Int, quiet: Bool = false) {
         // A chat a tab shows already (History's open row), or a box chat its window adopted
         // already (the box listed it before this answer came).
         if let shown = tab(showing: chat) ?? (chat.services as? BoxChatServices)?.chatId.flatMap({ boxTab($0) }) {
-            select(shown)
+            if !quiet { select(shown) }
             return
         }
         let tab = ChatTab()
         tab.chat = chat
-        if tabs.count == 1, tabs[0].isEmpty { tabs.removeAll() }
+        let lone = tabs.count == 1 && tabs[0].isEmpty
+        if lone { tabs.removeAll() }
         tabs.insert(tab, at: min(max(index, 0), tabs.count))
-        activeID = tab.id
+        if !quiet || lone { activeID = tab.id }
+    }
+
+    /// A past chat of this Mac's in a tab of its own at the end, the tab in front left there
+    /// (`kore open --silent`); its tab when it's open already.
+    func openQuietly(_ session: SessionSummary) {
+        if tab(for: session.id, provider: Registry.provider(for: session.agent).id) != nil { return }
+        if activeTab.isEmpty {
+            activeTab.chat = chat(session)
+            return
+        }
+        let tab = ChatTab()
+        tab.chat = chat(session)
+        tabs.append(tab)
     }
 
     /// Shows a chat: its tab if already open, else the empty active tab or a new one.
@@ -443,19 +489,19 @@ package final class Workspace {
     /// A box window's past chat in a tab, as History opens it: its tab in front when it's shown
     /// (`opened` false), else a closed chat back on the box, or a past session its CLI keeps, as a
     /// box chat (1.9). Nil when the box didn't open it (or this isn't a box's window).
-    func openBoxSession(_ session: SessionSummary) async -> (chat: Chat, opened: Bool)? {
+    func openBoxSession(_ session: SessionSummary, quiet: Bool = false) async -> (chat: Chat, opened: Bool)? {
         guard let box else { return nil }
         if let shown = box.shownChat(session.id) {
-            if let tab = tab(showing: shown) { select(tab) }
+            if !quiet, let tab = tab(showing: shown) { select(tab) }
             return (shown, false)
         }
         guard let chat = await box.openSession(session) else { return nil }
         // The box answered with a chat a tab shows already (the session it holds): that tab.
         if let tab = tab(showing: chat) {
-            select(tab)
+            if !quiet { select(tab) }
             return (chat, false)
         }
-        place(chat, at: tabs.count)
+        place(chat, at: tabs.count, quiet: quiet)
         chats.removeAll { $0.id == session.id }
         return (chat, true)
     }
@@ -644,7 +690,7 @@ package final class Workspace {
             rememberClosed(tab, at: index)
         } else if remember, let box, tab.agent == nil, let chat = tab.chat {
             // On a box: the box keeps the chat, and ⇧⌘T asks for it back.
-            box.rememberClosed(chat, at: index)
+            box.rememberClosed(chat, at: index, batch: closingBatch)
         }
         if tab.agent == nil, let chat = tab.chat {
             for agentTab in tabs where agentTab.chat === chat && agentTab.agent != nil { remove(agentTab) }
@@ -715,6 +761,8 @@ package final class Workspace {
         let tab: UUID
         let window: Bool
         let at: TimeInterval
+        /// Asked for a close of many tabs (`requestClose(_:)`): Stop closes them all.
+        var many: [UUID]? = nil
     }
 
     enum CloseStep: Equatable { case ask, wait, close, closeWindow }
@@ -754,6 +802,11 @@ package final class Workspace {
     /// question's Cancel is where the × was, Stop isn't.)
     func confirmClose() {
         guard let closing, let tab = tabs.first(where: { $0.id == closing.tab }) else { return }
+        if let many = closing.many {
+            self.closing = nil
+            close(tabs.filter { many.contains($0.id) })
+            return
+        }
         self.closing = CloseAsk(tab: closing.tab, window: closing.window, at: -.infinity)
         requestClose(tab, window: closing.window)
     }
@@ -1317,6 +1370,9 @@ package final class Workspace {
         }
     }
 
+    /// A history row's chat while a tab has it open: its logo shows the chat's Arsenal.
+    func openChat(_ session: SessionSummary) -> Chat? { tab(for: session.id, provider: Registry.provider(for: session.agent).id)?.chat }
+
     private func chat(_ session: SessionSummary) -> Chat {
         let chat = Self.chat(session, provider: Registry.provider(for: session.agent), in: folder)
         if let draft = drafts[Self.draftKey(chat.provider.id, session.id)] {
@@ -1355,6 +1411,8 @@ package final class Workspace {
             var index: Int
             var agent: String? = nil
             var parent: UUID? = nil
+            /// Closed with others at once: ⇧⌘T reopens the whole batch.
+            var batch: UUID? = nil
         }
 
         var tabs: [Tab]
@@ -1493,7 +1551,7 @@ package final class Workspace {
             value.draft = chat.composerDraft
         }
         let parent = tab.agent == nil ? nil : tabs.first { $0.chat === tab.chat && $0.agent == nil }?.id
-        let entry = Saved.Closed(tab: value, index: index, agent: tab.agent, parent: parent)
+        let entry = Saved.Closed(tab: value, index: index, agent: tab.agent, parent: parent, batch: closingBatch)
         closedTabs.append(entry)
         if let chat = tab.chat, tab.agent == nil {
             retainedAttachments[entry.id] = chat.attachments
@@ -1511,44 +1569,56 @@ package final class Workspace {
         }
     }
 
-    /// Reopens the last closed tab at its old position without retaining its previous CLI or views.
+    /// Reopens the last closed tab at its old position without retaining its previous CLI or views;
+    /// tabs closed together come back together, each where it was.
     func reopenClosedTab() {
         if let box {
             Task {
-                guard let (chat, index) = await box.reopenLast() else { return }
-                place(chat, at: index)
+                for (chat, index) in await box.reopenLast() { place(chat, at: index) }
             }
             return
         }
         while let entry = closedTabs.popLast() {
-            let attachments = retainedAttachments.removeValue(forKey: entry.id) ?? []
-            let tab: ChatTab
-            if let agent = entry.agent {
-                guard let parent = tabs.first(where: { $0.agent == nil && $0.id == entry.parent }), let chat = parent.chat else { continue }
-                if let existing = tabs.first(where: { $0.chat === chat && $0.agent == agent }) { select(existing); save(); return }
-                tab = ChatTab()
-                tab.agent = agent
-                tab.chat = chat
-            } else {
-                if let file = entry.tab.file, let existing = tabs.first(where: { $0.file?.path == realPath(file) }) {
-                    select(existing); save(); return
+            guard reopen(entry) else { continue }
+            if let batch = entry.batch {
+                while let next = closedTabs.last, next.batch == batch {
+                    closedTabs.removeLast()
+                    _ = reopen(next)
                 }
-                if let provider = entry.tab.provider, let id = entry.tab.session,
-                    let existing = self.tab(for: id, provider: provider) { select(existing); save(); return }
-                var value = entry.tab
-                if let provider = value.provider, let id = value.session,
-                    let latest = drafts[Self.draftKey(provider, id)] { value.draft = latest }
-                tab = Self.tab(value, in: folder)
-                if let draft = value.draft { tab.chat?.restoreComposerDraft(draft, keeping: attachments) }
             }
-            if tabs.count == 1, tabs[0].isEmpty { tabs.removeAll() }
-            tabs.insert(tab, at: min(max(entry.index, 0), tabs.count))
-            activeID = tab.id
-            if tab.file != nil { _ = filesStore() }
-            save()
-            return
+            break
         }
         save()
+    }
+
+    /// One closed tab back, or shown if it's open already; false when it can't come back (an
+    /// agent whose chat is gone).
+    private func reopen(_ entry: Saved.Closed) -> Bool {
+        let attachments = retainedAttachments.removeValue(forKey: entry.id) ?? []
+        let tab: ChatTab
+        if let agent = entry.agent {
+            guard let parent = tabs.first(where: { $0.agent == nil && $0.id == entry.parent }), let chat = parent.chat else { return false }
+            if let existing = tabs.first(where: { $0.chat === chat && $0.agent == agent }) { select(existing); return true }
+            tab = ChatTab()
+            tab.agent = agent
+            tab.chat = chat
+        } else {
+            if let file = entry.tab.file, let existing = tabs.first(where: { $0.file?.path == realPath(file) }) {
+                select(existing); return true
+            }
+            if let provider = entry.tab.provider, let id = entry.tab.session,
+                let existing = self.tab(for: id, provider: provider) { select(existing); return true }
+            var value = entry.tab
+            if let provider = value.provider, let id = value.session,
+                let latest = drafts[Self.draftKey(provider, id)] { value.draft = latest }
+            tab = Self.tab(value, in: folder)
+            if let draft = value.draft { tab.chat?.restoreComposerDraft(draft, keeping: attachments) }
+        }
+        if tabs.count == 1, tabs[0].isEmpty { tabs.removeAll() }
+        tabs.insert(tab, at: min(max(entry.index, 0), tabs.count))
+        activeID = tab.id
+        if tab.file != nil { _ = filesStore() }
+        return true
     }
 
     private func discardRecovery(provider: String, session: String) {

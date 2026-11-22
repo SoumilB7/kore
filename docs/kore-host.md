@@ -410,6 +410,13 @@ limits are the Mac's, and only the Mac decides each call.
 - Each tool call goes to the daemon on `agent.sock` with the chat's id and a secret the daemon gave
   that CLI alone, then on to the Mac over the link. kore-host decides nothing.
 - New chats open on the same box and folder; `place: "mac"` opens one in a window on the Mac.
+- `folder` (`kore new --folder F`, Act device) opens a new chat in another folder: one this box
+  serves opens here, as the Mac would; any other goes to the Mac, which opens that folder's window
+  if none is open (an existing folder; a box's as `box:path`, only on a box Kore has and is
+  connected to). Below Act device: "A chat in another folder needs Arsenal's Act device tier".
+- `silent` (`--silent` on `kore new`, `kore open`, `kore send`) leaves the tab in front where it
+  is: the new or opened tab isn't selected, its window isn't brought forward (a new one opens
+  behind) and Kore isn't activated. The chat decides from what the user asked.
 - `kore_send` (`kore send`) to a chat that isn't open opens it from the folder's History first,
   as `kore_open_chat` does, then sends; the Mac opens it, on the box.
 - With no Mac connected, a call says "Kore isn't connected to <box> right now".

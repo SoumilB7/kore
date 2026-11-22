@@ -58,6 +58,10 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case card
         /// A tab's title: the room its name gets in the strip.
         case title
+        /// A tab picked with others (⇧ or ⌘-click): its quiet highlight.
+        case selected
+        /// A chat's logo in Arsenal's colour: it has Arsenal on.
+        case arsenal
     }
 }
 

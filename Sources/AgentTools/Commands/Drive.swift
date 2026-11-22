@@ -5,10 +5,10 @@ enum Drive {
     typealias Object = AgentTools.Object
 
     static let usage = [
-        "new": "[--claude|--codex] [--model M] [--mode X] [--place box|mac] [\"message\"]", "send": "<chat> \"message\" [--folder F]", "stop": "<chat>", "tab": "<chat>",
+        "new": "[--claude|--codex] [--model M] [--mode X] [--place box|mac] [--folder F] [--silent] [\"message\"]", "send": "<chat> \"message\" [--folder F] [--silent]", "stop": "<chat>", "tab": "<chat>",
         "fork": "<chat> [--at -N|<message>] [--claude|--codex] [--model M] [\"message\"]", "wait": "<chat> | --ask <id> [--timeout s]",
         "ask": "<short id> \"question\"", "reply": "<ask id> \"answer\" [file]", "fetch": "<device:path | path>",
-        "answer": "<chat> <card> <answer>... | <chat> <card> --deny | <chat> <card> --allow", "open": "<session> [--folder F]", "close": "<short id>",
+        "answer": "<chat> <card> <answer>... | <chat> <card> --deny | <chat> <card> --allow", "open": "<session> [--folder F] [--silent]", "close": "<short id>",
     ]
 
     static func fits(_ name: String, _ o: Reads.Options) -> Bool {
@@ -36,6 +36,8 @@ enum Drive {
             if let model = o.model { args["model"] = model }
             if let mode = o.mode { args["mode"] = mode }
             if let place = o.place { args["place"] = place }
+            if let folder = o.folder { args["folder"] = folder }
+            if o.silent { args["silent"] = true }
             if let text = p.first { args["text"] = text }
             data = try client.run("chat.new", args)
         case "fork":
@@ -66,6 +68,7 @@ enum Drive {
         case "send":
             var args: Object = ["chat": p[0], "text": p[1]]
             if let folder = o.folder { args["folder"] = folder }
+            if o.silent { args["silent"] = true }
             // A chat that isn't open is woken first: its CLI starts before it has the message.
             client.timeout(AgentTools.answerWait("chat.send"))
             data = try client.run("chat.send", args)
@@ -89,6 +92,7 @@ enum Drive {
         case "open":
             var args: Object = ["session": p[0]]
             if let folder = o.folder { args["folder"] = folder }
+            if o.silent { args["silent"] = true }
             client.timeout(AgentTools.answerWait("chat.open"))
             data = try client.run("chat.open", args)
         default:

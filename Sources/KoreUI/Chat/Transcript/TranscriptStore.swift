@@ -504,7 +504,10 @@ package final class TranscriptStore {
     var pendingMessage: (query: String, until: Date)?
 
     /// What a storyline presses on the scroller, once it's on screen.
-    @ObservationIgnored package var storyRail: (jump: (Int) -> Void, hover: (Int?) -> Void, current: () -> Int?)?
+    @ObservationIgnored package var storyRail: (
+        jump: (Int) -> Void, hover: (Int?) -> Void, current: () -> Int?, ticks: () -> [(index: Int, y: CGFloat)], room: () -> CGFloat,
+        click: (CGFloat) -> Void
+    )?
 
     /// Conversation before what the CLI's history shows (before a compaction): once the shown
     /// turns are all in view, the top row loads it.

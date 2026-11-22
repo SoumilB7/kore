@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import src
 
 /// A chat's mark while only its background commands run and the model is idle (bg-command-cue.html,
 /// option C): ">_" in its CLI's colour (the working spinner's: Claude's orange, Codex's white), its
@@ -11,10 +12,14 @@ struct BackgroundPrompt: View {
     let provider: Provider
     var needsYou = false
     var size: CGFloat = Size.spinner
+    /// The chat's Arsenal tier: on, ">_" takes Arsenal's colour, as the logo does.
+    var arsenal: ArsenalTier? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    var tint: Color { WorkingSpinner.tint(provider, arsenal: arsenal) }
+
     var body: some View {
-        PromptMarkView.Representable(reduceMotion: reduceMotion, tint: NSColor(WorkingSpinner.tint(provider)))
+        PromptMarkView.Representable(reduceMotion: reduceMotion, tint: NSColor(tint))
             .frame(width: size, height: size)
             .overlay(alignment: .topTrailing) {
                 if needsYou {

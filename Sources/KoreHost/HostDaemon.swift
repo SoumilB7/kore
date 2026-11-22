@@ -548,12 +548,12 @@ package final class HostDaemon {
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {
                     guard let self else {
-                        if case .kore(_, _, let stop) = pick { stop() }
+                        if case .kore(_, _, let stop, _) = pick { stop() }
                         return
                     }
                     self.choosingTailnet = false
                     guard mine == self.tailnetChoices, self.config.netOn, let net = self.net, net.tailnet == nil else {
-                        if case .kore(_, _, let stop) = pick { DispatchQueue.global(qos: .utility).async { stop() } }
+                        if case .kore(_, _, let stop, _) = pick { DispatchQueue.global(qos: .utility).async { stop() } }
                         // Turned off and on again while it chose: chosen afresh.
                         if self.config.netOn, self.net?.tailnet == nil { self.startNet() }
                         return
@@ -572,16 +572,53 @@ package final class HostDaemon {
             net.join(tailnet, choice: choice)
             HostJournal.note("korenet on", ["tailnet": "tailscale", "choice": "\(choice)"])
             Self.tailnetChosen?("installed")
-        case .kore(let tailnet, let alive, let stop):
+        case .kore(let tailnet, let alive, let stop, let beside):
             koreTailnet = (alive, stop)
             net.join(tailnet, userspace: true)
-            HostJournal.note("korenet on", ["tailnet": "kore"])
+            HostJournal.note("korenet on", ["tailnet": "kore", "beside": beside == nil ? "no" : "tailscale"])
             Self.tailnetChosen?("kore")
+            if let beside, let box = boxTailnet { watchBeside(box, beside) }
         case .unavailable(let why):
             net.unavailable(why)
             HostJournal.note("korenet tailnet unavailable", ["reason": why])
             Self.tailnetChosen?("unavailable")
         }
+    }
+
+    /// Hears installed Tailscale come back up while Kore's own runs beside it: then the box moves
+    /// back to it (Kore's own stops).
+    private var besideWatch: TailscaleBesideWatch?
+    /// Its looks' spacing (tests: at once).
+    package var besideWait: @Sendable (Int) -> TimeInterval = TailscaleBesideWatch.wait
+
+    private func watchBeside(_ box: BoxTailnet, _ local: any Tailnet) {
+        besideWatch?.stop()
+        let watch = TailscaleBesideWatch(installed: box.installed, after: besideWait) { [weak self] in
+            DispatchQueue.main.async { MainActor.assumeIsolated { self?.chooseTailnetAgain("tailscale up again") } }
+        }
+        besideWatch = watch
+        watch.start(local)
+    }
+
+    /// Installed Tailscale went down (stopped, signed out) under KoreNet: Kore's own takes over
+    /// beside it, when it's here (`HostNet` says, on the change).
+    package func installedTailscaleWentDown() {
+        guard let box = boxTailnet, box.helper() != nil, !box.forced else { return }
+        chooseTailnetAgain("tailscale went down")
+    }
+
+    /// The box's tailnet chosen afresh with KoreNet on: the port and tailnet links go (Macs and
+    /// phones dial again, and take the box's node key after its proof), Kore's own stops, and
+    /// the choice is made again.
+    private func chooseTailnetAgain(_ why: String) {
+        guard config.netOn, let net, net.tailnet != nil else { return }
+        HostJournal.note("korenet choose again", ["why": why])
+        besideWatch?.stop()
+        besideWatch = nil
+        net.leave()
+        stopKoreTailnet()
+        for connection in connections where connection.route == .tailnet && connection.peer != nil { connection.end(.quit) }
+        startNet()
     }
 
     /// Kore's own tailnet ends (off the main thread: its stop is a round trip on its socket).
@@ -608,6 +645,8 @@ package final class HostDaemon {
             try? FileManager.default.removeItem(at: paths.netState)
             return
         }
+        besideWatch?.stop()
+        besideWatch = nil
         net.leave()
         stopKoreTailnet()
         for connection in connections where connection.route == .tailnet && connection.peer != nil { connection.end(.quit) }

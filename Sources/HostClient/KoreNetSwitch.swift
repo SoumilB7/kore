@@ -14,11 +14,13 @@ package enum NetState: Equatable, Sendable {
     case choosing
     /// Installed Tailscale, running: Kore adds no process.
     case installed
-    /// Installed Tailscale, stopped: SSH only.
+    /// Installed Tailscale, stopped, and Kore's own can't run beside it: SSH only.
     case stopped
-    /// Installed Tailscale, signed out: SSH only; the UI says "Sign in to Tailscale".
+    /// Installed Tailscale, signed out, and Kore's own can't run beside it: SSH only; the UI says
+    /// "Sign in to Tailscale".
     case signedOut
-    /// Kore's own `kore-tailnet` (no installed Tailscale, or its LocalAPI unreadable).
+    /// Kore's own `kore-tailnet`: no installed Tailscale (or its LocalAPI unreadable), or beside
+    /// an installed app that's quit or signed out.
     case sidecar
     /// Kore's own couldn't start (no helper, or it failed): SSH only.
     case unavailable(String)
@@ -46,13 +48,18 @@ package struct NetEnvironment: @unchecked Sendable {
     /// deleted, replaced by an update): KoreNet chooses again. Nil when there's no app to watch.
     /// The closure it gives back stops watching. One descriptor, no poll.
     package var watchApp: @Sendable (_ changed: @escaping @Sendable () -> Void) -> (@Sendable () -> Void)?
+    /// Calls `changed` each time installed Tailscale's app is launched or quits (the system's
+    /// own notices, no poll), so KoreNet chooses again. Nil when there's no app to watch. The
+    /// closure it gives back stops watching.
+    package var watchRunning: @Sendable (_ changed: @escaping @Sendable () -> Void) -> (@Sendable () -> Void)?
 
     package init(
         installed: @escaping @Sendable () -> (TailnetChooser.Installed, (any Tailnet)?),
         sidecar: @escaping @Sendable (Data) throws -> (tailnet: any Tailnet, stop: @Sendable () -> Void), secrets: any NetSecrets, defaults: UserDefaults,
         support: URL, upgradeDial: @escaping @Sendable (String, String, String) throws -> (fd: Int32, onClose: @Sendable () -> Void),
         macName: @escaping @Sendable () -> String,
-        watchApp: @escaping @Sendable (@escaping @Sendable () -> Void) -> (@Sendable () -> Void)? = { _ in nil }
+        watchApp: @escaping @Sendable (@escaping @Sendable () -> Void) -> (@Sendable () -> Void)? = { _ in nil },
+        watchRunning: @escaping @Sendable (@escaping @Sendable () -> Void) -> (@Sendable () -> Void)? = { _ in nil }
     ) {
         self.installed = installed
         self.sidecar = sidecar
@@ -62,6 +69,7 @@ package struct NetEnvironment: @unchecked Sendable {
         self.upgradeDial = upgradeDial
         self.macName = macName
         self.watchApp = watchApp
+        self.watchRunning = watchRunning
     }
 
     /// Why Kore's own tailnet can't start in a copy built without it (`Contents/Helpers` has no
@@ -101,7 +109,8 @@ package struct NetEnvironment: @unchecked Sendable {
                 return (mine, { if process.isRunning { process.terminate() } })
             },
             macName: { String(ProcessInfo.processInfo.hostName.split(separator: ".").first ?? "Mac") },
-            watchApp: { changed in AppWatch.start(LocalAPIDiscovery().appPath, changed: changed) })
+            watchApp: { changed in AppWatch.start(LocalAPIDiscovery().appPath, changed: changed) },
+            watchRunning: { changed in AppRunWatch.start(LocalAPIDiscovery().appPath, changed: changed) })
     }
 }
 
@@ -234,7 +243,7 @@ package final class KoreNetSwitch: NetRouter {
     private func choose(_ env: NetEnvironment, _ mine: Int) {
         Task.detached {
             let (installed, local) = env.installed()
-            let choice = TailnetChooser.choose(installed)
+            var choice = TailnetChooser.chooseBeside(installed)
             var sidecar: (tailnet: any Tailnet, stop: @Sendable () -> Void)?
             var problem: String?
             var resealed = false
@@ -247,14 +256,21 @@ package final class KoreNetSwitch: NetRouter {
                     problem = "\(error)"
                 }
             }
-            let (made, failure, signInAgain) = (sidecar, problem, resealed)
+            // Beside the app, Kore's own couldn't start (a copy built without it): SSH only, as
+            // before Kore's own ran beside it.
+            if choice == .beside, sidecar == nil {
+                HostLog.note("korenet", "own tailnet beside tailscale unavailable", problem ?? "")
+                choice = TailnetChooser.fallback(installed)
+                problem = nil
+            }
+            let (made, failure, signInAgain, chosen) = (sidecar, problem, resealed, choice)
             await MainActor.run {
                 guard self.generation == mine, self.env != nil else {
                     made?.stop()
                     return
                 }
                 if signInAgain { self.tailnetSignInAgain = true }
-                self.chose(choice, local: local, sidecar: made, problem: failure)
+                self.chose(chosen, local: local, sidecar: made, problem: failure)
             }
         }
     }
@@ -308,9 +324,14 @@ package final class KoreNetSwitch: NetRouter {
     }
 
     private func chose(_ choice: TailnetChooser.Choice, local: (any Tailnet)?, sidecar: (tailnet: any Tailnet, stop: @Sendable () -> Void)?, problem: String?) {
-        // Installed Tailscale chosen (running, stopped or signed out): its app leaving chooses
-        // again, so an uninstall hands over to Kore's own tailnet with no restart.
+        // Installed Tailscale there (running, quit or signed out): its app leaving chooses again,
+        // so an uninstall hands over to Kore's own tailnet with no restart; its launches and
+        // quits choose again too, so the Mac moves between the app's node and Kore's own.
+        self.chosen = choice
+        besideRetry = 0
         watchApp(choice == .sidecar ? nil : env)
+        watchRunning(choice == .sidecar ? nil : env)
+        watchBeside(local, beside: choice == .beside)
         switch choice {
         case .installed:
             tailnet = local
@@ -321,7 +342,7 @@ package final class KoreNetSwitch: NetRouter {
         case .signedOut:
             tailnet = local
             state = .signedOut
-        case .sidecar:
+        case .sidecar, .beside:
             if let sidecar {
                 tailnet = sidecar.tailnet
                 stopSidecar = sidecar.stop
@@ -363,14 +384,70 @@ package final class KoreNetSwitch: NetRouter {
         }
     }
 
-    /// The choice as the state shows it (`.choosing`, `.off`: none).
-    private var choice: TailnetChooser.Choice? {
-        switch state {
-        case .installed: .installed
-        case .stopped: .stopped
-        case .signedOut: .signedOut
-        case .sidecar, .unavailable: .sidecar
-        case .off, .choosing: nil
+    /// What was chosen last (Kore's own beside the app reads `.sidecar` in `state`).
+    @ObservationIgnored private var chosen: TailnetChooser.Choice?
+
+    // MARK: Kore's own beside a quit or signed-out app
+
+    @ObservationIgnored private var runWatch: (@Sendable () -> Void)?
+    /// The app's bus while Kore's own runs beside it: heard only for its node coming up again.
+    @ObservationIgnored private var besideBus: Task<Void, Never>?
+    @ObservationIgnored private var besideRetry = 0
+    @ObservationIgnored private var besideRetryCancel: (() -> Void)?
+    /// When the app's daemon isn't answering beside Kore's own (quit, or not up yet at login):
+    /// looked at again this many seconds apart, then only when the app is launched.
+    package static let besideRetrySteps: [TimeInterval] = [2, 5, 15, 60]
+
+    private func watchRunning(_ env: NetEnvironment?) {
+        runWatch?()
+        runWatch = nil
+        guard let env else { return }
+        let mine = generation
+        runWatch = env.watchRunning { [weak self] in
+            Task { @MainActor in
+                guard let self, self.generation == mine else { return }
+                self.besideRetry = 0
+                self.rechoose("tailscale app launched or quit")
+            }
+        }
+    }
+
+    /// Listens to the quit or signed-out app beside Kore's own: once its node runs signed in
+    /// again, the Mac moves back to it (and Kore's own stops). A daemon that isn't answering is
+    /// looked at again a few times (`besideRetrySteps`), then at the app's next launch.
+    private func watchBeside(_ local: (any Tailnet)?, beside: Bool) {
+        besideBus?.cancel()
+        besideBus = nil
+        besideRetryCancel?()
+        besideRetryCancel = nil
+        guard beside else { return }
+        let mine = generation
+        guard let local else { return lookAgainBeside(mine) }
+        let events = local.events()
+        besideBus = Task { [weak self] in
+            for await event in events {
+                guard let self, !Task.isCancelled, self.generation == mine else { return }
+                if case .state(let backend) = event, TailnetChooser.chooseBeside(.state(backend)) == .installed {
+                    self.rechoose("tailscale up again")
+                    return
+                }
+            }
+            guard let self, !Task.isCancelled, self.generation == mine else { return }
+            self.besideBus = nil
+            self.lookAgainBeside(mine)
+        }
+    }
+
+    /// The app's daemon isn't answering beside Kore's own: looked at again a few times, further
+    /// apart each time, then only at the app's next launch.
+    private func lookAgainBeside(_ mine: Int) {
+        guard chosen == .beside || chosen == .stopped || chosen == .signedOut, besideRetry < Self.besideRetrySteps.count else { return }
+        let seconds = Self.besideRetrySteps[besideRetry]
+        besideRetry += 1
+        besideRetryCancel = schedule(seconds) { [weak self] in
+            guard let self, self.generation == mine else { return }
+            self.besideRetryCancel = nil
+            self.rechoose("tailscale looked at again")
         }
     }
 
@@ -383,12 +460,17 @@ package final class KoreNetSwitch: NetRouter {
         guard on, let env, state != .choosing else { return }
         let mine = generation
         Task.detached {
-            let (installed, _) = env.installed()
-            let next = TailnetChooser.choose(installed)
+            let (installed, local) = env.installed()
+            let next = TailnetChooser.chooseBeside(installed)
             await MainActor.run {
                 guard self.generation == mine, self.env != nil else { return }
-                guard next != self.choice else {
+                guard !self.keeps(next) else {
+                    // Kore's own goes on running whether the app beside it is quit, signed out or
+                    // gone: the same node, no restart.
+                    if next.startsSidecar, self.chosen?.startsSidecar == true { self.chosen = next }
                     self.watchApp(next == .sidecar ? nil : env)
+                    self.watchRunning(next == .sidecar ? nil : env)
+                    self.watchBeside(local, beside: next == .beside)
                     self.settled?("choice kept")
                     return
                 }
@@ -411,8 +493,20 @@ package final class KoreNetSwitch: NetRouter {
         }
     }
 
+    /// Whether `next` keeps what runs now: the same choice; Kore's own running beside the app or
+    /// alone (it goes on); or SSH only because Kore's own can't run beside it (it still can't).
+    private func keeps(_ next: TailnetChooser.Choice) -> Bool {
+        guard let chosen else { return false }
+        if next == chosen { return true }
+        if next.startsSidecar, chosen.startsSidecar, state == .sidecar { return true }
+        return next == .beside && (chosen == .stopped || chosen == .signedOut)
+    }
+
     private func end() {
         watchApp(nil)
+        watchRunning(nil)
+        watchBeside(nil, beside: false)
+        chosen = nil
         generation += 1
         if global, HostConnection.net === self { HostConnection.net = nil }
         bus?.cancel()
@@ -561,13 +655,20 @@ package final class KoreNetSwitch: NetRouter {
     /// The installed Tailscale's backend now (the bus, or a read): KoreNet's state follows.
     private func follow(_ backend: BackendState) {
         guard state == .installed || state == .stopped || state == .signedOut else { return }
+        // The app's node went down (quit, signed out): Kore's own takes over beside it.
+        if state == .installed, TailnetChooser.chooseBeside(.state(backend)) == .beside { return rechoose("tailscale went down") }
         let next: NetState = switch TailnetChooser.choose(.state(backend)) {
         case .installed: .installed
         case .stopped: .stopped
-        case .signedOut, .sidecar: .signedOut
+        case .signedOut, .sidecar, .beside: .signedOut
         }
         guard next != state else { return }
         state = next
+        chosen = switch next {
+        case .installed: .installed
+        case .signedOut: .signedOut
+        default: .stopped
+        }
         if next.reaches { for connection in connections() { connection.peerOnline() } }
     }
 

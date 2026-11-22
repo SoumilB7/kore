@@ -63,8 +63,8 @@ struct TailscaleUninstallTests {
             watchApp: { now.watch($0) })
     }
 
-    /// The owner's test: Tailscale quit (stopped: no second node), then its app uninstalled →
-    /// Kore's own tailnet starts by itself, the bus it held moves to it, the app's watch goes.
+    /// The owner's test: Tailscale quit → Kore's own tailnet starts beside it, the bus it held
+    /// moves to it; then the app uninstalled → the same node goes on, the app's watch goes.
     @Test func quitThenUninstalledHandsOverToKoresOwn() async throws {
         let root = netScratch()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -78,14 +78,16 @@ struct TailscaleUninstallTests {
         #expect(net.state == .installed && now.watched)
         net.hold("devices", true)
         #expect(now.local.buses == 1)
-        // Quit: the bus says stopped. Still the owner's node: nothing of Kore's starts.
+        // Quit: the bus says stopped. Kore's own starts beside it.
+        now.set(.state(.stopped))
         now.local.push(.state(.stopped))
-        await Observed.until { net.state == .stopped }
-        #expect(calls.held.withLock { $0.sidecars } == 0)
-        // Uninstalled: the app's watch fires; the leftovers read absent.
+        await settled.next { $0 == "chose" }
+        #expect(net.state == .sidecar && net.rechosen == 1)
+        #expect(calls.held.withLock { $0.sidecars } == 1)
+        // Uninstalled: the app's watch fires; the leftovers read absent. Kore's own goes on.
         now.set(.missing(.absent))
         now.appMoved()
-        await settled.next { $0 == "chose" }
+        await settled.next { $0 == "choice kept" }
         #expect(net.state == .sidecar && net.rechosen == 1)
         #expect(calls.held.withLock { $0.sidecars } == 1)
         #expect(!now.watched && now.unwatches >= 1)
@@ -129,10 +131,11 @@ struct TailscaleUninstallTests {
         let (net, settled) = netSwitch(defaults, root: root) { env(now, sidecar: FakeTailnet(.running), root: root, defaults: defaults, calls: calls) }
         net.set(true)
         await settled.next { $0 == "chose" }
-        #expect(net.state == .signedOut && now.watched)
+        // Signed out: Kore's own beside it, the app still watched.
+        #expect(net.state == .sidecar && now.watched)
         now.set(.missing(.absent))
         now.appMoved()
-        await settled.next { $0 == "chose" }
+        await settled.next { $0 == "choice kept" }
         #expect(net.state == .sidecar && !now.watched && now.watches == 1)
         net.set(false)
     }

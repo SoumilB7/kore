@@ -399,7 +399,9 @@ package final class AgentChannel {
             guard tier != .off else { return .stopped }
             return AgentCommand.refusal(name, tier: tier, among: Self.commands)
         }()
-        if let code {
+        if code == .tier, name == AgentCommand.new.name, args.folder != nil {
+            fail(client, id, .tier, AgentTools.folderTierLine(has: tier(client).rawValue))
+        } else if let code {
             fail(client, id, code, Self.message(code))
         } else {
             target = run(id, name, args, client)
@@ -735,7 +737,7 @@ package final class AgentChannel {
                     client, id, .notOwn,
                     "\(title) is in History in \(place), another folder: opened from here its Arsenal is off, so this chat couldn't reach it. Nothing was opened or sent.")
             }
-            self.wakeAndSend(summary, in: window, text: text, client, id)
+            self.wakeAndSend(summary, in: window, text: text, quiet: args.silent == true, client, id)
         }
         wakeLookups[lookups] = (token, lookup)
         return nil
@@ -745,7 +747,7 @@ package final class AgentChannel {
     private var wakeLookups: [ObjectIdentifier: (token: UUID, task: Task<Void, Never>)] = [:]
 
     /// Opens the past chat (once, however many sends wait for it) and sends it this caller's message.
-    private func wakeAndSend(_ summary: SessionSummary, in window: Workspace, text: String, _ client: Client, _ id: String) {
+    private func wakeAndSend(_ summary: SessionSummary, in window: Workspace, text: String, quiet: Bool, _ client: Client, _ id: String) {
         let key = WakeKey(window: ObjectIdentifier(window), session: summary.id)
         let first = waking[key] == nil
         guard let own = callerChat(client) else { return fail(client, id, .noWindow, "This chat closed.") }
@@ -761,7 +763,7 @@ package final class AgentChannel {
         }
         guard first else { return }
         Task { @MainActor [weak self] in
-            let result = await window.arsenalOpen(session: summary.id, under: own)
+            let result = await window.arsenalOpen(session: summary.id, under: own, quiet: quiet)
             guard let self else { return }
             // Every send that waited, in the order they came: each message is in the chat before the next.
             for send in self.waking.removeValue(forKey: key) ?? [] { send(result) }
@@ -1085,12 +1087,14 @@ package final class AgentChannel {
     }
 
     /// A new chat in the caller's window, in front, at or below its mode; its first message, if given.
-    /// A chat on a box opens it on that box, or with `place` `mac` in a window on this Mac.
+    /// A chat on a box opens it on that box, or with `place` `mac` in a window on this Mac; with
+    /// `folder` (Act device), in that folder's window. `silent`: the tab in front stays.
     private func newChat(_ args: AgentArgs, _ client: Client, _ id: String) -> String? {
         guard let own = client.chat.flatMap({ AgentReads.chatsByID()[$0] }), let home = AgentReads.workspace(of: own) else {
             fail(client, id, .noWindow, "Only a chat in Kore opens chats, in its own window.")
             return nil
         }
+        if let folder = args.folder { return newChat(in: folder, args, from: home, client, id) }
         let window: Workspace
         switch args.place {
         case nil, "box": window = home
@@ -1109,23 +1113,80 @@ package final class AgentChannel {
             fail(client, id, .invalid, "A message can be \(Self.textMax / 1024) KiB at most.")
             return nil
         }
-        switch window.arsenalNewChat(provider: args.provider ?? own.provider.id, model: args.model, mode: args.mode, under: own) {
+        switch window.arsenalNewChat(provider: args.provider ?? own.provider.id, model: args.model, mode: args.mode, under: own, quiet: args.silent == true) {
         case .failure(let refusal):
             fail(client, id, .refused, refusal.message)
             return nil
         case .success(let chat):
-            spentNew(chat, client)
-            var message = "Opened a \(chat.provider.name) chat."
-            if let text = args.text, !text.isEmpty {
-                switch chat.arsenalSend(text, from: callerName(client)) {
-                case .success: message += " Sent."
-                case .failure(let refusal): message += " " + refusal.message
-                }
-            }
-            let chatId = chat.id.uuidString
-            send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chatId, message: message, short: AgentReads.short(chatId))))
-            return chatId
+            return made(chat, "Opened a \(chat.provider.name) chat.", args, client, id)
         }
+    }
+
+    /// A new chat's answer: counted, its first message sent, its short id back.
+    private func made(_ chat: Chat, _ lead: String, _ args: AgentArgs, _ client: Client, _ id: String) -> String {
+        spentNew(chat, client)
+        var message = lead
+        if let text = args.text, !text.isEmpty {
+            switch chat.arsenalSend(text, from: callerName(client)) {
+            case .success: message += " Sent."
+            case .failure(let refusal): message += " " + refusal.message
+            }
+        }
+        let chatId = chat.id.uuidString
+        send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chatId, message: message, short: AgentReads.short(chatId))))
+        return chatId
+    }
+
+    /// The lowest tier that opens a chat in another folder's window (the owner, 2026-11-22).
+    static let folderTier = AgentTier.device
+
+    /// `chat.new` with `folder`: that folder's window (a path on the caller's device, or
+    /// `device:path` on a connected box Kore has), opened when none is, quietly with `silent`;
+    /// the chat as `arsenalNewChat` makes one, under the same limits.
+    private func newChat(in folder: String, _ args: AgentArgs, from home: Workspace, _ client: Client, _ id: String) -> String? {
+        let has = tier(client)
+        guard has >= Self.folderTier else {
+            fail(client, id, .tier, AgentTools.folderTierLine(has: has.rawValue))
+            return nil
+        }
+        guard args.place == nil else {
+            fail(client, id, .invalid, "Give folder or place, not both.")
+            return nil
+        }
+        guard !folder.trimmingCharacters(in: .whitespaces).isEmpty, folder.utf8.count <= 4096 else {
+            fail(client, id, .invalid, "Name the folder: a path, or device:path.")
+            return nil
+        }
+        guard roomForNew(client, id) else { return nil }
+        if let text = args.text, text.utf8.count > Self.textMax {
+            fail(client, id, .invalid, "A message can be \(Self.textMax / 1024) KiB at most.")
+            return nil
+        }
+        let quiet = args.silent == true
+        Task { @MainActor [weak self, weak client] in
+            let found = await ArsenalWindows.window(folder, from: home, quiet: quiet)
+            // Its access and the limits again, after the wait for the window.
+            guard let self, let client, AgentChannel.current === self, self.tier(client) >= Self.folderTier, let own = self.callerChat(client) else { return }
+            let window: Workspace
+            let opened: Bool
+            switch found {
+            case .failure(let refusal): return self.fail(client, id, .noWindow, refusal.message)
+            case .success(let found):
+                window = found.window
+                opened = found.opened
+            }
+            guard self.roomForNew(client, id) else { return }
+            switch window.arsenalNewChat(provider: args.provider ?? own.provider.id, model: args.model, mode: args.mode, under: own, quiet: quiet) {
+            case .failure(let refusal):
+                self.fail(client, id, .refused, refusal.message)
+            case .success(let chat):
+                // A window open already comes to the front, as its chat does; a quiet one stays.
+                if !quiet, !opened, window !== home { ArsenalWindows.front(window) }
+                _ = self.made(chat, "Opened a \(chat.provider.name) chat in \(window.folder.lastPathComponent).", args, client, id)
+            }
+        }
+        // Its log line names no chat: the one it opens isn't known yet.
+        return nil
     }
 
     /// Room for a chat it makes: fewer than `madeOpen` of them open, and `newPerHour` not spent.
@@ -1362,7 +1423,7 @@ package final class AgentChannel {
         guard roomForNew(client, id) else { return nil }
         // A box window's opens over the link: answered when the box has it.
         Task { @MainActor [weak self, weak client] in
-            let result = await window.arsenalOpen(session: session, under: own)
+            let result = await window.arsenalOpen(session: session, under: own, quiet: args.silent == true)
             guard let self, let client, AgentChannel.current === self else { return }
             switch result {
             case .failure(let refusal):
@@ -1370,7 +1431,7 @@ package final class AgentChannel {
             case .success(let (chat, opened)):
                 if opened { self.spentNew(chat, client) }
                 let chatId = chat.id.uuidString
-                let message = opened ? "Opened “\(AgentReads.title(chat.title))”." : "It was open: in front."
+                let message = opened ? "Opened “\(AgentReads.title(chat.title))”." : args.silent == true ? "It was open." : "It was open: in front."
                 self.send(client, AgentResult(id: id, ok: true, data: AgentDone(chat: chatId, message: message, short: AgentReads.short(chatId))))
             }
         }

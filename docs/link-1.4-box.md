@@ -301,7 +301,9 @@ and never sees the new messages.
 
 - `kore-host mcp` lists the same tools and schemas as the Mac's `kore mcp`, and `kore_new_chat`
   takes `place`: `box` (the default: the same box and folder) or `mac` (the Mac window of the
-  folder this one syncs with, else the Mac's front window).
+  folder this one syncs with, else the Mac's front window). With `folder` (Act device) the box
+  answers itself for a folder it serves, and passes any other to the Mac; `silent` leaves the tab
+  in front where it is.
 - Its environment holds `KORE_AGENT_CHAT` (the box chat's id), `KORE_AGENT_PASS` (a secret made
   for that CLI's run) and `KORE_AGENT_SOCKET` (`$XDG_RUNTIME_DIR/kore-host/agent.sock`, 0600 in
   the runtime folder). Each call is one connection there: one frame

@@ -20,6 +20,17 @@ package enum AgentTools {
     /// Own's tools: this chat, or with Drive another chat it reaches.
     static let ownChatArg = ("chat", "string", "Default: this chat. With Act unlimited, another chat at or below this chat's mode (title, short id).")
 
+    /// A tab made or opened without coming to the front (`--silent`).
+    static let silentArg = (
+        "silent", "boolean",
+        "true when the user won't watch this tab now: the tab isn't selected, its window isn't brought forward, Kore isn't activated. " + silentGuide
+    )
+
+    /// When a chat opens tabs silently: its own call, from what the user asked (the owner, 2026-11-23).
+    package static let silentGuide =
+        "Silent for several chats, background workers, fan-out, or tabs the user didn't ask to look at; in front for one chat the user wants to see or read. Unclear: one chat in front, several silent."
+
+
     /// A chat on a box opens its new chats on that box, in its folder; `place` opens one on the Mac.
     static let placeArg = ("place", "string", "box (default: this chat's box and folder) or mac (a Kore window on the Mac).")
 
@@ -81,11 +92,13 @@ package enum AgentTools {
         Tool(name: "kore_compact", command: "chat.compact", description: "Compact this chat once the current turn ends, or another it reaches with Act unlimited (Act limited).", args: [ownChatArg], required: []),
         Tool(
             name: "kore_new_chat", command: "chat.new",
-            description: "Open a new chat in a new Kore tab, in front, in this window, and send it a first message if given. Use when the user asks for another tab, chat or agent. It starts at this chat's mode or lower, with its own Arsenal off. Returns its short id for kore_send (Act unlimited).",
+            description: "Open a new chat in a new Kore tab, in front, in this window (or another folder's with folder), and send it a first message if given. Use when the user asks for another tab, chat or agent. It starts at this chat's mode or lower, with its own Arsenal off. Returns its short id for kore_send. silent: true when the user won't watch it now (Act unlimited; folder: Act device).",
             args: [
                 ("provider", "string", "claude or codex (default: this chat's)."),
                 ("model", "string", "A model the CLI lists, by id or name, written loosely (\"gpt 6 sol\" is gpt-6-sol). Default: the CLI's."),
                 ("mode", "string", "A mode at or below this chat's (default: the CLI's usual one, capped)."), ("text", "string", "The first message."),
+                ("folder", "string", "Another folder's window, opened if none is: an existing folder on this chat's device (~ and links resolved), or device:path on a connected box Kore has (Act device)."),
+                silentArg,
             ], required: []),
         Tool(
             name: "kore_fork", command: "chat.fork",
@@ -110,12 +123,13 @@ package enum AgentTools {
                 ("chat", "string", "The chat: its title (any part only it has), its short id, its CLI session id (or the start of it), or a past chat's id from kore_history."),
                 ("text", "string", "The message. A \"/\" command that chat's CLI has goes too, except sign-in, account, permission and settings ones (mode and model: their own tools); never a \"!\" line."),
                 ("folder", "string", "Look only in this folder's window, as kore_history names one (default: open chats anywhere, then this chat's window's History). Past chats wake only in this chat's own folder."),
+                silentArg,
             ], required: ["chat", "text"]),
         Tool(name: "kore_stop", command: "chat.stop", description: "Stop another chat's turn (Act unlimited).", args: [chatArg], required: ["chat"]),
         Tool(
             name: "kore_open_chat", command: "chat.open",
-            description: "Open a past chat (kore_history lists them) in a tab, in front, as History opens it; its tab if it's open already (Act unlimited).",
-            args: [("session", "string", "Its session id, or the start of it."), ("folder", "string", "Its folder (default: this chat's window).")],
+            description: "Open a past chat (kore_history lists them) in a tab, in front, as History opens it; its tab if it's open already. silent: true when the user won't watch it now (Act unlimited).",
+            args: [("session", "string", "Its session id, or the start of it."), ("folder", "string", "Its folder (default: this chat's window)."), silentArg],
             required: ["session"]),
         Tool(
             name: "kore_close", command: "chat.close",
@@ -149,7 +163,8 @@ package enum AgentTools {
     package static let serverInstructions = """
         Kore's own controls, for when the user asks for something in Kore: open a tab with a new claude or codex \
         chat (kore_new_chat), message another chat (kore_send), list and read chats, change this chat's model. \
-        They act only while the user has Arsenal on for this chat; a tool says so when it's off.
+        They act only while the user has Arsenal on for this chat; a tool says so when it's off. \
+        kore_new_chat, kore_open_chat and kore_send take silent: \(silentGuide)
         """
 
     /// The tier each command needs, lowest first: wire ids (`tierName` names them).
@@ -224,6 +239,11 @@ package enum AgentTools {
     /// A command above the chat's tier: which one it needs.
     package static func tierLine(_ command: String, has tier: String) -> String {
         "This needs Arsenal's \(tierName(tierNeeded(command))) tier; this chat has \(tierName(tier)). " + howLine
+    }
+
+    /// `chat.new` with `folder` below Act device (the owner, 2026-11-22), on the Mac and on a box.
+    package static func folderTierLine(has tier: String) -> String {
+        "A chat in another folder needs Arsenal's \(tierName("device")) tier; this chat has \(tierName(tier)). " + howLine
     }
 
     /// Kore's line for a call (its result, or a `bye`) as the agent reads it, the same from

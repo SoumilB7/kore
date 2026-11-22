@@ -31,6 +31,9 @@ enum Theme {
     static let borderFocused = text.opacity(0.22)
     /// Inactive tab under the pointer.
     static let tabHover = surface.opacity(0.5)
+    /// Inactive tab picked with others (⇧ or ⌘-click): between hover and the active tab, with an edge.
+    static let tabSelected = surface.opacity(0.75)
+    static let tabSelectedEdge = text.opacity(0.14)
     /// Image-viewer tool button under the pointer.
     static let toolHover = surfaceHover.opacity(0.6)
     /// Transcript plan block.
@@ -86,11 +89,15 @@ extension Color {
     }
 }
 
-/// A working chat tab's spinner, in its CLI's colour: Claude's orange, the others plain.
+/// A working chat tab's spinner, in its CLI's colour: Claude's orange, the others plain; Arsenal's
+/// one colour while the chat has it at any tier, as its logo.
 enum WorkingSpinner {
     static let claude = Color(hex: 0xF59A55)
 
-    static func tint(_ provider: Provider) -> Color { provider.id == "claude" ? claude : .white }
+    static func tint(_ provider: Provider, arsenal: ArsenalTier? = nil) -> Color {
+        if arsenal != nil { return Theme.Arsenal.mark }
+        return provider.id == "claude" ? claude : .white
+    }
 }
 
 

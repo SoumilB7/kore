@@ -96,8 +96,9 @@ extension Workspace {
     /// the picker would launch it. Its mode is the CLI's usual one when that's no freer than the
     /// caller's, else the highest one that is, or `mode` when asked for and allowed. Its Arsenal is off.
     /// A Codex chat's Plan is its switch, and its permissions still have to pass: Plan restricts
-    /// nothing. `model`, when given, is one the CLI lists in an open chat of Kore's.
-    package func arsenalNewChat(provider id: String, model: String?, mode: String?, under caller: Chat) -> Result<Chat, ArsenalRefusal> {
+    /// nothing. `model`, when given, is one the CLI lists in an open chat of Kore's. `quiet`: its
+    /// tab goes at the end and the one in front stays (`--silent`).
+    package func arsenalNewChat(provider id: String, model: String?, mode: String?, under caller: Chat, quiet: Bool = false) -> Result<Chat, ArsenalRefusal> {
         let rank = caller.arsenalRank
         let cap = { (mode: String) in Chat.noFreer(mode, unreviewed: false, than: rank.id, unreviewed: rank.unreviewed) }
         guard let provider = Registry.provider(id) else { return .failure(.init("Kore runs claude or codex.")) }
@@ -135,7 +136,7 @@ extension Workspace {
             case .failure(let refusal): return .failure(refusal)
             }
         }
-        guard start(provider: id, model: launch), let chat = activeTab.chat else { return .failure(.init("Kore couldn't open a chat.")) }
+        guard let chat = start(provider: id, model: launch, select: !quiet) else { return .failure(.init("Kore couldn't open a chat.")) }
         if wanted == nil, !cap(chat.controls.mode) {
             wanted = capped.max { Chat.modeLevel($0.id) < Chat.modeLevel($1.id) }
         }
@@ -179,8 +180,8 @@ extension Workspace {
     /// open already, else a tab of its own. `session` is its id, or the start of it only one has.
     /// Opened, its mode is capped as a new chat's is (no freer than the caller's), and its Arsenal
     /// stays off whatever it had: a tier is the user's to give it back. In a box's window it opens
-    /// on the box, as that window's History does.
-    package func arsenalOpen(session: String, under caller: Chat) async -> Result<(chat: Chat, opened: Bool), ArsenalRefusal> {
+    /// on the box, as that window's History does. `quiet`: the tab in front stays (`--silent`).
+    package func arsenalOpen(session: String, under caller: Chat, quiet: Bool = false) async -> Result<(chat: Chat, opened: Bool), ArsenalRefusal> {
         let wanted = session.trimmingCharacters(in: .whitespaces).lowercased()
         func lookup() -> [SessionSummary] {
             chats.filter { $0.id.lowercased() == wanted || (wanted.count >= 6 && $0.id.lowercased().hasPrefix(wanted)) }
@@ -196,7 +197,7 @@ extension Workspace {
         }
         if paired != nil, boxRowPlace(summary.id) != nil { return .failure(.init("That chat is on the box: open it from History.")) }
         if box == nil, let tab = tabs.first(where: { $0.chat?.sessionId == summary.id && $0.agent == nil }), let chat = tab.chat {
-            select(tab)
+            if !quiet { select(tab) }
             return .success((chat, false))
         }
         let provider = Registry.provider(for: summary.agent)
@@ -210,13 +211,13 @@ extension Workspace {
         let chat: Chat
         if let box {
             // On the box, as its History opens it (a closed chat back on the box, or a session its CLI keeps).
-            guard let shown = await openBoxSession(summary) else {
+            guard let shown = await openBoxSession(summary, quiet: quiet) else {
                 return .failure(.init("\(NodeNames.name(box.alias)) didn't open that chat."))
             }
             if !shown.opened { return .success((shown.chat, false)) }
             chat = shown.chat
         } else {
-            open(summary)
+            if quiet { openQuietly(summary) } else { open(summary) }
             guard let opened = tabs.first(where: { $0.chat?.sessionId == summary.id && $0.agent == nil })?.chat else {
                 return .failure(.init("Kore couldn't open that chat."))
             }

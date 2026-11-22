@@ -149,10 +149,11 @@ struct NetLinkTests {
     @Test(arguments: [
         (TailnetChooser.Installed.state(.running), NetState.installed, 0, true),
         (.state(.starting), .installed, 0, true),
-        (.state(.stopped), .stopped, 0, false),
-        (.state(.needsLogin), .signedOut, 0, false),
-        (.state(.noState), .signedOut, 0, false),
-        (.state(.inUseOtherUser), .signedOut, 0, false),
+        // Quit, signed out, never set up, another user's: Kore's own runs beside it.
+        (.state(.stopped), .sidecar, 1, true),
+        (.state(.needsLogin), .sidecar, 1, true),
+        (.state(.noState), .sidecar, 1, true),
+        (.state(.inUseOtherUser), .sidecar, 1, true),
         (.missing(.absent), .sidecar, 1, true),
         (.missing(.appStore), .sidecar, 1, true),
         (.missing(.unreadable), .sidecar, 1, true),
@@ -186,21 +187,25 @@ struct NetLinkTests {
         switcher.set(false)
     }
 
-    /// A read is as good as the bus: Tailscale stopped while nothing held the bus shows on the next read.
+    /// A read is as good as the bus: Tailscale stopped while nothing held the bus shows on the
+    /// next read, and Kore's own takes over beside it.
     @Test func aStatusReadMovesTheStateWithoutTheBus() async throws {
         let root = netScratch()
         defer { try? FileManager.default.removeItem(at: root) }
         let defaults = suite()
         let local = FakeTailnet()
         let (switcher, settled) = netSwitch(defaults, root: root, directory: NodeDirectory(defaults: defaults)) {
-            fakeEnv(.state(.running), local: local, sidecar: FakeTailnet(), root: root, defaults: defaults, calls: EnvCalls())
+            var env = fakeEnv(.state(.running), local: local, sidecar: FakeTailnet(), root: root, defaults: defaults, calls: EnvCalls())
+            env.installed = { (.state((try? local.status())?.backendState ?? .noState), local) }
+            return env
         }
         switcher.set(true)
         await settled.next { $0 == "chose" }
         #expect(switcher.state == .installed)
         local.held.withLock { $0.status.backendState = .stopped }
         switcher.readStatus()
-        #expect(await until { switcher.state == .stopped })
+        await settled.next { $0 == "chose" }
+        #expect(switcher.state == .sidecar)
         switcher.set(false)
     }
 

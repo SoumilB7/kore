@@ -119,9 +119,9 @@ class NetDialer(
         /** Other Macs tried for one that moved, at most. */
         const val MOVED_TRIES = 4
 
-        /** The node a record names: one of its node keys, else its name. */
+        /** The node a record names: one of its node keys (an online one first), else its name. */
         fun known(device: Device, peers: List<TailnetNode>): TailnetNode? =
-            peers.firstOrNull { it.nodeKey in device.nodeKeys }
+            peers.filter { it.nodeKey in device.nodeKeys }.let { mine -> mine.firstOrNull { it.online } ?: mine.firstOrNull() }
                 ?: peers.firstOrNull { device.fqdn.isNotEmpty() && it.dnsName.trimEnd('.') == device.fqdn.trimEnd('.') }
 
         /**

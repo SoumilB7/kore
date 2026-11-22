@@ -74,7 +74,11 @@ extension HostDaemon {
         case AgentCommand.close.name: return resolvesHere(hc, chat, byID: true)
         case _ where AgentTools.ownCommands.contains(tool.command): return resolvesHere(hc, chat ?? ".")
         case AgentCommand.history.name: return (args["folder"] as? String).map { historyFolder($0, of: hc) != nil } ?? true
-        case AgentCommand.new.name: return (args["place"] as? String).map { $0 != "mac" } ?? true
+        case AgentCommand.new.name:
+            // Another folder (Act device): one this box serves here; any other the Mac's, as its
+            // windows open folders.
+            if let folder = args["folder"] as? String { return tier < .device || historyFolder(folder, of: hc) != nil || !mac }
+            return (args["place"] as? String).map { $0 != "mac" } ?? true
         // Forks, opens from History, asks and their replies, files and tabs: the Mac's.
         default: return false
         }
@@ -99,7 +103,7 @@ extension HostDaemon {
     /// command's result or refusal.
     func arsenalCall(_ hc: HostChat, _ name: String, _ given: AgentTools.Object) async -> Data {
         let tier = tier(hc)
-        if let (code, text) = ArsenalRules.refusal(tool: name, tier: tier, box: true) { return Self.failed(code, text) }
+        if let (code, text) = ArsenalRules.refusal(tool: name, tier: tier, box: true, folder: given["folder"] != nil) { return Self.failed(code, text) }
         guard let tool = AgentTools.tool(name, box: true) else { return Self.failed(.unknownCommand, ArsenalRules.message(.unknownCommand)) }
         guard boxArsenal.commands[hc.id, default: RateLimiter(limit: ArsenalRules.perMinute, per: 60)].take() else {
             return Self.failed(.rateLimited, ArsenalRules.message(.rateLimited))
@@ -449,6 +453,20 @@ extension HostDaemon {
         case "mac": return Self.failed(.noWindow, Self.notConnected)
         default: return Self.failed(.invalid, "place is box or mac.")
         }
+        var folder = hc.record.folder
+        if let named = args.folder {
+            // The Mac's rule (`AgentChannel.folderTier`), in its words.
+            let has = tier(hc)
+            guard has >= .device else { return Self.failed(.tier, AgentTools.folderTierLine(has: has.rawValue)) }
+            guard args.place == nil else { return Self.failed(.invalid, "Give folder or place, not both.") }
+            // Not one this box serves: the Mac opens it, and it isn't here.
+            guard let served = historyFolder(named, of: hc) else { return Self.failed(.noWindow, Self.notConnected) }
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: served, isDirectory: &isDir), isDir.boolValue else {
+                return Self.failed(.noWindow, "\(named) isn't a folder on this box.")
+            }
+            folder = served
+        }
         if let refused = roomForNew(hc) { return refused }
         if let text = args.text, text.utf8.count > ArsenalRules.textMax {
             return Self.failed(.invalid, "A message can be \(ArsenalRules.textMax / 1024) KiB at most.")
@@ -492,14 +510,14 @@ extension HostDaemon {
         }
         let usual = provider.modes.first?.id ?? ""
         if wanted == nil, !cap(usual) { wanted = capped.max { Chat.modeLevel($0.id) < Chat.modeLevel($1.id) } }
-        guard let made = newChat(folder: hc.record.folder, provider: provider.id, modelId: launch, mode: wanted?.id) else {
+        guard let made = newChat(folder: folder, provider: provider.id, modelId: launch, mode: wanted?.id) else {
             return Self.failed(.refused, "Kore couldn't open a chat.")
         }
         _ = boxArsenal.news[hc.id, default: RateLimiter(limit: ArsenalRules.newPerHour, per: 3600)].take()
         boxArsenal.made[hc.id, default: []].append(made.id)
         // Made by this chat (and so by whatever made it): it never allows commands there.
         made.arsenalOrigins = [hc.id] + hc.arsenalOrigins.filter { $0 != hc.id }
-        var message = "Opened a \(provider.name) chat."
+        var message = "Opened a \(provider.name) chat" + (args.folder == nil ? "." : " in \(URL(fileURLWithPath: folder).lastPathComponent).")
         if plan || !(args.text ?? "").isEmpty {
             if let chat = live(made) {
                 if plan { chat.setPlanMode(true) }

@@ -177,7 +177,7 @@ case "join":
         fail(BoxOS.here == .macos
             ? "Tailscale on this Mac is stopped or signed out: open Tailscale and sign in, then `kore-host join` again."
             : "Tailscale is stopped or signed out on this box: run `sudo tailscale up`, then `kore-host join` again.")
-    case .sidecar:
+    case .sidecar, .beside:
         if box.helper() == nil {
             print(BoxOS.here == .macos
                 ? "No Tailscale here and no kore-tailnet beside kore-host: install the Tailscale app and sign in, or set this box up again from Kore."

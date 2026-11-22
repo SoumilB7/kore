@@ -551,7 +551,10 @@ final class PhoneEmu {
     /// (`NetDialer.movedMacs`; here the first, as a world has one Mac): its proof decides.
     private func dial(_ c: Client) {
         let status = net.status(of: ip)
-        var found = status.peers.first(where: { c.record.nodeKeys.contains($0.publicKey) })
+        // Of the nodes it knows for the device, an online one first: a Mac that moved back to a
+        // node it had before (Kore's own beside a quit Tailscale) is on that one, not the other.
+        let known = status.peers.filter { c.record.nodeKeys.contains($0.publicKey) }
+        var found = known.first(where: \.online) ?? known.first
         if c.record.kind == .mac, found?.online != true, let user = status.selfNode?.userID,
            let moved = status.peers.first(where: {
                $0.os == "macOS" && $0.online && $0.tags.isEmpty && $0.userID == user && !c.record.nodeKeys.contains($0.publicKey)

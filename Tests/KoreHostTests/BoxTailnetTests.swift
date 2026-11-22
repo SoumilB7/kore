@@ -32,12 +32,12 @@ struct BoxTailnetTests {
             key: { Data(repeating: 7, count: 32) }, forced: forced)
     }
 
-    /// Installed and running → it; installed but stopped or signed out → it, never a second node;
+    /// Installed and running → it; installed but stopped or signed out → Kore's own beside it;
     /// absent, the App Store build or an unreadable LocalAPI → Kore's own, started with its key.
     @Test func eachInstalledStateHasItsTailnet() {
         let cases: [(TailnetChooser.Installed, String)] = [
-            (.state(.running), "installed"), (.state(.starting), "installed"), (.state(.stopped), "installed stopped"),
-            (.state(.needsLogin), "installed signedOut"), (.state(.noState), "installed signedOut"), (.missing(.notRunning), "installed stopped"),
+            (.state(.running), "installed"), (.state(.starting), "installed"), (.state(.stopped), "kore beside"),
+            (.state(.needsLogin), "kore beside"), (.state(.noState), "kore beside"), (.missing(.notRunning), "kore beside"),
             (.missing(.absent), "kore"), (.missing(.appStore), "kore"), (.missing(.unreadable), "kore"),
         ]
         for (installed, want) in cases {
@@ -45,16 +45,55 @@ struct BoxTailnetTests {
             let pick = Self.box(installed, calls: calls).choose()
             let got: String = switch pick {
             case .installed(_, let choice): choice == .installed ? "installed" : "installed \(choice)"
-            case .kore: "kore"
+            case .kore(_, _, _, let beside): beside == nil ? "kore" : "kore beside"
             case .unavailable(let why): "unavailable \(why)"
             }
             #expect(got == want, "\(installed)")
-            #expect(calls.starts.withLock { $0.count } == (want == "kore" ? 1 : 0), "a second node for \(installed)")
+            #expect(calls.starts.withLock { $0.count } == (want.hasPrefix("kore") ? 1 : 0), "\(installed)")
         }
         // The live test's override: Kore's own beside a running Tailscale.
         let calls = Calls()
         if case .kore = Self.box(.state(.running), forced: true, calls: calls).choose() {} else { Issue.record("forced isn't Kore's own") }
         #expect(calls.starts.withLock { $0 } == [Data(repeating: 7, count: 32)])
+    }
+
+    /// Beside a stopped or signed-out Tailscale, with no helper (or one that won't start): that
+    /// node, waited for, as before Kore's own ran beside it.
+    @Test func besideWithoutKoresOwnWaitsForTailscale() {
+        for box in [Self.box(.state(.stopped), helper: nil), Self.box(.state(.stopped), fails: true)] {
+            guard case .installed(_, let choice) = box.choose() else {
+                Issue.record("not installed")
+                continue
+            }
+            #expect(choice == .stopped)
+        }
+        guard case .installed(_, let choice) = Self.box(.state(.needsLogin), helper: nil).choose() else {
+            Issue.record("not installed")
+            return
+        }
+        #expect(choice == .signedOut)
+    }
+
+    /// Kore's own beside a stopped Tailscale hears it come back: its daemon's bus while it answers,
+    /// else a look now and then (here at once).
+    @Test func theBesideWatchHearsTailscaleBack() async {
+        let now = Mutex<TailnetChooser.Installed>(.state(.stopped))
+        let back = Mutex(0)
+        let looked = Mutex(0)
+        let watch = TailscaleBesideWatch(
+            installed: {
+                looked.withLock { $0 += 1 }
+                return (now.withLock { $0 }, nil)
+            }, after: { _ in 0.001 }
+        ) { back.withLock { $0 += 1 } }
+        watch.start(nil)
+        let end = ContinuousClock.now + .seconds(5)
+        while looked.withLock({ $0 }) < 2, ContinuousClock.now < end { await Task.yield() }
+        #expect(back.withLock { $0 } == 0)
+        now.withLock { $0 = .state(.running) }
+        while back.withLock({ $0 }) == 0, ContinuousClock.now < end { await Task.yield() }
+        #expect(back.withLock { $0 } == 1)
+        watch.stop()
     }
 
     @Test func noHelperOrAFailedStartIsUnavailable() {
@@ -131,7 +170,12 @@ struct BoxTailnetTests {
         let running = PlainTailnet(TailnetStatus(backendState: .running, selfNode: .init(publicKey: "nodekey:b", tailscaleIPs: ["100.64.0.2"], userID: 3)))
         let installed = BoxTailnet(installed: { (.state(.running), running) }, helper: { nil }, start: { _, _ in throw TailnetError.sidecar("no") }, key: { Data() })
         #expect(HostUpgrade.look(paths: paths, box: installed, relogin: false, kore: read) == .running(node: "nodekey:b", account: nil))
-        #expect(kore.withLock { $0.count } == 1, "Kore's own was read beside installed Tailscale")
+        // Stopped: Kore's own beside it when its helper is here; without one, Tailscale's own word.
+        #expect(HostUpgrade.look(paths: paths, box: Self.box(.state(.stopped)), relogin: false, kore: read) == .kore(.signIn("https://login.tailscale.com/a/k")))
+        let stopped = PlainTailnet(TailnetStatus(backendState: .stopped, selfNode: nil))
+        let bare = BoxTailnet(installed: { (.state(.stopped), stopped) }, helper: { nil }, start: { _, _ in throw TailnetError.sidecar("no") }, key: { Data() })
+        #expect(HostUpgrade.look(paths: paths, box: bare, relogin: false, kore: read) == .stopped(.stopped, login: nil))
+        #expect(kore.withLock { $0.count } == 2, "Kore's own was read beside running Tailscale")
     }
 
     /// Kore's own as `upgrade` reads it: the daemon's word that it couldn't start, or nothing on
@@ -245,15 +289,33 @@ struct BoxTailnetDaemonTests {
         await until("started again") { calls.starts.withLock { $0.count } == 2 }
     }
 
-    @Test func stoppedTailscaleStartsNoSecondNode() async throws {
+    /// Installed Tailscale stopped: Kore's own runs beside it; Tailscale up again, the box moves
+    /// back to it and Kore's own stops.
+    @Test func stoppedTailscaleRunsKoresOwnBesideItUntilItsBack() async throws {
         let calls = BoxTailnetTests.Calls()
-        let rig = try rig(BoxTailnetTests.box(.state(.stopped), calls: calls))
+        let now = Mutex<TailnetChooser.Installed>(.state(.stopped))
+        let tailnet = try HandoffTailnet()
+        let box = BoxTailnet(
+            // Never this Mac's own Tailscale: a fake client once it's running (none while stopped,
+            // so the watch looks again).
+            installed: {
+                let state = now.withLock { $0 }
+                let up = PlainTailnet(TailnetStatus(backendState: .running, selfNode: .init(publicKey: "nodekey:b", tailscaleIPs: ["100.64.0.2"], userID: 3)))
+                return (state, state == .state(.running) ? up : nil)
+            }, helper: { URL(fileURLWithPath: "/opt/kore/kore-tailnet") },
+            start: { _, key in
+                calls.starts.withLock { $0.append(key) }
+                return (tailnet, { true }, { calls.stops.withLock { $0 += 1 } })
+            }, key: { Data(repeating: 7, count: 32) })
+        let rig = try rig(box)
         defer { rig.finish() }
+        rig.host.besideWait = { _ in 0.001 }
         try rig.host.start()
         let net = try #require(rig.host.net)
-        await until("installed Tailscale taken") { net.tailnet != nil }
-        await net.settled()
-        #expect(!net.userspace && calls.starts.withLock { $0.count } == 0)
+        await until("Kore's own beside it") { net.userspace && calls.starts.withLock { $0.count } == 1 }
+        now.withLock { $0 = .state(.running) }
+        await until("back on Tailscale, Kore's own stopped") { calls.stops.withLock { $0 } == 1 && net.tailnet != nil && !net.userspace }
+        #expect(calls.starts.withLock { $0.count } == 1)
     }
 
     @Test func aMissingHelperIsSaid() async throws {

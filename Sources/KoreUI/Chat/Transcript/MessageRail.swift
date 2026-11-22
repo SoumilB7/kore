@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// The chat's user messages as ticks on its right edge: bright for the one being read, plain for
-/// those loaded, dim for those not yet. The pointer over a tick shows its message; a click goes
+/// The chat's user messages as ticks on its right edge, the chat from its first message at the
+/// rail's top to its last at its bottom: bright for the one being read, plain for those loaded,
+/// dim for those not yet. The pointer over the rail shows the message at its place; a click goes
 /// there, loading it first if it has to. Plain shapes, at most `Size.railMost`, drawn again only
-/// when a message crosses the top, a list changes or the pointer moves to another tick. Not a
+/// when a message crosses the top, a list changes or the pointer moves to another message. Not a
 /// Canvas: its renderer holds about 50 MB of graphics memory while anything draws, whatever the
 /// size of the canvas.
 struct MessageRail: View {
@@ -19,11 +20,8 @@ struct MessageRail: View {
     @StateObject private var height = Local<CGFloat>(0)
     @StateObject private var hovered = Local<Int?>(nil)
     @StateObject private var cardHeight = Local<CGFloat>(0)
-    /// What the run of ticks is centred on: it holds still under the pointer, so one tick up is
-    /// one tick up, and catches up when the pointer leaves.
-    @StateObject private var runAround = Held<Int?>(nil)
-    /// The tick last drawn lit, for a storyline.
-    @StateObject private var drawnCurrent = Held<Int?>(nil)
+    /// The rail last drawn and the message it lit, for a storyline.
+    @StateObject private var drawn = Held<(layout: Layout, current: Int?)?>(nil)
     /// The last jump's second aim, which the next jump replaces.
     @StateObject private var aiming = Held<Task<Void, Never>?>(nil)
     /// The one on its way in from disk.
@@ -36,8 +34,10 @@ struct MessageRail: View {
             .overlay(alignment: .trailing) {
                 let marks = store.messageMarks
                 if marks.count > 1, height.value > 0 {
-                    let layout = Layout(count: marks.count, room: height.value - 2 * Size.railMargin, around: around(marks))
-                    rail(marks, layout).offset(y: Self.drop(growth: store.composerGrowth, room: height.value, rail: layout.height))
+                    let reading = current(marks)
+                    let lit = [reading, hovered.value, loading.value].compactMap { $0 }
+                    let layout = Layout(count: marks.count, room: height.value - 2 * Size.railMargin, lit: lit)
+                    rail(marks, layout, reading).offset(y: Self.drop(growth: store.composerGrowth, room: height.value, rail: layout.height))
                 }
             }
             .onChange(of: SectionsKey(store), initial: true) {
@@ -57,53 +57,61 @@ struct MessageRail: View {
         return min(growth / 2, max(0, (room - rail) / 2 - Size.railMargin))
     }
 
-    /// Which ticks show and where: all of them up to `Size.railMost`. Past that, the chat's first
-    /// and last and a run around the message being read, so either end is a click away and each
-    /// click on the run's end moves it on.
+    /// Where each message's tick is: in order down the rail, one step apart, so the rail is the
+    /// chat from its first message to its last and a tick's place says where its message is. The
+    /// rail grows with the chat until it fills its room. Drawn: every tick while they're
+    /// `Size.railSpacing` apart and no more than `Size.railMost`; past that every so many, evenly,
+    /// the first and last always, and each lit one (being read, under the pointer, on its way in)
+    /// at its own place, in place of the picked one nearest it. The pointer finds any message,
+    /// drawn or not, so what lights under it is what a click opens.
     struct Layout {
+        let count: Int
+        /// From one message's tick to the next's.
+        let step: CGFloat
         let shown: [Int]
-        let spacing: CGFloat
 
-        init(count: Int, room: CGFloat, around: Int?) {
-            if count <= Size.railMost {
-                shown = Array(0..<count)
-            } else {
-                let run = Size.railMost - 2
-                let start = min(max((around ?? count - 1) - run / 2, 1), count - 1 - run)
-                shown = [0] + Array(start..<(start + run)) + [count - 1]
+        init(count: Int, room: CGFloat, lit: [Int] = []) {
+            self.count = count
+            let gaps = CGFloat(max(count - 1, 1))
+            step = max(0, min(Size.railStepMost, room / gaps))
+            let fit = Int(step * gaps / Size.railSpacing) + 1
+            let most = min(count, max(min(Size.railMost, fit), 2))
+            var shown = Array(0..<count)
+            if most < count {
+                // Every `every`th, so they're evenly apart; the last's own, with the one before it
+                // left out when that's under half the way.
+                let every = Int((Double(count - 1) / Double(most - 1)).rounded(.up))
+                shown = Array(stride(from: 0, to: count - 1, by: every))
+                if shown.count > 1, (count - 1 - shown[shown.count - 1]) * 2 < every { shown.removeLast() }
+                shown.append(count - 1)
             }
-            spacing = shown.count > 1 ? min(Size.railSpacing, room / CGFloat(shown.count - 1)) : Size.railSpacing
+            let lit = Set(lit.filter { (0..<count).contains($0) })
+            for index in lit.sorted() where !shown.contains(index) {
+                let picked = shown.indices.filter { $0 > 0 && $0 < shown.count - 1 && !lit.contains(shown[$0]) }
+                if let nearest = picked.min(by: { abs(shown[$0] - index) < abs(shown[$1] - index) }) { shown[nearest] = index } else { shown.append(index) }
+            }
+            self.shown = shown.sorted()
         }
 
         /// The rail's height: the ticks, and room for the pointer past each end. `y` and
         /// `index(atY:)` are both from its top, so a tick lights where it's drawn.
-        var height: CGFloat { CGFloat(max(shown.count - 1, 0)) * spacing + Size.railStroke + 2 * Size.railSpacing }
+        var height: CGFloat { CGFloat(max(count - 1, 0)) * step + Size.railStroke + 2 * Size.railSpacing }
 
-        func y(_ place: Int) -> CGFloat { CGFloat(place) * spacing + Size.railStroke / 2 + Size.railSpacing }
+        /// A message's tick, drawn or not.
+        func y(_ index: Int) -> CGFloat { CGFloat(index) * step + Size.railStroke / 2 + Size.railSpacing }
 
-        /// Where a message is among the ticks, when it's shown.
+        /// Where a message is among the drawn ticks, when it's drawn.
         func place(of index: Int) -> Int? { shown.firstIndex(of: index) }
 
+        /// The message whose place is nearest.
         func index(atY y: CGFloat) -> Int {
-            let nearest = Int(((y - self.y(0)) / spacing).rounded())
-            return shown[min(max(nearest, 0), shown.count - 1)]
-        }
-
-        /// A tick next to a gap in the list fades, saying there's more between.
-        func fade(_ place: Int) -> Double {
-            func gap(_ a: Int, _ b: Int) -> Bool { shown.indices.contains(a) && shown.indices.contains(b) && shown[b] - shown[a] > 1 }
-            var nearest = Size.railFade
-            for distance in 0..<Size.railFade where gap(place - distance - 1, place - distance) || gap(place + distance, place + distance + 1) {
-                nearest = distance
-                break
-            }
-            return min(Double(nearest + 1) / Double(Size.railFade), 1)
+            guard count > 1, step > 0 else { return 0 }
+            return min(max(Int(((y - self.y(0)) / step).rounded()), 0), count - 1)
         }
     }
 
-    private func rail(_ marks: [TranscriptStore.MessageMark], _ layout: Layout) -> some View {
-        let reading = current(marks)
-        drawnCurrent.value = reading
+    private func rail(_ marks: [TranscriptStore.MessageMark], _ layout: Layout, _ reading: Int?) -> some View {
+        drawn.value = (layout, reading)
         let pointed = hovered.value
         let coming = loading.value
         return ZStack(alignment: .topTrailing) {
@@ -112,8 +120,7 @@ struct MessageRail: View {
                 Self.tick
                     .fill(Self.color(marks[index], lit: index == reading || index == pointed || index == coming))
                     .frame(width: Self.length(place, index, layout, current: reading, hover: pointed) + Size.railStroke / 2, height: Size.railStroke)
-                    .opacity(layout.fade(place))
-                    .offset(y: layout.y(place) - Size.railStroke / 2)
+                    .offset(y: layout.y(index) - Size.railStroke / 2)
             }
         }
         .frame(width: Size.railWidth, height: layout.height, alignment: .topTrailing)
@@ -129,7 +136,7 @@ struct MessageRail: View {
             if let pointed, marks.indices.contains(pointed), let preview = preview(marks[pointed]) {
                 RailCard(message: preview.message, answer: preview.answer, back: marks.count - pointed)
                     .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cardHeight.value = $0 }
-                    .offset(x: -(Size.railWidth + Size.railCardGap), y: cardTop(at: layout.y(layout.place(of: pointed) ?? 0), layout))
+                    .offset(x: -(Size.railWidth + Size.railCardGap), y: cardTop(at: layout.y(pointed), layout))
                     .allowsHitTesting(false)
             }
         }
@@ -140,10 +147,13 @@ struct MessageRail: View {
         .accessibilityValue("\(marks.count)")
         .onAppear {
             guard StoryHost.installed else { return }
-            let (store, hovered) = (store, hovered)
+            let (store, hovered, drawn, height) = (store, hovered, drawn, height)
             store.storyRail = (
                 jump: { [self] in jump($0, store.messageMarks) }, hover: { hovered.value = $0 },
-                current: { [drawnCurrent] in drawnCurrent.value }
+                current: { drawn.value?.current },
+                ticks: { drawn.value.map { rail in rail.layout.shown.map { ($0, rail.layout.y($0)) } } ?? [] },
+                room: { height.value - 2 * Size.railMargin },
+                click: { [self] y in if let layout = drawn.value?.layout { jump(layout.index(atY: y), store.messageMarks) } }
             )
         }
     }
@@ -179,11 +189,6 @@ struct MessageRail: View {
     private func current(_ marks: [TranscriptStore.MessageMark]) -> Int? {
         if atEnd || reading.index == nil { return marks.isEmpty ? nil : marks.count - 1 }
         return reading.index
-    }
-
-    private func around(_ marks: [TranscriptStore.MessageMark]) -> Int? {
-        if hovered.value == nil { runAround.value = current(marks) }
-        return runAround.value
     }
 
     private func preview(_ mark: TranscriptStore.MessageMark) -> (message: String, answer: String?)? {

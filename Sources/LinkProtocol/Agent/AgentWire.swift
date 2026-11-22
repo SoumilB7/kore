@@ -131,7 +131,8 @@ package struct AgentArgs: Codable, Sendable, Equatable {
     package var last: Int?
     package var before: String?
     /// `history.list` and `chat.open`: the folder asked for: the caller's own chat's, or with Act
-    /// unlimited any folder a Kore window on this Mac has open.
+    /// unlimited any folder a Kore window on this Mac has open. `chat.new`: another folder's
+    /// window, opened if none is (Act device).
     package var folder: String?
     package var query: String?
     package var archived: Bool?
@@ -165,6 +166,9 @@ package struct AgentArgs: Codable, Sendable, Equatable {
     package var ask: String?
     /// `file.fetch` and `chat.reply`: a file, `device:path` or a path on the caller's device.
     package var path: String?
+    /// `chat.new`, `chat.open` and `chat.send`'s wake: the tab made or opened without being put in
+    /// front, its window left where it is and Kore not activated.
+    package var silent: Bool?
 
     package init(
         chat: String? = nil, last: Int? = nil, before: String? = nil, folder: String? = nil, query: String? = nil,
@@ -185,6 +189,7 @@ package struct AgentArgs: Codable, Sendable, Equatable {
         self.session = nil
         self.ask = nil
         self.path = nil
+        self.silent = nil
         self.chat = chat
         self.last = last
         self.before = before

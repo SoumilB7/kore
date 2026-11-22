@@ -8,13 +8,36 @@ typealias Provider = ProviderDescriptor
 struct ProviderLogo: View {
     let provider: Provider
     var size: CGFloat = 16
+    /// The chat's Arsenal tier: on at any tier, the logo takes Arsenal's colour.
+    var arsenal: ArsenalTier? = nil
+
+    /// Arsenal's one colour while the chat has it at any tier, Claude's and Codex's alike; nil keeps
+    /// the logo's own colours.
+    static func tint(_ arsenal: ArsenalTier?) -> Color? { arsenal == nil ? nil : Theme.Arsenal.mark }
 
     var body: some View {
+        let tint = Self.tint(arsenal)
         Image(nsImage: provider.logo)
+            .renderingMode(tint == nil ? nil : .template)
             .resizable()
             .aspectRatio(contentMode: .fit)
             .frame(width: size, height: size)
-            .foregroundStyle(Theme.text)
+            .foregroundStyle(tint ?? Theme.text)
+    }
+}
+
+/// A chat's logo, tinted while it has Arsenal: the tier is read here, so turning it on or off
+/// redraws this logo and nothing around it. `story`: the row's name; its `.arsenal` part is there
+/// while tinted.
+struct ChatLogo: View {
+    let chat: Chat
+    var size: CGFloat = 16
+    var story: StoryID? = nil
+
+    var body: some View {
+        let tier = chat.arsenal
+        ProviderLogo(provider: chat.provider, size: size, arsenal: tier)
+            .overlay { if ProviderLogo.tint(tier) != nil, let story { Color.clear.storyMark(story.part(.arsenal)) } }
     }
 }
 

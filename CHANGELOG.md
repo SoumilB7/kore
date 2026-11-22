@@ -5,6 +5,11 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
 ## [0.3.7] - 2026-11-22
 
 ### Added
+- Shift-click selects a run of tabs, Cmd-click picks single ones; right-click groups them ("Group
+  N Tabs", "Add N Tabs to Group"), closes them (Cmd-W, Cmd-Shift-T brings all back) or drags them together.
+- `kore new --folder <path>` (Arsenal's Act device tier) opens a chat in another folder or box folder,
+  and `--silent` opens or wakes a chat without moving your focus; the chat picks which from what you asked.
+- Chats with Arsenal on show their CLI logo, working spinner and terminal cue in Arsenal's blue.
 - Claude chats have Full access, as Codex chats do: edits and every command without asking (Claude's
   bypass permissions). Only you put a chat in it: phones and links stop at Auto, and Arsenal never
   raises a chat past the one asking. Picking it starts Claude again in it, between turns.
@@ -14,6 +19,8 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
   a dev build of the app is "Kore Dev" with its own settings, chats and keys.
 
 ### Changed
+- When the installed Tailscale quits or signs out, Kore and kore-host move to their own tailnet
+  beside it, and back when it returns; boxes and phones follow without a new Allow.
 - Kore makes no Keychain call at all. KoreNet's identity and tailnet keys live in files only you
   can read, in Kore's own support folder; this Mac gets a new identity key, never reading the old one. Boxes
   set up over SSH take the new key by themselves; phones show "Key changed · Pair again" and
@@ -32,6 +39,11 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
 - Auto no longer holds a chat on Kore's own list: Claude's own check decides; if a chat stops because a command was refused, a card offers Run once / Always allow.
 
 ### Fixed
+- The message rail maps the whole chat: its ticks follow where each message is, so the right
+  side no longer jumps or bunches while you scroll a long chat.
+- A fork is named "<chat> (fork)", then "(fork 2)", "(fork 3)"…, and keeps that name.
+- A phone whose Mac moved between Tailscale and Kore's own tailnet dials the node that's online,
+  not "Asleep".
 - Set up on a box again no longer locks its Mac out: the box keeps the grant tied to that Mac, and
   takes the Mac's new key on a grant issued again.
 - A phone whose Mac's key changed shows "Key changed · Pair again" instead of retrying forever.

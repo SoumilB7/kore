@@ -278,22 +278,31 @@ final class BoxBinding {
 
     /// Its tab closed here: it closes on the box too.
     /// Box tabs closed in this window, last closed last: ⇧⌘T reopens them on the box.
-    private var closedTabs: [(id: String, provider: Provider, title: String, index: Int)] = []
+    private var closedTabs: [(id: String, provider: Provider, title: String, index: Int, batch: UUID?)] = []
 
     var canReopen: Bool { !closedTabs.isEmpty }
 
-    func rememberClosed(_ chat: Chat, at index: Int) {
+    func rememberClosed(_ chat: Chat, at index: Int, batch: UUID? = nil) {
         guard let id = (chat.services as? BoxChatServices)?.chatId else { return }
-        closedTabs.append((id, chat.provider, chat.title, index))
+        closedTabs.append((id, chat.provider, chat.title, index, batch))
         if closedTabs.count > 20 { closedTabs.removeFirst(closedTabs.count - 20) }
     }
 
-    /// The last closed tab's chat, back on the box, and where its tab was.
-    func reopenLast() async -> (chat: Chat, index: Int)? {
+    /// The last closed tab's chat, back on the box, and where its tab was; tabs closed together
+    /// come back together, the last closed first, so each lands where it was.
+    func reopenLast() async -> [(chat: Chat, index: Int)] {
         while let entry = closedTabs.popLast() {
-            if let chat = await reopen(entry.id, provider: entry.provider, title: entry.title) { return (chat, entry.index) }
+            guard let chat = await reopen(entry.id, provider: entry.provider, title: entry.title) else { continue }
+            var back = [(chat, entry.index)]
+            if let batch = entry.batch {
+                while let next = closedTabs.last, next.batch == batch {
+                    closedTabs.removeLast()
+                    if let chat = await reopen(next.id, provider: next.provider, title: next.title) { back.append((chat, next.index)) }
+                }
+            }
+            return back
         }
-        return nil
+        return []
     }
 
     /// A closed chat back on the box, as a chat for a tab here; nil when the box no longer keeps it.

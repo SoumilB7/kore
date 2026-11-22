@@ -27,9 +27,11 @@ package enum AgentBoxCalls {
         // The channel checks the tier too: this says it in the agent's terms, as `kore mcp` does,
         // and as kore-host does for the calls it answers itself (`ArsenalRules`).
         let channel = AgentChannel.current
-        if let (code, text) = ArsenalRules.refusal(tool: call.tool, tier: channel == nil ? .off : tier, box: true) { return refused(code, text) }
-        guard let channel, let tool = AgentTools.tool(call.tool, box: true) else { return refused(.denied, AgentTools.offLine(box: true)) }
         let given = (try? call.args?.encoded()).flatMap { try? JSONSerialization.jsonObject(with: $0) } as? [String: Any] ?? [:]
+        if let (code, text) = ArsenalRules.refusal(tool: call.tool, tier: channel == nil ? .off : tier, box: true, folder: given["folder"] != nil) {
+            return refused(code, text)
+        }
+        guard let channel, let tool = AgentTools.tool(call.tool, box: true) else { return refused(.denied, AgentTools.offLine(box: true)) }
         let line = await channel.boxCall(chat: chat.id.uuidString, tool.command, AgentTools.arguments(tool, given))
         return result(line, id: call.id)
     }

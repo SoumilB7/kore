@@ -68,8 +68,13 @@ package enum Reads {
                kore fast on|off      its fast mode
                kore mode <mode>      lower its mode (only you raise one)
                kore compact          compact it, once this turn ends
-               kore new [--claude|--codex] [--model M] [--mode X] ["message"]
-                                     a new chat in this window, in front (Act unlimited)
+               kore new [--claude|--codex] [--model M] [--mode X] [--folder F] [--silent] ["message"]
+                                     a new chat in this window, in front (Act unlimited); --folder:
+                                     another folder's window, opened if none is (path or device:path,
+                                     Act device); --silent: the tab in front stays, Kore stays behind.
+                                     Silent for several chats, background workers, fan-out, tabs the
+                                     user didn't ask to see; in front for one chat the user wants to
+                                     read. Unclear: one in front, several silent
                kore fork <chat> [--at -N|<message>] [--claude|--codex] [--model M] ["message"]
                                      fork a chat (. for this one) into a tab in front (Act unlimited)
                kore wait <chat> [--timeout s]
@@ -81,12 +86,12 @@ package enum Reads {
                kore fetch <device:path | path>
                                      copy a file from an open folder into .kore/inbox/ (50 MB, no secrets;
                                      another device's needs Act device)
-               kore send <chat> "message" [--folder F]
+               kore send <chat> "message" [--folder F] [--silent]
                                      send to another chat, queued while it works; one that isn't
                                      open (closed, in History: its id or title) opens first
                kore stop <chat>      stop its turn
                kore tab <chat>       bring its tab to the front
-               kore open <session> [--folder F]
+               kore open <session> [--folder F] [--silent]
                                      open a past chat (kore history lists them) in front
                kore close <short id> close a chat as its tab's close does; History keeps it
                kore answer <chat> <card> <answer>... | --deny | --allow | --always
@@ -127,6 +132,8 @@ package enum Reads {
         /// `new --place`: a box chat's new chat on its box (the default) or the Mac.
         var place: String?
         var deny = false
+        /// `new`, `open` and `send --silent`: the tab in front stays, Kore isn't activated.
+        var silent = false
         /// `answer --allow`: a permission card allowed once.
         var allow = false
         /// `answer --always`: Always allow on an Auto-asks card.
@@ -166,6 +173,7 @@ package enum Reads {
                     guard let m = rest.popFirst() else { problem = "--place takes box or mac"; return }
                     place = m
                 case "--deny": deny = true
+                case "--silent": silent = true
                 case "--allow": allow = true
                 case "--always": always = true
                 case "--at":

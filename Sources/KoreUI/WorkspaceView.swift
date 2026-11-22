@@ -211,7 +211,8 @@ struct TabBar: View {
             .onChanged { value in
                 // Over a board, a chat's tab can be dragged down onto it: the board stays shown.
                 let board = boardUnder(tab)
-                if drag.value?.id != tab.id, board == nil {
+                // A picked tab carries the others: no switch, the selection stays.
+                if drag.value?.id != tab.id, board == nil, workspace.menuTabs(for: tab).count == 1 {
                     workspace.select(tab)
                 }
                 if let board = board?.board {
@@ -255,9 +256,15 @@ struct TabBar: View {
                 }
                 let layout = layout
                 let strip = strip(layout)
+                // The picked tabs move with it, as one.
+                let many = workspace.menuTabs(for: tab)
                 if let id = ended.groupWith, let other = layout.tabs.first(where: { $0.id == id }) {
                     drag.value = nil
-                    if let made = workspace.group(tab, onto: other) { workspace.editGroup(made) }
+                    let made = workspace.group(tab, onto: other)
+                    if many.count > 1, let group = workspace.tabGroups.member[other.id] {
+                        workspace.add(many.filter { $0 !== other }, with: tab, to: group)
+                    }
+                    if let made { workspace.editGroup(made) }
                     return
                 }
                 let to = strip.drop(at: ended.x, from: ended.from).place
@@ -265,7 +272,9 @@ struct TabBar: View {
                 let place = insertion(of: tab, to: to, from: ended.from, layout)
                 withAnimation(reduceMotion ? nil : Motion.fade) {
                     if let group, workspace.tabGroups.group(group)?.folded == true, workspace.tabGroups.member[tab.id] != group {
-                        workspace.add(tab, to: group)
+                        workspace.add(many, with: tab, to: group)
+                    } else if many.count > 1 {
+                        workspace.moveTabs(many, with: tab, to: place, group: group)
                     } else {
                         workspace.moveTab(tab, to: place, group: group)
                     }
@@ -561,7 +570,9 @@ struct TabBar: View {
         let dragged = drag.value?.id == tab.id
         let groups = workspace.tabGroups
         let outline = resting == tab.id ? (groups.group(of: tab.id)?.color ?? groups.nextColor()) : nil
-        return TabItem(tab: tab, workspace: workspace, height: tabHeight, label: strip.label, isActive: workspace.activeID == tab.id, groupTarget: outline)
+        return TabItem(
+            tab: tab, workspace: workspace, height: tabHeight, label: strip.label, isActive: workspace.activeID == tab.id,
+            isSelected: workspace.selection.contains(tab.id), groupTarget: outline)
             // The close question takes the room it needs.
             .frame(width: strip.width(index))
             // Dropped on a board tile's middle, the tile's chat comes to the strip
@@ -1183,7 +1194,7 @@ private struct GhostTab: View {
 
     var body: some View {
         HStack(spacing: Space.md) {
-            ProviderLogo(provider: chat.provider, size: Size.logoTab)
+            ChatLogo(chat: chat, size: Size.logoTab)
             Text(chat.title).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(1)
             Spacer(minLength: 0)
         }
@@ -1212,6 +1223,8 @@ private struct TabItem: View {
     let label: TabStrip.Label
     /// A switch changes only the old and new tab, rather than every tab observing activeID.
     let isActive: Bool
+    /// Picked with others (⇧ or ⌘-click): only the tabs picked or let go redraw.
+    var isSelected = false
     /// A dragged tab rests on this one: a drop groups them, in this colour.
     var groupTarget: TabGroupColor? = nil
     @StateObject private var hovered = Local(false)
@@ -1270,9 +1283,17 @@ private struct TabItem: View {
         // Width set by the tab bar (220 down to 48, like browser tabs); titles truncate, clip, then go.
         .frame(height: height)
         .background(
-            isActive ? Theme.surface : (hovered.value ? Theme.tabHover : .clear),
+            isActive ? Theme.surface : (isSelected ? Theme.tabSelected : hovered.value ? Theme.tabHover : .clear),
             in: RoundedRectangle(cornerRadius: Radius.control)
         )
+        .overlay {
+            // Picked, not shown: a quiet edge besides the fill, lighter than the active tab.
+            if isSelected && !isActive {
+                RoundedRectangle(cornerRadius: Radius.control).strokeBorder(Theme.tabSelectedEdge, lineWidth: Stroke.hairline)
+                    .allowsHitTesting(false)
+                    .storyMark(storyKey.part(.selected))
+            }
+        }
         .overlay {
             if let color = groupTarget {
                 RoundedRectangle(cornerRadius: Radius.control)
@@ -1289,7 +1310,10 @@ private struct TabItem: View {
         }
         .onHover { hovered.value = $0 }
         .help(workspace.asking(tab) ? "Closing the tab stops its turn" : help)
-        .koreContextMenu("tab") { TabMenu.items(tab, in: workspace) { startRename() } }
+        .koreContextMenu("tab") {
+            let many = workspace.menuTabs(for: tab)
+            return many.count > 1 ? TabMenu.items(many, in: workspace) : TabMenu.items(tab, in: workspace) { startRename() }
+        }
         .alert("Rename chat", isPresented: $renaming.value) {
             TextField("Name", text: $newName.value)
             Button("Rename") { tab.chat?.rename(newName.value) }
@@ -1341,10 +1365,12 @@ private struct TabItem: View {
 
     private var select: some View {
         Button {
-            workspace.select(tab)
+            // ⇧ picks a range from the active tab, ⌘ one more tab; a plain click shows it alone.
+            let kind = Workspace.TabClick.of(NSApp.currentEvent?.modifierFlags)
+            workspace.click(tab, kind)
             // A double click on a preview tab keeps it (VS Code). Read from the event, so
             // no second gesture competes with the button or the window drag.
-            if NSApp.mouseClickCount == 2 { workspace.keep(tab) }
+            if kind == .select, NSApp.mouseClickCount == 2 { workspace.keep(tab) }
         } label: {
             HStack(spacing: TabTitle.gap(label)) {
                 TabMark(tab: tab, active: isActive, story: StoryID.Tabs.tab(tab.id), tint: TabMark.fileTint(tab, in: workspace.files))
@@ -1538,16 +1564,16 @@ private struct TabMark: View {
             } else if running, tab.agent == nil, TabWork.kind(chat) == .background {
                 // Only background commands run: ">_", the amber point on it while an approval waits.
                 let needsYou = !chat.approvals.pending.isEmpty
-                BackgroundPrompt(provider: chat.provider, needsYou: needsYou)
+                BackgroundPrompt(provider: chat.provider, needsYou: needsYou, arsenal: chat.arsenal)
                     .storyMark(story.part(.background))
                     .overlay { if needsYou { Color.clear.storyMark(story.part(.needsYou)) } }
             } else if running {
                 // The system spinner is grey: multiplied, it takes the CLI's colour.
                 ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
-                    .colorMultiply(WorkingSpinner.tint(chat.provider))
+                    .colorMultiply(WorkingSpinner.tint(chat.provider, arsenal: chat.arsenal))
                     .storyMark(story.part(.working))
             } else {
-                ProviderLogo(provider: chat.provider, size: Size.logoTab)
+                ChatLogo(chat: chat, size: Size.logoTab, story: story)
             }
         } else if let board = tab.board {
             BoardMark(board: board, active: active, story: story)
@@ -1575,11 +1601,12 @@ private struct BoardMark: View {
             let running = board.orderedChats.filter { TabWork.running($0) }
             if running.allSatisfy({ TabWork.kind($0) == .background }) {
                 // Every running chat only waits on background commands.
-                BackgroundPrompt(provider: running.first?.provider ?? .claude).storyMark(story.part(.background))
+                BackgroundPrompt(provider: running.first?.provider ?? .claude, arsenal: running.first?.arsenal)
+                    .storyMark(story.part(.background))
             } else {
-                let provider = running.first { TabWork.kind($0) == .working }?.provider ?? .claude
+                let lead = running.first { TabWork.kind($0) == .working }
                 ProgressView().controlSize(.small).frame(width: Size.spinner, height: Size.spinner)
-                    .colorMultiply(WorkingSpinner.tint(provider))
+                    .colorMultiply(WorkingSpinner.tint(lead?.provider ?? .claude, arsenal: lead?.arsenal))
                     .storyMark(story.part(.working))
             }
         case .stuck:
@@ -1891,6 +1918,40 @@ enum TabMenu {
         let paste = ChatPasting.menuItems(workspace)
         if !paste.isEmpty { items += paste + [.rule] }
         items.append(OptionItem("Close Tab") { workspace.requestClose(tab) })
+        return items
+    }
+
+    /// A picked tab's right-click: what makes sense for all of them at once.
+    static func items(_ many: [ChatTab], in workspace: Workspace) -> [OptionItem] {
+        var items: [OptionItem] = []
+        let previews = many.filter(\.isPreview)
+        if !previews.isEmpty { items.append(OptionItem("Keep Open") { previews.forEach(workspace.keep) }) }
+        // Chats onto a board, each into the section picked.
+        let chats = many.filter { $0.chat != nil && $0.agent == nil && $0.board == nil }
+        if !chats.isEmpty {
+            for boardTab in workspace.boardTabs {
+                guard let board = boardTab.board else { continue }
+                let sections = board.board.sections.map { section in
+                    OptionItem(section.name) { for tab in chats { workspace.attach(tab, to: boardTab, section: section.id) } }
+                }
+                if !sections.isEmpty { items.append(OptionItem("Attach \(chats.count) to \(board.name)", children: sections)) }
+            }
+        }
+        if !items.isEmpty { items.append(.rule) }
+        let n = many.count
+        let groups = workspace.tabGroups
+        items.append(OptionItem("Group \(n) Tabs") { if let made = workspace.newGroup(with: many) { workspace.editGroup(made) } })
+        let into = groups.groups.filter { group in !many.allSatisfy { groups.member[$0.id] == group.id } }.map { group in
+            OptionItem(group.name.isEmpty ? group.color.rawValue.capitalized : group.name, tint: Theme.TabGroups.color(group.color)) {
+                workspace.add(many, to: group.id)
+            }
+        }
+        if !into.isEmpty { items.append(OptionItem("Add \(n) Tabs to Group", children: into)) }
+        if many.contains(where: { groups.member[$0.id] != nil }) {
+            items.append(OptionItem("Remove from Group") { workspace.removeFromGroup(many) })
+        }
+        items.append(.rule)
+        items.append(OptionItem("Close \(n) Tabs") { workspace.requestClose(many) })
         return items
     }
 }

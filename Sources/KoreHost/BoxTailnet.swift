@@ -31,17 +31,21 @@ package enum BoxOS: String, Equatable, Sendable {
 }
 
 /// Which tailnet this box is on KoreNet with (phase 18 §1, the Mac's rule, `TailnetChooser`):
-/// installed Tailscale running → it; installed but stopped or signed out → it, and never a second
-/// node (the person starts it); absent, or its LocalAPI unreadable (the Mac App Store build, a
-/// non-admin user) → Kore's own `kore-tailnet`, started by the daemon beside kore-host, its state
-/// sealed under a key in a 0600 file. Its lifetime is the daemon's; KoreNet off stops it.
+/// installed Tailscale running → it; installed but stopped or signed out → Kore's own beside it
+/// until it's up again (`TailscaleBesideWatch`), so the box stays reachable; absent, or its
+/// LocalAPI unreadable (the Mac App Store build, a non-admin user) → Kore's own `kore-tailnet`,
+/// started by the daemon beside kore-host, its state sealed under a key in a 0600 file. Its
+/// lifetime is the daemon's; KoreNet off stops it. Without the helper, beside a stopped or
+/// signed-out Tailscale, the box waits for that node as before.
 package struct BoxTailnet: Sendable {
     /// What the daemon got.
     package enum Pick: @unchecked Sendable {
         /// Installed Tailscale (running, stopped or signed out: its own node, never a second one).
         case installed(any Tailnet, TailnetChooser.Choice)
-        /// Kore's own, up: its tailnet, whether its program still runs, and how it stops.
-        case kore(any Tailnet, alive: @Sendable () -> Bool, stop: @Sendable () -> Void)
+        /// Kore's own, up: its tailnet, whether its program still runs, and how it stops; beside
+        /// installed Tailscale that's stopped or signed out, that Tailscale's client (to hear it
+        /// come back up).
+        case kore(any Tailnet, alive: @Sendable () -> Bool, stop: @Sendable () -> Void, beside: (any Tailnet)? = nil)
         /// Kore's own was chosen and couldn't start: why, in a few words.
         case unavailable(String)
     }
@@ -75,21 +79,23 @@ package struct BoxTailnet: Sendable {
 
     /// The choice now, without starting anything.
     package func choice() -> TailnetChooser.Choice {
-        forced ? .sidecar : TailnetChooser.choose(installed().0)
+        forced ? .sidecar : TailnetChooser.chooseBeside(installed().0)
     }
 
     /// Chooses, and starts Kore's own when that's the choice. Blocks while it starts (up to its
     /// helper's `ready` and the node's start): run it off the main thread.
     package func choose() -> Pick {
         let (found, local) = installed()
-        let choice = forced ? .sidecar : TailnetChooser.choose(found)
+        let choice = forced ? .sidecar : TailnetChooser.chooseBeside(found)
         guard choice.startsSidecar else { return .installed(local ?? TailnetLocal(), choice) }
-        guard let helper = helper() else { return .unavailable(Self.noHelper) }
+        // Beside a stopped or signed-out Tailscale and Kore's own can't run: that node, waited for.
+        let waitForInstalled = Pick.installed(local ?? TailnetLocal(), TailnetChooser.fallback(found))
+        guard let helper = helper() else { return choice == .beside ? waitForInstalled : .unavailable(Self.noHelper) }
         do {
             let made = try start(helper, try key())
-            return .kore(made.tailnet, alive: made.alive, stop: made.stop)
+            return .kore(made.tailnet, alive: made.alive, stop: made.stop, beside: choice == .beside ? (local ?? TailnetLocal()) : nil)
         } catch {
-            return .unavailable("\(error)")
+            return choice == .beside ? waitForInstalled : .unavailable("\(error)")
         }
     }
 

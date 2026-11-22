@@ -16,28 +16,54 @@ package enum TailnetChooser {
 
     package enum Choice: Equatable, Sendable {
         case installed
+        /// No installed Tailscale (or its LocalAPI unreadable): Kore's own.
         case sidecar
-        /// The user stopped installed Tailscale: SSH only.
+        /// Installed Tailscale quit, signed out or not up yet: Kore's own runs beside it until the
+        /// app runs signed in again, so the Mac needs no second app open to reach its boxes.
+        case beside
+        /// The user stopped installed Tailscale and Kore's own can't run: SSH only.
         case stopped
-        /// Installed Tailscale needs a sign-in: SSH only, the UI asks for "Sign in to Tailscale".
+        /// Installed Tailscale needs a sign-in and Kore's own can't run: SSH only, the UI asks
+        /// for "Sign in to Tailscale".
         case signedOut
 
-        package var startsSidecar: Bool { self == .sidecar }
+        package var startsSidecar: Bool { self == .sidecar || self == .beside }
     }
 
+    /// A box's choice: installed Tailscale whenever it's there; Kore's own only with none (or
+    /// its LocalAPI unreadable). Quit or signed out, the installed node is still the box's, so
+    /// no second one.
     package static func choose(_ installed: Installed) -> Choice {
         switch installed {
-        // Installed but not running: the user's own node, so never a second one of Kore's.
         case .missing(.notRunning): .stopped
         case .missing: .sidecar
         case .state(let state):
             switch state {
             case .running, .starting, .needsMachineAuth, .unknown: .installed
             case .stopped: .stopped
-            // Signed out, never set up, or held by another user of this machine: all the
-            // installed node's, so no second one.
+            // Signed out, never set up, or held by another user of this machine.
             case .needsLogin, .noState, .inUseOtherUser: .signedOut
             }
+        }
+    }
+
+    /// The Mac's choice: installed Tailscale whenever it runs signed in; otherwise Kore's own,
+    /// beside a quit or signed-out app (or with none), so the Mac needs no second app open to
+    /// reach its boxes. One node at a time: Kore's stops the moment the app's is up again
+    /// (`KoreNetSwitch`).
+    package static func chooseBeside(_ installed: Installed) -> Choice {
+        switch choose(installed) {
+        case .stopped, .signedOut: .beside
+        case let other: other
+        }
+    }
+
+    /// What the Mac does when Kore's own tailnet can't run beside installed Tailscale (a copy
+    /// built without it): SSH only, as the installed app's state says.
+    package static func fallback(_ installed: Installed) -> Choice {
+        switch installed {
+        case .state(.needsLogin), .state(.noState), .state(.inUseOtherUser): .signedOut
+        default: .stopped
         }
     }
 

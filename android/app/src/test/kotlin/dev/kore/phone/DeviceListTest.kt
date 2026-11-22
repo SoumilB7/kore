@@ -103,4 +103,23 @@ class DeviceListTest {
         )
         assertEquals(listOf("Projects", "clones", "Work/x", "Play/x", null), DeviceList.chipSuffixes(chips))
     }
+
+    /** Arsenal at any tier: the row knows, and its logo, spinner and ">_" take the Arsenal mark's blue; off, their own colours. */
+    @Test fun arsenalTintsTheLogoSpinnerAndPrompt() {
+        for (provider in listOf("claude", "codex")) {
+            val own = if (provider == "codex") dev.kore.phone.ui.Tone.spinCodex else dev.kore.phone.ui.Tone.spinClaude
+            for (tier in listOf(null, "off")) {
+                val row = DeviceList.chatRow(o("""{"id":"a","provider":"$provider"${tier?.let { ",\"arsenal\":\"$it\"" } ?: ""}}"""), "w1", "", false, now, none)!!
+                assertFalse(row.arsenal)
+                assertEquals(null, dev.kore.phone.ui.logoTint(row.arsenal))
+                assertEquals(own, dev.kore.phone.ui.workTint(provider, row.arsenal))
+            }
+            for (tier in listOf("watch", "own", "drive", "device", "full")) {
+                val row = DeviceList.chatRow(o("""{"id":"a","provider":"$provider","arsenal":"$tier"}"""), "w1", "", false, now, none)!!
+                assertTrue(row.arsenal)
+                assertEquals(dev.kore.phone.ui.Tone.accent, dev.kore.phone.ui.logoTint(row.arsenal))
+                assertEquals(dev.kore.phone.ui.Tone.accent, dev.kore.phone.ui.workTint(provider, row.arsenal))
+            }
+        }
+    }
 }
