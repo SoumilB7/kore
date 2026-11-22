@@ -116,6 +116,13 @@ final class Run {
         return ok
     }
 
+    /// A box's line is Ready now; a check either way.
+    func expectReady(_ alias: String, _ what: String) -> Bool {
+        let status = BoxList.shared.box(alias)?.status
+        check(what, status == .ready, status.map { "\($0)" } ?? "not listed")
+        return status == .ready
+    }
+
     /// The box's window opens; its link is up over KoreNet within `within`.
     func linkOnNet(_ alias: String, within: Double = 60, netCase: Bool = false) async -> Bool {
         kore.open(alias)
@@ -298,6 +305,8 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     ("pipe-no-sshd", "a box set up over SSH, then its sshd stopped: copies both ways and the sync run over kore pipe on KoreNet, no SSH at all", pipeNoSSHD),
     ("interrupted", "the upgrade interrupted at each step (SSH killed mid-install, mid-join, mid-sign-in) → a retry completes, one own node, nothing stuck", interrupted),
     ("host-restart", "kore-host restarted (systemctl restart, as an update does) with the link on Kore's own tailnet → the Mac hears `restart` and relinks on KoreNet within seconds, never through SSH", hostRestart),
+    ("dead-alias", "the box's SSH alias now names an address nothing answers (an old LAN address) while KoreNet carries it → reads, chats, copies, the sync, a probe, a window reopened and Check again take no SSH wait; the row stays online", deadAlias),
+    ("host-keys", "past first contact: the box's keys made again (ssh's own changed-key refusal), the same at a moved address (Kore's own), the old key at a new address (offered as moved, trusted), a key changed between its offer and Trust → never trusted, known_hosts keeps what it had, KoreNet keeps working", hostKeys),
 ]
 
 @MainActor func plainBox(_ r: Run, _ name: String, port: Int, user: String = "kore", lingerOn: Bool = false) async -> Bool {
@@ -998,6 +1007,157 @@ let macVersion: String = {
     await filesThroughKore(r, "b26", shell: false)
     r.note(String(format: "copies and the sync over the pipe in %.1fs", now() - t0))
     r.logRow("b26")
+}
+
+/// 0.3.10: a box's alias left on an address that no longer answers (mybox's `Host mybox` on its
+/// old LAN address) while KoreNet carries the box. Nothing Kore does for it waits on an SSH
+/// connect there (Kore's are 5–10 s each), and its row doesn't say it can't be reached.
+@MainActor func deadAlias(_ r: Run) async {
+    guard await plainBox(r, "b28", port: 22128) else { return }
+    await r.works("b28", "KoreNet before the alias went dead")
+    // TEST-NET-1: routed nowhere, so a connect there waits out its timeout, as a dead LAN address does.
+    RigSSH.write([RigSSH.Host(alias: "b28", lines: ["HostName 192.0.2.1", "User kore"])], places: r.places)
+    let probe = now()
+    let ssh = await RigSSH.exec("b28", "true", places: r.places, timeout: 15)
+    r.check(String(format: "ssh b28 gets no answer now (%.1fs)", now() - probe), !ssh.ok, ssh.out)
+    let log = r.places.scratch.appendingPathComponent("kore-ssh.log")
+    let sshBefore = ((try? String(contentsOf: log, encoding: .utf8)) ?? "").count
+    /// One action, timed: within `limit`, well under an SSH connect's wait.
+    func quick(_ what: String, limit: Double = 3, _ work: () async -> String?) async {
+        let t0 = now()
+        let failed = await work()
+        let took = now() - t0
+        r.check(String(format: "%@ (%.1fs, under %.0fs)", what, took, limit), failed == nil && took < limit, failed ?? r.kore.describe("b28"))
+    }
+    await quick("fs.list over KoreNet, alias dead") { await r.kore.list("b28", "/home/kore") ? nil : "fs.list failed" }
+    await quick("chat.call over KoreNet, alias dead") { await r.kore.chatCall("b28", folder: "/home/kore") }
+    await quick("a probe of b28 finds it Ready") {
+        await BoxList.shared.probe("b28")
+        return BoxList.shared.box("b28")?.status == .ready ? nil : "status \(BoxList.shared.box("b28").map { "\($0.status)" } ?? "-")"
+    }
+    await quick("its window closed and opened again: online on KoreNet") {
+        r.kore.close("b28")
+        try? await Task.sleep(for: .milliseconds(500))
+        r.kore.open("b28")
+        let up = await r.until("b28 back online", within: 10) { r.onRoute("b28", net: true) }
+        return up == nil ? "not back on KoreNet" : nil
+    }
+    let files = now()
+    await filesThroughKore(r, "b28", shell: false)
+    let filesTook = now() - files
+    r.check(String(format: "copies both ways and the sync took no SSH wait (%.1fs, under 10s)", filesTook), filesTook < 10)
+    let row = r.kore.row("b28")
+    r.check("b28's row online, not \"can't reach\"", row?.status == .connected && row?.line.lowercased().contains("reach") != true, row.map { "\($0.status) · \($0.line)" } ?? "no row")
+    let spawned = String(((try? String(contentsOf: log, encoding: .utf8)) ?? "").dropFirst(sshBefore))
+        .split(whereSeparator: \.isNewline).filter { $0.contains("b28") }
+    r.check("Kore ran no ssh to b28 for any of it", spawned.isEmpty, spawned.prefix(5).joined(separator: " | "))
+    // Check again on its line: what's asked of a box that's working, and its line after.
+    await quick("Check again on b28: no SSH wait, its line stays Ready") {
+        await BoxList.shared.act(.checkAgain, on: "b28")
+        return BoxList.shared.box("b28")?.status == .ready ? nil : "status \(BoxList.shared.box("b28").map { "\($0.status)" } ?? "-")"
+    }
+    r.check("the link stayed on KoreNet throughout", r.onRoute("b28", net: true), r.kore.describe("b28"))
+    r.logRow("b28")
+}
+
+/// A box's line as it is: its words and what it offers.
+@MainActor func boxLine(_ alias: String) -> (line: String, fix: BoxList.Action?) {
+    switch BoxList.shared.box(alias)?.status {
+    case .failed(let line, let fix)?, .unreachable(let line, let fix)?: return (line, fix)
+    case let other?: return ("\(other)", nil)
+    case nil: return ("not listed", nil)
+    }
+}
+
+/// The Trust offer a box's line comes to, within `within`.
+@MainActor func trustOffer(_ r: Run, _ alias: String, _ what: String, within: Double = 30) async -> BoxHostKey.Offer? {
+    var offer: BoxHostKey.Offer?
+    _ = await r.expect(what, within: within, box: alias) {
+        if case .failed(_, .trust(let shown))? = BoxList.shared.box(alias)?.status { offer = shown }
+        return offer != nil
+    }
+    return offer
+}
+
+/// 0.3.10's host keys past first contact (first-contact has the new key and Trust). A box showing
+/// another key than before is never offered Trust, whether ssh knows the old key (its own refusal)
+/// or Kore does (the alias moved to an address known_hosts has nothing for); the box's old key at
+/// a new address is offered as moved; a key that changes between its offer and Trust isn't added.
+/// known_hosts keeps what it had through each, and KoreNet keeps carrying the box.
+@MainActor func hostKeys(_ r: Run) async {
+    guard await r.box(BoxSpec(name: "b27", sshPort: 22127)) else { return }
+    let known = r.places.scratch.appendingPathComponent("known_hosts")
+    FileManager.default.createFile(atPath: known.path, contents: nil)
+    func alias(_ lines: [String]) {
+        RigSSH.write([RigSSH.Host(alias: "b27", lines: lines + ["Port 22127", "User kore", "StrictHostKeyChecking ask", "UserKnownHostsFile \(known.path)"])], places: r.places)
+    }
+    func kept() -> String { (try? String(contentsOf: known, encoding: .utf8)) ?? "" }
+    /// The box's host keys made again (a reinstall, or someone in the middle); `keep` saves the old.
+    func newKeys(keep: Bool = false) async -> Bool {
+        let save = keep ? "mkdir -p /root/k1 && cp -p /etc/ssh/ssh_host_* /root/k1/ && " : ""
+        return await Boxes.exec("b27", save + "rm -f /etc/ssh/ssh_host_* && ssh-keygen -A >/dev/null && (systemctl restart ssh 2>/dev/null; true)").ok
+    }
+    alias(["HostName 127.0.0.1"])
+    guard await r.launch(installed: false) else { return }
+    // First contact, trusted: Kore has seen this key over b27.
+    _ = await r.kore.addAndSetUp("b27")
+    guard let first = await trustOffer(r, "b27", "b27's new key offered with Trust") else { return }
+    await BoxList.shared.act(.trust(first), on: "b27")
+    guard r.expectReady("b27", "Trust → Set up → Ready") else { return }
+    guard await r.linkOnNet("b27") else { return }
+    let trusted = kept()
+
+    // 1. Its keys made again, known_hosts holding the old. Check again asks the KoreNet link (no
+    // SSH: still Ready); what needs SSH (Update) meets ssh's own refusal, said as a possible attack.
+    r.check("b27's keys made again (old ones kept aside)", await newKeys(keep: true))
+    await BoxList.shared.act(.checkAgain, on: "b27")
+    _ = r.expectReady("b27", "Check again over KoreNet: still Ready, SSH not asked")
+    await BoxList.shared.act(.update, on: "b27")
+    var said = boxLine("b27")
+    r.check("Update over SSH: b27's key changed, could be an attack", said.line.contains("host key changed") && said.line.contains("attack"), said.line)
+    r.check("no Trust offered for a changed key", { if case .trust? = said.fix { return false }; return true }(), "\(said.fix.map { "\($0)" } ?? "-")")
+    r.check("known_hosts unchanged", kept() == trusted)
+    await r.works("b27", "KoreNet with its SSH key changed")
+
+    // 2. The alias moved to an address known_hosts has nothing for, the box on its new key: Kore's
+    // own comparison with the key it saw before.
+    alias(["HostName localhost"])
+    await BoxList.shared.act(.checkAgain, on: "b27")
+    let different = await r.expect("b27 at a new address shows a different key than before: no Trust", within: 30, box: "b27") {
+        let now = boxLine("b27")
+        if case .trust? = now.fix { return false }
+        return now.line.contains("shows a different key than before")
+    }
+    said = boxLine("b27")
+    r.note("b27 said: \(said.line)")
+    r.check("still no Trust after looking again", { if case .trust? = said.fix { return false }; return true }() && different)
+    r.check("known_hosts unchanged", kept() == trusted)
+
+    // 3. The box's old key back, at the new address: the alias moved, the box is the one it was.
+    r.check("b27's old keys back", await Boxes.exec("b27", "cp -p /root/k1/* /etc/ssh/ && (systemctl restart ssh 2>/dev/null; true)").ok)
+    await BoxList.shared.act(.checkAgain, on: "b27")
+    if let moved = await trustOffer(r, "b27", "b27's old key at a new address offered with Trust") {
+        r.check("said as moved: \(moved.line)", moved.moved && moved.line.contains("now points at a new address"), moved.line)
+        await BoxList.shared.act(.trust(moved), on: "b27")
+        r.check("Trust → b27 Ready at its new address", BoxList.shared.box("b27")?.status == .ready, boxLine("b27").line)
+        r.check("known_hosts gained the new address's lines", kept() != trusted && moved.lines.allSatisfy(kept().contains), kept())
+    }
+    let movedKept = kept()
+
+    // 4. A key offered (to what needs SSH: Update), then changed before Trust: Trust looks again
+    // and adds nothing.
+    alias(["HostName 127.0.0.1", "HostKeyAlias b27-elsewhere"])
+    await BoxList.shared.act(.update, on: "b27")
+    if let offered = await trustOffer(r, "b27", "b27 under another known_hosts name offered with Trust") {
+        r.check("b27's keys made again before Trust", await newKeys())
+        let t0 = now()
+        await BoxList.shared.act(.trust(offered), on: "b27")
+        said = boxLine("b27")
+        r.check(String(format: "Trust refused: another key just now, not trusted (%.1fs)", now() - t0), said.line.contains("another key just now") && said.line.contains("not trusted"), said.line)
+        r.check("known_hosts unchanged by the refused Trust", kept() == movedKept, kept())
+    }
+    await r.works("b27", "KoreNet after every key")
+    r.logRow("b27")
 }
 
 // MARK: Main

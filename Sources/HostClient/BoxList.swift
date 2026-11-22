@@ -164,6 +164,37 @@ package final class BoxList {
     @ObservationIgnored private var kitConsent = false
     /// How long a probe waits for kore-host's state.
     @ObservationIgnored package var patience: Duration = .seconds(20)
+
+    /// The box's link on KoreNet, for Check again (a test's own: now and after its probe alike).
+    @ObservationIgnored package var onNet: (@MainActor (String) -> Bool)?
+
+    /// The box's link on KoreNet: up there now, or asleep and last up there (`before`: the up it
+    /// was last). Nil when it isn't.
+    private struct NetLink { let before: Int? }
+    private func netLink(_ alias: String) -> NetLink? {
+        if let onNet { return onNet(alias) ? NetLink(before: nil) : nil }
+        let link = connection(alias)
+        let up = link.isOnline && link.route?.isNet == true
+        guard up || (!link.isOnline && link.netUpAt != nil) else { return nil }
+        return NetLink(before: link.netUpAt)
+    }
+
+    /// After a probe: the link was up on KoreNet (still, or again since `net`).
+    private func upOnNet(_ alias: String, since net: NetLink) -> Bool {
+        if let onNet { return onNet(alias) }
+        let link = connection(alias)
+        return (link.isOnline && link.route?.isNet == true) || link.netUpAt != net.before
+    }
+
+    /// A line only SSH can answer again: a host key's, a Trust's, Set up's, a command copied for
+    /// Terminal (its key, a reset), or steps under way (Trust's own look after).
+    static func sshLine(_ status: Status?) -> Bool {
+        switch status {
+        case .failed?, .working?, .unreachable(_, .copy?)?: true
+        default: false
+        }
+    }
+
     /// Between tries to reach a box its setup just started.
     @ObservationIgnored package var settle: Duration = .seconds(1)
 
@@ -486,7 +517,17 @@ package final class BoxList {
         case .updateAnyway: await perform(alias, grant: nil, retry: .update) { setup, step in try await setup.run(allow: false, step: step) }
         case .trust(let offer): await trust(offer, on: alias)
         case .tryAgain, .checkAgain:
+            let said = box(alias)?.status
             update(alias) { $0.status = .working("Checking \(NodeNames.name(alias))…") }
+            // Its link on KoreNet and no line only SSH answers: the link first, and answered over
+            // KoreNet that's the answer. Its SSH alias may name an address nothing answers (an old
+            // LAN one): never waited on then.
+            if !Self.sshLine(said), let net = netLink(alias) {
+                update(alias) { $0.status = .unknown }
+                await probe(alias)
+                if box(alias)?.status == .ready, upOnNet(alias, since: net) { return }
+                update(alias) { $0.status = .working("Checking \(NodeNames.name(alias))…") }
+            }
             guard await detect(alias) != nil else { return }
             update(alias) { $0.status = .unknown }
             await probe(alias)

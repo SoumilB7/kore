@@ -245,6 +245,52 @@ struct HostClientTests {
         #expect(BoxList(defaults: defaults, hosts: { [] }, cacheRoot: root).boxes.map(\.alias) == ["mybox", "other"])
     }
 
+    /// Check again on a box linked over KoreNet asks the link, never SSH: its alias may name an
+    /// address nothing answers (an old LAN one). A line only SSH answers (a host key's) still
+    /// looks over SSH, and so does a box whose link isn't on KoreNet.
+    @Test func checkAgainOverKoreNetAsksTheLinkNotSSH() async throws {
+        final class Use { var dead = false; var net = true }
+        let live = try FakeSSH(.linuxSystemd)
+        let dead = try FakeSSH(status: 255, said: "ssh: connect to host 192.0.2.1 port 22: Operation timed out")
+        defer { live.finish(); dead.finish() }
+        let use = Use(), up = Dials()
+        let root = Fixture.scratch()
+        let defaults = try #require(UserDefaults(suiteName: "hostclient-\(UUID().uuidString)"))
+        let list = BoxList(
+            defaults: defaults, hosts: { [] }, cacheRoot: root.appendingPathComponent("cache"),
+            connection: { [self] alias in makeConnection(root: root.appendingPathComponent(alias), dials: up) },
+            setup: { alias, grant in BoxSetup(alias: alias, grant: grant, shell: (use.dead ? dead : live).shell, binary: live.binary()) })
+        list.findMac = { nil }
+        list.onNet = { _ in use.net }
+        list.add("mybox")
+        #expect(await list.detect("mybox") != nil)
+        use.dead = true
+        list.injectStatus("mybox", .ready)
+
+        Task {
+            #expect(await until { up.hosts.count == 1 })
+            let host = up.hosts[0]
+            _ = await host.handshake(windows: [], chats: [])
+            let ask = await host.next("cmd")
+            host.send(json: ["t": "result", "ok": true, "id": ask?["id"] ?? "", "folders": [["windowId": "w_1", "path": "/home/me/app"]]])
+        }
+        await list.act(.checkAgain, on: "mybox")
+        #expect(list.box("mybox")?.status == .ready)
+        #expect(dead.calls.isEmpty)
+
+        // A host key's line: only SSH answers it, so SSH is asked (and here doesn't answer).
+        list.injectStatus("mybox", .failed("mybox's host key changed · this could be an attack, so Kore won't trust it · check with the box, then ssh-keygen -R mybox", .copy("ssh-keygen -R mybox")))
+        await list.act(.checkAgain, on: "mybox")
+        #expect(dead.calls == ["ssh mybox sh -s: # kore: detect"])
+        if case .unreachable? = list.box("mybox")?.status {} else { Issue.record("host key line: \(String(describing: list.box("mybox")?.status))") }
+
+        // Not on KoreNet: SSH is how it's checked, as before.
+        use.net = false
+        list.injectStatus("mybox", .ready)
+        await list.act(.tryAgain, on: "mybox")
+        #expect(dead.calls.count == 2 && up.hosts.count == 1)
+    }
+
     /// A probe's line is its link's answer, whichever ends first: the machine's look beside it
     /// failing never puts its own line over the link's (a slow ssh under load did once).
     @Test func aProbesLineIsItsLinksWhicheverEndsFirst() async throws {
