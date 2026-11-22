@@ -280,6 +280,11 @@ private struct RebuildAndExpect: Step {
                 let drawn = ExpectDrawnAtEnd.drawn(document, in: visible)
                 seen = "document \(Int(document.frame.height)), visible \(Int(visible.minY))–\(Int(visible.maxY)), \(drawn) layers, was \(Int(before))"
                 guard drawn > 0 else { return false }
+                // Its text takes presses: the selection's view is the new one's.
+                guard let responder = transcript.selectionResponder, responder.window != nil, responder.isDescendant(of: scroll) else {
+                    seen += transcript.selectionResponder == nil ? ", no selection view" : ", the selection's view not in it"
+                    return false
+                }
                 let end = visible.maxY >= document.bounds.maxY - 60
                 return atEnd ? end : !end && abs(visible.minY - before) < 200
             }

@@ -51,8 +51,15 @@ package final class TranscriptSelection: ObservableObject {
     nonisolated static let space = "transcript-selection"
 
     weak var store: (any SelectionSource)?
-    /// The view behind the rows that follows the pointer (its coordinates are the content space).
-    weak var responder: NSView?
+    /// The view behind the rows that follows the pointer (its coordinates are the content space):
+    /// the one in a window. A scroll view built again (`checkBlank`) makes its own before the old
+    /// one goes, and SwiftUI can update the old one last: one weak reference was left on it, then
+    /// on nothing.
+    var responder: NSView? {
+        get { responders.allObjects.first { $0.window != nil } ?? responders.allObjects.first }
+        set { if let newValue { responders.add(newValue) } }
+    }
+    private let responders = NSHashTable<NSView>.weakObjects()
     @Published private(set) var anchor: TextPoint?
     @Published private(set) var focus: TextPoint?
     /// The transcript has focus in the key window: the highlight is the active colour. Heard only

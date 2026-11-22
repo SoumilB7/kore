@@ -133,6 +133,9 @@ extension StoryTranscript {
         return view.convert(CGPoint(x: slot.frame.minX + p.x + 1, y: slot.frame.minY + p.y), to: nil)
     }
 
+    /// The selection's view, which takes the presses on text: none, and no text can be selected.
+    package var selectionResponder: NSView? { store.selection.responder }
+
     /// The texts reported and where (a check's failure says).
     package func slotsDescription(near point: CGPoint) -> String {
         let selection = store.selection

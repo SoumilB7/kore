@@ -103,6 +103,8 @@ struct TranscriptTimeline: View, Equatable {
     /// That, as it last was on screen: under another tab a new height of the composer's (a new
     /// chat's import line) moves it, and that says nothing of where the reader left it.
     @StateObject private var seenShown = Held([CGFloat]())
+    /// The text's size (`Zoom`) at the last pass on screen.
+    @StateObject private var textScale = Held(CGFloat?.none)
     /// Built anew out of sight (`renewOutOfSight`), and laying out until then.
     @StateObject private var renewing = Held(Date?.none)
     /// A shown transcript with rows and none of them on screen (`checkBlank`): the check under
@@ -315,7 +317,20 @@ struct TranscriptTimeline: View, Equatable {
                     geometry.value = (height, offset)
                     return
                 }
+                let shownBefore = seenShown.value
                 seenShown.value = new
+                // The text's size changed (⌘+ / ⌘-) under a reader at the end there by a move that
+                // took nothing up (a zoom out that left the view at the end): followed, so the pin
+                // below keeps the end in view as the text reflows, as `readerAtEnd` has it.
+                let scale = Zoom.shared.scale
+                if let was = textScale.value, was != scale, !following.value, !shift.zoomAdjusting,
+                    shownBefore.count == 5, shownBefore[1] + shownBefore[2] >= shownBefore[0] - Self.atBottom
+                {
+                    ScrollLog.write("follow", "zoom-at-end")
+                    following.value = true
+                    followTaken.value = shift.readerInputs
+                }
+                textScale.value = scale
                 // The end taken up again, or still there with nothing moved up (a wheel turned down
                 // at the end): the reader's inputs before this pass are behind it (one that came
                 // with this pass's move is that move's).

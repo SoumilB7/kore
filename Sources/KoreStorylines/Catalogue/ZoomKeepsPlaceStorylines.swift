@@ -43,9 +43,44 @@ final class ZoomKeepsPlace: ChatStoryline {
             KeepsPlace(where: "near the end", at: 0.7, trackpad: true),
             UnloadStoryline.ToEnd(), WaitIdle(),
             Key(KeyChord(.character("="), .command)), WaitIdle(),
-            Expect("at the end, ⌘+ keeps the end in view") { story in try story.activeChat().storyTranscript.readerAtEnd },
+            Self.endKept,
+            Key(KeyChord(.character("0"), .command)), WaitIdle(),
+            // At the end by a move that took nothing up, as a zoom out can leave it (the text
+            // shrinks under a reader above the end): ⌘+ keeps the end in view there too.
+            BoxStep("Up from the end, then onto it by a move that isn't the reader's") { story in
+                let transcript = try story.activeChat().storyTranscript
+                for _ in 0..<5 {
+                    transcript.readerScrolled()
+                    transcript.scrollContent(by: -400)
+                    try await Task.sleep(for: .milliseconds(60))
+                }
+                try await story.idle()
+                try await Task.sleep(for: .milliseconds(200))
+                // The rows built on the way down make the content taller: again till it's the end.
+                for _ in 0..<5 where !transcript.readerAtEnd {
+                    transcript.scrollContent(by: 5000)
+                    try await story.idle()
+                    try await Task.sleep(for: .milliseconds(150))
+                }
+            },
+            WaitIdle(),
+            Expect("there, at the end, not followed", found: { try? $0.activeChat().storyTranscript.endWhy }) { story in
+                let transcript = try story.activeChat().storyTranscript
+                return transcript.readerAtEnd && transcript.endWhy.hasPrefix("following false")
+            },
+            Key(KeyChord(.character("="), .command)), WaitIdle(),
+            Self.endKept,
             Key(KeyChord(.character("0"), .command)), WaitIdle(),
         ]
+    }
+}
+
+extension ZoomKeepsPlace {
+    static var endKept: Expect {
+        Expect("at the end, ⌘+ keeps the end in view", found: { story in
+            guard let view = story.app.chat?.storyTranscript.scrollView, let document = view.documentView else { return "no scroll view" }
+            return "bottom \(view.contentView.bounds.maxY) of \(document.frame.height); \(story.app.chat?.storyTranscript.endWhy ?? "-")"
+        }) { story in try story.activeChat().storyTranscript.readerAtEnd }
     }
 }
 
