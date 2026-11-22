@@ -128,6 +128,34 @@ extension StoryTranscript {
         return view.convert(CGPoint(x: slot.frame.minX + p.x + 1, y: slot.frame.minY + p.y), to: nil)
     }
 
+    /// The texts reported and where (a check's failure says).
+    package func slotsDescription(near point: CGPoint) -> String {
+        let selection = store.selection
+        guard let view = selection.responder else { return "no responder" }
+        let p = view.convert(point, from: nil)
+        let frames = selection.slots.values.flatMap(\.values).map(\.frame)
+        let ys = frames.map { "\(Int($0.minY))–\(Int($0.maxY))" }.prefix(8)
+        return "point \(Int(p.x)),\(Int(p.y)) in \(frames.count) texts, e.g. \(ys.joined(separator: " "))"
+    }
+
+    /// The text at a window point's height nearest it, and the place in it.
+    package func textAt(_ point: CGPoint) -> (entry: UUID, path: [Int], offset: Int)? {
+        let selection = store.selection
+        guard let view = selection.responder else { return nil }
+        let p = view.convert(point, from: nil)
+        // The text whose lines take in the point's height (left or right of it), the nearest.
+        var best: (entry: UUID, path: [Int], frame: CGRect)?
+        for (entry, texts) in selection.slots {
+            for (path, slot) in texts where slot.frame.minY <= p.y && p.y <= slot.frame.maxY {
+                let d = max(0, slot.frame.minX - p.x, p.x - slot.frame.maxX)
+                if best == nil || d < max(0, best!.frame.minX - p.x, p.x - best!.frame.maxX) { best = (entry, path, slot.frame) }
+            }
+        }
+        guard let best, let layout = selection.layout(best.entry, best.path) else { return nil }
+        let x = min(max(p.x, best.frame.minX), best.frame.maxX)
+        return (best.entry, best.path, layout.offset(at: CGPoint(x: x - best.frame.minX, y: p.y - best.frame.minY)))
+    }
+
     /// The paths of an entry's texts its built row reports.
     package func selectableTexts(_ entry: UUID) -> [[Int]] {
         (store.selection.slots[entry] ?? [:]).keys.sorted { $0.lexicographicallyPrecedes($1) }
