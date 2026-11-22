@@ -35,6 +35,41 @@ final class ScrollShift: ObservableObject {
                 MainActor.assumeIsolated { self?.readerInput() }
             }
         }
+        if ScrollLog.on { watchClip(scroll) }
+    }
+
+    // MARK: The scroll log (`ScrollLog`)
+
+    private var clipSeen: (y: CGFloat, doc: CGFloat)?
+
+    /// Every move of the clip and every new document height, whoever made it.
+    private func watchClip(_ scroll: NSScrollView) {
+        let clip = scroll.contentView
+        clip.postsBoundsChangedNotifications = true
+        scroll.documentView?.postsFrameChangedNotifications = true
+        ScrollLog.write("attach", "doc=\(ScrollLog.n(scroll.documentView?.frame.height ?? 0)) y=\(ScrollLog.n(clip.bounds.minY))")
+        clipSeen = nil
+        let names: [(NSView?, Notification.Name)] = [(clip, NSView.boundsDidChangeNotification), (scroll.documentView, NSView.frameDidChangeNotification)]
+        for (view, name) in names {
+            guard let view else { continue }
+            liveObservers.append(
+                NotificationCenter.default.addObserver(forName: name, object: view, queue: nil) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.logClip() }
+                })
+        }
+    }
+
+    private func logClip() {
+        guard let scroll = scrollView, let document = scroll.documentView else { return }
+        let y = scroll.contentView.bounds.minY
+        let doc = document.frame.height
+        let was = clipSeen
+        clipSeen = (y, doc)
+        guard abs(y - (was?.y ?? .nan)) > 0.5 || abs(doc - (was?.doc ?? .nan)) > 0.5 else { return }
+        ScrollLog.write(
+            "clip",
+            "y=\(ScrollLog.n(y)) dy=\(ScrollLog.d(y - (was?.y ?? y))) doc=\(ScrollLog.n(doc)) ddoc=\(ScrollLog.d(doc - (was?.doc ?? doc))) in=\(readerInputs)"
+                + (holding ? " by=hold" : ""))
     }
 
     // MARK: The reader's own input
@@ -172,6 +207,7 @@ final class ScrollShift: ObservableObject {
         let clip = scroll.contentView
         var origin = clip.bounds.origin
         origin.y += document.isFlipped ? dy : -dy
+        ScrollLog.write("shift", "dy=\(ScrollLog.d(dy))")
         clip.scroll(to: origin)
         scroll.reflectScrolledClipView(clip)
         return true
@@ -254,6 +290,7 @@ final class ScrollShift: ObservableObject {
         }
         let origin = clip.constrainBoundsRect(place).origin
         if abs(origin.y - clip.bounds.minY) > 0.5 {
+            ScrollLog.write("hold-keep", "place=\(held.place) from=\(ScrollLog.n(clip.bounds.minY)) to=\(ScrollLog.n(origin.y))")
             holding = true
             defer { holding = false }
             clip.scroll(to: origin)
@@ -273,6 +310,7 @@ final class ScrollShift: ObservableObject {
         place.origin.y = end - place.height
         let origin = clip.constrainBoundsRect(place).origin
         guard abs(origin.y - clip.bounds.minY) > 0.5 else { return false }
+        ScrollLog.write("pin-end-native", "end=\(ScrollLog.n(end)) from=\(ScrollLog.n(clip.bounds.minY)) to=\(ScrollLog.n(origin.y))")
         clip.scroll(to: origin)
         scroll.reflectScrolledClipView(clip)
         return true

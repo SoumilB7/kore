@@ -26,6 +26,11 @@ package struct StoryTranscript {
 
     /// Builds the transcript's scroll view again, as for a blank one.
     package func rebuildScrollView() { store.storyRebuild?() }
+    /// A move a storyline makes stands for the reader's own (`ScrollShift.readerInputs`): only
+    /// those take up the end again, never one of Kore's.
+    package func readerScrolled() {
+        if let view = scrollView { ScrollShift.readerMoved(view) }
+    }
 
     /// The scroll view the timeline knows it's in.
     package var scrollView: NSScrollView? { store.storyScrollView?() }

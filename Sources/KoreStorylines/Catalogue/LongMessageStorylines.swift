@@ -346,9 +346,11 @@ final class FoldAtEndDrawn: FoldShrinks {
     override var before: [any Step] { [AfterGlide(after: true), Scroll(.answer(turn: Self.earlier + 1), to: .bottom), WaitIdle()] }
 }
 
-/// Followed, finishing within the send's glide (which holds layout's pin off): the same.
+/// Followed, finishing within the send's glide (which holds layout's pin off): the same. The
+/// glide is checked as soon as the answer is in (it takes the view to the end itself): a scroll
+/// and a wait for idle first used up what was left of it on a busy Mac.
 final class FoldInGlideDrawn: FoldShrinks {
-    override var before: [any Step] { [Scroll(.answer(turn: Self.earlier + 1), to: .bottom), WaitIdle(), AfterGlide(after: false)] }
+    override var before: [any Step] { [AfterGlide(after: false)] }
 }
 
 /// Read from 120 pt above the end: the answer stays where it was on screen.

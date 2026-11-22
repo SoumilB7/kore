@@ -154,6 +154,8 @@ package final class TranscriptStore {
         _modify { yield &log.workedBefore }
     }
     var turnIsOpen: Bool { log.turnIsOpen }
+    /// A turn is under way, for a storyline.
+    package var storyTurnOpen: Bool { turnIsOpen }
     private func endUnfinishedAgents(from first: Int = 0) { log.endUnfinishedAgents(from: first) }
     package func compacting(_ on: Bool, at point: Int? = nil) { log.compacting(on, at: point) }
     var connectionWord: String? { log.connectionWord }
@@ -493,10 +495,12 @@ package final class TranscriptStore {
     private(set) var folded: (turn: String, answer: String, seq: Int)?
 
     /// User turns before the shown window: the "Load earlier turns" row shows while any are.
-    private(set) var hiddenTurns = 0
+    package private(set) var hiddenTurns = 0
 
     /// Every user message of the chat, loaded or not.
     private(set) var messageMarks: [MessageMark] = []
+    /// How many there are, for a storyline.
+    package var messageCount: Int { messageMarks.count }
 
     /// The ones not loaded, oldest first.
     private(set) var earlierMarks: [EarlierMessage] = []

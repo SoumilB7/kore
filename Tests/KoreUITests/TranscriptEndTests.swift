@@ -201,15 +201,14 @@ struct TranscriptEndTests {
         #expect(!TranscriptTimeline.pinsEnd(grew: false, insetSettling: false, visibleMoved: false, magnified: false))
     }
 
-    @Test func aFoldFollowedLooksAtTheEndAndAboveKeepsTheAnswerOnScreen() {
-        // Following: the end is looked at, whatever answers are on screen.
-        #expect(FoldMove(following: true, answerTops: ["a": 100], visible: 600) == .checkEnd)
-        // Above the end: the answer starting lowest above the view's bottom stays where it is,
-        // one whose top went above the view included; one under the bottom isn't the reader's.
-        #expect(FoldMove(following: false, answerTops: ["a": -300, "b": 120, "c": 640], visible: 600) == .keep(id: "b", top: 120))
-        #expect(FoldMove(following: false, answerTops: ["a": -300], visible: 600) == .keep(id: "a", top: -300))
-        // No answer there: up by the height the fold took.
-        #expect(FoldMove(following: false, answerTops: ["c": 640], visible: 600) == .byHeight)
-        #expect(FoldMove(following: false, answerTops: [:], visible: 600) == .byHeight)
+    @Test func aFoldFollowedLooksAtTheEndAndAboveKeepsTheRowAtTheTop() {
+        // Following: the end is looked at, whatever rows are on screen.
+        #expect(FoldMove(following: true, kept: ("a", 100)) == .checkEnd)
+        // Above the end: the row at the top of the view (or the first below it) stays where it is,
+        // one whose top went above the view included.
+        #expect(FoldMove(following: false, kept: ("b", 120)) == .keep(id: "b", top: 120))
+        #expect(FoldMove(following: false, kept: ("a", -300)) == .keep(id: "a", top: -300))
+        // No row built there: nothing moves, the work folding never takes the view with it.
+        #expect(FoldMove(following: false, kept: nil) == .stay)
     }
 }
