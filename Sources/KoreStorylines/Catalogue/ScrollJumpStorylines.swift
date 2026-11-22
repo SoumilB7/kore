@@ -231,6 +231,9 @@ final class JumpWatch {
             lost += 1
             return
         }
+        // At the content's end, which the rows just measured put higher than was estimated:
+        // AppKit stops the view there.
+        if moved > 0, let scroll, let document = scroll.documentView, scroll.contentView.bounds.maxY >= document.frame.height - 2 { return }
         let off = (now - row.top) - moved
         if abs(off) > ScrollJumpProbe.movingSlack {
             guard asserted else { return note("not asserted, \(label): \(row.id) moved \(Int(now - row.top)) for a scroll of \(Int(moved))") }
