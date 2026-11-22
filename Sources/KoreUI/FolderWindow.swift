@@ -106,7 +106,7 @@ struct FolderWindow: View {
                 .overlay(alignment: .leading) {
                     if workspace.explorerOpen, floating, let box = workspace.box {
                         ZStack(alignment: .leading) {
-                            Color.clear.contentShape(Rectangle()).onTapGesture { workspace.explorerOpen = false }
+                            OutsidePress { if workspace.explorerOpen { workspace.explorerOpen = false } }
                             BoxExplorer(workspace: workspace, box: box, floating: true)
                                 .boxGitShown(box, in: workspace)
                                 .frame(width: min(Layout.Explorer.width, geometry.size.width - Layout.Explorer.overlayMargin))
@@ -120,7 +120,7 @@ struct FolderWindow: View {
                         }
                     } else if workspace.explorerOpen, floating, let store = workspace.files {
                         ZStack(alignment: .leading) {
-                            Color.clear.contentShape(Rectangle()).onTapGesture { workspace.explorerOpen = false }
+                            OutsidePress { if workspace.explorerOpen { workspace.explorerOpen = false } }
                             ExplorerSidebar(workspace: workspace, store: store, floating: true)
                                 .frame(width: min(Layout.Explorer.width, geometry.size.width - Layout.Explorer.overlayMargin))
                                 .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: Radius.panel, topTrailingRadius: Radius.panel))
@@ -137,7 +137,7 @@ struct FolderWindow: View {
                 .overlay(alignment: .leading) {
                     if workspace.devicesOpen, floating {
                         ZStack(alignment: .leading) {
-                            Color.clear.contentShape(Rectangle()).onTapGesture { workspace.devicesOpen = false }
+                            OutsidePress { if workspace.devicesOpen { workspace.devicesOpen = false } }
                             DevicesSidebar(holdKey: DevicesSidebar.key(workspace), floating: true)
                                 .frame(width: min(Layout.Devices.width, geometry.size.width - Layout.Explorer.overlayMargin))
                                 .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: Radius.panel, topTrailingRadius: Radius.panel))
@@ -161,11 +161,6 @@ struct FolderWindow: View {
                             .padding(.top, Space.md)
                         }
                     }
-                }
-                .onChange(of: workspace.activeID) {
-                    guard floating else { return }
-                    if workspace.explorerOpen { workspace.explorerOpen = false }
-                    if workspace.devicesOpen { workspace.devicesOpen = false }
                 }
                 .onChange(of: floating, initial: true) { _, floats in workspace.explorerFloats = floats }
             }
@@ -271,3 +266,16 @@ extension FocusedValues {
         set { self[FocusedWorkspaceKey.self] = newValue }
     }
 }
+
+/// Behind a pane floating over a narrow window: a press anywhere else closes it, as one outside a
+/// popup does. On the press, not a tap: a drag that starts there (a sash, a selection) would
+/// otherwise do nothing and leave the pane open.
+private struct OutsidePress: View {
+    let close: () -> Void
+
+    var body: some View {
+        Color.clear.contentShape(Rectangle())
+            .gesture(DragGesture(minimumDistance: 0).onChanged { _ in close() })
+    }
+}
+

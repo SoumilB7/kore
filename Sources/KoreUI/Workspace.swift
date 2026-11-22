@@ -189,6 +189,13 @@ package final class Workspace {
             // the newly mounted page after layout.
             PinchZoom.selectTab(in: window, id: activeID, openTabs: tabs.map(\.id))
             if closing != nil { closing = nil }
+            // So does the explorer or Devices floating over a narrow window, here as the switch
+            // happens: the window's onChange heard of it only at its next redraw, and that was
+            // the pane opening, so it closed again at once (the icon's first press did nothing).
+            if explorerFloats {
+                if explorerOpen { explorerOpen = false }
+                if devicesOpen { devicesOpen = false }
+            }
             if !selection.isEmpty { selection = [] }
             markShown()
         }

@@ -454,6 +454,7 @@ private struct TreeList: View, Equatable {
         let dropSegment = target.flatMap { target in store.row(showing: target).flatMap { $0.id == target ? nil : target } }
         let drop = dropSegment == nil ? target : nil
         let carrying = !FileCarries.shared.pending.isEmpty
+        VStack(spacing: 0) {
         LazyVStack(spacing: 0) {
             ForEach(rows) { row in
                 let isSelected = store.isChosen(row)
@@ -524,6 +525,7 @@ private struct TreeList: View, Equatable {
         .accessibilityHidden(true)
         // Dropped below the rows: into the folder itself.
         .onDrop(of: TreeDrop.types, delegate: TreeDrop(folder: store.root, store: store, workspace: workspace, undo: undo))
+        }
     }
 
     /// The selected row's parent folder, whose guide is brighter.

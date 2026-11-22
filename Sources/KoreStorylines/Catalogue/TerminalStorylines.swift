@@ -39,6 +39,9 @@ final class WindowTerminal: ChatStoryline {
             Snapshot("terminal-explorer"),
             Do("Resize the window with the explorer docked") { $0.window?.setContentSize(CGSize(width: 760, height: 540)) },
             WaitIdle(),
+            // Begun narrow, the explorer was closed to reach the sash: shown again, now docked.
+            ExplorerShown(),
+            WaitIdle(),
             Expect("the terminal stays beside the explorer and inside the window") { story in
                 guard let panel = StoryElement(StoryID.Terminal.panel)?.frame,
                       let explorer = StoryElement(StoryID.Explorer.newfile)?.frame,
@@ -275,6 +278,15 @@ private struct TerminalWindowCloses: Step {
 private struct TerminalResize: Step {
     var label: String { "Drag the terminal sash upward" }
     func run(_ story: StoryContext) async throws {
+        // Below 700pt the explorer floats over the window and a press outside it only closes it:
+        // closed first (its toggle), as a person reaching for the sash would.
+        if story.app.workspace?.explorerOpen == true, story.app.workspace?.hasOverlay == true {
+            try await Command(.toggleExplorer).run(story)
+            // Gone from the window, not only closed: it slides out over the sash's middle first.
+            try await story.until("the floating explorer gone") {
+                story.app.workspace?.hasOverlay == false && StoryElement(StoryID.Explorer.newfile)?.frame == nil
+            }
+        }
         let sash = try await story.element(.id(StoryID.Terminal.sash))
         guard let frame = sash.frame, let window = story.window else { throw StoryFailure.other("no terminal sash") }
         let height = story.app.workspace?.storyTerminalHeight ?? 0

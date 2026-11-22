@@ -1269,14 +1269,17 @@ final class CodeBlockCopyBelow: ChatStoryline {
         id.dropFirst("transcript.code[".count).dropLast().split(separator: ".").compactMap { Int($0) }
     }
 
-    /// The nth block's Copy lies in its bottom row, below the well, and ends at its right edge.
+    /// The nth block's Copy lies in its bottom row, below the well, and ends at its right edge,
+    /// or short of the message rail where the block reaches under it (a narrow window).
     @MainActor static func copyBelow(_ n: Int) -> Bool {
         let ids = blocks()
-        guard ids.indices.contains(n), let block = StoryRegistry.entry(ids[n])?.frame,
-            let copy = StoryRegistry.entry(ids[n] + ".copy")?.frame
+        guard ids.indices.contains(n), let entry = StoryRegistry.entry(ids[n]), let block = entry.frame,
+            let copy = StoryRegistry.entry(ids[n] + ".copy")?.frame,
+            let clip = entry.registeredView?.enclosingScrollView?.contentView
         else { return false }
+        let railLeft = clip.convert(clip.bounds, to: nil).maxX - (26 + 12)  // the rail's width and inset (Size.railWidth, railInset)
         // Frames are the window's, y up: the block's bottom is its minY.
-        return abs(copy.minY - block.minY) < 0.5 && copy.height <= 22.5 && abs(copy.maxX - block.maxX) < 1
+        return abs(copy.minY - block.minY) < 0.5 && copy.height <= 22.5 && abs(copy.maxX - min(block.maxX, railLeft)) < 1
     }
 }
 
