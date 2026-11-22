@@ -24,13 +24,27 @@ final class DevicesAddPhone: ChatStoryline {
             Self.icon("KoreNet is off", dimmed: true),
             Press(icon),
             WaitForElement(.id(StoryID.Net.panel)),
-            ExpectElement(.id(StoryID.Net.add), .absent),
             Expect("the popup says KoreNet is off") { _ in Devices.shared.picture().net == .off },
+            // The + is there with KoreNet off (a box needs none of it); a phone waits for KoreNet.
+            Press(.id(StoryID.Net.add)),
+            WaitForElement(.id(StoryID.Options.panel)),
+            Expect("the +'s two rows, Add a phone greyed while KoreNet is off") { _ in
+                StoryID.Options.rows.map(\.title) == ["Add a box", "Add a phone"]
+                    && StoryID.Options.rows.map(\.enabled) == [true, false]
+            },
+            WaitIdle(), Snapshot("devices-plus-off"),
+            Key(.escape),
+            ExpectElement(.id(StoryID.Options.panel), .absent),
             Press(.id(StoryID.Net.toggle)),
             Expect("KoreNet on, on a tailnet") { _ in Devices.shared.picture().net == .running },
             Self.icon("No other devices yet", dimmed: false),
             WaitForElement(.id(StoryID.Net.add)),
             Press(.id(StoryID.Net.add)),
+            WaitForElement(.id(StoryID.Options.panel)),
+            Expect("both rows open with KoreNet on") { _ in StoryID.Options.rows.map(\.enabled) == [true, true] },
+            WaitIdle(), Snapshot("devices-plus-menu"),
+            Key(.escape),
+            DevicesPlus("Add a phone"),
             WaitForElement(.id(StoryID.Net.countdown)),
             Expect("the Add device window open, the icon's dot accent") { _ in
                 Devices.shared.picture().addOpen(at: Date()) && Devices.shared.look().dot == .accent
@@ -271,16 +285,22 @@ final class DevicesAddBox: ChatStoryline {
             Press(.id(StoryID.Net.icon)),
             WaitForElement(.id(StoryID.Net.panel)),
             Expect("KoreNet off, no rows yet") { _ in Devices.shared.picture().net == .off && Devices.shared.picture().devices.isEmpty },
-            ExpectElement(.id(StoryID.Net.addBox)),
+            ExpectElement(.id(StoryID.Net.add)),
             ExpectElement(.id(StoryID.Net.useSSH), .absent),
             Snapshot("devices-add-box-1-row"),
-            Press(.id(StoryID.Net.addBox)),
+            DevicesPlus("Add a box"),
             WaitForElement(.id(StoryID.Net.useSSH)),
             WaitForElement(.id(StoryID.Net.newBox)),
             Expect("asked the release once, no tailnet boxes") { _ in
                 DevicesStory.releaseAsks == 1 && !StoryRegistry.ids.contains { $0.contains("net.add.peer") }
             },
             Snapshot("devices-add-box-2-choices"),
+            // One add at a time: the lit + closes the choices, and opens its rows again after.
+            Press(.id(StoryID.Net.add)),
+            ExpectElement(.id(StoryID.Net.useSSH), .absent),
+            ExpectElement(.id(StoryID.Options.panel), .absent),
+            DevicesPlus("Add a box"),
+            WaitForElement(.id(StoryID.Net.useSSH)),
             Press(.id(StoryID.Net.useSSH)),
             WaitForElement(.id(StoryID.Net.boxField)),
             ExpectElement(.id(StoryID.Net.boxHost("gpu-box"))),
@@ -335,7 +355,7 @@ final class DevicesAddBoxOnTailnet: ChatStoryline {
             DevicesSetUp(on: true, scriptedBoxes: true, release: false, peers: ["box-2"]),
             Press(.id(StoryID.Net.icon)),
             WaitForElement(.id(StoryID.Net.panel)),
-            Press(.id(StoryID.Net.addBox)),
+            DevicesPlus("Add a box"),
             WaitForElement(.id(StoryID.Net.welcomePeer("box-2"))),
             ExpectElement(.id(StoryID.Net.useSSH)),
             ExpectElement(.id(StoryID.Net.newBox), .absent),
@@ -571,5 +591,22 @@ private final class DevicesReset: StoryFinishing {
         BoxNetJoin.unreachable = []
         DevicesStory.phones = nil
         DevicesStory.net = nil
+    }
+}
+
+/// The Devices header's + and one of its two rows ("Add a box", "Add a phone"): the one add
+/// (devices-plus.html).
+struct DevicesPlus: Step {
+    let row: String
+    var label: String { "+ ▸ \(row)" }
+    init(_ row: String) { self.row = row }
+
+    func run(_ story: StoryContext) async throws {
+        try await Press(.id(StoryID.Net.add)).run(story)
+        try await WaitForElement(.id(StoryID.Options.panel)).run(story)
+        guard let index = StoryMenus.open.firstIndex(of: row) else {
+            throw StoryFailure.expectation("“\(row)” under the + (it has \(StoryMenus.open))")
+        }
+        try await Press(.id(StoryID.Options.item(index))).run(story)
     }
 }

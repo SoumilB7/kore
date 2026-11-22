@@ -163,9 +163,14 @@ struct DevicesPopup: View {
             if adding {
                 NetHeaderButton(glyph: .close, lit: true, help: "Stop adding") { devices.closeAddWindow() }
                     .storyID(StoryID.Net.closeAdd, press: { devices.closeAddWindow() })
-            } else if picture.net.adds {
-                NetHeaderButton(glyph: .plus, lit: false, help: "Add device") { devices.openAddWindow() }
-                    .storyID(StoryID.Net.add, press: { devices.openAddWindow() })
+            } else {
+                // The one add (devices-plus.html): a box or a phone. Lit while its popup or the
+                // box choices are open; with the choices open it closes them.
+                NetHeaderButton(glyph: .plus, lit: OptionsMenu.shared.openSource == Self.addMenu || addingBox.value != nil, help: "Add device") {
+                    plusPressed(picture)
+                }
+                .background(BoxAnchor { [anchors] view in anchors.value[Self.addMenu] = view })
+                .storyID(StoryID.Net.add, press: { plusPressed(picture) })
             }
         }
         .padding(.leading, Space.xl)
@@ -431,11 +436,26 @@ struct DevicesPopup: View {
 
     // MARK: Add a box
 
-    /// "Add a box", whatever KoreNet's state (an SSH box needs none of it): one click opens its
-    /// choices under it (`BoxAddChoicesList`, the Welcome "+"'s too), a second closes them.
+    /// The header +'s menu: its anchor's key and its menu's source (the + lit while it shows).
+    private static let addMenu = "devices-add"
+
+    /// The +: with the box choices open, it closes them; else its two rows, right-aligned under
+    /// it: Add a box (whatever KoreNet's state: an SSH box needs none of it) and Add a phone
+    /// (KoreNet running: the Add device window).
+    private func plusPressed(_ picture: DevicesPicture) {
+        if addingBox.value != nil { return addingBox.value = nil }
+        guard let view = anchors.value[Self.addMenu], let window = view.window else { return }
+        let point = view.convert(CGPoint(x: view.bounds.maxX - Layout.Options.width, y: view.isFlipped ? view.bounds.maxY : view.bounds.minY), to: nil)
+        let items = [
+            OptionItem("Add a box", netGlyph: .box) { addingBox.value = .choices },
+            OptionItem("Add a phone", enabled: picture.net.adds, netGlyph: .phone) { devices.openAddWindow() },
+        ]
+        OptionsMenu.shared.show(items, at: point, in: window, source: Self.addMenu)
+    }
+
+    /// "Add a box"'s steps, at the bottom of the list (the + opens them): its choices
+    /// (`BoxAddChoicesList`, the Welcome "+"'s too), the alias field, New box…, the box's line.
     @ViewBuilder private func addBox(_ picture: DevicesPicture) -> some View {
-        NetAction(title: "Add a box", glyph: .plus, trailing: false) { toggleAddBox() }
-            .storyID(StoryID.Net.addBox, press: { toggleAddBox() })
         switch addingBox.value {
         case nil:
             EmptyView()
@@ -462,10 +482,6 @@ struct DevicesPopup: View {
                     .storyID(StoryID.Net.boxLine)
             }
         }
-    }
-
-    private func toggleAddBox() {
-        addingBox.value = addingBox.value == nil ? .choices : nil
     }
 
     /// Use SSH…'s alias: listed now (its row above, its Welcome chip), asked once; its line

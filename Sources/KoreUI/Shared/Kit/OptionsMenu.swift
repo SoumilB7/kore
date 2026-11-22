@@ -15,12 +15,15 @@ struct OptionItem {
     var action: (() -> Void)?
     /// A symbol before the title, and the key that does the same, after it (learnt by being seen).
     var glyph: String?
+    /// KoreNet's own glyph before the title instead (the device list's box, phone…).
+    var netGlyph: NetGlyph.Kind?
     var key: String?
     var separator: Bool { title.isEmpty && action == nil && children.isEmpty }
 
     init(_ title: String, enabled: Bool = true, checked: Bool = false, destructive: Bool = false, tint: Color? = nil,
-         glyph: String? = nil, key: String? = nil, children: [OptionItem] = [], action: (() -> Void)? = nil) {
+         glyph: String? = nil, netGlyph: NetGlyph.Kind? = nil, key: String? = nil, children: [OptionItem] = [], action: (() -> Void)? = nil) {
         self.glyph = glyph
+        self.netGlyph = netGlyph
         self.key = key
         self.title = title
         self.enabled = enabled
@@ -62,6 +65,8 @@ final class OptionsMenu {
     @ObservationIgnored private var nativeMenu: NSMenu?
     @ObservationIgnored private var anchor = CGPoint.zero
     @ObservationIgnored private var source = ""
+    /// Who opened the menu up now (its `source`), observed: a control lit while its own menu shows.
+    private(set) var openSource: String?
     @ObservationIgnored private static var nativeMonitor: Any?
 
     static func install() {
@@ -165,6 +170,7 @@ final class OptionsMenu {
         selected = nil
         anchor = point
         self.source = source
+        openSource = source
         let host = NSHostingView(rootView: OptionsList(menu: self))
         host.setAccessibilityRole(.menu)
         self.host = host
@@ -240,6 +246,7 @@ final class OptionsMenu {
     func close() {
         host?.removeFromSuperview()
         host = nil
+        if openSource != nil { openSource = nil }
         nativeMenu = nil
         owner = nil
         items = []
@@ -306,7 +313,7 @@ private struct OptionsList: View {
                             Button { menu.choose(index) } label: {
                                 label(item.title, symbol: item.checked ? "checkmark" : nil,
                                       tint: !item.enabled ? Theme.tertiary : item.destructive ? Theme.danger : item.tint ?? Theme.text,
-                                      branch: !item.children.isEmpty, glyph: item.glyph, key: item.key)
+                                      branch: !item.children.isEmpty, glyph: item.glyph, netGlyph: item.netGlyph, key: item.key)
                             }
                             .buttonStyle(.plain)
                             .disabled(!item.enabled)
@@ -329,10 +336,12 @@ private struct OptionsList: View {
         .storyMark(StoryID.Options.panel)
     }
 
-    private func label(_ text: String, symbol: String?, tint: SwiftUI.Color, branch: Bool = false, glyph: String? = nil, key: String? = nil) -> some View {
+    private func label(_ text: String, symbol: String?, tint: SwiftUI.Color, branch: Bool = false, glyph: String? = nil,
+                       netGlyph: NetGlyph.Kind? = nil, key: String? = nil) -> some View {
         HStack(spacing: Space.sm) {
             if gutter { Image(systemName: symbol ?? "checkmark").opacity(symbol == nil ? 0 : 1).font(Chrome.glyphCrumb) }
             if let glyph { Image(systemName: glyph).font(Chrome.caption).foregroundStyle(Theme.secondary) }
+            if let netGlyph { NetGlyph(kind: netGlyph).foregroundStyle(Theme.secondary) }
             Text(text).font(Chrome.caption).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 0)
             if let key { Text(key).font(Chrome.caption).foregroundStyle(Theme.tertiary).padding(.leading, Space.lg) }

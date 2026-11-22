@@ -618,9 +618,8 @@ extension StoryID {
         package static let useSSH = StoryID(.welcome, "net.add.ssh")
         package static let newBoxPopup = StoryID(.welcome, "net.newbox")
         package static let copyInstall = newBoxPopup.part(.copy)
-        /// Devices' "Add a box", its alias field, an SSH host under it, and the added box's line
-        /// and that line's action.
-        package static let addBox = StoryID(.titlebar, "net.addbox")
+        /// Devices' Add a box (from the header +): its alias field, an SSH host under it, and the
+        /// added box's line and that line's action.
         package static let boxField = StoryID(.titlebar, "net.addbox.field")
         package static func boxHost(_ host: String) -> StoryID { StoryID(.titlebar, "net.addbox.host", key: host) }
         package static let boxLine = StoryID(.titlebar, "net.addbox.line")

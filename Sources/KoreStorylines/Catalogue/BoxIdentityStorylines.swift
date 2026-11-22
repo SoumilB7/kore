@@ -115,7 +115,7 @@ enum BoxIdentityStory {
             },
             Press(.id(StoryID.Net.icon)),
             WaitForElement(.id(StoryID.Net.panel)),
-            Press(.id(StoryID.Net.addBox)),
+            DevicesPlus("Add a box"),
             WaitForElement(.id(StoryID.Net.useSSH)),
             Press(.id(StoryID.Net.useSSH)),
             WaitForElement(.id(StoryID.Net.boxField)),
