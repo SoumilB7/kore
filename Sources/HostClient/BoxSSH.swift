@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 
 /// Every ssh (and scp, and rsync's `-e`) Kore runs to a box, built in one place: the program,
 /// Kore's options for the use, the alias's own (a typed destination's user and port), then the
@@ -15,13 +16,19 @@ package enum BoxSSH {
 
     /// The same, its route worked out off the main actor.
     package static func head(_ alias: String, program: String = SSHTransport.ssh, options: [String]) async -> [String] {
-        let given = Self.route.map { $0(alias) }
-        let now = if let given { given } else { await SSHTailnetRoute.options(forAlias: alias) }
+        let set = Self.route.map { $0(alias) }
+        let now = if let set { set } else { await SSHTailnetRoute.options(forAlias: alias) }
         return [program] + options + (BoxAddress(alias)?.options ?? []) + now
     }
 
     /// Tests: the route each alias gets, in place of `SSHTailnetRoute`'s (nil: its).
-    nonisolated(unsafe) package static var route: (@Sendable (String) -> [String])?
+    /// Read by every suite's ssh while one sets it, so it's locked; the route itself runs outside
+    /// the lock.
+    package static var route: (@Sendable (String) -> [String])? {
+        get { given.withLock { $0 } }
+        set { given.withLock { $0 = newValue } }
+    }
+    private static let given = Mutex<(@Sendable (String) -> [String])?>(nil)
 
     /// The host ssh is given: the alias, or a typed destination's host (its user and port are
     /// options in `head`).

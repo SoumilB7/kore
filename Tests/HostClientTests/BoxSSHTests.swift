@@ -9,23 +9,27 @@ import Testing
 @Suite("Box SSH: one route for every ssh", .serialized)
 @MainActor
 struct BoxSSHTests {
-    /// mybox's alias names a stopped Tailscale's address; the link runs on Kore's own tailnet.
+    /// This suite's own alias: the route is the process's, and other suites' boxes (`mybox`) run
+    /// meanwhile.
+    nonisolated static let alias = "routedbox"
+    /// Its alias names a stopped Tailscale's address; the link runs on Kore's own tailnet.
     nonisolated static let route = [
         "-o", "HostName=100.87.122.76", "-o", "HostKeyAlias=100.91.66.71", "-o", #"ProxyCommand="/K app/kore-tailnet" nc -socket "/S p/kt.sock" %h %p"#,
     ]
 
     func routed<T>(_ body: () async throws -> T) async rethrows -> T {
-        BoxSSH.route = { $0 == "mybox" ? Self.route : [] }
-        defer { BoxSSH.route = nil }
+        let before = BoxSSH.route
+        BoxSSH.route = { $0 == Self.alias ? Self.route : before?($0) ?? [] }
+        defer { BoxSSH.route = before }
         return try await body()
     }
 
     @Test func theSyncAndEveryCopyGoOnTheRoute() async throws {
         try await routed {
-            let box = try #require(SyncBox.ssh("mybox"))
+            let box = try #require(SyncBox.ssh(Self.alias))
             // ssh, Kore's options, then the route, then `--` and the alias.
             #expect(box.ssh == ["/usr/bin/ssh"] + SyncBox.sshOptions + Self.route)
-            #expect(box.shellArgv("true").suffix(3) == ["--", "mybox", "sh -c 'true' sh"])
+            #expect(box.shellArgv("true").suffix(3) == ["--", Self.alias, "sh -c 'true' sh"])
             #expect(box.shellArgv("true").contains(Self.route[5]))
             #expect(box.masterArgv(socket: "/s").contains(Self.route[5]))
             // rsync's -e: the route's ProxyCommand one quoted word.
@@ -42,10 +46,10 @@ struct BoxSSHTests {
 
     @Test func theAttachSetUpAndKeyScanGoOnTheRouteToo() async {
         await routed {
-            let attach = SSHTransport.arguments(alias: "mybox", grant: "mac")
-            #expect(attach.starts(with: ["-T"]) && attach.contains(Self.route[5]) && attach.suffix(5) == ["mybox", SSHTransport.defaultCommand, "attach", "--as", "mac"])
-            let ran = await BoxSSH.argv("mybox", program: "/bin/ssh", options: ["-T"], ["sh -s"])
-            #expect(ran == ["/bin/ssh", "-T"] + Self.route + ["--", "mybox", "sh -s"])
+            let attach = SSHTransport.arguments(alias: Self.alias, grant: "mac")
+            #expect(attach.starts(with: ["-T"]) && attach.contains(Self.route[5]) && attach.suffix(5) == [Self.alias, SSHTransport.defaultCommand, "attach", "--as", "mac"])
+            let ran = await BoxSSH.argv(Self.alias, program: "/bin/ssh", options: ["-T"], ["sh -s"])
+            #expect(ran == ["/bin/ssh", "-T"] + Self.route + ["--", Self.alias, "sh -s"])
             // A typed destination: its user and port before the route, its host after `--`.
             #expect(await BoxSSH.argv("me@box.lan:2222", options: [], ["x"]).suffix(3) == ["--", "box.lan", "x"])
         }
@@ -61,7 +65,7 @@ struct BoxSSHTests {
         try "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > '\(said.path)'\nexit 255\n".write(to: fake, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
         try await routed {
-            let box = try #require(SyncBox.ssh("mybox", program: fake.path))
+            let box = try #require(SyncBox.ssh(Self.alias, program: fake.path))
             _ = await SyncProcess.run("/usr/bin/rsync", ["-a"] + box.rsyncOptions(false) + [box.spec("/x/"), dir.appendingPathComponent("to").path + "/"])
             let words = try String(contentsOf: said, encoding: .utf8).split(separator: "\n").map(String.init)
             #expect(words.contains(Self.route[5]), "\(words)")
