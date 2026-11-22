@@ -719,16 +719,16 @@ struct CaptionButton: View {
         let lit = hovered.value && isEnabled
         Button(action: action) {
             HStack(spacing: Space.xxs) {
-                Text(title).lineLimit(1).fixedSize()
+                // The ↗ inside the title's Text: one baseline, the line's, wherever it sits.
+                (opens ? Text(title) + Text(" ") + Text(Image(systemName: "arrow.up.right")).font(Glyph.chevron)
+                    .foregroundStyle(isEnabled && lit ? hover : Theme.tertiary) : Text(title))
+                    .lineLimit(1).fixedSize()
                 if let unfolds {
                     Image(systemName: "chevron.down")
                         .font(Glyph.chevron)
                         .foregroundStyle(lit ? hover : Theme.tertiary)
                         .rotationEffect(.degrees(unfolds ? 180 : 0))
                         .animation(reduceMotion ? nil : Motion.fade, value: unfolds)
-                }
-                if opens {
-                    Image(systemName: "arrow.up.right").font(Glyph.chevron).foregroundStyle(lit ? hover : Theme.tertiary)
                 }
             }
             .foregroundStyle(isEnabled ? (lit ? hover : tint) : Theme.tertiary)
