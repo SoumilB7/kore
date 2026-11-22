@@ -116,7 +116,7 @@ struct AgentGrantTests {
     @Test func tiersAddUpAndOffHasNothing() {
         #expect(AgentCommand.allowed(.off).isEmpty)
         #expect(AgentCommand.allowed(.drive).map(\.name) == AgentCommand.all.map(\.name))
-        #expect(AgentCommand.allowed(.own).allSatisfy { $0.tier <= .own } && AgentCommand.allowed(.own).count == 18)
+        #expect(AgentCommand.allowed(.own).allSatisfy { $0.tier <= .own } && AgentCommand.allowed(.own).count == 19)
         // Watch reads (and waits on a chat's turn); every change is Own's.
         #expect(AgentCommand.allowed(.watch).allSatisfy { !$0.name.hasPrefix("chat.") || ["chat.show", "chat.wait"].contains($0.name) })
         #expect(AgentCommand.allowed(.watch).count == 10)

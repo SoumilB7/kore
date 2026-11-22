@@ -232,18 +232,21 @@ struct BoxCardTests {
             try ("#!/bin/sh\n" + body).write(to: path, atomically: true, encoding: .utf8)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
         }
-        var shell = fake.shell
-        shell.quick = .milliseconds(500)
-        shell.reach = .milliseconds(500)
-        let bounded = shell
+        // The healthy look under the usual limits (a busy Mac may take more than half a second to
+        // answer it), the dead ones under half a second.
+        final class Limits: @unchecked Sendable { var shell: BoxShell; init(_ shell: BoxShell) { self.shell = shell } }
+        let limits = Limits(fake.shell)
         let list = BoxList(defaults: try defaults(), hosts: { [] }, cacheRoot: fake.root, setup: { alias, grant in
-            BoxSetup(alias: alias, grant: grant, shell: bounded, binary: fake.binary())
+            BoxSetup(alias: alias, grant: grant, shell: limits.shell, binary: fake.binary())
         })
         let mac = try mac()
         list.findMac = { mac }
         list.add(alias)
         try ssh("cat > /dev/null; cat '\(fake.root.path)/detection'\n")
         _ = try await list.look(alias).get()
+        limits.shell.quick = .milliseconds(500)
+        limits.shell.reach = .milliseconds(500)
+        let bounded = limits.shell
         try ssh("(trap '' TERM HUP; sleep 20) &\ntrap '' TERM\nsleep 20\n")
         let dead = BoxSetup.Failure(message: "Can't reach \(alias)", fix: .tryAgain)
         func timed(_ what: String, _ action: () async -> BoxSetup.Failure?) async {

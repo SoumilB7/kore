@@ -105,6 +105,7 @@ extension AgentChannelTests {
                 home = Workspace(folder: folder, restore: false)
                 caller = Chat(provider: try #require(Registry.provider(callerCLI)), folder: folder)
                 home.tabs[0].chat = caller
+                Self.clearCeilings(past)
                 self.past[folder.standardizedFileURL] = past
                 // History is the rig's alone: no CLI's own list is read.
                 StorylineSeams.sessions = { [weak self] provider, folder in
@@ -128,13 +129,22 @@ extension AgentChannelTests {
             func other(_ name: String, _ past: [SessionSummary]) throws -> Workspace {
                 let folder = root.appendingPathComponent(name)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                Self.clearCeilings(past)
                 self.past[folder.standardizedFileURL] = past
                 let workspace = Workspace(folder: folder, restore: false)
                 show(workspace)
                 return workspace
             }
 
+            /// The past chats' ids are fixed, and an Arsenal open keeps a ceiling under each in the
+            /// test runner's defaults (`ModeCeilings`, never raised by a later open): each rig
+            /// starts and ends without one, so no earlier test or run decides a woken chat's mode.
+            static func clearCeilings(_ past: [SessionSummary]) {
+                for session in past { ModeCeilings.put(nil, for: session.id) }
+            }
+
             func finish() {
+                for sessions in past.values { Self.clearCeilings(sessions) }
                 AgentPasses.shared.ended(getppid())
                 AgentGrants.stopAll()
                 StorylineSeams.backend = nil
