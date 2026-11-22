@@ -203,3 +203,83 @@ final class QuoteAfterScrolling: ChatStoryline {
         ]
     }
 }
+
+/// Every way to take a quote's text, as a person tries them: a double and a triple click, a
+/// drag inside it, a drag from the paragraph above into it and from the one below up into it,
+/// ⌘A then ⌘C, and a right-click's Copy. At 100% (this one), at ⌘+'s 130%, and on a page a
+/// pinch magnified.
+class QuoteGestures: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    override class var script: CLIScript { QuoteSelectCopy.script }
+    /// What sets the text's size or the page's scale before the gestures.
+    var sized: [any Step] { [] }
+
+    static let first = QuoteSelectCopy.first, then = QuoteSelectCopy.then, after = QuoteSelectCopy.after
+    static let line1: [Int] = [1, 0], line2: [Int] = [1, 1]
+
+    override func steps() -> [any Step] {
+        let spot = { (path: [Int], text: String, word: String) in Spot.answer(1, path, at: text, word) }
+        return super.steps() + [Send("Quote it"), TurnFinished(1), WaitIdle()] + sized + [
+            Snapshot("quote-gestures"),
+            ClickText(spot(Self.line2, Self.then, "build"), count: 2),
+            CopySelection("build"),
+            ClickText(spot(Self.line1, Self.first, "NOTES"), count: 3),
+            CopySelection(Self.first),
+            DragSelect(from: spot(Self.line1, Self.first, "NOTES"), to: spot(Self.line1, Self.first, " first")),
+            CopySelection("NOTES.md"),
+            DragSelect(from: spot([0], "Before the quote.", "Before"), to: spot(Self.line1, Self.first, " NOTES")),
+            CopySelection("Before the quote.\n\n> Resume from"),
+            DragSelect(from: spot([2], Self.after, " the"), to: spot(Self.line2, Self.then, "build")),
+            CopySelection("> build the clone.\n\nAfter"),
+            ClickText(spot(Self.line2, Self.then, "clone"), count: 2),
+            Key(KeyChord(.character("a"), .command)),
+            CopyContains("> Resume from NOTES.md first.\n>\n> Then build the clone.\n\nAfter the quote."),
+            ClickText(spot(Self.line2, Self.then, "clone"), count: 2),
+            RightClickCopy(spot: spot(Self.line2, Self.then, "clone"), expected: "clone"),
+        ]
+    }
+
+    /// A right-click on the selection, its Copy picked: the selection on the pasteboard.
+    struct RightClickCopy: Step {
+        let spot: Spot
+        let expected: String
+        var label: String { "Right-click \(spot), Copy: “\(expected)”" }
+
+        func run(_ story: StoryContext) async throws {
+            StoryTranscript.clearCopied()
+            let (window, point) = try await spot.point(story)
+            await story.input.rightClick(at: point, in: window)
+            try await PickOption("Copy").run(story)
+            do {
+                try await story.until("the copy") { StoryTranscript.copied == expected }
+            } catch StoryFailure.timedOut {
+                throw StoryFailure.expectation("Copy to copy “\(expected)”; it copied “\(StoryTranscript.copied ?? "nothing")”")
+            }
+        }
+    }
+}
+
+final class QuoteGesturesLarger: QuoteGestures {
+    override var sized: [any Step] { [Do("Text at 130%") { _ in PinchZoom.storyRestoreScale(1.3) }, WaitIdle()] }
+}
+
+final class QuoteGesturesPinched: QuoteGestures {
+    override var sized: [any Step] { [PinchAtQuote()] }
+
+    /// A pinch at the quote's first line to about 1.5×, let go.
+    struct PinchAtQuote: Step {
+        var label: String { "Pinch the page to 1.5× at the quote" }
+        func run(_ story: StoryContext) async throws {
+            try await UnloadStoryline.GlideEnds().run(story)
+            let (window, point) = try await Spot.answer(1, QuoteGestures.line1, at: QuoteGestures.first, "NOTES").point(story)
+            guard PinchZoom.storySample(in: window, amount: 0, phase: .began, at: point) else { throw StoryFailure.other("the page took no pinch") }
+            for _ in 0..<25 {
+                _ = PinchZoom.storySample(in: window, amount: 0.02, phase: .changed, at: point)
+                try await Task.sleep(for: .milliseconds(8))
+            }
+            _ = PinchZoom.storySample(in: window, amount: 0, phase: .ended, at: point)
+            try await story.until("the page magnified") { (PinchZoom.storyPageScale(in: window) ?? 1) > 1.4 && PinchZoom.storyPlacement(in: window) != nil }
+            try await story.idle()
+        }
+    }
+}
