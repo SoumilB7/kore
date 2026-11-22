@@ -42,6 +42,9 @@ package protocol ChatServices: AnyObject {
     /// The chat runs on a box (its window's chats): what's this Mac's alone (Arsenal, its usage,
     /// its sign-in, modes above Auto) isn't offered.
     var onBox: Bool { get }
+    /// An idle chat's CLI rests after `Chat.restAfter` (the Mac's own chats): a box rests its
+    /// chats itself (`HostDaemon.idleStops`), and the Mac's chats on a box are the box's.
+    var restsIdleCLI: Bool { get }
     /// The chat's mode changed: an Arsenal it can't keep goes off.
     func arsenalFollowMode(_ chat: Chat)
     /// Every event, after the chat took it: storylines, the local link, the agent channel.
@@ -84,6 +87,7 @@ extension ChatServices {
     package var watchesStall: Bool { true }
     package func transcriptReplaced(_ chat: Chat) {}
     package var onBox: Bool { false }
+    package var restsIdleCLI: Bool { false }
     package func agentServer(_ chat: Chat) -> KoreReach.Server? { nil }
 }
 

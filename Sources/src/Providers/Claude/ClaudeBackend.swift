@@ -1466,6 +1466,19 @@ package final class ClaudeBackend: ChatBackend {
     }
 
     package func relaunch(reason: String) async {
+        await end(reason: reason)
+        // A chat that's remotely controlled comes back at once, for its remote side.
+        if remoteWanted { Task { try? await start() } }
+    }
+
+    package func rest() async -> Bool {
+        guard session != nil, starting == nil, !remoteWanted else { return false }
+        await end(reason: "idle")
+        return true
+    }
+
+    /// The process ends, saying nothing to the chat: the next `start()` launches it again.
+    private func end(reason: String) async {
         guard let session else { return }
         log.relaunch("claude", chat: sessionId, reason: reason)
         // Its shells, and the agents it ran, end with its process.
@@ -1478,8 +1491,6 @@ package final class ClaudeBackend: ChatBackend {
         await session.close(awaitingExit: .seconds(2))
         await endOwnAgents()
         logExit(session)
-        // A chat that's remotely controlled comes back at once, for its remote side.
-        if remoteWanted { Task { try? await start() } }
     }
 
     /// The CLI's process is gone: the agents it ran end. Each one's tail reads what it wrote
