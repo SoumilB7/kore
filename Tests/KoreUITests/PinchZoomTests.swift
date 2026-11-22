@@ -185,9 +185,9 @@ struct PinchZoomTests {
     func unsolicitedNativeScrollsAreHeldOnlyDuringTheGesture(posted: Bool) {
         let (window, scroll, _, point) = editor()
         let clip = scroll.contentView
-        clip.postsBoundsChangedNotifications = posted
         let shift = ScrollShift()
         shift.attach(scroll)
+        clip.postsBoundsChangedNotifications = posted
         var freezes = 0
         shift.onZoomBegin = { _ in freezes += 1 }
         let pinch = PinchZoom()
