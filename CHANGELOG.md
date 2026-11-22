@@ -2,6 +2,23 @@
 
 Notable changes to Kore, newest first. Versions follow [semver](https://semver.org).
 
+## [0.3.8] - 2026-11-22
+
+### Added
+- Your Mac (full control of a box) can put box chats in Full access; phones and other chats stop
+  at Auto. A box running kore-host as root says Full access can't run there.
+- Builds and tests run by chats count as "Kore Dev", not Kore, in Battery and Activity Monitor;
+  a dev build of the app is "Kore Dev" with its own settings, chats and keys.
+
+### Changed
+- Full access is never remembered as the default mode for new chats; Auto and the rest still are.
+
+### Fixed
+- Usage bars show "outside Kore" only when the plan rose with no Kore request from that login on
+  this Mac, a box or a paired Mac.
+- A chat in a window you can't see no longer draws while it streams: several streaming chats cost
+  about twice one, not nine times.
+
 ## [0.3.7] - 2026-11-22
 
 ### Added
