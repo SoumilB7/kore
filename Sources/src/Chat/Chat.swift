@@ -40,6 +40,9 @@ package final class Chat: Identifiable {
     }
     /// The window schedules its own debounced persistence, independently of SwiftUI bodies.
     @ObservationIgnored package var onDraftChanged: (() -> Void)?
+    /// Its turn, its sub-agents or its background commands started or ended: its window keeps a
+    /// note of what was working, for Resume after a close it didn't choose (`Workspace.work(of:)`).
+    @ObservationIgnored package var onWorkChanged: (() -> Void)?
     @ObservationIgnored package var restoringComposerDraft = false
     /// The / menu was closed (Esc, a click away, another popup) for the "/word" at the caret;
     /// the next one opens it again.
@@ -427,6 +430,7 @@ package final class Chat: Identifiable {
         if let start { services.logReplay(ContinuousClock.now - start) }
         if case .replayed = event { showHeld() }
         services.tap(self, event)
+        if Self.changesWork(event) { onWorkChanged?() }
         // A stopped turn took the compaction in it along, whether or not the CLI said so.
         if case .turnFinished = event, stoppingCompaction, context.compacting { dispatch(.compactionStopped) }
         noteModelList(event)
@@ -434,6 +438,14 @@ package final class Chat: Identifiable {
         case .earlierHistory: unloadOld(opening: true)
         case .turnFinished: unloadOld()
         default: break
+        }
+    }
+
+    /// A turn, a sub-agent or a background command starting or ending.
+    static func changesWork(_ event: ChatEvent) -> Bool {
+        switch event {
+        case .turnStarted, .turnFinished, .exited, .agentSpawned, .agentFinished, .agentResumed, .commandStarted, .commandEnded: true
+        default: false
         }
     }
 
@@ -600,6 +612,12 @@ package final class Chat: Identifiable {
     /// A turn, a background agent or a command Stop applies to is running: what a sign-out or
     /// a switch of its login stops.
     package var hasWork: Bool { !closed && (isWorking || waitingForNetwork || commands.summary.total > 0) }
+
+    /// Work a close or an idle rest would cut off, one rule for both: a turn running (a card
+    /// waiting in it included), live sub-agents, background commands (a Monitor, an armed cron job
+    /// included), or a send queued. Resume after a close offers the chats that had it
+    /// (`Workspace.work(of:)`); an idle CLI never rests while its chat has it.
+    package var hasLiveWork: Bool { hasWork || (!closed && queuedCount > 0) }
 
     /// Its login is going (a sign-out) or moving (a switch): the turn, the background agents
     /// and the commands stop, and the CLI starts again as the new login once they have.
@@ -910,6 +928,7 @@ package final class Chat: Identifiable {
 
     package func close(reason: String = "tab closed") {
         onDraftChanged = nil
+        onWorkChanged = nil
         if !closed, backend != nil { SessionLog.shared.closing(provider.id, chat: sessionId, reason: reason) }
         if let networkObserver { NotificationCenter.default.removeObserver(networkObserver) }
         networkObserver = nil

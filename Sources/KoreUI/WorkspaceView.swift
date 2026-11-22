@@ -430,6 +430,8 @@ struct TabBar: View {
                 .truncationMode(.middle)
                 .layoutPriority(-1)
                 .tip(workspace.box?.label ?? workspace.folder.path)
+            // Chats that were working when this window last went: one quiet line, Resume on it.
+            ResumeCue(workspace: workspace)
             // Kore's tailnet of this window's device not signed in: one quiet line, Sign in on it.
             OwnCueLine(box: workspace.box?.alias, story: StoryID.Net.titleCue(workspace.box?.alias)).layoutPriority(-1)
             // A Mac folder synced with a box folder that has chats open there: one quiet line.

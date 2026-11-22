@@ -109,6 +109,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for workspace in workspaces { workspace.flushAutoSaves() }
         let files = workspaces.flatMap(\.unsavedFiles)
         guard working > 0 || terminals > 0 || transfers > 0 || !files.isEmpty else {
+            // What's working is noted as it is now, before the CLIs end with Kore (Resume next time).
+            Workspace.ending = true
             workspaces.forEach { $0.persistNow() }
             return .terminateNow
         }
@@ -117,7 +119,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         Task { @MainActor in
             var quit = await Self.confirmQuit(working: working, terminals: terminals, transfers: transfers)
             if quit { quit = await UnsavedGuard.confirm(files, saveAll: { workspaces.forEach { $0.saveAll() } }) }
-            if quit { workspaces.forEach { $0.persistNow() } }
+            if quit {
+                Workspace.ending = true
+                workspaces.forEach { $0.persistNow() }
+            }
             quitAsking = false
             sender.reply(toApplicationShouldTerminate: quit)
         }

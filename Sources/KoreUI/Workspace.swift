@@ -63,6 +63,7 @@ package final class Workspace {
             if !tabGroups.isEmpty { tabGroups.normalize(order: tabs.map(\.id)) }
             if keptBoxGroups != nil { adoptBoxGroups() }
             if !selection.isEmpty { keepSelectionTrue() }
+            if resumeOffer != nil { keepResumeTrue() }
         }
     }
     /// Browser-style groups of the tabs (TabGroups.swift).
@@ -86,6 +87,10 @@ package final class Workspace {
     var chatPaste: ChatPasteLine?
     /// The group whose popup is open, and whether its name field takes the keys.
     package internal(set) var groupEdit: TabGroupEdit?
+    /// Chats that were working when this window last went, offered once to carry on (`ResumeCue`).
+    package internal(set) var resumeOffer: ResumeOffer?
+    /// What was working as a quit began, kept for every save after it (`Workspace.ending`).
+    @ObservationIgnored var workAtEnd: [UUID: SavedWork]?
     /// The folder's window, once it's on screen (a storyline host sizes and snapshots it). Its
     /// close, not its view's, ends the chats.
     @ObservationIgnored package weak var window: NSWindow? {
@@ -278,6 +283,7 @@ package final class Workspace {
         var groups = TabGroups()
         for group in saved?.groups ?? [] { groups.add(group) }
         for (tab, savedTab) in zip(restored, savedTabs) where savedTab.group != nil { groups.set(tab.id, to: savedTab.group) }
+        let resume = box == nil ? Self.resumeItems(restored, savedTabs) : []
         // A file open twice (saved under two spellings of its path) comes back once.
         var seen: Set<String> = []
         restored.removeAll { tab in
@@ -286,6 +292,7 @@ package final class Workspace {
         }
         if restored.isEmpty { restored = [ChatTab()] }
         tabs = restored
+        if !resume.isEmpty { resumeOffer = ResumeOffer(items: resume) }
         groups.normalize(order: restored.map(\.id))
         tabGroups = groups
         restoredChats = Set(restored.compactMap { $0.chat.map(ObjectIdentifier.init) })
@@ -1434,6 +1441,8 @@ package final class Workspace {
             /// When its chat's settings last changed here (`Chat.settingsChangedAt`): a box chat
             /// held here says on its send back whether they changed since it came, after a relaunch too.
             var settingsAt: Date? = nil
+            /// Its chat was working as the window went (`ResumeAfterClose.swift`).
+            var working: SavedWork? = nil
         }
 
         struct Closed: Codable, Equatable {
@@ -1488,6 +1497,7 @@ package final class Workspace {
             rememberDraft(chat)
             let draft = chat.composerDraft
             snapshot.tabs[index].draft = draft.isEmpty ? nil : draft
+            if snapshot.tabs[index].session != nil { snapshot.tabs[index].working = work(of: tab) }
         }
         snapshot.closed = closedTabs.isEmpty ? nil : closedTabs
         snapshot.drafts = drafts.isEmpty ? nil : drafts
@@ -1549,17 +1559,25 @@ package final class Workspace {
     private func bindTabs(previous: [ChatTab]) {
         for tab in previous where !tabs.contains(where: { $0 === tab }) {
             tab.onChatChanged = nil
-            if tab.agent == nil { tab.chat?.onDraftChanged = nil }
+            if tab.agent == nil {
+                tab.chat?.onDraftChanged = nil
+                tab.chat?.onWorkChanged = nil
+            }
         }
         for tab in tabs {
             if tab.board != nil { bindBoard(tab) }
             tab.onChatChanged = { [weak self] old, _ in
                 guard let self else { return }
                 old?.onDraftChanged = nil
+                old?.onWorkChanged = nil
                 bindTabs(previous: [])
                 save()
             }
             guard tab.agent == nil, let chat = tab.chat else { continue }
+            chat.onWorkChanged = { [weak self, weak tab] in
+                guard let self, let tab else { return }
+                workChanged(tab)
+            }
             chat.onDraftChanged = { [weak self, weak chat] in
                 guard let self, let chat else { return }
                 if LinkTaps.on { LinkTaps.draft?(chat) }
@@ -1880,6 +1898,8 @@ extension Workspace {
     /// Storylines: what the window saves, in its saved form, and the folder opened from it again
     /// as a relaunch opens it.
     package func storySaved() throws -> Data { try JSONEncoder().encode(persistenceSnapshot()) }
+    /// The CLIs' lists read once (restored tabs checked against them).
+    package var storyListsLoaded: Bool { loaded }
 
     package static func storyRestore(folder: URL, saved: Data) -> Bool {
         guard let snapshot = try? JSONDecoder().decode(Saved.self, from: saved) else { return false }
