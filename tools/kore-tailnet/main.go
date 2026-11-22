@@ -6,8 +6,9 @@
 //	kore-tailnet nc -socket <path> <addr> <port>     (ssh's ProxyCommand over the running one)
 //
 // It prints "ready" once the socket listens, waits for a `start` carrying the 32-byte state key
-// (never argv or env), and ends when the connection that sent it closes, on `stop`, or on
-// SIGTERM/SIGINT. Log upload is off; the auth URL leaves only through `status`.
+// (never argv or env), and ends when the connection that sent it closes or on `stop`; on
+// SIGTERM/SIGINT at once before `start`, after it once its owner has had ownerGrace to end it.
+// Log upload is off; the auth URL leaves only through `status`.
 package main
 
 import (
@@ -79,10 +80,22 @@ func main() {
 			srv.finish(3)
 		}
 	})
-	signals := make(chan os.Signal, 1)
+	signals := make(chan os.Signal, 2)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
 		<-signals
+		// Started, its owner ends it (closing its connection, or `stop`). A signal to the whole
+		// group (systemd stopping or restarting kore-host) reaches this node too: the owner gets
+		// the moment it needs to send its links' last words (a Mac's `bye restart`) on it first.
+		srv.mu.Lock()
+		started := srv.started
+		srv.mu.Unlock()
+		if started {
+			select {
+			case <-signals:
+			case <-time.After(ownerGrace):
+			}
+		}
 		srv.finish(0)
 	}()
 	fmt.Println("ready")
@@ -93,6 +106,9 @@ func main() {
 	srv.shutdown()
 	os.Exit(code)
 }
+
+// ownerGrace: how long a started node outlasts a signal for its owner to end it.
+const ownerGrace = 3 * time.Second
 
 // listenSocket binds the control socket 0600, refusing a path another kore-tailnet still serves.
 func listenSocket(path string) (*net.UnixListener, error) {

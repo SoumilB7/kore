@@ -262,8 +262,8 @@ struct BoxTailnetDaemonTests {
         return rig
     }
 
-    func until(_ what: String, _ condition: () -> Bool) async {
-        let end = ContinuousClock.now + .seconds(5)
+    func until(_ what: String, within: Duration = .seconds(5), _ condition: () -> Bool) async {
+        let end = ContinuousClock.now + within
         while !condition(), ContinuousClock.now < end { await Task.yield() }
         #expect(condition(), "\(what)")
     }
@@ -288,6 +288,33 @@ struct BoxTailnetDaemonTests {
         // On again: a fresh one.
         try rig.host.setNet(true)
         await until("started again") { calls.starts.withLock { $0.count } == 2 }
+    }
+
+    /// KoreNet off and straight on while a link's `bye` is still going out: the old node's stop
+    /// waits for the bye (`SocketEnd.settle`), and the new node starts only after it, since a stop
+    /// asks the helper at the folder's socket, where the new one would be listening.
+    @Test func offAndOnAtOnceStopsTheOldNodeBeforeTheNewStarts() async throws {
+        let order = Mutex<[String]>([])
+        let tailnet = try HandoffTailnet()
+        let box = BoxTailnet(
+            installed: { (.missing(.absent), PlainTailnet()) }, helper: { URL(fileURLWithPath: "/opt/kore/kore-tailnet") },
+            start: { _, _ in
+                order.withLock { $0.append("start") }
+                return (tailnet, { true }, { order.withLock { $0.append("stop") } })
+            }, key: { Data(repeating: 7, count: 32) })
+        let rig = try rig(box)
+        defer { rig.finish() }
+        try rig.host.start()
+        let net = try #require(rig.host.net)
+        await until("listening on Kore's own") { net.listening }
+        // A bye under way to a peer that hasn't hung up yet: the stop waits for it (a second).
+        let (mine, theirs) = try Sockets.pair()
+        defer { Sockets.closeFD(theirs) }
+        SocketEnd.start(mine, owed: Data("bye quit".utf8), wait: .seconds(30))
+        try rig.host.setNet(false)
+        try rig.host.setNet(true)
+        await until("stopped and started again", within: .seconds(10)) { order.withLock { $0.count } == 3 }
+        #expect(order.withLock { $0 } == ["start", "stop", "start"])
     }
 
     /// Installed Tailscale stopped: Kore's own runs beside it; Tailscale up again, the box moves

@@ -137,6 +137,8 @@ case "run":
             MainActor.assumeIsolated {
                 // SIGINT is a person stopping it; SIGTERM may be a restart (systemd, an update).
                 host.stop(restarting: number == SIGTERM && HostDaemon.restarting(paths))
+                // Each link's `bye` (restart or quit) out before the process goes.
+                SocketEnd.settle()
                 exit(0)
             }
         }

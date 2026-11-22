@@ -35,6 +35,9 @@ package final class SocketEnd: @unchecked Sendable {
     package static func start(_ fd: Int32, owed: Data = Data(), wait: DispatchTimeInterval = SocketEnd.wait) {
         guard fd >= 0 else { return }
         let end = SocketEnd(fd, owed)
+        gate.lock()
+        underWay += 1
+        gate.unlock()
         queue.async { end.begin(wait) }
     }
 
@@ -44,8 +47,34 @@ package final class SocketEnd: @unchecked Sendable {
         start(copy, owed: owed)
     }
 
+    /// Ends started and not yet done, and `settle`'s wake-up: apart from `queue`, so a caller
+    /// waiting here never holds up the queue the ends finish on.
+    private static let gate = NSCondition()
+    nonisolated(unsafe) private static var underWay = 0
+
     /// Ends still waiting on their peers.
-    package static var open: Int { queue.sync { ending.count } }
+    package static var open: Int {
+        gate.lock()
+        defer { gate.unlock() }
+        return underWay
+    }
+
+    /// Waits, `within` at most, for the ends under way to finish: before what carries them goes
+    /// (kore-host stopping Kore's own tailnet, then exiting), so their last message, the `bye
+    /// restart` a Mac or phone dials straight back on, isn't lost with it. Blocks its caller;
+    /// returns at once when nothing is ending.
+    /// Ends under way when it was called, and how long it waited.
+    @discardableResult
+    package static func settle(within: Duration = .seconds(1)) -> (ending: Int, waited: Duration) {
+        let clock = ContinuousClock()
+        let began = clock.now
+        let deadline = Date(timeIntervalSinceNow: within / .seconds(1))
+        gate.lock()
+        let ending = underWay
+        while underWay > 0, gate.wait(until: deadline) {}
+        gate.unlock()
+        return (ending, clock.now - began)
+    }
 
     private func begin(_ wait: DispatchTimeInterval) {
         Self.ending[ObjectIdentifier(self)] = self
@@ -121,5 +150,9 @@ package final class SocketEnd: @unchecked Sendable {
         // The sources watch their own copies, closed as they cancel: this one goes now.
         Sockets.closeFD(fd)
         Self.ending[ObjectIdentifier(self)] = nil
+        Self.gate.lock()
+        Self.underWay -= 1
+        Self.gate.broadcast()
+        Self.gate.unlock()
     }
 }

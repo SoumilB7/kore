@@ -268,6 +268,7 @@ package final class HostDaemon {
     }
 
     package func stop(restarting: Bool = false) {
+        let told = connections.count
         for connection in connections { connection.end(restarting ? .restart : .quit) }
         net?.stop()
         net = nil
@@ -281,7 +282,8 @@ package final class HostDaemon {
         try? FileManager.default.removeItem(at: paths.pid)
         lock.release()
         self.lock = nil
-        HostJournal.note("stop")
+        // How the links' byes went: how many were told, and how long their ends took to go.
+        HostJournal.note("stop", ["restart": restarting ? "yes" : "no", "told": "\(told)", "ending": "\(lastSettle.ending)", "settled_ms": "\(Int(lastSettle.waited / .milliseconds(1)))"])
     }
 
     // MARK: Folders and chats
@@ -575,11 +577,14 @@ package final class HostDaemon {
         let mine = tailnetChoices
         net.choosing()
         let standby = takeOwnStandby()
+        let stopping = koreStopping
         let counting = HostNet.counting
         counting(true)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             defer { DispatchQueue.main.async { counting(false) } }
-            // Kore's own signing in beside Tailscale stops first: they share a folder.
+            // Kore's own signing in beside Tailscale stops first: they share a folder. So does
+            // one stopping after KoreNet went off, or the tailnet was chosen again.
+            stopping.wait()
             standby?()
             let pick = box.choose()
             DispatchQueue.main.async {
@@ -675,11 +680,17 @@ package final class HostDaemon {
         // `restart`, never `quit`, and while the old node still carries it: the box is back within
         // seconds on its other node, and Macs and phones dial again from their shortest wait (a
         // `quit` reads asleep: minutes).
-        for connection in connections where connection.route == .tailnet && connection.peer != nil { connection.end(.restart) }
+        let told = connections.filter { $0.route == .tailnet && $0.peer != nil }
+        for connection in told { connection.end(.restart) }
         net.leave()
         stopKoreTailnet()
         startNet()
     }
+
+    /// Kore's own tailnets still stopping, off the main thread.
+    let koreStopping = DispatchGroup()
+    /// The last stop's wait for the links' byes (`SocketEnd.settle`), for its journal line.
+    private var lastSettle: (ending: Int, waited: Duration) = (0, .zero)
 
     /// Kore's own tailnet ends (off the main thread: its stop is a round trip on its socket).
     private func stopKoreTailnet(wait: Bool = false) {
@@ -687,13 +698,21 @@ package final class HostDaemon {
         ownSSH = nil
         guard let kore = koreTailnet else { return }
         koreTailnet = nil
+        // The links' last words (their `bye`) still travel on it: they go first, a second at most.
         if wait {
+            lastSettle = SocketEnd.settle()
             kore.stop()
             Self.tailnetChosen?("stopped")
         } else {
+            // A start meanwhile waits for this stop (`koreStopping`): the stop asks the helper at
+            // the folder's socket, where the new one would be listening by then.
+            let stopping = koreStopping
+            stopping.enter()
             DispatchQueue.global(qos: .utility).async {
+                SocketEnd.settle()
                 kore.stop()
                 Self.tailnetChosen?("stopped")
+                stopping.leave()
             }
         }
     }
@@ -709,10 +728,12 @@ package final class HostDaemon {
         }
         besideWatch?.stop()
         besideWatch = nil
+        // Told first, while the tailnet under them still carries their `bye`.
+        let told = connections.filter { $0.route == .tailnet && $0.peer != nil }
+        for connection in told { connection.end(.quit) }
         net.leave()
         stopKoreTailnet()
         if let standby = takeOwnStandby() { DispatchQueue.global(qos: .utility).async { standby() } }
-        for connection in connections where connection.route == .tailnet && connection.peer != nil { connection.end(.quit) }
         HostJournal.note("korenet off")
     }
 

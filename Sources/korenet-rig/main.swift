@@ -297,6 +297,7 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     ("fresh-phase", "(a step of fresh-box, run as its own Kore)", freshPhase),
     ("pipe-no-sshd", "a box set up over SSH, then its sshd stopped: copies both ways and the sync run over kore pipe on KoreNet, no SSH at all", pipeNoSSHD),
     ("interrupted", "the upgrade interrupted at each step (SSH killed mid-install, mid-join, mid-sign-in) → a retry completes, one own node, nothing stuck", interrupted),
+    ("host-restart", "kore-host restarted (systemctl restart, as an update does) with the link on Kore's own tailnet → the Mac hears `restart` and relinks on KoreNet within seconds, never through SSH", hostRestart),
 ]
 
 @MainActor func plainBox(_ r: Run, _ name: String, port: Int, user: String = "kore", lingerOn: Bool = false) async -> Bool {
@@ -386,6 +387,36 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     let ran = await docker("restart", "-t", "5", Boxes.container(box), timeout: 90)
     _ = await Boxes.exec(box, "for i in $(seq 100); do s=$(systemctl is-system-running 2>/dev/null || true); case $s in running|degraded) break;; esac; sleep 0.1; done")
     return ran.ok
+}
+
+/// 0.3.10: the box's `bye restart` went down with its tailnet (kore-tailnet stopped, then exit,
+/// before the bye crossed), so the Mac found the link dead by probe, relinked over SSH and moved
+/// back ~30 s later. Now the bye goes first: the Mac's restart path, KoreNet straight back.
+@MainActor func hostRestart(_ r: Run) async {
+    guard await plainBox(r, "b25", port: 22125, lingerOn: true) else { return }
+    await r.works("b25", "KoreNet before the restart")
+    guard let link = r.kore.link("b25") else { return r.check("b25's link", false, "") }
+    let t0 = now()
+    let ran = await Boxes.exec("b25", "XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user restart kore-host", user: "kore")
+    r.check("kore-host restarted by systemd", ran.ok, ran.out)
+    // Watched every 100 ms until it's back: the reason the link ended, and any time on SSH.
+    var heard: [String] = []
+    var onSSH = false
+    var back: Double?
+    while now() - t0 < 30 {
+        if let why = link.lastReason, heard.last != why { heard.append(why) }
+        if link.isOnline, let route = link.route {
+            if !route.isNet { onSSH = true }
+            if route.isNet, now() - t0 > 0.5, await r.answers("b25") { back = now() - t0; break }
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+    }
+    r.note("the link said: " + heard.joined(separator: " → "))
+    r.check("the Mac heard kore-host restarting", heard.contains { $0.contains("restarting") }, heard.joined(separator: " → "))
+    r.check("never through SSH meanwhile", !onSSH, "")
+    r.check(String(format: "back on KoreNet, answering, within 15 s (%.1fs)", back ?? -1), (back ?? 99) < 15, r.kore.describe("b25"))
+    await r.works("b25", "KoreNet after the restart")
+    r.logRow("b25")
 }
 
 @MainActor func reboot(_ r: Run) async {
@@ -640,10 +671,17 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
         guard await r.setUp("b17") else { continue }
         if await r.linkOnNet("b17", within: 60) { await r.works("b17", "KoreNet (after a \(what) kore-host)") }
         let v = await Boxes.exec("b17", "su - kore -c '~/.local/bin/kore-host --version'; ls \(bin)")
-        r.check("b17 runs this Mac's kore-host, nothing left over (\(what))", v.out.contains("0.3.8") && !v.out.contains(".new"), v.out)
+        r.check("b17 runs this Mac's kore-host, nothing left over (\(what))", v.out.contains("kore-host \(macVersion) ") && !v.out.contains(".new"), v.out)
     }
     r.check("one b17-kore node", (await Headscale.nodes()).filter { $0.name.hasPrefix("b17-kore") }.count == 1)
 }
+
+/// The version this Mac's kore-host says: the package's `VERSION`, as kore-host embeds it.
+let macVersion: String = {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let text = (try? String(contentsOf: root.appendingPathComponent("VERSION"), encoding: .utf8)) ?? ""
+    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+}()
 
 @MainActor func forgotten(_ r: Run) async {
     guard await plainBox(r, "b18", port: 22118) else { return }
@@ -719,7 +757,7 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     let left = await Boxes.exec("b12", "ls -a /home/kore/.local/bin /home/kore/.local/state /home/kore/.config/systemd/user 2>/dev/null; pgrep -u kore -x kore-host")
     r.check("b12 has no kore-host (binary, state, unit, daemon)", !left.out.contains("kore-host"), left.out)
     let prefs = runSync("/usr/bin/defaults", ["export", "korenet-rig-fresh", "-"]).out
-    r.check("Kore's settings name b12 nowhere", !prefs.contains("b12"), "")
+    r.check("Kore's settings name b12 nowhere", !prefs.contains("b12"), prefs.split(whereSeparator: \.isNewline).filter { $0.contains("b12") }.prefix(6).joined(separator: " "))
     let verify = await freshBoxSh(["--verify", "b12", "--expect", "fresh"])
     r.check("fresh-box.sh --verify b12 --expect fresh: clean", verify.ok, verify.out)
     let proof = r.places.run.appendingPathComponent("proof/fresh-box", isDirectory: true)
