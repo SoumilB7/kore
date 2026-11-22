@@ -97,6 +97,19 @@ extension ChatSettings {
     }
 }
 
+extension ChatSettings {
+    /// As a copy a phone asked for takes them (`chat.copyVia`): the mode no higher than a phone's
+    /// new chat starts in (`LinkPolicy.askedMode`), Arsenal and Plan's allow switch off. A new chat
+    /// never has by copying what a phone needs a fingerprint for, or can't set at all.
+    func asked(provider: String) -> ChatSettings {
+        var said = self
+        said.mode = LinkPolicy.askedMode(mode, provider: provider)
+        said.arsenal = nil
+        said.planAllow = false
+        return said
+    }
+}
+
 @MainActor
 package struct ChatCopies {
     /// This Mac's environment for the CLIs' folders (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `HOME`).
@@ -112,6 +125,8 @@ package struct ChatCopies {
     package var stopper: Spawn?
     /// This Mac lets chats use Arsenal: a tier goes with a copy to a box only then.
     package var arsenalAllowed = true
+    /// A phone asked for it (`chat.copyVia`): the copy's settings are capped (`ChatSettings.asked`).
+    package var asked = false
 
     package init(env: [String: String] = ProcessInfo.processInfo.environment, staging: URL, trash: URL) {
         self.env = env
@@ -149,8 +164,9 @@ package struct ChatCopies {
         whole: Bool = false, draft: Bool = false
     ) async -> Result<ChatCopy, MoveFailure> {
         let title = title ?? source.title
-        func carried(_ settings: ChatSettings?) -> ChatSettings {
+        func carried(_ settings: ChatSettings?, _ provider: String) -> ChatSettings {
             guard var settings = settings?.linkable else { return ChatSettings() }
+            if asked { settings = settings.asked(provider: provider) }
             if !draft { settings.draft = nil }
             settings.at = nil
             settings.changed = nil
@@ -179,12 +195,12 @@ package struct ChatCopies {
                     progress?(total, total)
                     Self.keepRollbackPoint(cut, provider: provider, session: new)
                 }
-                let settings = carried(source.settings)
+                let settings = carried(source.settings, source.provider)
                 return placed.map { _ in ChatCopy(provider: provider, session: new, title: title, settings: settings) }
             case .box(let moves, let folder):
                 return await push(
                     found, provider: source.provider, old: source.id, folders: SessionCopy.spellings(from), to: metered(moves, base: 0, total: total), folder: folder, as: new,
-                    settings: ChatCopy(provider: source.provider, session: new, title: title, settings: carried(source.settings)), line: line, rollbackAt: cut)
+                    settings: ChatCopy(provider: source.provider, session: new, title: title, settings: carried(source.settings, source.provider)), line: line, rollbackAt: cut)
             }
         case .box(let moves, let folder):
             guard moves.connection.copiesChats else { return .failure(MoveFailure("Update kore-host on \(NodeNames.name(moves.connection.alias)) to copy chats")) }
@@ -209,7 +225,7 @@ package struct ChatCopies {
             guard pulled.ok else { return .failure(MoveFailure("Couldn't copy the session: \(pulled.said)")) }
             let found = SessionFiles.Found(root: stage, files: files)
             // A box from before `settings` says the four it knows.
-            let settings = carried(info.settings ?? ChatSettings(modelId: info.modelId, effort: info.effort, mode: info.mode))
+            let settings = carried(info.settings ?? ChatSettings(modelId: info.modelId, effort: info.effort, mode: info.mode), info.provider)
             var made = ChatCopy(provider: info.provider, session: new, title: title, settings: settings, whole: info.settings != nil, cost: cost)
             switch target {
             case .mac(let to):

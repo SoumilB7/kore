@@ -21,7 +21,7 @@ import kotlinx.serialization.json.longOrNull
 /**
  * A window's history, as the Mac's panel (L7–L9): search, newest first under day headers, ▣
  * for the archived ones. A tap opens the chat in this window (a background tab on a Mac) and
- * here; a long-press offers Open here, Pin, Rename and Archive. Read a page at a time with `history.list`.
+ * here; a long-press offers Open here, Pin, Copy, Rename and Archive. Read a page at a time with `history.list`.
  */
 class HistoryActivity : NodeActivity() {
     private val windowId by lazy { intent.getStringExtra("window") ?: "" }
@@ -183,6 +183,9 @@ class HistoryActivity : NodeActivity() {
             PopMenu.Item("Open here") { open(s) },
             // This phone's own pin; History keeps its order by date (it reads a page at a time).
             device?.let { d -> PopMenu.Item(kore.pins.word(d, keys)) { kore.pins.set(d, keys, !kore.pins.pinned(d, keys)); draw() } },
+            device?.takeIf { copyOffered(link) }?.let { d ->
+                PopMenu.Item("Copy") { copyChat(ChatCopy.Clip(d, macName, windowId, null, id, s.str("provider") ?: "claude", s.str("title")?.ifBlank { null } ?: "Untitled chat")) }
+            },
             PopMenu.Item("Rename…") { renameSheet(s.str("title").orEmpty()) { t -> act(Control.historyRename(windowId, id, t)) { load(reset = true) } } },
             PopMenu.Item(if (isArchived) "Unarchive" else "Archive") { act(Control.historyArchive(windowId, id, !isArchived)) { load(reset = true) } },
         ))

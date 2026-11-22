@@ -174,6 +174,23 @@ object Control {
         put("windowId", windowId); put("sessionId", sessionId); put("on", on)
     }
 
+    /**
+     * One end of a copy (cap "copyVia"): a window on the Mac that runs it ([device] null) or on one of
+     * its boxes (the box's device id); the source names its open chat or its past session.
+     */
+    data class CopyEnd(val device: String?, val windowId: String, val chatId: String? = null, val sessionId: String? = null)
+
+    /** Cap "copyVia": the Mac copies a chat (never a cut) from [from] into the window [to], with its own grants. */
+    fun copyVia(from: CopyEnd, to: CopyEnd, provider: String, title: String) = cmd("chat.copyVia") {
+        fun end(e: CopyEnd) = buildJsonObject { putOpt("device", e.device); put("windowId", e.windowId); putOpt("chatId", e.chatId); putOpt("sessionId", e.sessionId) }
+        put("copy", buildJsonObject {
+            put("from", end(from))
+            put("to", end(CopyEnd(to.device, to.windowId)))
+            put("provider", provider)
+            put("title", title.lines().joinToString(" ").trim().take(200))
+        })
+    }
+
     // Reads: the request without its `id` (the client adds it).
 
     fun historyList(windowId: String, query: String = "", archived: Boolean = false, offset: Int = 0): JsonObject = buildJsonObject {

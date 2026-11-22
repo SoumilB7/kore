@@ -2,7 +2,8 @@ import Foundation
 
 /// What a device that may **ask** (a phone, phase 18 §1 "Abilities") does over the link, on the Mac
 /// and on a box alike: follow and read; send within the chat's mode, answer cards plainly, stop,
-/// keep drafts, rename, arrange chats, tabs and windows Kore already has. Every card's Allow is a
+/// keep drafts, rename, arrange chats, tabs and windows Kore already has, and ask the Mac to copy a
+/// chat into a window it has (the Mac runs the copy). Every card's Allow is a
 /// plain tap (owner, 2026-11-20). Never accounts or sign-ins, a box's files, Always allow, or a
 /// raise without the fingerprint: a mode or an Arsenal tier takes a signed `raise`
 /// (`LinkRaiseWire`). Of accounts, only
@@ -14,7 +15,9 @@ package enum LinkAsk {
         case .chatRename, .chatClose, .chatSelect, .chatSetModel, .chatSetEffort, .chatSetFast, .chatCompact, .chatSetAutoCompact, .chatFork,
             .chatRetry, .chatContinue, .chatSendAtReset, .chatCancelContinue, .chatNew, .chatSetDraft, .tabMove, .tabReopen, .groupSet, .groupEdit,
             .groupUngroup, .groupClose, .boardNew, .boardAttach, .boardDetach, .boardSection, .windowOpen, .windowReopen, .windowClose, .historyOpen,
-            .historyRename, .historyArchive, .macStayAwake, .chatSetArsenal, .arsenalStopAll:
+            .historyRename, .historyArchive, .macStayAwake, .chatSetArsenal, .arsenalStopAll,
+            // Cap "copyVia": a copy the Mac runs with its own grants (owner, 2026-11-24); a box refuses it.
+            .chatCopyVia:
             true
         default:
             false

@@ -84,6 +84,10 @@
       "type": "cmd"
     },
     {
+      "file": "cmd.copyVia.json",
+      "type": "cmd"
+    },
+    {
       "file": "cmd.answer.json",
       "type": "cmd"
     },

@@ -238,6 +238,7 @@ class DeviceActivity : NodeActivity() {
         val items = ArrayList<PopMenu.Item>()
         if (!isBox) items += PopMenu.Item("Show on the Mac", enabled = shown != null) { shown?.let { id -> act(C.select(id)) { Quiet.say(this, "Shown on $macName") } } }
         items += PopMenu.Item("History") { history(chip.windowId) }
+        pasteItem(chip.windowId, chip.name)?.let { items += it }
         items += PopMenu.Item("Close window", danger = true, rule = true) {
             act(C.windowClose(chip.windowId), forced = C.windowClose(chip.windowId, force = true), ask = "A chat in ${w.str("name") ?: "this window"} is working. Closing stops it.")
         }
@@ -592,12 +593,20 @@ class DeviceActivity : NodeActivity() {
     private fun windowMenu(anchor: View, w: JsonObject) {
         val id = w.str("id") ?: return
         val C = dev.kore.link.node.Control
-        PopMenu(this).show(anchor, listOf(
+        PopMenu(this).show(anchor, listOfNotNull(
             PopMenu.Item("History") { history(id) },
+            pasteItem(id, w.str("name") ?: "this window"),
             PopMenu.Item("Close window", danger = true, rule = true) {
                 act(C.windowClose(id), forced = C.windowClose(id, force = true), ask = "A chat in ${w.str("name") ?: "this window"} is working. Closing stops it.")
             },
         ))
+    }
+
+    /** Paste chat on a window while a chat is held and this device's Mac copies from here. */
+    private fun pasteItem(windowId: String, name: String): PopMenu.Item? {
+        val l = link ?: return null
+        if (kore.chatClip == null || !copyOffered(l)) return null
+        return PopMenu.Item("Paste chat") { pasteChat(l, windowId, name) }
     }
 
     /** A window's past chats; a tap there opens one here, in that window. */
@@ -615,6 +624,10 @@ class DeviceActivity : NodeActivity() {
         if (device != null && row.pinKeys.isNotEmpty()) items += PopMenu.Item(kore.pins.word(device, row.pinKeys)) {
             kore.pins.set(device, row.pinKeys, !row.pinned)
             draw()
+        }
+        val wid = row.windowId
+        if (device != null && wid != null && copyOffered(link)) items += PopMenu.Item("Copy") {
+            copyChat(ChatCopy.Clip(device, macName, wid, chatId, null, chat.str("provider") ?: "claude", chat.str("title") ?: row.title))
         }
         if (link.hasControl(last)) {
             if (!isBox) items += PopMenu.Item("Show on the Mac") { act(dev.kore.link.node.Control.select(chatId)) { Quiet.say(this, "Shown on $macName") } }

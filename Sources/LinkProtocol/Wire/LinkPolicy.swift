@@ -215,6 +215,8 @@ package enum LinkPolicy {
             guard let provider = args.provider, LinkLogins.clis.contains(provider) else { return .deny(.invalid, "Name the CLI.") }
         case .accountPrivacy:
             guard args.on != nil else { return .deny(.invalid, "Say on or off.") }
+        case .chatCopyVia:
+            return copyVia(args.copy)
         case .chatSetArsenal:
             let tier = args.tier ?? ""
             if tier == "full" { return .deny(.invalid, "Arsenal's Full tier isn't built yet.") }
@@ -222,6 +224,30 @@ package enum LinkPolicy {
             if tier != "off", let why = chat?.arsenalUnavailable { return .deny(.busy, why) }
         default: break
         }
+        return .allow
+    }
+
+    /// `chat.copyVia` (cap "copyVia"), as the Mac takes it: a source that is one chat or one past session, a
+    /// target that is a window, plain ids, a CLI Kore runs, a one-line title. Where each end is,
+    /// and that the Mac knows it, the Mac checks as it runs it.
+    package static func copyVia(_ ask: CopyAsk?) -> Verdict {
+        guard let ask else { return .deny(.invalid, "Name the chat and where it goes.") }
+        func plain(_ id: String?) -> Bool {
+            guard let id else { return true }
+            return (1...128).contains(id.count) && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "-_.:".contains($0)) }
+        }
+        for end in [ask.from, ask.to] {
+            guard plain(end.windowId), plain(end.device), end.device.map({ UUID(uuidString: $0) != nil }) ?? true else {
+                return .deny(.invalid, "Name the windows and devices.")
+            }
+        }
+        guard (ask.from.chatId == nil) != (ask.from.sessionId == nil), plain(ask.from.chatId), plain(ask.from.sessionId) else {
+            return .deny(.invalid, "Name one chat to copy.")
+        }
+        guard ask.to.chatId == nil, ask.to.sessionId == nil else { return .deny(.invalid, "A copy goes to a window.") }
+        guard ["claude", "codex"].contains(ask.provider) else { return .deny(.invalid, "That isn't a CLI Kore runs.") }
+        let title = ask.title.trimmingCharacters(in: .whitespaces)
+        guard title.count <= maxTitle, !title.contains(where: \.isNewline) else { return .deny(.invalid, "A title is one line, up to 200 characters.") }
         return .allow
     }
 
@@ -582,6 +608,15 @@ package enum LinkPolicy {
             return provider.modes.filter { $0.listed && level($0) <= raiseCap }.max { $0.level < $1.level }?.id ?? provider.modes[0].id
         }
         return mode
+    }
+
+    /// The mode a copy a phone asked for starts in (`chat.copyVia`): as a phone's new chat does, no
+    /// higher than where tools still ask (`leavePlanMaxLevel`; more takes a signed raise). Its own
+    /// when it's at or below, else its CLI's first mode, also when it says none.
+    package static func askedMode(_ mode: String?, provider id: String) -> String? {
+        guard let provider = Registry.provider(id) else { return nil }
+        if let own = provider.modes.first(where: { $0.id == mode }), (ModeLevel(rawValue: own.level) ?? .danger) <= leavePlanMaxLevel { return own.id }
+        return provider.modes[0].id
     }
 
     /// The highest a full-control client may raise a mode: Auto, or Full access for a Mac with

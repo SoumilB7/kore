@@ -262,25 +262,10 @@ enum ChatPasting {
         // Read before the source's tab closes (a cut stops it first).
         let carried = settings(of: clip)
         // The boxes on each end, linked for the paste.
-        var held: [HostConnection] = []
-        defer { held.forEach { $0.release() } }
-        func end(_ spot: ChatSpot) async -> Result<CopyEnd, MoveFailure> {
-            switch spot {
-            case .mac(let folder): return .success(.mac(folder))
-            case .box(let alias, let folder):
-                let link = connection(alias)
-                link.retain()
-                held.append(link)
-                guard await ChatMoving.online(link) else { return .failure(MoveFailure("Can't reach \(NodeNames.name(alias)) · nothing changed")) }
-                guard var moves = ChatMoving.engine(link) else { return .failure(MoveFailure("\(NodeNames.name(alias)) isn't an SSH alias Kore can use")) }
-                // 1.10's moves (bring, send back, adopt) on the same bar.
-                moves.stopper = stopper
-                moves.progress = { bytes, total in TransferProgress.shared.update(transfer, bytes: bytes, total: total) }
-                return .success(.box(moves, folder: folder))
-            }
-        }
+        let held = Held()
+        defer { held.release() }
         let from: CopyEnd, to: CopyEnd
-        switch (await end(clip.spot), await end(target)) {
+        switch (await end(clip.spot, held: held, transfer: transfer, stopper: stopper), await end(target, held: held, transfer: transfer, stopper: stopper)) {
         case (.success(let a), .success(let b)): (from, to) = (a, b)
         case (.failure(let failure), _), (_, .failure(let failure)): return fail(failure.line, in: workspace, transfer: transfer)
         }
@@ -368,6 +353,35 @@ enum ChatPasting {
             }
         case .open, .refuse:
             break
+        }
+    }
+
+    /// The boxes a paste linked, let go when it ends.
+    @MainActor final class Held {
+        private var links: [HostConnection] = []
+        func hold(_ link: HostConnection) {
+            link.retain()
+            links.append(link)
+        }
+        func release() {
+            links.forEach { $0.release() }
+            links = []
+        }
+    }
+
+    /// One end of a paste: a folder here, or a box's, linked and online.
+    static func end(_ spot: ChatSpot, held: Held, transfer: UUID?, stopper: Spawn) async -> Result<CopyEnd, MoveFailure> {
+        switch spot {
+        case .mac(let folder): return .success(.mac(folder))
+        case .box(let alias, let folder):
+            let link = connection(alias)
+            held.hold(link)
+            guard await ChatMoving.online(link) else { return .failure(MoveFailure("Can't reach \(NodeNames.name(alias)) · nothing changed")) }
+            guard var moves = ChatMoving.engine(link) else { return .failure(MoveFailure("\(NodeNames.name(alias)) isn't an SSH alias Kore can use")) }
+            // 1.10's moves (bring, send back, adopt) on the same bar.
+            moves.stopper = stopper
+            if let transfer { moves.progress = { bytes, total in TransferProgress.shared.update(transfer, bytes: bytes, total: total) } }
+            return .success(.box(moves, folder: folder))
         }
     }
 

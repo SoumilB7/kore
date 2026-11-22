@@ -166,6 +166,9 @@ enum LinkControlActions {
             return .done
         case .macStayAwake:
             return LinkAwake.choose(args.mode ?? "") ? .done : .failed(.invalid, "Stay awake has no such mode.")
+        case .chatCopyVia:
+            guard let ask = args.copy else { return .failed(.invalid, "Name the chat and where it goes.") }
+            return await LinkCopyVia.run(ask)
         default: break
         }
         guard let workspace = LinkSnapshot.workspaces().first(where: { LinkSnapshot.windowID($0) == args.windowId }) else {

@@ -178,6 +178,9 @@ extension Workspace {
         return tabs.filter { !before.contains($0.id) }
     }
 
+    /// A chat copied in at a phone's ask (`ChatCopyAsk`): its tab behind the one shown.
+    func linkLand(_ landing: ChatLanding) -> Chat? { keepingActive { land(landing) } }
+
     package func linkSelect(_ tab: ChatTab) { select(tab) }
 
     package enum LinkClose { case closed, asks, gone }
