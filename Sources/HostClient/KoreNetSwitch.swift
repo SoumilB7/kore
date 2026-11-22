@@ -1589,6 +1589,24 @@ package final class KoreNetSwitch: NetRouter {
             return .failed("\(error)")
         }
         if node.enrolled == identity.device { return .already }
+        let first = await enrollOnce(env: env, identity: identity, book: book, node: node, alias: alias, grant: grant, command: command)
+        // Dialled, then ended before the box answered (its pre-auth window ran out on a slow link or
+        // a busy box): tried once more. A refusal, or a dial that failed, stands; nothing was used
+        // on the box yet.
+        guard case .failed(let why) = first, Self.mayEnrollAgain(why) else { return first }
+        return await enrollOnce(env: env, identity: identity, book: book, node: node, alias: alias, grant: grant, command: command)
+    }
+
+    /// Whether an enroll that ended this way is worth one more try: only the line closing after
+    /// the dial worked, or the box's own timeout. Never a dial that failed (a dead alias, SSH
+    /// unreachable): nothing waits twice on that.
+    package nonisolated static func mayEnrollAgain(_ why: String) -> Bool {
+        why == "closed" || why == "bye " + NetControl.Reason.timeout
+    }
+
+    private nonisolated static func enrollOnce(
+        env: NetEnvironment, identity: MacIdentity, book: DeviceBook, node: NetNodeWire.Node, alias: String, grant: String, command: String
+    ) async -> Enrolled {
         let transport = NetTransport(route: .ssh) {
             let (fd, onClose) = try env.upgradeDial(alias, grant, command)
             var setup = NetSession.Client(
