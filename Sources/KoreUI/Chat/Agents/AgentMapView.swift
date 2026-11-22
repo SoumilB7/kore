@@ -33,7 +33,10 @@ struct AgentMapView: View {
         return GeometryReader { geometry in
             let narrow = geometry.size.width < Size.changesListMinWindow
             ZStack(alignment: .topTrailing) {
-                Theme.background
+                // Paint only: taking clicks, this fill took the title row's too while the map was
+                // open (its tabs, Agents, +), though its frame ends below the row. The tree, the
+                // sash and the pane take the map's own.
+                Theme.background.allowsHitTesting(false)
                 HStack(spacing: 0) {
                     if !narrow {
                         // Every row counts, its group open or closed: opening one, or an agent

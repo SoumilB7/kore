@@ -69,6 +69,72 @@ final class AgentMapOpen: ChatStoryline {
     }
 }
 
+/// The chat's own tab, clicked while the agent map shows over it, takes it back to the chat as
+/// the map's × does: from the list, and from an agent's detail (the owner's case, a failed one).
+/// The tab stays in front, and the composer has its focus again. Over the open map, another tab
+/// still switches and the Agents button still closes it.
+final class AgentMapTabClickBack: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .agents, .gate] }
+    override class var script: CLIScript {
+        CLIScript(turns: [[
+            .startTurn, AgentMapStories.spawn("scan", "Scan the logs"),
+            .event(.agentFinished(id: "scan", .failed, result: "The log is missing")),
+            .stream(.answer, "It failed."), .finishTurn(.completed),
+        ]])
+    }
+
+    override func steps() -> [any Step] {
+        let scan = StoryID.AgentMap.row("scan")
+        let front = Front()
+        let tab = Locator("the chat's tab") { app in
+            app.workspace.map { .success(StoryID.Tabs.tab($0.activeTab.id)) } ?? .failure(LocatorMiss("no workspace"))
+        }
+        let back: [any Step] = [
+            Click(tab),
+            Expect("the agent map closed", found: AgentMapOpen.maps) { try !$0.activeChat().isAgentMapOpen },
+            Expect("the same tab in front") { story in front.same(story) },
+            ExpectElement(.id(scan), .absent),
+            WaitForFocus(.id(StoryID.Composer.field)),
+        ]
+        return super.steps() + [
+            Send("Use a helper"), TurnFinished(1), WaitIdle(),
+            Expect("the tab in front noted") { story in front.note(story) },
+            // The list.
+            Press(.id(StoryID.Titlebar.agents)),
+            Expect("the agent map open") { try $0.activeChat().isAgentMapOpen },
+            ExpectElement(.id(scan), .visible),
+        ] + back + [
+            // An agent's detail.
+            Press(.id(StoryID.Titlebar.agents)),
+            Expect("the agent map open") { try $0.activeChat().isAgentMapOpen },
+            Press(.id(scan)),
+            Expect("the failed agent's detail") { try $0.activeChat().storyAgentMapSelected == "scan" },
+        ] + back + [
+            // The rest of the title row takes its clicks over the map as it does without it.
+            OpenTabs(1), Click(.tab(1)),
+            Expect("the chat in front again") { story in front.same(story) },
+            Press(.id(StoryID.Titlebar.agents)),
+            Expect("the agent map open") { try $0.activeChat().isAgentMapOpen },
+            Click(.tab(2)),
+            Expect("the other tab in front") { story in !front.same(story) },
+            Click(.tab(1)),
+            Expect("the chat in front, its map as it was") { story in try front.same(story) && story.activeChat().isAgentMapOpen },
+            Click(.id(StoryID.Titlebar.agents)),
+            Expect("the agent map closed by its button", found: AgentMapOpen.maps) { try !$0.activeChat().isAgentMapOpen },
+        ]
+    }
+
+    /// The tab in front before the clicks.
+    final class Front: @unchecked Sendable {
+        private var id: UUID?
+        @MainActor func note(_ story: StoryContext) -> Bool {
+            id = story.app.workspace?.activeTab.id
+            return id != nil
+        }
+        @MainActor func same(_ story: StoryContext) -> Bool { id != nil && story.app.workspace?.activeTab.id == id }
+    }
+}
+
 /// A stopped agent waits in the map's closed Stopped group, below the Done one under the hairline;
 /// opened, the group shows it. Run again, it leaves the group for the running rows under the chat,
 /// live under the open map.
