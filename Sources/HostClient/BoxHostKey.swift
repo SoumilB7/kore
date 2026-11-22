@@ -48,14 +48,12 @@ package enum BoxHostKey {
         let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("kore-hostkey-\(UUID().uuidString.prefix(8))")
         defer { try? FileManager.default.removeItem(at: scratch) }
         guard FileManager.default.createFile(atPath: scratch.path, contents: Data()) else { return nil }
-        let address = BoxAddress(alias)
-        let route = await SSHTailnetRoute.options(forAlias: alias)
         // Auth is never tried past "none": only the key exchange matters, nothing runs there.
         let options = [
             "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new", "-o", "UserKnownHostsFile=" + scratch.path,
             "-o", "GlobalKnownHostsFile=/dev/null", "-o", "UpdateHostKeys=no", "-o", "PreferredAuthentications=none",
         ]
-        _ = await BoxShell.process(shell.ssh, options + (address?.options ?? []) + route + ["--", address?.host ?? alias, "exit 0"])
+        _ = await BoxShell.process(shell.ssh, Array(await BoxSSH.argv(alias, program: shell.ssh, options: options, ["exit 0"]).dropFirst()))
         let written = (try? String(contentsOf: scratch, encoding: .utf8)) ?? ""
         let lines = written.split(whereSeparator: \.isNewline).map(String.init).filter { !$0.isEmpty && !$0.hasPrefix("#") }
         guard !lines.isEmpty else { return nil }

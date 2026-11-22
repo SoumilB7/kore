@@ -770,7 +770,12 @@ package final class FileCarry {
         let spawn = spawn
         let why = await metering(landing: landing) { await spawn.run([command], output: { meter.set(parser.feed($0)) }) }
         log("carry-rsync", level: spawn.lastStatus == 0 ? .debug : .warn, ["code": String(spawn.lastStatus), "to": landing.alias ?? "mac"])
-        return why.map { .interrupted($0) }
+        // One plain line (`BoxCopyWords`); rsync's own in hosts.log.
+        return why.map { said in
+            guard said != "Cancelled" else { return .interrupted(said) }
+            HostLog.note(ssh.alias, "carry stopped", "exit \(spawn.lastStatus): " + said)
+            return .interrupted(BoxCopyWords.line(status: spawn.lastStatus, said: said, box: NodeNames.name(ssh.alias)))
+        }
     }
 
     /// On a copy that doesn't count the same: the first paths each side lacks, in hosts.log.

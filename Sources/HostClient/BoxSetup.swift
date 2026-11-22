@@ -37,24 +37,21 @@ package struct BoxShell: Sendable {
 
     /// `command` run by the box's shell, in its home; `input` on its stdin.
     package func run(_ alias: String, _ command: String, input: String? = nil) async -> BoxRan {
-        let address = BoxAddress(alias)
-        let route = await SSHTailnetRoute.options(forAlias: alias)
-        return await Self.process(ssh, Self.options + (address?.options ?? []) + route + ["--", address?.host ?? alias, command], input: input)
+        let argv = await BoxSSH.argv(alias, program: ssh, options: Self.options, [command])
+        return await Self.process(ssh, Array(argv.dropFirst()), input: input)
     }
 
     /// An sh script run on the box (`sh -s`, the script on stdin): the same whatever the login
     /// shell is. `limit` ends a run that takes longer (an install whose download hangs).
     package func script(_ alias: String, _ script: String, limit: Duration? = nil) async -> BoxRan {
-        let address = BoxAddress(alias)
-        let route = await SSHTailnetRoute.options(forAlias: alias)
-        return await Self.process(ssh, Self.options + (address?.options ?? []) + route + ["--", address?.host ?? alias, "sh -s"], input: script, limit: limit)
+        let argv = await BoxSSH.argv(alias, program: ssh, options: Self.options, ["sh -s"])
+        return await Self.process(ssh, Array(argv.dropFirst()), input: script, limit: limit)
     }
 
     /// Copies a file to a path under the box's home.
     package func copy(_ file: URL, to alias: String, path: String) async -> BoxRan {
-        let address = BoxAddress(alias)
-        let route = await SSHTailnetRoute.options(forAlias: alias)
-        return await Self.process(scp, ["-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"] + (address?.options ?? []) + route + ["--", file.path, (address?.host ?? alias) + ":" + path])
+        let head = await BoxSSH.head(alias, program: scp, options: ["-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"])
+        return await Self.process(scp, Array(head.dropFirst()) + ["--", file.path, BoxSSH.host(alias) + ":" + path])
     }
 
     /// Runs `ssh` (whatever program it names) with `arguments`.

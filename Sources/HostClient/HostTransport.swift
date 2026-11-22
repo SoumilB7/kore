@@ -159,10 +159,9 @@ package final class SSHTransport: HostTransport, @unchecked Sendable {
     package static func arguments(alias: String, grant: String, command: String = defaultCommand) -> [String] {
         // SSH notices a dead link itself (two missed keepalives, 15 s apart): the box never
         // wakes for a ping.
-        let address = BoxAddress(alias)
         // ConnectTimeout: a host that doesn't answer (a tailnet address gone) costs 5 s a try, not 20+.
-        return ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"] + (address?.options ?? [])
-            + SSHTailnetRoute.options(for: alias) + ["--", address?.host ?? alias, command, "attach", "--as", grant]
+        let head = BoxSSH.head(alias, options: ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=2"])
+        return Array(head.dropFirst()) + ["--", BoxSSH.host(alias), command, "attach", "--as", grant]
     }
 
     /// The host an alias reaches, as `ssh -G` resolves it (its `HostName`); nil when ssh can't

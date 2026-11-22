@@ -78,7 +78,7 @@ struct SSHTailnetRouteTests {
     @Test func onKoresOwnTailnetSSHGoesThroughIt() throws {
         let s = try Self.status([("mybox", "100.64.0.2", true, 1)])
         #expect(SSHTailnetRoute.decide(host: "100.64.0.2", jump: false, keyAlias: false, status: s, own: own) == [
-            "-o", "HostName=100.64.0.2", "-o", "HostKeyAlias=100.64.0.2", "-o", "ProxyCommand='/K/kore-tailnet' nc -socket '/S p/kt.sock' %h %p",
+            "-o", "HostName=100.64.0.2", "-o", "HostKeyAlias=100.64.0.2", "-o", "ProxyCommand=\"/K/kore-tailnet\" nc -socket \"/S p/kt.sock\" %h %p",
         ])
     }
 

@@ -121,7 +121,11 @@ struct SyncBatchTests {
         }
         #expect(seen.urls[0] != seen.urls[1])
         #expect(try Data(contentsOf: rig.manifest) == before)
-        #expect(rig.sync.notice == "Sync paused: rsync: poll: timeout")
+        #expect(rig.sync.notice == "Sync paused · testbox can't be reached over SSH right now")
+        // It waits for the route: a route change (or the link coming up) sends it again.
+        #expect(rig.sync.waitingRoute)
+        NotificationCenter.default.post(name: SSHTailnetRoute.changed, object: nil)
+        #expect(await until(5) { !rig.sync.waitingRoute })
         // The first batch went: it counts.
         #expect(rig.sync.carried == 2)
         #expect(batchFiles(rig.scratch).isEmpty)

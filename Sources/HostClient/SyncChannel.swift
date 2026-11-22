@@ -45,7 +45,7 @@ package final class SyncChannel {
 
     /// The box's channel, held once more: `close` once per `open`.
     package static func open(_ box: SyncBox, folder: URL) -> SyncChannel {
-        let name = StableID.of(box.ssh.joined(separator: "\u{0}") + "\u{0}" + box.host, prefix: "m")
+        let name = StableID.of(box.channelKey, prefix: "m")
         let socket = folder.appendingPathComponent(name + ".sock").path
         let channel = open[socket] ?? SyncChannel(base: box, socket: socket)
         open[socket] = channel

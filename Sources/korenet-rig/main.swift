@@ -835,6 +835,7 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     let ssh = await r.kore.sshThroughKore("b3")
     r.check("Kore's SSH to b3 (its Tailscale IP is gone) still works", ssh.ok, ssh.out)
     r.logRow("b3")
+    await filesThroughKore(r, "b3")
     let t1 = now()
     _ = await Boxes.exec("b3", "systemctl start tailscaled")
     await r.expect("b3 back on installed Tailscale: own offline, installed online", within: 60) {
@@ -845,6 +846,41 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     await r.expect("Mac's link on KoreNet over installed again, answering", within: 60, box: "b3", netCase: true) { if !r.onRoute("b3", net: true) { return false }; return await r.answers("b3") }
     await r.works("b3", "KoreNet after the moves")
     r.logRow("b3")
+}
+
+/// The box's Tailscale gone, its alias still naming that address, the link on Kore's own
+/// tailnet: the sync (a pair, both ways), a copy's rsync (as moves, copies and carries run it) and
+/// a shell over SSH ride the same route (0.3.10: they went to the dead address and paused on
+/// "rsync: unexpected end of file").
+@MainActor func filesThroughKore(_ r: Run, _ alias: String) async {
+    guard let link = r.kore.link(alias), let box = SyncBox.ssh(alias) else { return r.check("\(alias)'s link and SSH alias", false, "") }
+    let home = "/home/kore"
+    // A copy's rsync and a shell, as ChatMoves, ChatCopies and FileCarry run them.
+    let local = r.places.scratch.appendingPathComponent("carry-\(alias)")
+    try? FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
+    try? "carried".write(to: local.appendingPathComponent("carried.txt"), atomically: true, encoding: .utf8)
+    let pushed = await SyncProcess.run("/usr/bin/rsync", ["-a"] + box.rsyncOptions(false) + [local.path + "/", box.spec(home + "/carry/")])
+    r.check("a copy's rsync to \(alias) rides Kore's tailnet", pushed.status == 0, pushed.said)
+    let read = await box.shell(#"cat "$1""#, [home + "/carry/carried.txt"])
+    r.check("a shell over SSH reads it back", read.status == 0 && read.out.contains("carried"), read.said)
+    // The sync: a pair, a file each way.
+    _ = await Boxes.exec(alias, "mkdir -p \(home)/pair", user: "kore")
+    _ = await link.addFolder(home + "/pair")
+    let mac = r.places.scratch.appendingPathComponent("pair-\(alias)")
+    try? FileManager.default.createDirectory(at: mac, withIntermediateDirectories: true)
+    let pair = SyncPair(mac: mac.path, alias: alias, box: home + "/pair")
+    guard let sync = HostSync(pair: pair, connection: link, root: r.places.scratch.appendingPathComponent("sync-cache")) else {
+        return r.check("a sync for \(alias)", false, "")
+    }
+    sync.start()
+    defer { sync.stop() }
+    try? "from the Mac".write(to: mac.appendingPathComponent("from-mac.txt"), atomically: true, encoding: .utf8)
+    await r.expect("the sync carries a Mac file to \(alias)", within: 45) {
+        await Boxes.exec(alias, "cat \(home)/pair/from-mac.txt", user: "kore").out.contains("from the Mac")
+    }
+    _ = await Boxes.exec(alias, "echo from-box > \(home)/pair/from-box.txt", user: "kore")
+    await r.expect("the sync carries a box file here", within: 45) { FileManager.default.fileExists(atPath: mac.appendingPathComponent("from-box.txt").path) }
+    r.check("no paused line", sync.notice?.hasPrefix("Sync paused") != true, sync.notice ?? "")
 }
 
 @MainActor func firstContact(_ r: Run) async {
