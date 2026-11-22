@@ -90,6 +90,20 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
 - A box checking its GitHub sign-in no longer holds up its other work while it waits.
 - After a crash, a chat waits for the last Kore's Claude or Codex to end before it starts again on
   the same session, and only while one is still there; Resume no longer waits a fixed time first.
+- The first scroll after a jump (End, the message rail, the scroll bar) stays where you scrolled
+  instead of snapping back. Loading earlier conversation keeps the message you're reading in place
+  however long it takes, and while you scroll on. A long jump that lands on a blank page fills in
+  sooner.
+- ⌘+ or ⌘- at the end of a chat keeps the end in view, and text can be selected again after a
+  blank chat is redrawn.
+- In a short chat, VoiceOver finds an answer's rows where they're shown, so its Copy on a code
+  block works.
+- A box restarting, as an update does, tells the Mac before it goes, and the Mac links again
+  on KoreNet within seconds instead of going through SSH for half a minute.
+- Upgrading a box onto KoreNet tries once more when the box timed out or the line closed before it
+  answered; a box that can't be reached isn't waited on twice.
+- Check again on a box that's on KoreNet asks it over KoreNet first, so an SSH address nothing
+  answers (an old LAN one) isn't waited on. Host key, Trust and Set up lines still check over SSH.
 
 ## [0.3.9] - 2026-11-24
 
