@@ -342,10 +342,10 @@ enum ChatMoving {
 
     /// After a return: the box window comes forward with the chat live, its tab made if it came
     /// back as a new chat.
-    static func returned(alias: String, boxFolder: String, chatId: String) {
+    static func returned(alias: String, boxFolder: String, chatId: String, after anchor: ChatTab? = nil) {
         let place = BoxPlace(alias: alias, folder: boxFolder)
         if let box = Workspace.all.allObjects.first(where: { !$0.isClosed && $0.box?.key == BoxBinding.key(place) })?.box {
-            box.show(chatId)
+            box.show(chatId, after: anchor)
         }
         openBox(place, chatId)
     }

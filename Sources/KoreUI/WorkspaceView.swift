@@ -421,7 +421,12 @@ struct TabBar: View {
                     [OptionItem("New Tab") { workspace.newTab() }, OptionItem("New Board") { workspace.newBoard() }] + ChatPasting.menuItems(workspace)
                 }
                 .storyID(StoryID.Titlebar.newtab)
+            // The strip's empty end: what the + menu has, a held chat pasted at the end.
             Spacer(minLength: Space.xl)
+                .koreContextMenu("strip") {
+                    [OptionItem("New Tab") { workspace.newTab() }, OptionItem("New Board") { workspace.newBoard() }]
+                        + ChatPasting.menuItems(workspace, after: workspace.tabs.last)
+                }
             // A box folder's name too; its box's cue is on the box button.
             Text(workspace.folder.lastPathComponent)
                 .font(Chrome.label)
@@ -1314,7 +1319,7 @@ private struct TabItem: View {
         .tip(workspace.asking(tab) ? "Closing the tab stops its turn" : help)
         .koreContextMenu("tab") {
             let many = workspace.menuTabs(for: tab)
-            return many.count > 1 ? TabMenu.items(many, in: workspace) : TabMenu.items(tab, in: workspace) { startRename() }
+            return many.count > 1 ? TabMenu.items(many, in: workspace, at: tab) : TabMenu.items(tab, in: workspace) { startRename() }
         }
     }
 
@@ -1914,15 +1919,16 @@ enum TabMenu {
             }
         }
         items.append(.rule)
-        // 1.11: a chat copied or cut from any window's History, as a new tab here.
-        let paste = ChatPasting.menuItems(workspace)
-        if !paste.isEmpty { items += paste + [.rule] }
+        // 1.11: the tab's chat copied or cut, as History's row; a chat held pasted right after
+        // this tab (past its group).
+        let clip = ChatPasting.tabItems(tab, in: workspace) + ChatPasting.menuItems(workspace, after: tab)
+        if !clip.isEmpty { items += clip + [.rule] }
         items.append(OptionItem("Close Tab") { workspace.requestClose(tab) })
         return items
     }
 
     /// A picked tab's right-click: what makes sense for all of them at once.
-    static func items(_ many: [ChatTab], in workspace: Workspace) -> [OptionItem] {
+    static func items(_ many: [ChatTab], in workspace: Workspace, at clicked: ChatTab? = nil) -> [OptionItem] {
         var items: [OptionItem] = []
         let previews = many.filter(\.isPreview)
         if !previews.isEmpty { items.append(OptionItem("Keep Open") { previews.forEach(workspace.keep) }) }
@@ -1951,6 +1957,9 @@ enum TabMenu {
             items.append(OptionItem("Remove from Group") { workspace.removeFromGroup(many) })
         }
         items.append(.rule)
+        // The clipboard holds one chat: copying is a single tab's; a held one pastes after the clicked tab.
+        let paste = ChatPasting.menuItems(workspace, after: clicked)
+        if !paste.isEmpty { items += paste + [.rule] }
         items.append(OptionItem("Close \(n) Tabs") { workspace.requestClose(many) })
         return items
     }

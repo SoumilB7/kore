@@ -220,15 +220,33 @@ final class BoxBinding {
         } else {
             workspace.tabs += tabs
         }
+        // A pasted chat the box listed after the paste ended: beside the tab it was pasted at.
+        for tab in tabs {
+            guard let id = (tab.chat?.services as? BoxChatServices)?.chatId, let wanted = placeAfter.removeValue(forKey: id) else { continue }
+            if let anchor = wanted.tab { workspace.move(tab, after: anchor) }
+            workspace.select(tab)
+        }
     }
+
+    /// The tab a pasted chat goes after, until the box lists it.
+    private final class Anchor {
+        weak var tab: ChatTab?
+        init(_ tab: ChatTab) { self.tab = tab }
+    }
+    private var placeAfter: [String: Anchor] = [:]
 
     /// A box chat in front here: its tab, made when the window doesn't show it yet (a chat that
     /// came back from this Mac as a new one).
-    func show(_ chatId: String) {
+    /// A paste's: right after `anchor` (past its group).
+    func show(_ chatId: String, after anchor: ChatTab? = nil) {
         // Asked for by name (a paired folder's History opened it again): no longer closed here.
         closedIds.remove(chatId)
         adoptChats()
-        guard let workspace, let tab = workspace.tabs.first(where: { ($0.chat?.services as? BoxChatServices)?.chatId == chatId }) else { return }
+        guard let workspace, let tab = workspace.tabs.first(where: { ($0.chat?.services as? BoxChatServices)?.chatId == chatId }) else {
+            if let anchor { placeAfter[chatId] = Anchor(anchor) }
+            return
+        }
+        if let anchor { workspace.move(tab, after: anchor) }
         workspace.select(tab)
     }
 

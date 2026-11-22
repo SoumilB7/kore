@@ -352,6 +352,8 @@ extension StoryID {
         package static let search = StoryID(.history, "search")
         /// `.part(.archive)`.
         package static func row(_ session: String) -> StoryID { StoryID(.history, "row", key: session) }
+        /// A chat paste's line at the top of the window (its ask, "Stop and move").
+        package static let pasteLine = StoryID(.history, "paste")
     }
 
     package enum Explorer {

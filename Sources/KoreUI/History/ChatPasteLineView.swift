@@ -22,6 +22,7 @@ struct ChatPasteLineView: View {
                 .panel(.panel)
                 .transition(.opacity)
                 .accessibilityElement(children: .combine)
+                .storyID(StoryID.History.pasteLine)
             }
             if !explorerShowsBar, !TransferProgress.shared.shown(under: nil, window: workspace.transferKey).isEmpty {
                 TransferBar(root: nil, window: workspace.transferKey)

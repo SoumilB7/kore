@@ -181,8 +181,8 @@ extension Workspace {
     /// it had. A model this Mac doesn't have, a login it doesn't have, or an Arsenal tier the chat
     /// can't have here gives way to this Mac's own, said once.
     @discardableResult
-    func land(_ landing: ChatLanding) -> Chat? {
-        open(landing.session)
+    func land(_ landing: ChatLanding, after anchor: ChatTab? = nil) -> Chat? {
+        open(landing.session, after: anchor)
         guard let chat = tabs.first(where: { $0.agent == nil && $0.chat?.status.sessionId == landing.session.id })?.chat else { return nil }
         let settings = landing.settings
         if let model = settings.modelId {

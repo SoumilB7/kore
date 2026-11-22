@@ -407,10 +407,28 @@ package final class Workspace {
         }
     }
 
-    func newTab() {
+    func newTab() { newTab(after: nil) }
+
+    /// A new empty tab in front: right after `anchor` (past its group) when it's still here,
+    /// else where new tabs go.
+    func newTab(after anchor: ChatTab?) {
         let tab = ChatTab()
-        tabs.insert(tab, at: newTabIndex(tabs.count, from: activeTab))
+        if let anchor, let index = tabs.firstIndex(where: { $0 === anchor }) {
+            tabs.insert(tab, at: newTabIndex(index + 1, from: anchor))
+        } else {
+            tabs.insert(tab, at: newTabIndex(tabs.count, from: activeTab))
+        }
         activeID = tab.id
+    }
+
+    /// A tab moved to right after `anchor` (past its group); nothing when either has gone.
+    func move(_ tab: ChatTab, after anchor: ChatTab) {
+        guard tab !== anchor, tabGroups.member[tab.id] == nil, let from = tabs.firstIndex(where: { $0 === tab }),
+            tabs.contains(where: { $0 === anchor })
+        else { return }
+        tabs.remove(at: from)
+        guard let index = tabs.firstIndex(where: { $0 === anchor }) else { return tabs.insert(tab, at: from) }
+        tabs.insert(tab, at: newTabIndex(index + 1, from: anchor))
     }
 
     func start(_ provider: Provider, in tab: ChatTab) {
@@ -489,8 +507,9 @@ package final class Workspace {
         tabs.insert(tab, at: newTabIndex(tabs.count, from: activeTab))
     }
 
-    /// Shows a chat: its tab if already open, else the empty active tab or a new one.
-    package func open(_ session: SessionSummary) {
+    /// Shows a chat: its tab if already open, else the empty active tab or a new one (right
+    /// after `anchor`, past its group, when given).
+    package func open(_ session: SessionSummary, after anchor: ChatTab? = nil) {
         // The paired box's: in its window there.
         if let paired, boxRowPlace(session.id) != nil {
             let isOpen = boxOpen.contains(session.id)
@@ -511,7 +530,7 @@ package final class Workspace {
             select(tab)
             return
         }
-        if !activeTab.isEmpty { newTab() }
+        if !activeTab.isEmpty { newTab(after: anchor) }
         activeTab.chat = chat(session)
     }
 

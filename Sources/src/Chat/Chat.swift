@@ -79,6 +79,8 @@ package final class Chat: Identifiable {
     @ObservationIgnored private let resume: SessionSummary?
     /// When the session it resumed was last written (nil for a new chat).
     package var resumedUpdated: Date? { resume?.updated }
+    /// The transcript the session it resumed was listed with, while it's still that session.
+    package var resumedFile: String? { resume.flatMap { $0.id == status.sessionId ? $0.file?.path : nil } }
     /// A fork the CLI makes when it starts (Codex) or on its first message (Claude).
     @ObservationIgnored package let fork: ForkPoint?
     /// The chat this one was forked from, for the line after its history.

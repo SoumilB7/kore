@@ -17,14 +17,14 @@ import KoreUI
 @MainActor private var answered: [any Step] { [ExpectElement(card, .absent), Expect("no question up") { _ in KoreAsk.storyOpen == nil }] }
 
 /// Lets time pass (a tip's rest), with nothing to wait for.
-private struct Rest: Step {
+struct Rest: Step {
     let milliseconds: Int
     var label: String { "Wait \(milliseconds) ms" }
     func run(_ story: StoryContext) async throws { try await Task.sleep(for: .milliseconds(milliseconds)) }
 }
 
 /// Picks the open option popup's item titled `title`.
-private struct PickOption: Step {
+struct PickOption: Step {
     let title: String
     var label: String { "Pick “\(title)”" }
     init(_ title: String) { self.title = title }
