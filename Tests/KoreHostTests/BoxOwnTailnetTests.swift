@@ -48,6 +48,27 @@ struct BoxOwnTailnetTests {
         #expect(Own.signedOut(.loggedOut).line == "Kore's tailnet: signed out")
     }
 
+    /// `kore-host join` on Kore's own: its page said, the sign-in waited for, then the code.
+    @Test func joinSaysThePageAndWaits() {
+        var said: [String] = []
+        let page = "https://login.tailscale.com/a/box"
+        var answers: [(TimeInterval, Bool, BoxOwnRecord?)] = []
+        let ok = BoxOwnRecord.join(wait: { seconds, until in
+            answers.append((seconds, until, nil))
+            return BoxOwnRecord(own: until ? .signedIn("me@x.com") : .signedOut(.never, page: page))
+        }, say: { said.append($0) })
+        #expect(ok && answers.map(\.1) == [false, true])
+        #expect(said == ["Sign in to Kore's tailnet for this box, with the account your Mac uses:", "  " + page, "Kore's tailnet: signed in as me@x.com"])
+        // Signed in already: one line, no wait.
+        said = []
+        #expect(BoxOwnRecord.join(wait: { _, _ in BoxOwnRecord(own: .signedIn("me@x.com")) }, say: { said.append($0) }))
+        #expect(said == ["Kore's tailnet: signed in as me@x.com"])
+        // Not signed in in time: says so, and join fails.
+        said = []
+        #expect(!BoxOwnRecord.join(wait: { _, until in until ? nil : BoxOwnRecord(own: .signedOut(.never, page: page)) }, say: { said.append($0) }))
+        #expect(said.last == "Not signed in yet: open the page above, then run `kore-host join` again.")
+    }
+
     // MARK: The daemon
 
     func rig(_ box: BoxTailnet) throws -> HostRig {

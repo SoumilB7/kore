@@ -184,7 +184,7 @@ case "join":
                 ? "No Tailscale here and no kore-tailnet beside kore-host: install the Tailscale app and sign in, or set this box up again from Kore."
                 : "No Tailscale here and no kore-tailnet beside kore-host: run `kore-host update`, or install Tailscale and run `sudo tailscale up`.")
         } else {
-            print("Using Kore's own tailnet (kore-tailnet): kore-host starts it; Kore on your Mac shows its sign-in.")
+            print("Using Kore's own tailnet (kore-tailnet): kore-host starts it, and its sign-in page shows here.")
         }
     }
     do {
@@ -193,6 +193,12 @@ case "join":
         try NetJoin.mark(paths, at: Date())
         setNet(true)
         print("KoreNet is on for this box (kore-host net off turns it off)")
+        // Kore's own: signed in first, or no Mac can find this box.
+        if case let choice = box.choice(), choice == .sidecar || choice == .beside, box.helper() != nil {
+            guard BoxOwnRecord.join(wait: { BoxOwnRecord.wait(paths, within: $0, untilSignedIn: $1) }, say: { print($0) }) else { exit(1) }
+            // Its 10 minutes for the claim start now that a Mac can find it.
+            try NetJoin.mark(paths, at: Date())
+        }
         print("device  \(me.device.uuidString.lowercased())")
         print("code    \(me.code)")
         print("Within 10 minutes, open Devices in Kore on your Mac and check the code matches before you Allow this box.")

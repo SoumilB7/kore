@@ -129,6 +129,8 @@ package struct DeviceRow: Identifiable, Equatable, Sendable {
     package var update: String?
     /// Kore's own tailnet there, as the box last said (`net.node`).
     package var own: NetNodeWire.Own?
+    /// Claimed a moment ago: "Kore's tailnet on mybox · finish signing in…", then "Ready · …".
+    package var ownStep: String?
     /// Its sign-in page while Kore's own there is signed out (the row's "Sign in ↗").
     package var ownPage: String? { own.flatMap { $0.signedIn ? nil : $0.page } }
 
@@ -231,6 +233,8 @@ package struct BoxFacts: Equatable, Sendable {
     package var upgrade: BoxUpgradeFacts?
     /// Its kore-host update, as `BoxUpdates` holds it.
     package var update: BoxUpdates.Work?
+    /// Claimed from here a moment ago: its Kore's tailnet signing in (`BoxOwnFollow`).
+    package var ownStep: String?
 
     package init(key: String, name: String) {
         self.key = key
@@ -320,6 +324,7 @@ extension DevicesPicture {
             row.macOS = box.entry?.macOS ?? false
             row.koreTailnet = box.entry?.tailnet == "kore"
             row.own = box.entry?.own
+            row.ownStep = net.on ? box.ownStep : nil
             if row.tailscaleOff, row.upgradeFix == nil, !row.macOS, !row.koreTailnet { row.upgradeFix = .copy(BoxNetJoin.sudoLine) }
             if box.online {
                 switch box.route {
@@ -477,6 +482,7 @@ package enum DevicesWords {
         if row.paused { return "taken offline" }
         if row.identityChanged { return "identity changed · Forget and set up again" }
         if row.needsTailscale { return "needs Tailscale on" }
+        if let step = row.ownStep { return step }
         if let upgrading = row.upgrading { return upgrading }
         if let update = row.update { return update }
         if let at = row.joinedAt, now.timeIntervalSince(at) < Double(BoxUpgrades.shownFor.components.seconds) { return "on KoreNet" }

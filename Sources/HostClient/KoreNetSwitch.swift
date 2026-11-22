@@ -1077,7 +1077,11 @@ package final class KoreNetSwitch: NetRouter {
             node, before: directory.entry(forKey: connection.alias), own: directory.all[node.device.uuidString.lowercased()], ssh: connection.sshAlias)
         let entry = heard.entry
         let ownBefore = directory.entry(forKey: connection.alias)?.own
-        defer { if entry.own != ownBefore { nodeRevision += 1 } }
+        defer {
+            if entry.own != ownBefore { nodeRevision += 1 }
+            // A box claimed from here: its sign-in followed (New box…).
+            BoxOwnFollow.shared.heard([connection.alias, entry.id.raw], own: entry.own)
+        }
         if heard.refused {
             // Its row says so (Forget and set up again); nothing else is taken from it.
             if directory.all[entry.id.raw] != entry { directory.upsert(entry) }

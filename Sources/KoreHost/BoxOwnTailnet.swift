@@ -45,6 +45,34 @@ package struct BoxOwnRecord: Codable, Equatable, Sendable {
         return last
     }
 
+    /// `kore-host join` on a box whose tailnet is Kore's own: until it's signed in the box isn't on
+    /// any tailnet, so no Mac can find it. Its page is said here (signed in with the owner's
+    /// account, from any device), and join waits for the sign-in before it gives its code.
+    /// `wait(seconds, untilSignedIn)` reads the daemon's record; false when it never signed in.
+    @discardableResult
+    package static func join(wait: (TimeInterval, Bool) -> BoxOwnRecord?, say: (String) -> Void) -> Bool {
+        guard let first = wait(25, false)?.own else {
+            say("Kore's tailnet hasn't started yet: run `kore-host status`, then `kore-host join` again.")
+            return false
+        }
+        if first.signedIn {
+            say(first.line)
+            return true
+        }
+        guard let page = first.page else {
+            say(first.line + ": run `kore-host join` again in a moment.")
+            return false
+        }
+        say("Sign in to Kore's tailnet for this box, with the account your Mac uses:")
+        say("  " + page)
+        guard let after = wait(600, true)?.own, after.signedIn else {
+            say("Not signed in yet: open the page above, then run `kore-host join` again.")
+            return false
+        }
+        say(after.line)
+        return true
+    }
+
     /// Its sealed state couldn't be opened and was started afresh: signed out until signed in again.
     package static func unreadable(_ paths: HostPaths) {
         BoxOwnRecord(own: .signedOut(.unreadable)).write(paths)

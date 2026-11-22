@@ -40,6 +40,9 @@ enum WelcomeClaim {
                     if let key = await claims.allow(peer) {
                         Devices.shared.changed()
                         ready(key)
+                        // Its Kore's tailnet signs in from here: the page opens once, the row says so.
+                        BoxOwnFollow.shared.follow(
+                            key, name: NodeNames.name(key), own: NodeDirectory.shared.entry(forKey: key)?.own, open: Devices.shared.openURL)
                     }
                 }
             }

@@ -9,6 +9,9 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
 - `scripts/live-check.sh`: a short look at every screen, the network paths and a box, one line each.
 
 ### Changed
+- New box… on a box without Tailscale: `kore-host join` prints Kore's tailnet sign-in page and
+  waits for it, then the claim code; on the Mac the box's row follows it to "Ready · Kore's
+  tailnet: signed in as …", opening the page here if the box asks.
 - Kore's own tailnet is the main connection on your Mac and boxes; Tailscale takes over only while
   it runs. Kore's tailnet signs in once (during box setup, or "Sign in to Kore's tailnet" on the
   Mac), then waits stopped while Tailscale runs, so a quit switches with no sign-in. One node each,

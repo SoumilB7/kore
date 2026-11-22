@@ -230,6 +230,7 @@ package final class Devices {
         if case .refused(let why)? = connection?.phase { facts.refused = why }
         facts.entry = directory.entry(forKey: key)
         facts.paused = NetPauses.shared.contains(key)
+        facts.ownStep = BoxOwnFollow.shared.line(key) ?? facts.entry.flatMap { BoxOwnFollow.shared.line($0.id.raw) }
         facts.pending = connection?.pendingDevices ?? facts.entry?.pending ?? []
         facts.upgrade = upgrades?.facts(key)
         facts.update = BoxUpdates.shared.work[connection?.alias ?? key]
