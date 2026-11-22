@@ -161,6 +161,7 @@ private struct ChipView: View {
             .simultaneousGesture(drag ?? AnyGesture(DragGesture().onChanged { _ in }))
             .simultaneousGesture(TapGesture(count: 2).onEnded { model.edit { $0.setDensity(tile, .card, in: model.size) } })
             .allowsWindowActivationEvents(true)
+            .storyID(StoryID.Board.chipHandle(tile))
             if let line = summary.chipLine {
                 Text(line)
                     .font(TextStyle.label)
@@ -597,6 +598,7 @@ struct SectionView: View {
                     .foregroundStyle(Theme.text)
                     .lineLimit(1)
                     .onTapGesture(count: 2) { model.renaming = section.id }
+                    .storyID(StoryID.Board.sectionTitle(section.id))
             }
             Text(count)
                 .font(Chrome.captionMedium)

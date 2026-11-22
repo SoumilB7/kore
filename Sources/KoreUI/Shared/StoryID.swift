@@ -247,6 +247,8 @@ extension StoryID {
         /// An image or file chip on a sent message, by its name; right-click opens its menu.
         package static func attachment(_ name: String) -> StoryID { StoryID(.transcript, "attachment", key: name) }
         package static func answer(_ entry: UUID) -> StoryID { StoryID(.transcript, "answer", key: entry.uuidString) }
+        /// A compaction's summary row (its right-click copies it).
+        package static func summary(_ entry: UUID) -> StoryID { StoryID(.transcript, "summary", key: entry.uuidString) }
         package static func fold(_ turn: String) -> StoryID { StoryID(.transcript, "fold", key: turn) }
         package static func tool(_ id: String) -> StoryID { StoryID(.transcript, "tool", key: id) }
         /// A tool header's file name, by the name: a click opens the file.
@@ -314,6 +316,8 @@ extension StoryID {
         package static func ended(_ group: String) -> StoryID { StoryID(.agentmap, "ended", key: group) }
         /// The chat's own row, the root the running agents hang off.
         package static let chat = StoryID(.agentmap, "chat")
+        /// A narrow map's menu in place of the tree: the chat, the agents, the ended groups.
+        package static let menu = StoryID(.agentmap, "menu")
         /// A command's row in a BACKGROUND section: its click opens it; `.part(.stop)` asks to stop
         /// it, `.part(.allow)` is the red Stop, `.part(.cancel)` Cancel, `.part(.background)`
         /// Run in background.
@@ -433,6 +437,8 @@ extension StoryID {
     package enum Changes {
         package static func file(_ relativePath: String) -> StoryID { StoryID(.changes, "file", key: relativePath) }
         package static let done = StoryID(.changes, "done")
+        /// A narrow view's file menu in place of the list.
+        package static let menu = StoryID(.changes, "menu")
     }
 
     package enum Viewer {

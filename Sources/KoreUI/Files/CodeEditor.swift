@@ -373,6 +373,12 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
         window.makeFirstResponder(textView)
     }
 
+    /// Something else takes the keys before the text view is in a window: its ask is off.
+    func dropPendingFocus() {
+        focusPending = false
+        document.rendering.focusPending = false
+    }
+
     /// The text view is in a window now: it takes the caret if that was asked for meanwhile.
     func movedToWindow() {
         guard focusPending, textView.window != nil else { return }

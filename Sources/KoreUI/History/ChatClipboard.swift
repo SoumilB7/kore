@@ -63,7 +63,7 @@ final class ChatClipboard {
     /// The text pasteboard's count when the chat was copied: text copied after it wins ⌘V in a field.
     @ObservationIgnored private var pasteboardCount = 0
     /// The system pasteboard's change count (tests count their own; a storyline host its own board).
-    @ObservationIgnored var changeCount: () -> Int = { (StoryHost.installed ? NSPasteboard(name: StoryHost.board) : .general).changeCount }
+    @ObservationIgnored var changeCount: () -> Int = { StoryHost.pasteboard.changeCount }
 
     func put(_ clip: Clip) {
         self.clip = clip

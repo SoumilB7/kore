@@ -169,6 +169,7 @@ struct ExplorerSidebar: View {
             .focusable(interactions: .edit)
             .focused($focused)
             .focusEffectDisabled()
+            .onChange(of: focused, initial: true) { _, now in if StoryHost.installed { store.storyHasKeys = now } }
             .onKeyPress(phases: .down) { press in key(press, rows: store.rows) }
             // The Edit menu's ⌘A ⌘C ⌘X ⌘V while the tree has the keys (VS Code's tree).
             .onCommand(#selector(NSResponder.selectAll(_:))) { if store.edit == nil { store.pickAll() } }
@@ -315,11 +316,22 @@ struct ExplorerState: View {
     var body: some View {
         VStack(spacing: Space.md) {
             Text(message).font(Chrome.label).foregroundStyle(color)
-            Button(button, action: action).buttonStyle(SubtleButtonStyle())
+            Button(button, action: action).buttonStyle(SubtleButtonStyle()).storyID(StoryID.Explorer.state)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, Layout.Explorer.stateTop)
     }
+}
+
+extension StoryID.Explorer {
+    /// The empty, lost or unreadable folder's one button (New File, Locate…, Try Again).
+    package static let state = StoryID(.explorer, "state")
+    /// The empty part below the tree's rows.
+    package static let below = StoryID(.explorer, "below")
+    /// A transfer's action on the explorer's bottom bar, by its word (Cancel, Resume, Retry).
+    package static func transfer(_ title: String) -> StoryID { StoryID(.explorer, "transfer", key: title) }
+    /// A failed transfer's ✕.
+    package static let transferDismiss = StoryID(.explorer, "transfer.dismiss")
 }
 
 // MARK: - Sticky folders
@@ -523,6 +535,7 @@ private struct TreeList: View, Equatable {
         .buttonStyle(.plain)
         .focusable(false)
         .accessibilityHidden(true)
+        .storyID(StoryID.Explorer.below)
         // Dropped below the rows: into the folder itself.
         .onDrop(of: TreeDrop.types, delegate: TreeDrop(folder: store.root, store: store, workspace: workspace, undo: undo))
         }
@@ -991,7 +1004,7 @@ private struct InlineNameField: View {
         // Several chosen: only what applies to all of them.
         if chosen.count > 1 {
             return [
-                OptionItem("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting(chosen.map { URL(fileURLWithPath: $0) }) },
+                OptionItem("Reveal in Finder") { StoryHost.reveal(chosen.map { URL(fileURLWithPath: $0) }) },
                 OptionItem("Compress \(chosen.count) Items") { Task { if let failure = await store.compress(chosen) { TreeActions.show(failure) } } }, .rule,
                 OptionItem("Cut") { TreeActions.copy(chosen, cut: true, store: store) },
                 OptionItem("Copy") { TreeActions.copy(chosen, cut: false, store: store) },
@@ -1008,10 +1021,10 @@ private struct InlineNameField: View {
         ]
         if !isFolder {
             items += [OptionItem("Open") { workspace.openFile(URL(fileURLWithPath: path)) },
-                      OptionItem("Open with Default App") { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }]
+                      OptionItem("Open with Default App") { StoryHost.open(URL(fileURLWithPath: path)) }]
         }
         items += [
-            OptionItem("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) },
+            OptionItem("Reveal in Finder") { StoryHost.reveal([URL(fileURLWithPath: path)]) },
             OptionItem("Open in Terminal") { workspace.terminals.newShell(folder: URL(fileURLWithPath: folder)) },
         ]
         if isFolder { items.append(OptionItem("Find in Folder…") { TreeActions.find(in: path, store: store, workspace: workspace) }) }

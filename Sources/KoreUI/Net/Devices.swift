@@ -92,7 +92,7 @@ package final class Devices {
     /// "Get logs" didn't get an answer: one line in the popup for a few seconds.
     package private(set) var logsNote: String?
     /// Opens a page in the browser, or an app (storylines: recorded, nothing opens).
-    @ObservationIgnored package var openURL: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
+    @ObservationIgnored package var openURL: @MainActor (URL) -> Void = { StoryHost.open($0) }
     @ObservationIgnored package var openTailscaleApp: @MainActor () -> Void = { Devices.launchTailscale() }
     /// The join sheets' runner for a box (Kore: its upgrade over SSH, with or without a window).
     @ObservationIgnored package var joinRunner: @MainActor (String) -> (any BoxNetJoinRunner)? = { BoxUpgrades.shared.runner(for: $0) }
@@ -519,7 +519,7 @@ package final class Devices {
         guard row.kind == .phone, let id = UUID(uuidString: row.id), let phones else { return }
         Task { @MainActor in
             if let file = await phones.fetchLogs(id, name: row.name) {
-                NSWorkspace.shared.activateFileViewerSelecting([file])
+                StoryHost.reveal([file])
             } else {
                 let line = "\(row.name) didn't send its logs. Open Kore on it, then try again."
                 logsNote = line
@@ -655,5 +655,9 @@ extension StoryID {
         package static let boxLineAction = boxLine.part(.use)
         /// A box's Welcome line "Runs over SSH · Join KoreNet".
         package static let joinLine = StoryID(.welcome, "net.joinline")
+        /// New box…'s "KoreNet is off · Turn on".
+        package static let newBoxTurnOn = StoryID(.welcome, "net.newbox.turnon")
+        /// The join sheet's auth key field.
+        package static let authKeyField = StoryID(.welcome, "net.join.authkey")
     }
 }

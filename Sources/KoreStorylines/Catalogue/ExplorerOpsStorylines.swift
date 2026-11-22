@@ -8,7 +8,11 @@ import KoreUI
 /// Answers Kore's confirmations ("trash", "move") with yes, and counts them.
 @MainActor final class Confirms {
     var asked: [String] = []
-    func install() { StorylineSeams.confirm = { [unowned self] what in asked.append(what); return true } }
+    /// Until `remove()`, or the storyline's end, pass or fail.
+    func install(_ story: StoryContext) {
+        StorylineSeams.confirm = { [self] what in asked.append(what); return true }
+        story.atFinish { StorylineSeams.confirm = nil }
+    }
     func remove() { StorylineSeams.confirm = nil }
 }
 
@@ -57,7 +61,7 @@ final class ExplorerMultiSelect: FilesStoryline {
 
     override func steps() -> [any Step] {
         super.steps() + [
-            Do("answer confirmations") { [confirms] _ in confirms.install() },
+            Do("answer confirmations") { [confirms] story in confirms.install(story) },
             Command(.toggleExplorer),
             WaitForElement(.treeRow("e.txt")),
             Click(.treeRow("a.txt")),
@@ -109,8 +113,8 @@ final class ExplorerFileOps: FilesStoryline {
 
     override func steps() -> [any Step] {
         super.steps() + [
-            Do("answer confirmations, and a file outside the folder") { [confirms] _ in
-                confirms.install()
+            Do("answer confirmations, and a file outside the folder") { [confirms] story in
+                confirms.install(story)
                 try "outside\n".write(to: Self.outside, atomically: true, encoding: .utf8)
             },
             Command(.toggleExplorer),
@@ -163,6 +167,7 @@ final class ExplorerFileOps: FilesStoryline {
             // A folder's click puts the keys in the tree; a file's would open it, and an opened file
             // closes the explorer floating over a narrow window.
             Click(.treeRow("dest")),
+            Expect("the tree has the keys") { $0.app.workspace?.storyTreeHasKeys == true },
             TypeText("ze"),
             Expect("typing “ze” chose zeta.txt", found: { $0.app.workspace?.storyTreeSelection ?? "none" }) {
                 $0.app.workspace?.storyTreeSelection == "zeta.txt"

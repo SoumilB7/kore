@@ -122,6 +122,13 @@ package final class KoreAsk {
 
     func toggleTick() { ticked.toggle() }
 
+    /// Storylines: a question one left up, answered with its cancel so the next starts clear; its key.
+    package static func storyCancelLeftOpen() -> String? {
+        guard let key = shared.question?.key else { return nil }
+        shared.cancel()
+        return key
+    }
+
     private func close() {
         host?.removeFromSuperview()
         host = nil
@@ -267,6 +274,7 @@ private struct AskOverlay: View {
                 .contentShape(Rectangle())
                 .onTapGesture { ask.cancel() }
                 .accessibilityHidden(true)
+                .storyAction(StoryID.Ask.scrim) { ask.cancel() }
             if let question = ask.question { card(question) }
         }
     }
@@ -333,4 +341,9 @@ private struct AskOverlay: View {
         .accessibilityLabel(Text(question.title))
         .storyID(StoryID.Ask.card)
     }
+}
+
+extension StoryID.Ask {
+    /// The dimmed page around the card: a click there cancels.
+    package static let scrim = StoryID(.ask, "scrim")
 }

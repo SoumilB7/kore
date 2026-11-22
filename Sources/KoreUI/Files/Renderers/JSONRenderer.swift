@@ -83,6 +83,7 @@ private struct TreeFilterField: View {
             Image(systemName: "line.3.horizontal.decrease").font(Chrome.label).foregroundStyle(Theme.secondary)
             TextField("Filter keys and values", text: Binding(get: { query ?? "" }, set: { query = $0 }))
                 .textFieldStyle(.plain)
+                .storyID(StoryID.Editor.jsonFilter)
                 .font(Chrome.body)
                 .foregroundStyle(Theme.text)
                 .focused($focused)
@@ -315,6 +316,17 @@ private final class TreeCanvas: CanvasView {
         gutter + Size.JSONTree.leading + CGFloat(depth) * Size.JSONTree.indent * zoom
     }
 
+    /// Storylines: where a click lands on a row (0-based), its chevron or its text, in the window.
+    fileprivate func storyPoint(row: Int, chevron: Bool) -> NSPoint? {
+        guard rows.indices.contains(row), rowHeight > 0 else { return nil }
+        let box = Size.JSONTree.chevronBox * zoom
+        let x = indentX(rows[row].depth) + (chevron ? box / 2 : box * 2)
+        return convert(NSPoint(x: x, y: (CGFloat(row) + 0.5) * rowHeight), to: nil)
+    }
+
+    /// Storylines: the rows the tree shows.
+    fileprivate var storyRowCount: Int { rows.count }
+
     // MARK: Drawing
 
     override func draw(_ dirtyRect: NSRect) {
@@ -496,13 +508,13 @@ private final class TreeCanvas: CanvasView {
         guard let index else { return }
         let item = index.nodes[node]
         let text = item.kind == .string ? index.decodedString(item) : index.source(item)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        StoryHost.pasteboard.clearContents()
+        StoryHost.pasteboard.setString(text, forType: .string)
     }
 
     private func copyPath(_ node: Int) {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(path(node), forType: .string)
+        StoryHost.pasteboard.clearContents()
+        StoryHost.pasteboard.setString(path(node), forType: .string)
     }
 
     @objc func copy(_ sender: Any?) {
@@ -575,11 +587,18 @@ private final class TreeCanvas: CanvasView {
         return true
     }
 
-    override func keyDown(with event: NSEvent) {
-        if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "f" {
+    /// ⌘F while the tree has the keys (a ⌘ key isn't always sent on as a key down).
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        if window?.firstResponder === self, event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
+            event.charactersIgnoringModifiers == "f"
+        {
             onFind()
-            return
+            return true
         }
+        return super.performKeyEquivalent(with: event)
+    }
+
+    override func keyDown(with event: NSEvent) {
         guard let index, !rows.isEmpty else { return super.keyDown(with: event) }
         let current = selectedRow ?? -1
         let page = max(1, Int(visible.height / max(rowHeight, 1)) - 2)
@@ -614,4 +633,22 @@ private final class TreeCanvas: CanvasView {
             super.keyDown(with: event)
         }
     }
+}
+
+// MARK: - Storylines
+
+extension StoryID.Editor {
+    /// The JSON tree's ⌘F filter field.
+    package static let jsonFilter = StoryID(.editor, "json.filter")
+}
+
+extension Workspace {
+    /// Where a click lands on a row (0-based) of the active JSON tree: its chevron, or its text.
+    package func storyJSONPoint(row: Int, chevron: Bool = false) -> (NSWindow, CGPoint)? {
+        guard let tree = storyView(TreeCanvas.self), let window = tree.window, let point = tree.storyPoint(row: row, chevron: chevron) else { return nil }
+        return (window, point)
+    }
+
+    /// The rows the active JSON tree shows; nil while none does.
+    package var storyJSONRowCount: Int? { storyView(TreeCanvas.self)?.storyRowCount }
 }

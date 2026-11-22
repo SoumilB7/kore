@@ -128,8 +128,15 @@ enum LiveEyes {
 
     /// The lines of text in a frame (Vision, in process, off the main thread); nil when it takes
     /// over `seconds` (a busy Mac): the text isn't judged then.
+    /// A retina frame is read at 1× (a quarter of its pixels; the window's 11 pt text is still
+    /// 11 px high), and the time allowed grows with what's read: 5 s for a laptop window, more for
+    /// a very large one.
     static func texts(_ rep: NSBitmapImageRep, _ story: StoryContext, within seconds: Double = 5) async -> [String]? {
-        guard let image = rep.cgImage else { return [] }
+        guard var image = rep.cgImage else { return [] }
+        let scale = CGFloat(rep.pixelsWide) / max(rep.size.width, 1)
+        if scale > 1.5, let small = downscaled(image, by: scale) { image = small }
+        let megapixels = Double(image.width * image.height) / 1_000_000
+        let allowed = max(seconds, seconds * megapixels / 1.3)
         let box = OCRBox()
         nonisolated(unsafe) let cg = image
         DispatchQueue.global(qos: .userInitiated).async {
@@ -139,7 +146,18 @@ enum LiveEyes {
             try? VNImageRequestHandler(cgImage: cg).perform([request])
             box.set((request.results ?? []).compactMap { $0.topCandidates(1).first?.string })
         }
-        return try? await story.wait("the frame's text", timeout: .seconds(seconds)) { box.get() }
+        return try? await story.wait("the frame's text", timeout: .seconds(allowed)) { box.get() }
+    }
+
+    private static func downscaled(_ image: CGImage, by scale: CGFloat) -> CGImage? {
+        let width = Int(CGFloat(image.width) / scale), height = Int(CGFloat(image.height) / scale)
+        guard width > 0, height > 0,
+            let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: 0,
+                                    space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        context.interpolationQuality = .high
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
     }
 
     /// Work words left on screen once it settled: "Installing…" after the install.
@@ -163,17 +181,35 @@ enum LiveEyes {
         try await story.until("\(ms) ms to pass", timeout: .seconds(Double(ms) / 1000 + 5)) { ContinuousClock.now >= until }
     }
 
-    /// Frames 120 ms apart until two match: the window settled. nil: still changing after `ms`.
-    static func settle(_ window: NSWindow, _ story: StoryContext, ms: Int = 2000) async throws -> NSBitmapImageRep? {
+    /// Frames 120 ms apart until two match: the window settled. nil: still changing after `ms`
+    /// and after `looks` comparisons both. A frame's capture and comparison cost grows with its
+    /// pixels (a 3008×1692 window at 2× is 20 MP, 30 times a 560×700 one), so a large window gets
+    /// as many looks as a small one, not as many milliseconds; the gap between two looks is never
+    /// shorter than one look takes.
+    static func settle(_ window: NSWindow, _ story: StoryContext, ms: Int = 2000, looks: Int = 16) async throws -> NSBitmapImageRep? {
         let start = ContinuousClock.now
         var previous = frame(window)
-        while ContinuousClock.now - start < .milliseconds(ms) {
-            try await pass(story, ms: 120)
+        var cost = ContinuousClock.now - start
+        var n = 0
+        while ContinuousClock.now - start < .milliseconds(ms) || n < looks {
+            try await pass(story, ms: max(120, Int(cost.components.seconds * 1000 + cost.components.attoseconds / 1_000_000_000_000_000)))
+            let began = ContinuousClock.now
             let next = frame(window)
+            n += 1
             if let a = previous, let b = next, difference(a, b) == 0 { return b }
+            cost = ContinuousClock.now - began
             previous = next
         }
         return nil
+    }
+
+    /// One look's cost at this window's size: a capture and a comparison, in ms.
+    static func lookMs(_ window: NSWindow) -> Int {
+        let began = ContinuousClock.now
+        guard let a = frame(window) else { return 0 }
+        _ = difference(a, a)
+        let took = ContinuousClock.now - began
+        return Int(took.components.seconds * 1000 + took.components.attoseconds / 1_000_000_000_000_000)
     }
 
     /// The registered frames in `window` whose ids start with `prefix`.
@@ -215,11 +251,13 @@ struct Look: Step {
         // one that never ends is.
         guard let first = try await LiveEyes.settle(win, story) else {
             let file = LiveEyes.frame(win).map { LiveEyes.save($0, "\(base)-unsettled", story) } ?? ""
-            throw StoryFailure.other("flicker: never settles in 2 s (\(file))")
+            throw StoryFailure.other("flicker: never settles in 2 s and 16 looks (\(file))")
         }
         var shots = [first]
+        // Frames 300 ms apart, or a look's own time apart when that is longer (a very large window).
+        let gap = max(300, LiveEyes.lookMs(win))
         for _ in 1..<max(frames, 1) {
-            try await LiveEyes.pass(story, ms: 300)
+            try await LiveEyes.pass(story, ms: gap)
             guard let frame = LiveEyes.frame(win) else { throw StoryFailure.other("no frame of the window") }
             shots.append(frame)
         }
@@ -244,7 +282,7 @@ struct Look: Step {
             }
         }
         guard let lines = await LiveEyes.texts(shots[shots.count - 1], story) else {
-            story.note("\(name) text: not read in 5 s")
+            story.note("\(name) text: not read in time")
             return
         }
         story.note("\(name) text: \(lines.joined(separator: " | "))")

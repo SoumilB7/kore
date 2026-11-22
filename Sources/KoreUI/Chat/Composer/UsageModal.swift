@@ -4,6 +4,11 @@ import KoreCore
 import src
 import SwiftUI
 
+extension StoryID.UsageModal {
+    /// What lies around the card: a click there closes it.
+    package static let backdrop = StoryID(.usage, "backdrop")
+}
+
 /// The Usage popup's extended view (usage-monitor.html §10), a card centred over the chat: the
 /// plan's limits on top, as in the popup but roomier (a 6pt bar with Kore's hatch, the plan's %,
 /// Kore's ~%), which pick the limit shown below; then that limit's distribution: In Kore, every
@@ -26,6 +31,7 @@ struct UsageModal: View {
             let width = max(min(Size.usageModalWidth, geometry.size.width - Size.QuickOpen.windowMargin), 0)
             ZStack {
                 Color.clear.contentShape(Rectangle()).onTapGesture { state.closeExtended() }
+                    .storyID(StoryID.UsageModal.backdrop)
                 card(width: width, room: max(geometry.size.height - Size.QuickOpen.windowMargin, 0))
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
@@ -126,11 +132,11 @@ struct UsageModal: View {
             HStack(spacing: Space.xxs) {
                 if let url = account?.manage {
                     IconButton(symbol: "arrow.up.right", kind: .small, font: Glyph.chevron, help: "Manage usage on \(url.host() ?? url.absoluteString)") {
-                        NSWorkspace.shared.open(url)
+                        StoryHost.open(url)
                         state.closeExtended()
                     }
                     .tabStop(StoryID.UsageModal.card.part(.open)) {
-                        NSWorkspace.shared.open(url)
+                        StoryHost.open(url)
                         state.closeExtended()
                     }
                 }

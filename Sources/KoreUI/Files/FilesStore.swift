@@ -71,6 +71,8 @@ final class FilesStore {
     /// The rows chosen with ⌘ or ⇧ (VS Code's multi-select), the selection among them; empty
     /// while one row is chosen.
     private(set) var picked: Set<String> = []
+    /// Storylines: the tree has the keys (type to find, ⌘A).
+    @ObservationIgnored package var storyHasKeys = false
     /// Where a ⇧ range starts: the last row clicked without ⇧.
     @ObservationIgnored private(set) var anchor: String?
     /// The row a click chose: it's in view, so the list doesn't scroll to it (the keys' and a

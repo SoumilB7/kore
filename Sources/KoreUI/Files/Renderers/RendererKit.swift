@@ -19,7 +19,7 @@ struct RendererState: View {
                 .lineLimit(2)
             HStack(spacing: Space.md) {
                 ForEach(Array(buttons.enumerated()), id: \.offset) { _, button in
-                    Button(button.0, action: button.1).buttonStyle(SubtleButtonStyle())
+                    Button(button.0, action: button.1).buttonStyle(SubtleButtonStyle()).storyID(StoryID.Editor.rendererState(button.0))
                 }
             }
         }
@@ -39,11 +39,11 @@ struct RendererState: View {
     static func cantRender(_ file: FileInfo, reason: String, context: RendererContext, hasRaw: Bool) -> RendererState {
         var buttons: [(String, () -> Void)] = []
         if hasRaw { buttons.append(("Show Source", context.showSource)) }
-        buttons.append(("Open with Default App", { NSWorkspace.shared.open(file.url) }))
+        buttons.append(("Open with Default App", { StoryHost.open(file.url) }))
         return RendererState(title: "Kore can't show this file.", line: reason, buttons: buttons)
     }
 
-    static func reveal(_ url: URL) { NSWorkspace.shared.activateFileViewerSelecting([url]) }
+    static func reveal(_ url: URL) { StoryHost.reveal([url]) }
 }
 
 /// A spinner, only once loading has taken longer than `Motion.loadingDelay`.
@@ -166,7 +166,7 @@ struct RendererNotice: View {
             Text(message).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1)
             Spacer(minLength: Space.md)
             if let action {
-                Button(action.title, action: action.run).buttonStyle(SubtleButtonStyle())
+                Button(action.title, action: action.run).buttonStyle(SubtleButtonStyle()).storyID(StoryID.Editor.rendererNotice)
             }
         }
         .padding(.horizontal, Size.Editor.pathInset)

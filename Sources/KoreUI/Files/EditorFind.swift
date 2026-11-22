@@ -198,6 +198,13 @@ final class FindModel {
 
 // MARK: - The bar
 
+extension StoryID.Editor.Find {
+    /// The field's Aa, ab and .* toggles.
+    package static let matchCase = StoryID(.editor, "find.case")
+    package static let wholeWord = StoryID(.editor, "find.word")
+    package static let regex = StoryID(.editor, "find.regex")
+}
+
 /// The find bar at the editor's top-right (look §5).
 struct FindBar: View {
     let find: FindModel
@@ -227,8 +234,11 @@ struct FindBar: View {
                                 return .handled
                             }
                         Toggle(label: "Aa", isOn: find.caseSensitive, help: "Match Case") { find.caseSensitive.toggle() }
+                            .storyID(StoryID.Editor.Find.matchCase)
                         Toggle(label: "ab", isOn: find.wholeWord, underline: true, help: "Match Whole Word") { find.wholeWord.toggle() }
+                            .storyID(StoryID.Editor.Find.wholeWord)
                         Toggle(label: ".*", isOn: find.regex, help: "Use Regular Expression") { find.regex.toggle() }
+                            .storyID(StoryID.Editor.Find.regex)
                     }
                     .modifier(FindField(failed: find.invalid || (!find.query.isEmpty && find.matches.isEmpty), focused: field == .query))
                     Text(find.countLabel)

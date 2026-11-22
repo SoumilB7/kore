@@ -154,8 +154,10 @@ struct ImplementPlanCard: View {
     @ViewBuilder private var buttons: some View {
         Button(CardLabels.Implement.stay, action: stay)
             .buttonStyle(SubtleButtonStyle())
+            .storyID(StoryID.Approval.implementPlan.part(.keepplanning))
         Button(CardLabels.Implement.implement, action: implement)
             .buttonStyle(SubtleButtonStyle(prominent: true))
+            .storyID(StoryID.Approval.implementPlan.part(.allow))
     }
 
     var body: some View {
@@ -174,6 +176,11 @@ struct ImplementPlanCard: View {
         .panel(.card)
         .cornerMarks(Rung.plan.color, radius: Radius.card)
     }
+}
+
+extension StoryID.Approval {
+    /// Codex's "Implement this plan?" card: `.part(.allow)` is Implement, `.part(.keepplanning)` Stay.
+    package static let implementPlan = StoryID(.approval, "implement")
 }
 
 /// Codex extension's Plan indicator: lightbulb + "Plan"; hover shows × to turn it off.

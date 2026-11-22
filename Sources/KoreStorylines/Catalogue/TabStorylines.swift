@@ -546,6 +546,12 @@ final class WindowReopenOneChat: ChatStoryline {
         ] + super.steps() + [
             Send("Say OK"), TurnFinished(1),
             Do("Note the chat's session") { [self] story in session = try story.activeChat().listedId },
+            // Its CLI lists it now, as a real one's store would (the scripted CLIs list only forks):
+            // a reopened window keeps a restored chat its CLI lists.
+            Do("its CLI lists the chat") { [self] story in
+                guard let session else { throw StoryFailure.modelMissing("the chat's session") }
+                ScriptedWorld.shared.list(session, provider: story.variant?.provider ?? "claude", folder: story.folder, title: "Say OK")
+            },
             Expect("one tab, the chat") { [self] story in story.app.workspace?.tabs.count == 1 && session != nil },
             Do("Close the window") { story in story.window?.close() },
             Expect("the window closed") { story in story.app.workspace?.window?.isVisible != true },

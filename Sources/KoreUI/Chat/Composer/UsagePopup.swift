@@ -512,12 +512,12 @@ struct UsagePopup: View {
                     IconButton(
                         symbol: "arrow.up.right", kind: .mini, font: Glyph.chevron, help: "Manage usage on \(url.host() ?? url.absoluteString)"
                     ) {
-                        NSWorkspace.shared.open(url)
+                        StoryHost.open(url)
                         state.close()
                     }
                     .storyID(StoryID.Composer.usage.part(.open))
                     .tabStop(StoryID.Composer.usage.part(.open)) {
-                        NSWorkspace.shared.open(url)
+                        StoryHost.open(url)
                         state.close()
                     }
                 }

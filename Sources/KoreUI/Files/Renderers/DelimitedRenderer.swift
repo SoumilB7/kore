@@ -500,8 +500,8 @@ private final class GridCanvas: CanvasView {
         let text = range.rows.map { display in
             range.columns.map { table.text(row: tableRow(display), column: $0) }.joined(separator: "\t")
         }.joined(separator: "\n")
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        StoryHost.pasteboard.clearContents()
+        StoryHost.pasteboard.setString(text, forType: .string)
     }
 
     override func selectAll(_ sender: Any?) {
@@ -776,4 +776,26 @@ private final class GridRules: NSView {
         }
         CATransaction.commit()
     }
+}
+
+// MARK: - Storylines
+
+extension Workspace {
+    /// Where a click lands in the active grid: a little into the first column, on a row (display
+    /// order, 0-based, while the grid is scrolled to its top) or, `row` nil, on its header.
+    package func storyGridPoint(row: Int?) -> (NSWindow, CGPoint)? {
+        guard let grid = storyView(GridCanvas.self), let window = grid.window, grid.rowHeight > 0 else { return nil }
+        let y = row.map { grid.rowHeight * CGFloat($0 + 1) } ?? grid.visible.minY
+        return (window, grid.convert(NSPoint(x: grid.gutter + grid.rowHeight / 2, y: y + grid.rowHeight / 2), to: nil))
+    }
+
+    /// The middle of the grid's row numbers, in its window.
+    package var storyGridGutterPoint: (NSWindow, CGPoint)? {
+        guard let grid = storyView(GridCanvas.self), let window = grid.window, grid.gutter > 0 else { return nil }
+        let visible = grid.visible
+        return (window, grid.convert(NSPoint(x: visible.minX + grid.gutter / 2, y: visible.midY), to: nil))
+    }
+
+    /// How far down the grid is scrolled.
+    package var storyGridTop: CGFloat? { storyView(GridCanvas.self)?.visible.minY }
 }

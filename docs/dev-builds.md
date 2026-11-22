@@ -88,19 +88,29 @@ every area of the window as a person does and times it, at three window sizes an
 exists because element checks at one size missed what breaks at a large window, in a long chat or
 with many tabs, and because clicking a control isn't checking that it worked.
 
-- **Areas** (`Catalogue/ScaleStorylines.swift`, tag `scale`), at the **light load** each area's own
-  storyline with its checks (the effect, not just the click):
-  - tabs (select, ⇧-select, ⌘W, ⇧⌘T, drafts back where they were) and groups;
+- **Areas** (`Catalogue/ScaleStorylines.swift`, `ScaleGapStorylines.swift`, tag `scale`), at the
+  **light load** each area's own storyline with its checks (the effect, not just the click):
+  - tabs (select, ⇧-select, ⌘W, ⇧⌘T, drafts back where they were);
+  - groups: made, folded, a tab dragged out, closed with a chat working, new tabs placed after;
   - the model and mode pickers;
-  - Devices (the KoreNet switch on and off, a phone allowed and denied);
-  - the agent map, History (search, then open at the message);
+  - Devices (the KoreNet switch, a phone allowed and denied) and its one + (Add a box, Add a phone);
+  - the agent map (and a tab's click giving the chat back), History (search, open at the
+    message, the current row);
   - the explorer (copy, paste, rename with undo, trash, Open in Terminal);
   - table and code copy (the pasteboard holds exactly the text);
   - the rail (a mark's click lands on its message);
-  - the composer (sends, answered by the scripted CLI) and the terminal (a shell echoes).
-- **Heavy loads**: 30 tabs (tabs, Devices); a chat of 300 turns (open, scroll, rail, both copies,
-  both pickers at their anchors, a message sent); 500 files (the explorer expands, renames,
-  trashes).
+  - the composer (sends, answered by the scripted CLI);
+  - the terminal (a shell echoes), and a command's whole output (1,500 lines opened mid-run, the
+    lines after appended, "No output yet" for a quiet one; Claude's file, Codex's stream);
+  - Arsenal (its tint) and Arsenal's tab groups;
+  - Kore's questions (rename, trash, unsaved edits, a move, quit, a terminal's close) and tip;
+  - a box window's History (listed by the box, a pick opened there and shown as a tab).
+- **Heavy loads**:
+  - 30 tabs: tabs, a group's popup (named, recoloured, a new tab in it, ungrouped), Devices, the
+    terminal, the agent map, History, both pickers, Arsenal;
+  - a chat of 300 turns: open, scroll, rail, both copies, both pickers at their anchors, a
+    message sent;
+  - 500 files: the explorer expands, renames, trashes.
 - **Sizes**: narrow 560×700, laptop 1440×860, large 3008×1692 (`--size` per app).
 - **Timing**: each click or key is timed from the action to the first frame that two more follow
   at the display's pace (the main thread free and drawing again), against 100 ms; its own
@@ -109,13 +119,23 @@ with many tabs, and because clicking a control isn't checking that it worked.
   its later steps are still timed.
 - **Layout**: popups whole in the window and at their anchor; each area ends with the live
   check's Look (frames steady, no work word left, nothing clipped) and its edge controls whole.
+  Settling counts looks, not milliseconds: a look's cost grows with the window's pixels (a large
+  window at 2× is 20 MP, 30 times a narrow one), so every size gets 16 comparisons at least, and
+  the frames compared for flicker are never closer than one look takes. Text is read at 1×, with
+  time in proportion to its pixels; the report says how many looks were read (an unread look's
+  stale and clipped checks didn't run).
+- **Load gate**: before each size, the 1-minute load at most the Mac's cores, so a runnable thread
+  doesn't queue for one; above it a step's time is the queue's as much as the app's. It waits up
+  to `KORE_SCALE_WAIT` seconds (600); a size run over it anyway is marked loaded, and its
+  over-budget-only ✘ say so.
+- **Pending**: an area whose feature the build doesn't have (a storyline not in it, or the model or
+  screen without the feature) is ◌ pending, not ✘: its walk is found by name as the run starts.
 
-Claude's and Codex's apps run at once, each going through the three sizes in turn (six apps at
-once loaded the Mac enough to time the load, not the app), each off screen under
-its own name (defaults, pasteboard, Kore folders), input in process, the scripted CLI, ≤10 min.
-Areas that don't depend on the CLI run in one of the two. The output is one ✔/✘ per
-area × load × size × CLI with its slowest step, the ten slowest steps, then the total with the Mac's load at the start and end (a note when it's high: times over
-budget may then be the load's, so rerun that area alone); the detail
-is `<out>/<size>-<cli>/ui-scale.jsonl`, `report.txt` and `shots/`, under
-`$TMPDIR/kore-ui-scale`. Not covered: a live model's turns, the phone, real pointer hover
-(storylines hover in process), and the terminal and agent map at a heavy load.
+Size by size, Claude's and Codex's apps run at once (six apps at once loaded the Mac enough to
+time the load, not the app), each off screen under its own name (defaults, pasteboard, Kore
+folders), input in process, the scripted CLI. Areas that don't depend on the CLI run in one of
+the two. The output is one ✔/✘ per area × load × size × CLI with its slowest step, ◌ per pending
+area, the ten slowest steps, the looks read, the gate per size, then the total; the detail is
+`<out>/<size>-<cli>/ui-scale.jsonl`, `report.txt` and `shots/`, under `$TMPDIR/kore-ui-scale`.
+Not covered: a live model's turns, the phone, real pointer hover and window-server input
+(storylines press in process; hover-only effects aren't seen), and other Macs' displays.

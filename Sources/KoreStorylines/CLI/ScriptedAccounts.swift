@@ -95,9 +95,12 @@ package final class ScriptedAccounts {
         loginVault.removeAll()
         LoginMoves.shared.boxes = { [] }
         LoginMoves.shared.reset()
-        // The run's Claude settings start empty for each storyline.
-        try? FileManager.default.removeItem(at: ClaudeSettings.userFile())
-        try? FileManager.default.removeItem(at: SettingsFile.backup(of: ClaudeSettings.userFile()))
+        // The run's Claude settings start empty for each storyline: only the run's own (its
+        // CLAUDE_CONFIG_DIR), never the owner's ~/.claude, whatever order things were set up in.
+        if ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]?.isEmpty == false {
+            try? FileManager.default.removeItem(at: ClaudeSettings.userFile())
+            try? FileManager.default.removeItem(at: SettingsFile.backup(of: ClaudeSettings.userFile()))
+        }
         // Logins side by side only where a storyline gives them a folder (`SeedLogins`).
         CLIProfiles.root.value = nil
         CLIProfiles.mains.value = [:]

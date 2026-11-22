@@ -38,8 +38,7 @@ struct ApprovalsView: View {
     /// Claude Auto card on this Mac while it's in. Only on the owner's click.
     private func askSettings(_ approval: Approval) -> (label: String, run: () -> Void)? {
         guard approval.autoStop, chat.provider.id == "claude", chat.boxPlace == nil else { return nil }
-        let file = ClaudeAskSettings.file()
-        guard ClaudeAskSettings.installed(file) else { return nil }
+        guard let file = StoryHost.claudeSettings(chat.claudeSettingsFile), ClaudeAskSettings.installed(file) else { return nil }
         let chat = chat
         return ("Take Kore's old ask list out of my settings", {
             do {

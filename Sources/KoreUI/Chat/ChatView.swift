@@ -154,8 +154,6 @@ struct ChatView: View {
         }
         .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height.value = $0 }
         .environment(\.hiddenTab, active == nil)
-        // The approvals' and the changes modal's files open in Kore, as the transcript's do.
-        .environment(\.openURL, links.action(workspace, chat: chat))
         .overlay {
             // None while hidden: the agent map's keys would reach it from under a file.
             if active != nil {
@@ -167,6 +165,9 @@ struct ChatView: View {
                 }
             }
         }
+        // The approvals' and the changes modal's files open in Kore, as the transcript's do (after
+        // the overlay: one set before it isn't the overlay's).
+        .environment(\.openURL, links.action(workspace, chat: chat))
         .animation(Motion.fade, value: viewer.value?.content.id)
         .animation(Motion.fade, value: changesTurn.value?.turn)
         .animation(Motion.fade, value: chat.usage.extended)

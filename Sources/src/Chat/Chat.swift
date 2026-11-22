@@ -1998,6 +1998,15 @@ package final class Chat: Identifiable {
         }
     }
 
+    /// The Claude user settings file this chat's CLI reads: its process's `CLAUDE_CONFIG_DIR` as it
+    /// starts (the active login's folder, then the chat's own variables, a box account's), else
+    /// ~/.claude's. What Kore changes there for this chat goes to its login, not always ~/.claude.
+    package var claudeSettingsFile: URL {
+        var environment = CLIProfiles.environment
+        if let own = try? launchEnvironment?() { environment.merge(own) { $1 } }
+        return ClaudeAskSettings.file(environment: environment)
+    }
+
     /// A pane listing commands is showing (or not): the CLI is asked about them more often.
     package func watchCommands(_ closely: Bool) {
         let backend = backend

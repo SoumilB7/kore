@@ -225,6 +225,7 @@ struct AgentMapView: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
+        .storyID(StoryID.AgentMap.menu)
     }
 
     /// An ended agent says how it ended after its name ("Watch the build — stopped"); one

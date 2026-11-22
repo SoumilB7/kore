@@ -254,15 +254,27 @@ class ScaleArea: Storyline {
     override class var isFamily: Bool { self == ScaleArea.self }
     override class var tags: Set<Tag> { [.scale] }
     class var wraps: Storyline.Type? { nil }
+    /// A storyline found by name as the run starts: one a build may not have yet (a feature not on
+    /// its base). Without it the area is pending, not failed (`ScalePending`).
+    class var wrapsName: String? { nil }
     class var element: String { "" }
-    override class var variants: [Variant] { wraps?.variants ?? [.only] }
-    override class var needs: Needs { wraps?.needs ?? Needs() }
+    /// "light", or "30 tabs": the walk with 29 more chat tabs opened before its own chat.
+    class var load: String { "light" }
+    /// The storyline walked: `wraps`, or the one named `wrapsName` in this build.
+    class var walks: Storyline.Type? { wraps ?? wrapsName.flatMap(ScaleNamed.type) }
+    override class var variants: [Variant] { walks?.variants ?? [.only] }
+    override class var needs: Needs { walks?.needs ?? Needs() }
 
     func walked() -> [any Step] {
-        guard let type = Self.wraps else { return [] }
+        guard let type = Self.walks else { return [] }
         let story = type.init()
         story.variant = variant
-        return story.steps()
+        let steps = story.steps()
+        guard Self.load == ScaleLoad.tabs30 else { return steps }
+        // The 29 tabs open once the folder's window is up, before the area's own chat: it is the
+        // 30th, in front, as the walk expects.
+        guard let at = steps.firstIndex(where: { $0 is OpenFolder }) else { return steps }
+        return Array(steps[...at]) + [OpenTabs(29)] + Array(steps[(at + 1)...])
     }
 
     /// Checks after the walk, timed the same way.
@@ -271,9 +283,21 @@ class ScaleArea: Storyline {
     var edges: [StoryID] { LiveZoom.edges }
 
     override func steps() -> [any Step] {
-        [ScaleBegin(element: Self.element, load: "light")] + Timed.wrap(walked() + extra(), Self.element, "light")
-            + scaleLook(Self.element, "light", edges: edges)
+        let begin = ScaleBegin(element: Self.element, load: Self.load)
+        if Self.walks == nil, let name = Self.wrapsName {
+            return [begin, ScalePending(element: Self.element, load: Self.load, what: "\(name) (not in this build)")]
+        }
+        return [begin] + Timed.wrap(walked() + extra(), Self.element, Self.load)
+            + scaleLook(Self.element, Self.load, edges: edges)
     }
+}
+
+/// The loads' names, as the report groups them.
+enum ScaleLoad {
+    static let light = "light"
+    static let tabs30 = "30 tabs"
+    static let hugeChat = "huge chat"
+    static let files500 = "500 files"
 }
 
 /// Select, ⇧-select, ⌘W and ⇧⌘T, the drafts back where they were.
@@ -587,8 +611,15 @@ final class ScaleFiles500: FilesStoryline {
             TypeText("renamed.txt"),
             Key(.returnKey),
             Expect("renamed") { has("renamed.txt")($0) && !has("f001.txt")($0) },
-            Do("answer confirmations") { [confirms] _ in confirms.install() },
-            Click(.treeRow("f002.txt")),
+            Do("answer confirmations") { [confirms] story in confirms.install(story) },
+            // Chosen, not opened: a file's click opens it, and opening one closes the explorer
+            // floating over a narrow window (FolderWindow's tab change), so ⌘⌫ would go to the file.
+            // A folder's click keeps the keys in the tree; type to find chooses the row.
+            Click(.treeRow("docs")),
+            TypeText("f002"),
+            Expect("f002.txt chosen", found: { $0.app.workspace?.storyTreeSelection ?? "none" }) {
+                $0.app.workspace?.storyTreeSelection == "f002.txt"
+            },
             Key(KeyChord(.backspace, .command)),
             Expect("trashed, one question", found: { [confirms] _ in confirms.asked.joined(separator: ", ") }) { [confirms] story in
                 confirms.asked == ["trash"] && !has("f002.txt")(story)

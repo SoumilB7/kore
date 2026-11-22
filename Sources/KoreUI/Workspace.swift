@@ -17,10 +17,14 @@ package final class ChatTab: Identifiable {
     @ObservationIgnored var onChatChanged: ((Chat?, Chat?) -> Void)?
     /// Set for an agent tab: the sub-agent of `chat` it shows.
     var agent: String?
+    /// The sub-agent an agent tab shows, for a storyline's check.
+    package var storyAgent: String? { agent }
     /// Set for a file tab.
     var file: FileDocument?
     /// A file opened by a single click in the tree: the next one replaces it (italic title).
     var isPreview = false
+    /// A storyline's check of it.
+    package var storyPreview: Bool { isPreview }
     /// Set for a board tab: its sections and the chats in them.
     package var board: BoardModel?
 
@@ -221,6 +225,7 @@ package final class Workspace {
     @ObservationIgnored private var boxOpen: Set<String> = []
     private(set) var loaded = false
     private var refreshing: Task<Void, Never>?
+    @ObservationIgnored private var readAgain = false
     /// A running chat's tab asking before its close ends the turn (`requestClose`).
     var closing: CloseAsk?
     /// The explorer floats over the content (a narrow window), so Esc closes it.
@@ -1238,10 +1243,20 @@ package final class Workspace {
 
     // MARK: - The folder's chats
 
-    /// Re-reads both CLIs' chats for the folder (for the history popover).
+    /// Re-reads both CLIs' chats for the folder (for the history popover). Asked while a read is
+    /// under way, it reads once more after it: that read may have looked before a chat came.
     func refresh() async {
-        if let refreshing { return await refreshing.value }
-        let task = Task { await load() }
+        if let refreshing {
+            readAgain = true
+            return await refreshing.value
+        }
+        let task = Task {
+            await load()
+            while readAgain {
+                readAgain = false
+                await load()
+            }
+        }
         refreshing = task
         await task.value
         refreshing = nil
@@ -1291,7 +1306,19 @@ package final class Workspace {
         }
         if !loaded { reconcileRestored(listed: Set(lists.keys)) }
         loaded = true
+        if let hold = storyReadHold {
+            storyReadHold = nil
+            await hold()
+        }
     }
+
+    /// Storylines: run once when a read of the folder's chats is done, before it ends (a read
+    /// still under way while the storyline acts).
+    @ObservationIgnored package var storyReadHold: (@MainActor () async -> Void)?
+    /// Storylines: a read of the folder's chats, not waited for.
+    package func storyStartRefresh() { Task { await refresh() } }
+    /// Storylines: the History's rows by id, and whether a read is under way.
+    package var storyHistoryRead: (ids: [String], reading: Bool) { (historyChats.map(\.id), refreshing != nil) }
 
     /// Restored tabs against the CLIs' lists: chats archived or deleted elsewhere since last
     /// time are dropped, and titles renamed elsewhere are taken up. (Tabs of a CLI whose list
@@ -1981,13 +2008,20 @@ extension Workspace {
 
     /// Locate…: a folder picked for a lost one becomes this window's folder.
     func locateFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.directoryURL = folder.deletingLastPathComponent()
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let picked: URL?
+        if StoryHost.installed {
+            StoryHost.picks.append("Locate")
+            picked = StoryHost.pickedFolder
+        } else {
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.canCreateDirectories = true
+            panel.allowsMultipleSelection = false
+            panel.directoryURL = folder.deletingLastPathComponent()
+            picked = panel.runModal() == .OK ? panel.url : nil
+        }
+        guard let url = picked else { return }
         identity = FolderIdentity(url)
         folderLost = false
         move(to: url)

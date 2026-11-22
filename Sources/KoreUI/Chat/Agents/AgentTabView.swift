@@ -44,6 +44,7 @@ struct AgentTabView: View {
         VStack(spacing: 0) {
             HStack(spacing: Space.sm) {
                 CrumbLink(chat: chat) { backToChat() }
+                    .storyID(StoryID.AgentTab.chatLink(info.id))
                 ForEach(ancestors(of: info), id: \.id) { parent in
                     chevron
                     Button {
@@ -57,6 +58,7 @@ struct AgentTabView: View {
                         }
                     }
                     .buttonStyle(.plain)
+                    .storyID(StoryID.AgentTab.ancestor(info.id, parent.id))
                 }
                 chevron
                 AgentAvatar(index: info.index, name: info.name, status: info.status, background: info.background, place: .crumb)
@@ -118,9 +120,11 @@ struct AgentTabView: View {
                         Label("Stop agent", systemImage: "stop.fill").labelStyle(.titleAndIcon)
                     }
                     .buttonStyle(SubtleButtonStyle())
+                    .storyID(StoryID.AgentTab.stop(info.id))
                 }
                 Button("Back to chat") { backToChat() }
                     .buttonStyle(SubtleButtonStyle(prominent: true))
+                    .storyID(StoryID.AgentTab.back(info.id))
             }
             .fixedSize()
         }
@@ -286,4 +290,15 @@ private struct CrumbLink: View {
         .onHover { hovered.value = $0 }
         .tip("Back to the chat")
     }
+}
+
+extension StoryID.AgentTab {
+    /// The crumb's link back to the chat, by the tab's agent.
+    package static func chatLink(_ agent: String) -> StoryID { StoryID(.agentmap, "tabchat", key: agent) }
+    /// An agent above this one in the crumb, by the tab's agent and that one's.
+    package static func ancestor(_ agent: String, _ parent: String) -> StoryID { StoryID(.agentmap, "tabancestor", key: agent + "/" + parent) }
+    /// The footer's Stop agent, by the tab's agent.
+    package static func stop(_ agent: String) -> StoryID { StoryID(.agentmap, "tabstop", key: agent) }
+    /// The footer's Back to chat, by the tab's agent.
+    package static func back(_ agent: String) -> StoryID { StoryID(.agentmap, "tabback", key: agent) }
 }

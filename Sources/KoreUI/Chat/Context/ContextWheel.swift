@@ -402,7 +402,8 @@ private struct ContextTrack: View {
         .focusEffectDisabled()
         .onKeyPress(keys: [.leftArrow, .downArrow]) { _ in step(-1) }
         .onKeyPress(keys: [.rightArrow, .upArrow]) { _ in step(1) }
-        .onKeyPress(keys: [.delete, .deleteForward]) { _ in
+        // ⌫ sends U+007F, not `.delete`'s U+0008.
+        .onKeyPress(keys: [.delete, KeyEquivalent("\u{7F}"), .deleteForward]) { _ in
             chat.setAutoCompact(nil)
             return .handled
         }
@@ -412,6 +413,7 @@ private struct ContextTrack: View {
         .accessibilityAdjustableAction { direction in
             _ = step(direction == .increment ? 1 : -1)
         }
+        .storyID(StoryID.Composer.context.part(.track))
     }
 
     /// The bar `fraction` along, at least as wide as it's tall, centred on the row.

@@ -421,11 +421,16 @@ struct TabBar: View {
                     [OptionItem("New Tab") { workspace.newTab() }, OptionItem("New Board") { workspace.newBoard() }] + ChatPasting.menuItems(workspace)
                 }
                 .storyID(StoryID.Titlebar.newtab)
-            // The strip's empty end: what the + menu has, a held chat pasted at the end.
+            // The strip's empty end: what the + menu has, a held chat pasted at the end. Its
+            // target a tab tall over the spacer (a bare Spacer is 0 tall, so a right-click found
+            // nothing), without changing how the strip lays out.
             Spacer(minLength: Space.xl)
-                .koreContextMenu("strip") {
-                    [OptionItem("New Tab") { workspace.newTab() }, OptionItem("New Board") { workspace.newBoard() }]
-                        + ChatPasting.menuItems(workspace, after: workspace.tabs.last)
+                .overlay {
+                    Color.clear.frame(height: tabHeight)
+                        .koreContextMenu("strip") {
+                            [OptionItem("New Tab") { workspace.newTab() }, OptionItem("New Board") { workspace.newBoard() }]
+                                + ChatPasting.menuItems(workspace, after: workspace.tabs.last)
+                        }
                 }
             // A box folder's name too; its box's cue is on the box button.
             Text(workspace.folder.lastPathComponent)

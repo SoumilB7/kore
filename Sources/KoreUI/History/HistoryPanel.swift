@@ -216,6 +216,7 @@ struct HistoryPanel: View {
             }
             .buttonStyle(.plain)
             .tip(showArchived.value ? "Show chats" : "Show archived chats")
+            .storyID(StoryID.History.archived)
         }
         .padding(Inset.search)
         .panel(.well)
@@ -297,6 +298,8 @@ struct HistoryPanel: View {
             return nil
         }
         let location = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
+        // A row's own popup (its right-click), wherever it shows, is the panel's.
+        if OptionsMenu.shared.covers(event) { return event }
         if !frame.value.contains(location) && !anchor.contains(location) {
             // Let go of the search field now, before the click is handled: if SwiftUI still
             // thinks it's focused when the panel hides, it resets the window's focus and undoes
@@ -350,6 +353,7 @@ private struct HistoryRow: View {
             if isRenaming { renameField } else { title.storyID(StoryID.History.row(session.id)) }
             if showsActions && !isRenaming {
                 iconButton("pencil", help: locked ?? "Rename", action: startRename)
+                    .storyID(StoryID.History.rename(session.id))
                 iconButton(session.archived ? "tray.and.arrow.up" : "archivebox", help: locked ?? (session.archived ? "Unarchive" : "Archive"), action: toggleArchive)
                     .storyID(StoryID.History.row(session.id).part(.archive))
                     .padding(.trailing, Space.xs)
@@ -451,6 +455,7 @@ private struct HistoryRow: View {
                     return .handled
                 }
                 .onChange(of: fieldFocused) { _, focused in if !focused { finish(draft.value) } }
+                .storyID(StoryID.History.rename(session.id).part(.field))
         }
         .padding(Inset.row)
 
@@ -521,4 +526,11 @@ private struct PressFill: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.onChange(of: configuration.isPressed) { _, down in pressed(down) }
     }
+}
+
+extension StoryID.History {
+    /// The search bar's archive button: archived chats, or back to the rest.
+    package static let archived = StoryID(.history, "archived")
+    /// A lit row's pencil (`.part(.field)` its name field while renaming).
+    package static func rename(_ session: String) -> StoryID { StoryID(.history, "rename", key: session) }
 }

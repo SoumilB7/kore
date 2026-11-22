@@ -3,6 +3,13 @@ import Combine
 import src
 import SwiftUI
 
+extension StoryID.Transcript {
+    /// A fork's "Forked from …" line, while it opens the original chat.
+    package static let forkOriginal = StoryID(.transcript, "forkoriginal")
+    /// A thinking row's "Thought for 3s ›", by its entry.
+    package static func thinking(_ entry: UUID) -> StoryID { StoryID(.transcript, "thinking", key: entry.uuidString) }
+}
+
 /// The running turn's last row, as in the Claude Code extension (look.md §12): a glyph cycling
 /// `· ✢ * ✶ ✻ ✽` and back, and a random verb that changes at 2s, 3s, 5s and then every 5s,
 /// decoding into place one character at a time. Everything follows from the time since the turn
@@ -397,6 +404,7 @@ struct DividerRow: View {
                     .buttonStyle(.plain)
                     .onHover { hovered.value = $0 }
                     .tip(help ?? "Open original")
+                    .storyID(StoryID.Transcript.forkOriginal)
             } else {
                 label(Theme.tertiary).tip(help ?? "")
             }
@@ -498,10 +506,11 @@ struct CompactionSummary: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .koreContextMenu("summary") {
             [OptionItem("Copy Summary") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(entry.text, forType: .string)
+                StoryHost.pasteboard.clearContents()
+                StoryHost.pasteboard.setString(entry.text, forType: .string)
             }]
         }
+        .storyID(StoryID.Transcript.summary(entry.id))
     }
 }
 

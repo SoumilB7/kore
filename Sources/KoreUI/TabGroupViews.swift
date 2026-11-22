@@ -191,6 +191,7 @@ struct TabGroupPopup: View {
             HStack(spacing: Space.md) {
                 Spacer(minLength: 0)
                 Button("Cancel") { asking.value = false }.smallButton()
+                    .storyID(StoryID.TabGroups.close.part(.cancel))
                 Button("Stop and close") { finishClose() }
                     .smallButton(danger: true)
                     .storyID(StoryID.TabGroups.stopAndClose)

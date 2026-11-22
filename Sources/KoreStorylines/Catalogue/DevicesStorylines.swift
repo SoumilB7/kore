@@ -123,10 +123,7 @@ final class DevicesTakeOffline: ChatStoryline {
             ExpectElement(.id(StoryID.Net.keepBoxes)),
             WaitIdle(), Snapshot("devices-pane"),
             // The phone, through ⋯'s menu.
-            Press(Locator("Pixel 9's ⋯") { _ in
-                guard let row = Devices.shared.picture().devices.first(where: { $0.name == "Pixel 9" }) else { return .failure(LocatorMiss("no phone", pending: true)) }
-                return .success(StoryID.Net.more(row.id))
-            }),
+            Press(Self.more("Pixel 9")),
             WaitForElement(.id(StoryID.Options.panel)),
             // Rename, Take offline, —, Remove.
             Press(.id(StoryID.Options.item(1))),
@@ -134,6 +131,13 @@ final class DevicesTakeOffline: ChatStoryline {
             Snapshot("devices-taken-offline"),
             Press(Self.part("Pixel 9", .reload)),
             Expect("Pixel 9 back") { _ in Self.detail("Pixel 9") == nil && DevicesStory.phones?.log.last == "online" },
+            // The same through its ⋯: Take offline, then Bring online; and a linked phone's logs.
+            Press(Self.more("Pixel 9")), DriveMenuPick("Take offline"),
+            Expect("⋯ Take offline: Pixel 9 offline") { _ in Self.detail("Pixel 9") == "taken offline" && DevicesStory.phones?.log.last == "offline" },
+            Press(Self.more("Pixel 9")), DriveMenuPick("Bring online"),
+            Expect("⋯ Bring online: Pixel 9 back") { _ in Self.detail("Pixel 9") == nil && DevicesStory.phones?.log.last == "online" },
+            Press(Self.more("Pixel 9")), DriveMenuPick("Get logs"),
+            Expect("⋯ Get logs: its log asked for", found: { _ in DevicesStory.phones?.log.last }) { _ in DevicesStory.phones?.log.last == "logs" },
             // The box: kept offline by every key it goes by, and its link not dialled.
             Press(Self.part("mybox", .stop)),
             Expect("mybox taken offline") { _ in NetPauses.shared.contains("mybox") && Self.detail("mybox") == "taken offline" },
@@ -142,6 +146,14 @@ final class DevicesTakeOffline: ChatStoryline {
             Press(Self.part("mybox", .reload)),
             Expect("mybox back") { _ in !NetPauses.shared.contains("mybox") && Self.detail("mybox") == "Tailscale" },
         ]
+    }
+
+    /// A device row's ⋯, by its name.
+    static func more(_ name: String) -> Locator {
+        Locator("\(name)'s ⋯") { _ in
+            guard let row = Devices.shared.picture().devices.first(where: { $0.name == name }) else { return .failure(LocatorMiss("no \(name)", pending: true)) }
+            return .success(StoryID.Net.more(row.id))
+        }
     }
 
     static func detail(_ name: String) -> String? {

@@ -403,6 +403,8 @@ struct RowContent: View {
             SleptNotice(turn: turn, said: said, resume: actions.continueTurn)
         case .changes(let turn, let files, let added, let removed):
             ChangesLine(files: files, added: added, removed: removed) { actions.viewChanges(turn) }
+                // Its "View changes", for a storyline.
+                .storyAction(StoryID.Transcript.changes(turn).part(.open)) { actions.viewChanges(turn) }
         }
     }
 }
@@ -1265,6 +1267,7 @@ struct ThoughtItem: View {
             }
             .buttonStyle(.plain)
             .onHover { hovered.value = $0 }
+            .storyID(StoryID.Transcript.thinking(entry.id))
             if open {
                 Text(entry.text)
                     .font(TextStyle.body)
@@ -1497,6 +1500,8 @@ private struct AgentHeader: View {
             .accessibilityAction(named: "Open in tab") { actions.openAgent(info.id) }
             // "Open in tab" is built only on hover: pressed through its action meanwhile.
             .storyAction(StoryID.Transcript.agent(info.id).part(.open)) { actions.openAgent(info.id) }
+            // The card's line itself, which opens and closes it.
+            .storyMark(StoryID.Transcript.agent(info.id).part(.toggle))
             if info.status == .running {
                 IconButton(symbol: "stop.fill", kind: .small, font: Glyph.stop, help: "Stop agent") {
                     actions.stopAgent(info.id)
@@ -1511,6 +1516,7 @@ private struct AgentHeader: View {
             }
             .buttonStyle(.plain)
             .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
+            .storyMark(StoryID.Transcript.agent(info.id).part(.chevron))
         }
     }
 

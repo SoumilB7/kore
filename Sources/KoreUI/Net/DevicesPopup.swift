@@ -323,8 +323,8 @@ struct DevicesPopup: View {
         switch row.upgradeFix {
         case .copy(let line)?:
             items.append(OptionItem(line == BoxNetJoin.sudoLine ? "Copy sudo line" : "Copy line") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(line, forType: .string)
+                StoryHost.pasteboard.clearContents()
+                StoryHost.pasteboard.setString(line, forType: .string)
             })
         case .signIn(let page)?:
             if let url = URL(string: page) { items.append(OptionItem("Sign in ↗") { devices.openURL(url) }) }

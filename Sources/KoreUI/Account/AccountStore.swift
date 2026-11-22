@@ -448,7 +448,7 @@ package final class AccountStore {
         Task { await CLIProfiles.$pinned.withValue(pin) {
             do {
                 let context = SignInContext(
-                    folder: folder, open: { _ = NSWorkspace.shared.open($0) }, login: onBox ? boxLogin(provider, aim) : nil)
+                    folder: folder, open: { StoryHost.open($0) }, login: onBox ? boxLogin(provider, aim) : nil)
                 let handle = try await ops.calls.signIn(method.mechanism, context)
                 guard serials[provider] == serial else { return await handle.cancel() }
                 handles[provider] = handle
@@ -1006,7 +1006,7 @@ package final class AccountStore {
         if let opened = StorylineSeams.opened {
             opened(url)
         } else if !StoryHost.installed {
-            NSWorkspace.shared.open(url)
+            StoryHost.open(url)
         }
     }
 

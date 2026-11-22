@@ -73,6 +73,7 @@ struct WelcomeView: View {
             .buttonStyle(SubtleButtonStyle(prominent: true))
             // A box being set up (or one that can't be reached) has no folders to browse yet.
             .disabled(!opensFolders)
+            .storyID(StoryID.Boxes.welcomeOpen)
 
             if !items.isEmpty {
                 VStack(alignment: .leading, spacing: Space.xs) {

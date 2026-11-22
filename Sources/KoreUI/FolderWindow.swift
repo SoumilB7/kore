@@ -121,6 +121,7 @@ struct FolderWindow: View {
                     } else if workspace.explorerOpen, floating, let store = workspace.files {
                         ZStack(alignment: .leading) {
                             OutsidePress { if workspace.explorerOpen { workspace.explorerOpen = false } }
+                                .storyMark(StoryID.Explorer.outside)
                             ExplorerSidebar(workspace: workspace, store: store, floating: true)
                                 .frame(width: min(Layout.Explorer.width, geometry.size.width - Layout.Explorer.overlayMargin))
                                 .clipShape(UnevenRoundedRectangle(bottomTrailingRadius: Radius.panel, topTrailingRadius: Radius.panel))
@@ -154,6 +155,7 @@ struct FolderWindow: View {
                     if let mode = workspace.quickOpen {
                         ZStack(alignment: .top) {
                             Color.clear.contentShape(Rectangle()).onTapGesture { workspace.quickOpen = nil }
+                                .storyAction(StoryID.QuickOpen.outside) { workspace.quickOpen = nil }
                             QuickOpenView(
                                 workspace: workspace, mode: mode, maxWidth: geometry.size.width - Size.QuickOpen.windowMargin
                             )
@@ -277,5 +279,15 @@ private struct OutsidePress: View {
         Color.clear.contentShape(Rectangle())
             .gesture(DragGesture(minimumDistance: 0).onChanged { _ in close() })
     }
+}
+
+extension StoryID.Explorer {
+    /// The space beside the explorer floating over a narrow window: a press there closes it.
+    package static let outside = StoryID(.explorer, "outside")
+}
+
+extension StoryID.QuickOpen {
+    /// The space around Go to File or Go to Line: a click there closes it.
+    package static let outside = StoryID(.quickopen, "outside")
 }
 

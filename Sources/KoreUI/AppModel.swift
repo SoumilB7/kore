@@ -73,7 +73,8 @@ package final class AppModel {
     /// Opens (or focuses) a box folder's window, a chat of it in front.
     func openBox(_ place: BoxPlace, chat: String?) {
         guard let openWindow = windowActions?.0 else { return }
-        NSApp.activate()
+        // A storyline's app never comes to the front over the person's own apps.
+        if !StoryHost.installed { NSApp.activate() }
         BoxBinding.open(place, chat: chat, openWindow: openWindow)
     }
 
@@ -86,7 +87,7 @@ package final class AppModel {
     /// The Welcome window, where a folder (or a recent one) opens its window: the Dock menu's
     /// New Window.
     func showWelcome() {
-        NSApp.activate()
+        if !StoryHost.installed { NSApp.activate() }
         windowActions?.0(id: KoreApp.welcomeID)
     }
 
@@ -125,6 +126,10 @@ package final class AppModel {
 
     /// The open-folder panel (New Folder in it): Open, or another verb (Sync).
     func chooseFolder(prompt: String = "Open", message: String? = nil) -> URL? {
+        if StoryHost.installed {
+            StoryHost.picks.append(prompt)
+            return StoryHost.pickedFolder
+        }
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false

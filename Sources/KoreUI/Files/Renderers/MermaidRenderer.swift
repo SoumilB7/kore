@@ -257,7 +257,7 @@ private final class DiagramDelegate: NSObject, WKNavigationDelegate, WKScriptMes
             guard action.navigationType == .linkActivated, let target = action.request.url else {
                 return decisionHandler(action.request.url?.absoluteString == "about:blank" ? .allow : .cancel)
             }
-            if ["http", "https", "mailto"].contains(target.scheme ?? "") { NSWorkspace.shared.open(target) }
+            if ["http", "https", "mailto"].contains(target.scheme ?? "") { StoryHost.open(target) }
             decisionHandler(.cancel)
         }
     }

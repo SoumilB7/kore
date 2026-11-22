@@ -14,7 +14,9 @@ struct ChatPasteLineView: View {
                     Text(line.text).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.middle)
                     if let ask = line.ask {
                         Button("Cancel") { workspace.chatPaste = nil }.smallButton()
+                            .storyID(StoryID.History.paste.part(.cancel))
                         Button(ask) { line.go() }.smallButton(prominent: true)
+                            .storyID(StoryID.History.paste.part(.use))
                     }
                 }
                 .padding(.horizontal, Space.lg)
@@ -37,4 +39,10 @@ struct ChatPasteLineView: View {
 
     /// The explorer's foot has the window's bar already.
     private var explorerShowsBar: Bool { workspace.explorerOpen && workspace.sidebar != .search }
+}
+
+extension StoryID.History {
+    /// The window's ask before a cut of a working chat: `.part(.cancel)` its Cancel,
+    /// `.part(.use)` its "Stop and move".
+    package static let paste = StoryID(.history, "paste")
 }

@@ -1138,16 +1138,7 @@ struct LoginRow: View {
                     }
                 }
                 // Moving the only login here: the row asks once.
-                if state.askingMove?.login == login.id, state.askingMove != nil {
-                    HStack(spacing: Space.sm) {
-                        Text("It's the only login here: chats here sign in again.").font(TextStyle.caption).foregroundStyle(Theme.secondary)
-                            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: Space.sm)
-                        Button("No") { state.cancelMove() }.buttonStyle(.plain).font(TextStyle.caption).foregroundStyle(Theme.secondary)
-                        Button("Move") { state.confirmMove() }.buttonStyle(.plain).font(TextStyle.caption).foregroundStyle(Theme.accent)
-                    }
-                    .padding(.top, Space.xs)
-                }
+                if state.askingMove?.login == login.id, state.askingMove != nil { MoveQuestion(state: state, id: id) }
                 // Under the slot too: the bars run to the card's edge.
                 LoginMeters(state: usage, signedOut: login.signedOut, now: now, labelWidth: labelWidth, onBox: login.onBox != nil)
                     .padding(.top, Space.xs)
@@ -1297,5 +1288,24 @@ private struct LoginFallback: View {
                 self.reason.value = "Couldn't finish signing in. Try again or start a new sign-in."
             }
         }
+    }
+}
+
+/// "It's the only login here": asked once in its row before it moves to a box.
+private struct MoveQuestion: View {
+    let state: AccountState
+    let id: StoryID
+
+    var body: some View {
+        HStack(spacing: Space.sm) {
+            Text("It's the only login here: chats here sign in again.").font(TextStyle.caption).foregroundStyle(Theme.secondary)
+                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: Space.sm)
+            Button("No") { state.cancelMove() }.buttonStyle(.plain).font(TextStyle.caption).foregroundStyle(Theme.secondary)
+                .storyID(id.part(.deny), press: { state.cancelMove() })
+            Button("Move") { state.confirmMove() }.buttonStyle(.plain).font(TextStyle.caption).foregroundStyle(Theme.accent)
+                .storyID(id.part(.allow), press: { state.confirmMove() })
+        }
+        .padding(.top, Space.xs)
     }
 }

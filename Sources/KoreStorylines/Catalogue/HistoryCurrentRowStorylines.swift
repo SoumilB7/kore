@@ -17,6 +17,8 @@ final class HistoryCurrentRow: ChatStoryline {
         let session: @MainActor (StoryContext) throws -> String
         /// The raised fill (the current row), else the accent tint (the pointer's row).
         let raised: Bool
+        /// A plain row beside it: the raised fill is lighter than its ground.
+        var ground: (@MainActor (StoryContext) throws -> String)? = nil
         var label: String { "History: \(what) \(raised ? "raised" : "tinted, not raised")" }
         var timeout: Duration? { .seconds(10) }
 
@@ -32,8 +34,15 @@ final class HistoryCurrentRow: ChatStoryline {
                     // The raised fill is a neutral grey (#263036, a step up under the pointer or
                     // pressed); the tint is the ground with the accent's blue in it. Judged by hue,
                     // not exact values: the panel's ground differs with the window's state.
-                    let neutral = b - r <= 20 && r >= 0x24
-                    return raised ? neutral : b - r >= 22 && !neutral
+                    var lighter = r >= 0x24
+                    if let ground, let plain = StoryElement(StoryID.History.row(try ground(story)))?.frame,
+                        let under = Self.color(at: CGPoint(x: plain.minX + 3, y: plain.midY), story) {
+                        let base = Int(under.redComponent * 255)
+                        found += String(format: " over #%02X%02X%02X", base, Int(under.greenComponent * 255), Int(under.blueComponent * 255))
+                        lighter = r >= base + 4
+                    }
+                    let neutral = b - r <= 20 && lighter
+                    return raised ? neutral : b - r >= 22 && !(b - r <= 20)
                 }
             } catch StoryFailure.timedOut {
                 throw StoryFailure.expectation("\(what)'s fill \(found.isEmpty ? "unread" : found)")
@@ -69,7 +78,7 @@ final class HistoryCurrentRow: ChatStoryline {
                 StoryElement(StoryID.History.row(try this(story)).part(.selected)) != nil
             },
             ExpectElement(.id(StoryID.History.row(other).part(.selected)), .absent),
-            Fill(what: "this chat's row", session: this, raised: true),
+            Fill(what: "this chat's row", session: this, raised: true, ground: { _ in other }),
             Snapshot("history-current"),
             // The pointer over the other row: it takes the tint, the current row stays raised.
             Press(.id(StoryID.History.row(other).part(.hover))),
@@ -78,7 +87,7 @@ final class HistoryCurrentRow: ChatStoryline {
             Expect("this chat's row still current") { story in
                 StoryElement(StoryID.History.row(try this(story)).part(.selected)) != nil
             },
-            Fill(what: "this chat's row", session: this, raised: true),
+            Fill(what: "this chat's row", session: this, raised: true, ground: { _ in other }),
             Snapshot("history-current-hover"),
             Key(.escape),
         ]

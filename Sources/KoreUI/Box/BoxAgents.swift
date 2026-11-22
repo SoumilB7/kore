@@ -17,6 +17,7 @@ final class BoxCard {
     private var monitor: Any?
     private var observers: [NSObjectProtocol] = []
     private var origin = CGPoint.zero
+    private weak var anchor: NSView?
 
     /// The agents popup for `alias`, under `anchor`.
     func showAgents(_ alias: String, under anchor: NSView?) {
@@ -24,8 +25,8 @@ final class BoxCard {
         close()
         OptionsMenu.shared.close()
         owner = window
-        let below = anchor.convert(CGPoint(x: anchor.bounds.minX, y: anchor.isFlipped ? anchor.bounds.maxY : anchor.bounds.minY), to: nil)
-        origin = content.convert(below, from: nil)
+        self.anchor = anchor
+        origin = Self.origin(under: anchor, in: content)
         let host = NSHostingView(rootView: BoxAgentsView(alias: alias) { [weak self] size in self?.place(size) } close: { [weak self] in self?.close() })
         self.host = host
         content.addSubview(host)
@@ -39,11 +40,27 @@ final class BoxCard {
             if event.window !== self.owner || !host.bounds.contains(host.convert(event.locationInWindow, from: nil)) { self.close() }
             return event
         }
-        for name in [NSWindow.willCloseNotification, NSWindow.didResizeNotification, NSWindow.willMiniaturizeNotification] {
+        for name in [NSWindow.willCloseNotification, NSWindow.willMiniaturizeNotification] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.close() }
             })
         }
+        // The Welcome fits its content, so what the card does can resize it (a sign-in line comes):
+        // the card stays, under its anchor.
+        observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.follow() }
+        })
+    }
+
+    private static func origin(under anchor: NSView, in content: NSView) -> CGPoint {
+        let below = anchor.convert(CGPoint(x: anchor.bounds.minX, y: anchor.isFlipped ? anchor.bounds.maxY : anchor.bounds.minY), to: nil)
+        return content.convert(below, from: nil)
+    }
+
+    private func follow() {
+        guard let host, let anchor, anchor.window === owner, let content = owner?.contentView else { return close() }
+        origin = Self.origin(under: anchor, in: content)
+        place(host.frame.size)
     }
 
     private func place(_ size: CGSize) {
@@ -285,8 +302,8 @@ struct CopyButton: View {
 
     var body: some View {
         Button(copied.value ? "Copied" : "Copy") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+            StoryHost.pasteboard.clearContents()
+            StoryHost.pasteboard.setString(text, forType: .string)
             copied.value = true
             Task {
                 try? await Task.sleep(for: .seconds(1.5))
@@ -294,5 +311,11 @@ struct CopyButton: View {
             }
         }
         .smallButton()
+        .storyID(StoryID.Boxes.copyCommand(text))
     }
+}
+
+extension StoryID.Boxes {
+    /// The agents card's Copy for a command, by the command (storylines).
+    package static func copyCommand(_ command: String) -> StoryID { StoryID(.titlebar, "boxes.copy", key: command) }
 }

@@ -235,7 +235,17 @@ private struct WindowActions: ViewModifier {
     @Environment(\.dismissWindow) private var dismissWindow
 
     func body(content: Content) -> some View {
-        content.overlay(alignment: .top) { QuitNotice() }.onAppear {
+        content.overlay(alignment: .top) { QuitNotice() }
+            // Under a storyline host no link reaches the system, whatever view opens it.
+            .transformEnvironment(\.openURL) { open in
+                guard StoryHost.installed else { return }
+                open = OpenURLAction { url in
+                    StoryHost.open(url)
+                    return .handled
+                }
+            }
+            .allowsWindowActivationEvents(StoryHost.installed && StoryHost.firstClicks ? true : nil)
+            .onAppear {
             app.setWindowActions(openWindow: openWindow, dismissWindow: dismissWindow)
             Updater.shared.windowOpened()
         }

@@ -157,18 +157,23 @@ struct BoxAccountLine: View {
                 // Signed in already: nothing to press.
                 case .idle where line.signedIn == true: EmptyView()
                 case .idle, .failed: Button("Sign in", action: signIn).smallButton()
+                    .storyID(StoryID.Boxes.account(key).part(.signIn))
                 case .starting: ProgressView().controlSize(.small)
                 case .waiting, .submitting: Button("Cancel") { accounts.cancel(key) }.smallButton()
+                    .storyID(StoryID.Boxes.account(key).part(.cancel))
                 }
             }
             if let page = page(line.step) {
                 HStack(spacing: Space.sm) {
-                    if let url = page.url { Button("Open page") { NSWorkspace.shared.open(url) }.smallButton(prominent: true) }
+                    if let url = page.url {
+                        Button("Open page") { StoryHost.open(url) }.smallButton(prominent: true)
+                            .storyID(StoryID.Boxes.account(key).part(.open))
+                    }
                     if let device = page.code {
                         Text(device).font(TextStyle.code).foregroundStyle(Theme.text).textSelection(.enabled)
                         Button(copied.value ? "Copied" : "Copy") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(device, forType: .string)
+                            StoryHost.pasteboard.clearContents()
+                            StoryHost.pasteboard.setString(device, forType: .string)
                             copied.value = true
                             Task {
                                 try? await Task.sleep(for: .seconds(1.5))
@@ -176,15 +181,18 @@ struct BoxAccountLine: View {
                             }
                         }
                         .smallButton()
+                        .storyID(StoryID.Boxes.account(key).part(.copy))
                     }
                     if takesPaste {
                         TextField("", text: $code.value, prompt: Text("Code from the page").foregroundStyle(Theme.tertiary))
                             .textFieldStyle(.plain)
+                            .storyID(StoryID.Boxes.account(key).part(.field))
                             .focused($typing)
                             .fieldWell(focused: typing)
                             .onSubmit(submit)
                             .onAppear { typing = true }
                         Button("Sign in", action: submit).smallButton(prominent: true).disabled(code.value.isEmpty)
+                            .storyID(StoryID.Boxes.account(key).part(.submit))
                     }
                 }
             }
@@ -207,4 +215,10 @@ struct BoxAccountLine: View {
         if case .failed(let why) = line.step { return why }
         return line.said ?? ""
     }
+}
+
+extension StoryID.Boxes {
+    /// A login's line on the box by its key ("claude", "gh"): `.signIn`, `.cancel`, and Claude's
+    /// pasted code `.field` and its Sign in `.submit` (storylines).
+    package static func account(_ key: String) -> StoryID { StoryID(.titlebar, "boxes.account", key: key) }
 }

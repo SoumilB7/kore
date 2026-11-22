@@ -69,8 +69,8 @@ struct BoxNoteLine: View {
     private func take(_ action: BoxList.Action) {
         switch action {
         case .copy(let command):
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(command, forType: .string)
+            StoryHost.pasteboard.clearContents()
+            StoryHost.pasteboard.setString(command, forType: .string)
             copied.value = true
             Task {
                 try? await Task.sleep(for: .seconds(1.5))
@@ -80,9 +80,9 @@ struct BoxNoteLine: View {
             BoxCard.shared.showAgents(alias, under: anchor.value)
             opened?()
         case .showLog(let path):
-            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+            StoryHost.open(URL(fileURLWithPath: path))
         case .signIn(let page):
-            if let url = URL(string: page) { NSWorkspace.shared.open(url) }
+            if let url = URL(string: page) { StoryHost.open(url) }
         default:
             let act = act
             Task { await act(action, alias) }

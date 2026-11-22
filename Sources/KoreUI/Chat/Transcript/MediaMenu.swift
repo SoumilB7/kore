@@ -103,29 +103,37 @@ enum MediaMenu {
         if StoryHost.installed { TranscriptSelection.opened.append(url) } else { NSWorkspace.shared.open(url) }
     }
 
-    private static func reveal(_ url: URL) {
-        guard !StoryHost.installed else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([url])
-    }
+    /// Under storylines it's recorded (`StoryHost.revealed`), as Finder isn't asked.
+    private static func reveal(_ url: URL) { StoryHost.reveal([url]) }
 
+    /// Under storylines no panel shows: the host's pick (`StoryHost.pickedSave`) is where it saves.
     private static func saveAs(_ target: Target) {
-        guard !StoryHost.installed else { return }
+        let name = target.name.contains(".") ? target.name : target.name + ".png"
+        if StoryHost.installed {
+            StoryHost.picks.append("Save")
+            if let destination = StoryHost.pickedSave { save(target, to: destination) }
+            return
+        }
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = target.name.contains(".") ? target.name : target.name + ".png"
+        panel.nameFieldStringValue = name
         let write: (NSApplication.ModalResponse) -> Void = { response in
             guard response == .OK, let destination = panel.url else { return }
-            do {
-                if let file = target.file {
-                    if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
-                    try FileManager.default.copyItem(at: file, to: destination)
-                } else if let tiff = target.image?.tiffRepresentation,
-                          let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
-                    try png.write(to: destination, options: .atomic)
-                }
-            } catch {
-                UILog.event("media-save-failed", ["kind": target.isVideo ? "video" : "image"])
-            }
+            save(target, to: destination)
         }
         if let window = NSApp.keyWindow { panel.beginSheetModal(for: window, completionHandler: write) } else { panel.begin(completionHandler: write) }
+    }
+
+    private static func save(_ target: Target, to destination: URL) {
+        do {
+            if let file = target.file {
+                if FileManager.default.fileExists(atPath: destination.path) { try FileManager.default.removeItem(at: destination) }
+                try FileManager.default.copyItem(at: file, to: destination)
+            } else if let tiff = target.image?.tiffRepresentation,
+                      let png = NSBitmapImageRep(data: tiff)?.representation(using: .png, properties: [:]) {
+                try png.write(to: destination, options: .atomic)
+            }
+        } catch {
+            UILog.event("media-save-failed", ["kind": target.isVideo ? "video" : "image"])
+        }
     }
 }

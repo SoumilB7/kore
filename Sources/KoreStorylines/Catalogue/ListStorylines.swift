@@ -302,6 +302,9 @@ struct PutHistoryChat: Step {
                 .replacingOccurrences(of: "Check the build number.", with: title)
         }
         try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
+        // Archived by the storyline or not, it isn't after: the run's defaults outlive it.
+        let session = session
+        story.atFinish { ClaudeArchive.set(session, archived: false) }
     }
 }
 
@@ -361,5 +364,44 @@ private struct FadesEnd: Step {
     func run(_ story: StoryContext) async throws {
         let end = ContinuousClock.now + .milliseconds(400)
         try await story.until("the fades to end") { ContinuousClock.now >= end }
+    }
+}
+
+/// History opened while a read of the folder's chats is under way (one that looked before a
+/// chat came): the chat shows once that read ends, the open's own read run after it.
+final class HistoryReadUnderWay: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+    override class var variants: [Variant] { [.claude] }
+    static let session = "d71e-0005"
+
+    @MainActor private final class Hold {
+        var reached = false
+        var release: CheckedContinuation<Void, Never>?
+        func end() { release?.resume(); release = nil }
+    }
+
+    override func steps() -> [any Step] {
+        let hold = Hold()
+        return super.steps() + [
+            Do("a read of the folder's chats, held once it has looked") { story in
+                guard let workspace = story.app.workspace else { throw StoryFailure.modelMissing("the workspace") }
+                workspace.storyReadHold = {
+                    hold.reached = true
+                    await withCheckedContinuation { hold.release = $0 }
+                }
+                story.atFinish { [weak workspace] in workspace?.storyReadHold = nil; hold.end() }
+                workspace.storyStartRefresh()
+            },
+            Expect("the read has looked") { _ in hold.reached && hold.release != nil },
+            PutHistoryChat(session: Self.session, title: "Came while it read"),
+            Press(.id(StoryID.Titlebar.history)),
+            // History up: its own read asked for while the held one is still under way.
+            WaitForElement(.id(StoryID.History.search)),
+            Expect("not listed while the read is held", found: { "\($0.app.workspace?.storyHistoryRead ?? ([], false))" }) {
+                $0.app.workspace?.storyHistoryRead.ids.contains(Self.session) == false
+            },
+            Do("the read ends") { _ in hold.end() },
+            WaitForElement(.id(StoryID.History.row(Self.session))),
+        ]
     }
 }

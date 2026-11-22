@@ -400,7 +400,8 @@ final class AccountUsageMeters: ChatStoryline {
         }
         return [
             UseScript(AccountPopup.script(provider), for: provider), SeedLogins(provider: provider),
-            Do("Add two isolated login fixtures") { _ in
+            Do("Add two isolated login fixtures") { story in
+                story.atFinish { StorylineSeams.loginUsage = nil }
                 let unused = try CLIProfiles.prepare(provider)
                 CLIProfiles.adopt(provider, unused, email: "unused@example.com", workspace: provider == "codex" ? "ChatGPT Pro Lite" : "Unused Org")
                 let mismatch = try CLIProfiles.prepare(provider)

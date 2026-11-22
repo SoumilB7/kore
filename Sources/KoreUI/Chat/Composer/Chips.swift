@@ -22,7 +22,15 @@ struct PlanChip: View {
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
         .tip("Turn off Plan mode")
+        .storyID(StoryID.Composer.planChip)
     }
+}
+
+extension StoryID.Composer {
+    /// Codex's Plan mark beside the mode; its click turns Plan off.
+    package static let planChip = StoryID(.composer, "planchip")
+    /// The row the text sits in, padding and all: a click on its padding focuses the text.
+    package static let fieldBox = StoryID(.composer, "fieldbox")
 }
 
 /// The CLI's own remote control, on: the bar's one mark of it, beside the mode. Its tooltip is
@@ -136,6 +144,7 @@ struct AttachmentChip: View {
                 .hitTargetRoom(Size.chipBadgeReach)
                 .offset(x: Size.chipBadge.width, y: Size.chipBadge.height)
                 .tip("Remove")
+                .storyID(StoryID.Composer.attachment(attachment.name).part(.close))
             }
         }
     }

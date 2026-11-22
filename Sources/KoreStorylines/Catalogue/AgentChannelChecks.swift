@@ -674,7 +674,7 @@ final class AgentChannelAll: ChatStoryline {
                 }
                 let tools = (AgentJSON.path(replies[2], "result", "tools") as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
                 return try status == 0 && AgentJSON.path(replies[1], "result", "serverInfo", "name") as? String == "kore"
-                    && tools.count == 27 && tools.contains("kore_new_chat") && tools.contains("kore_read_chat")
+                    && tools.count == 28 && tools.contains("kore_set_compact") && tools.contains("kore_new_chat") && tools.contains("kore_read_chat")
                     && replies[3]?["result"] != nil
                     && AgentJSON.path(text(10), "caller", "chat") as? String == cast.id("a")
                     && text(11)?["tier"] as? String == "watch"
@@ -778,7 +778,9 @@ final class AgentChannelAll: ChatStoryline {
     /// A run that took under half a second.
     static func fast(_ note: String) -> Bool {
         guard let ms = note.split(separator: "ms=").last.flatMap({ Double($0) }) else { return false }
-        return ms >= 0 && ms < 500
+        // Under 500 ms on a quiet Mac (the timed run); the functional pass, sharing the Mac with
+        // its other shards, only rules out waiting (a timeout would be seconds).
+        return ms >= 0 && ms < (ProcessInfo.processInfo.environment["KORE_STORY_QUIET"] != nil ? 500 : 2000)
     }
 }
 
@@ -1557,9 +1559,12 @@ final class AgentSafety: ChatStoryline {
             try await story.until("it to finish", timeout: timeout) { run.status != nil }
             let replies = AgentJSON.objects(run.output)
             guard replies.count == 4, replies[0]["type"] as? String == "welcome", replies[1]["type"] as? String == "bye", replies[1]["code"] as? String == "mismatch",
-                replies[2]["type"] as? String == "welcome", replies[3]["type"] as? String == "ended"
+                replies[2]["type"] as? String == "welcome",
+                // The child gone by the time Kore looks: the connection just ends; still there: refused by name.
+                replies[3]["type"] as? String == "ended" || (replies[3]["type"] as? String == "bye" && replies[3]["code"] as? String == "mismatch")
             else {
-                throw StoryFailure.expectation("got: \(run.output.prefix(400))")
+                let kinds = replies.map { reply in [reply["type"], reply["code"]].compactMap { $0 as? String }.joined(separator: ":") }
+                throw StoryFailure.expectation("welcome, bye:mismatch, welcome, ended or bye:mismatch (got \(kinds))")
             }
         }
     }

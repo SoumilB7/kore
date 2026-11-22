@@ -56,6 +56,10 @@ extension Workspace {
 
     /// The tree's selected row, relative to the folder.
     package var storyTreeSelection: String? { files.flatMap { store in store.selection.map(store.relative) } }
+    /// The explorer's tree has the keys.
+    package var storyTreeHasKeys: Bool { files?.storyHasKeys ?? false }
+    /// The rows chosen (⌘-click), as a several-rows menu acts on them.
+    package var storyExplorerChosen: [String] { files.map { store in store.chosenTops.map(store.relative) } ?? [] }
 
     /// No paste, duplicate or drop is running in the tree (their undo is registered).
     package var storyTreeSettled: Bool { (files?.fileWorks ?? 0) == 0 }
@@ -217,6 +221,19 @@ extension Workspace {
         return rendering.renderer?.id
     }
 
+    /// The status row's facts while the active file's renderer shows ("Row 2, Col 1", "$.users").
+    package var storyRendererFacts: [String] { activeFile?.rendering.facts ?? [] }
+
+    /// The first view of this type in the window: a renderer's AppKit view, for its accessors.
+    func storyView<V: NSView>(_ type: V.Type) -> V? {
+        func find(_ view: NSView) -> V? {
+            if let match = view as? V { return match }
+            for child in view.subviews { if let match = find(child) { return match } }
+            return nil
+        }
+        return window?.contentView.flatMap(find)
+    }
+
     /// The active Markdown preview's selection: whether it has the keyboard, and what's selected.
     package var storyPreviewSelection: (focused: Bool, markdown: String)? {
         guard let state = activeFile?.rendering.memory.current as? MarkdownState else { return nil }
@@ -278,6 +295,10 @@ extension Workspace {
 
     /// Quick open's file list is showing (⌘P).
     package var storyQuickOpenShown: Bool { quickOpen == .files }
+    /// Go to Line is up.
+    package var storyGoToLineShown: Bool { quickOpen == .line }
+    /// The active file's status bar: its indent, line endings and language, as shown.
+    package var storyEditorStatus: [String]? { activeFile.map { [$0.indent.label, $0.lineEnding.rawValue, $0.language.name] } }
 
     /// The sidebar shows Search.
     package var storySearchShown: Bool { explorerOpen && sidebar == .search }

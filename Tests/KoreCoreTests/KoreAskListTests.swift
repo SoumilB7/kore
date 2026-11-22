@@ -390,4 +390,39 @@ struct KoreAskHardenedTests {
         #expect(KoreAskList.heredocs(in: "echo $((1<<4)) '<<X' \"<<Y\" <<<z").isEmpty)
         #expect(KoreAskList.heredocs(in: "cat <<-'E' <<F").map(\.word) == ["E", "F"])
     }
+
+    /// The settings file follows the login the CLI runs on (an added login's folder by
+    /// CLAUDE_CONFIG_DIR), else the home's ~/.claude: scratch folders only, never the real one.
+    @Test func theSettingsFileIsTheLoginsOwn() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("kore-ask-file-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: home) }
+        // An added login: its own folder, as its CLI is started with it.
+        let login = CLIProfiles.environment("claude", login: "acct1")
+        #expect(ClaudeAskSettings.file(environment: login, home: home) == CLIProfiles.folder("claude", "acct1").appendingPathComponent("settings.json"))
+        let dir = home.appendingPathComponent("logins/claude/acct2", isDirectory: true)
+        #expect(ClaudeAskSettings.file(environment: ["CLAUDE_CONFIG_DIR": dir.path], home: home) == dir.appendingPathComponent("settings.json"))
+        // No CLAUDE_CONFIG_DIR (or an empty one): the home's.
+        #expect(ClaudeAskSettings.file(environment: [:], home: home) == home.appendingPathComponent(".claude/settings.json"))
+        #expect(ClaudeAskSettings.file(environment: ["CLAUDE_CONFIG_DIR": ""], home: home) == home.appendingPathComponent(".claude/settings.json"))
+    }
+
+    /// An added login's settings.json links to main's: a change through it lands in main's file and
+    /// the link stays a link (an atomic write to the link would have left a separate copy).
+    @Test func aChangeThroughALinkedSettingsFileKeepsTheLink() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("kore-ask-link-\(UUID().uuidString.prefix(8))")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let main = root.appendingPathComponent("main/settings.json"), login = root.appendingPathComponent("login/settings.json")
+        try FileManager.default.createDirectory(at: main.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: login.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"theme":"dark"}"#.utf8).write(to: main)
+        try FileManager.default.createSymbolicLink(at: login, withDestinationURL: main)
+        let hook = "'/Applications/Kore.app/Contents/MacOS/kore' hook pretool"
+        try ClaudeAskSettings.install(login, command: hook)
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: login.path)) == main.path)
+        #expect(ClaudeAskSettings.installed(main))
+        try ClaudeAskSettings.remove(login)
+        #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: login.path)) == main.path)
+        #expect(!ClaudeAskSettings.installed(main))
+        #expect(try String(contentsOf: main, encoding: .utf8).contains("\"theme\""))
+    }
 }

@@ -363,7 +363,7 @@ package final class TranscriptSelection: ObservableObject {
         } else if StoryHost.installed {
             Self.opened.append(url)
         } else {
-            NSWorkspace.shared.open(url)
+            StoryHost.open(url)
         }
     }
 

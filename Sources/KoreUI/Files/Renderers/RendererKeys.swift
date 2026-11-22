@@ -12,9 +12,10 @@ struct RendererKeys: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .background(AnchorView { anchor.value = $0 })
+            .background(AnchorView { anchor.value = $0; arm() })
             .onAppear {
                 guard monitor.value == nil else { return }
+                defer { arm() }
                 monitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
                     guard let window = anchor.value?.window, event.window === window else { return event }
                     let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
@@ -26,7 +27,19 @@ struct RendererKeys: ViewModifier {
             .onDisappear {
                 if let value = monitor.value { NSEvent.removeMonitor(value) }
                 monitor.value = nil
+                if let view = anchor.value { Self.armed.remove(view) }
             }
+    }
+
+    /// Storylines: the renderers taking keys now, by their anchor (its window known, the monitor on).
+    @MainActor private static let armed = NSHashTable<NSView>.weakObjects()
+    @MainActor private func arm() {
+        guard StoryHost.installed, monitor.value != nil, let view = anchor.value else { return }
+        Self.armed.add(view)
+    }
+    /// Storylines: a renderer in `window` takes its keys.
+    @MainActor static func storyTakesKeys(in window: NSWindow?) -> Bool {
+        Self.armed.allObjects.contains { $0.window != nil && $0.window === window }
     }
 }
 
@@ -47,4 +60,9 @@ private struct AnchorView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: NSView, context: Context) {}
+}
+
+/// Storylines: a file renderer in `window` takes its keys now (⌘C, ⌘=, ⌘F).
+@MainActor package enum StoryRendererKeys {
+    package static func taken(in window: NSWindow?) -> Bool { RendererKeys.storyTakesKeys(in: window) }
 }

@@ -53,6 +53,13 @@ extension Array where Element == OptionItem {
 @MainActor @Observable
 final class OptionsMenu {
     static let shared = OptionsMenu()
+    /// Storylines: what the popups did last (shown, closed, a secondary click's routing), for a
+    /// failed pick to say.
+    static var storyTrail: [String] = []
+    static func storyNote(_ line: String) {
+        guard StoryHost.installed else { return }
+        storyTrail = Array((storyTrail + [line]).suffix(8))
+    }
     private(set) var items: [OptionItem] = []
     /// Storylines: the items of the menu open now, by title (`StoryMenus`).
     static var storyOpen: [String] { shared.items.map(\.title) }
@@ -96,6 +103,7 @@ final class OptionsMenu {
                 return $0.window === window && !$0.isHiddenOrHasHiddenAncestor
                     && $0.bounds.contains(point) && $0.visibleRect.contains(point)
             }
+            Self.storyNote("secondary at \(event.locationInWindow): \(targets.map(\.source)); near \(ContextOptions.Target.all.allObjects.filter { $0.window === window && $0.bounds.contains($0.convert(event.locationInWindow, from: nil)) }.map { "\($0.source) visible \($0.visibleRect) hidden \($0.isHiddenOrHasHiddenAncestor)" })")
             // A modal's own menu, over whatever it covers.
             let shown = targets.contains(where: \.modal) ? targets.filter(\.modal) : targets
             if let target = shown.min(by: { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }) {
@@ -164,6 +172,7 @@ final class OptionsMenu {
     /// `width`: a short menu's own (the Devices +'s two rows); else every option popup's.
     func show(_ entries: [OptionItem], at point: CGPoint, in window: NSWindow, source: String, width: CGFloat? = nil) {
         close()
+        Self.storyNote("show \(source): \(entries.count) entries")
         let entries = entries.ruled
         guard !entries.isEmpty, window.contentView != nil else { return }
         owner = window
@@ -227,6 +236,7 @@ final class OptionsMenu {
     func choose(_ index: Int) {
         guard items.indices.contains(index), items[index].enabled, !items[index].separator else { return }
         let item = items[index]
+        StoryHost.touch("menu \(source)|\(item.title)")
         if !item.children.isEmpty {
             parents.append(items)
             items = item.children.ruled
@@ -246,7 +256,14 @@ final class OptionsMenu {
         place()
     }
 
+    /// The click lands on this popup (its rows), not on what it covers.
+    func covers(_ event: NSEvent) -> Bool {
+        guard let host, event.window === owner else { return false }
+        return host.bounds.contains(host.convert(event.locationInWindow, from: nil))
+    }
+
     func close() {
+        if host != nil { Self.storyNote("close \(openSource ?? "?")") }
         host?.removeFromSuperview()
         host = nil
         if openSource != nil { openSource = nil }
@@ -471,5 +488,7 @@ extension StoryID {
 /// Storylines: the options menu open now, by its items' titles.
 @MainActor
 package enum StoryMenus {
+    /// What the popups did last: shown, closed, a secondary click's routing.
+    package static var trail: [String] { OptionsMenu.storyTrail }
     package static var open: [String] { OptionsMenu.storyOpen }
 }

@@ -222,6 +222,7 @@ private struct CommandRow: View {
             .buttonStyle(.plain)
             .tip("Select \(owner.name)")
             .layoutPriority(-1)
+            .storyID(id.part(.choose))
         }
     }
 

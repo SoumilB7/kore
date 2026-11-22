@@ -210,7 +210,13 @@ package struct Release: Step {
     package var label: String { "Let the script go on" }
     package init() {}
 
-    package func run(_ story: StoryContext) async throws { try story.scriptedBackend().release() }
+    /// The backend comes with the chat's session: a working mark can show before it does.
+    package func run(_ story: StoryContext) async throws {
+        let backend = try await story.wait("the chat's scripted backend") { () -> ScriptedBackend? in
+            ScriptedWorld.shared.backend(session: (try? story.activeChat())?.sessionId)
+        }
+        backend.release()
+    }
 }
 
 extension StoryContext {

@@ -276,6 +276,7 @@ struct NewBoxBody: View {
                     Text("KoreNet is off")
                     Text("·")
                     Button("Turn on") { Devices.shared.setOn(true) }.buttonStyle(.plain).foregroundStyle(Theme.accent)
+                        .storyID(StoryID.Net.newBoxTurnOn, press: { Devices.shared.setOn(true) })
                 } else if let refusal = refusal.value {
                     Text(refusal)
                 } else {
@@ -299,8 +300,8 @@ struct NewBoxBody: View {
     }
 
     private func copy() {
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(Devices.installLine, forType: .string)
+        StoryHost.pasteboard.clearContents()
+        StoryHost.pasteboard.setString(Devices.installLine, forType: .string)
         copied.value = true
         Task { @MainActor in
             try? await Task.sleep(for: Size.Net.copiedFor)

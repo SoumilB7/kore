@@ -19,6 +19,9 @@ extension StoryID {
         package static func sectionName(_ id: UUID) -> StoryID { StoryID(.board, "section.name", key: id.uuidString) }
         package static func sectionAdd(_ id: UUID) -> StoryID { StoryID(.board, "section.add", key: id.uuidString) }
         package static func sectionMenu(_ id: UUID) -> StoryID { StoryID(.board, "section.menu", key: id.uuidString) }
+        /// A section's name as drawn (double-click renames it), and a chip's handle (its mark and name).
+        package static func sectionTitle(_ id: UUID) -> StoryID { StoryID(.board, "section.title", key: id.uuidString) }
+        package static func chipHandle(_ id: UUID) -> StoryID { StoryID(.board, "chip.handle", key: id.uuidString) }
         /// A slot's (or an empty section's) New Claude / New Codex, and a strip chat in its list.
         package static func slotProvider(_ id: UUID, _ provider: String) -> StoryID { StoryID(.board, "slot.provider", key: "\(id.uuidString):\(provider)") }
         package static func slotChat(_ id: UUID, _ tab: UUID) -> StoryID { StoryID(.board, "slot.chat", key: "\(id.uuidString):\(tab.uuidString)") }

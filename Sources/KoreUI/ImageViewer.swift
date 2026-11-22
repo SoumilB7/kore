@@ -230,6 +230,7 @@ struct ImageViewer: View {
                     .koreContextMenu("viewer", modal: true) { MediaMenu.items(.init(url: vector.url), openInKore: nil) }
             } else {
                 ImageCanvas(editor: editor)
+                    .storyID(StoryID.Viewer.canvas)
             }
         case .video(let file, _):
             let handle = video.value
@@ -322,9 +323,11 @@ struct ImageToolbar: View {
                         .foregroundStyle(Theme.secondary)
                         .frame(width: Size.zoomLabel.width, height: Size.zoomLabel.height)
                         .contentShape(Rectangle())
+                        .storyMark(StoryID.Viewer.zoom(Int((editor.zoom * 100).rounded())))
                 }
                 .buttonStyle(.plain)
                 .tip("Actual size")
+                .storyID(StoryID.Viewer.actualSize)
             }
             if density != .minimal {
                 toolButton("plus.magnifyingglass", help: "Zoom in (⌘=)", action: editor.zoomIn)
@@ -338,6 +341,7 @@ struct ImageToolbar: View {
                     .lineLimit(1)
                     .fixedSize()
                     .tip(secondary.help)
+                    .storyID(StoryID.Viewer.secondary)
                     .padding(.leading, Space.xs)
             }
             Button(actionTitle, action: finish).storyID(StoryID.Viewer.add)
@@ -353,15 +357,19 @@ struct ImageToolbar: View {
     /// The pen, its colours, undo and clear, then a divider before the action.
     @ViewBuilder private func pen(_ density: Density) -> some View {
         toolButton("pencil", help: "Pen", isOn: editor.penOn) { editor.penOn.toggle() }
+            .storyID(StoryID.Viewer.pen)
         if editor.penOn {
             if density == .full {
                 ForEach(ImageEditor.PenColor.allCases, id: \.self) { color in
+                    let story = StoryID.Viewer.swatch(String(describing: color))
                     Button {
                         editor.color = color
                     } label: {
                         swatch(color, selected: editor.color == color)
                     }
                     .buttonStyle(.plain)
+                    .storyID(story)
+                    .background(StoryAnchor(id: editor.color == color ? story.part(.selected).raw : nil, press: nil))
                 }
             } else {
                 OptionMenuButton(source: "pen-colour", items: {
@@ -370,14 +378,17 @@ struct ImageToolbar: View {
                     }
                 }) {
                     swatch(editor.color, selected: true)
+                        .background(StoryAnchor(id: StoryID.Viewer.swatch(String(describing: editor.color)).part(.selected).raw, press: nil))
                 }
                 .buttonStyle(.plain)
                 .fixedSize()
                 .tip("Pen colour")
+                .storyID(StoryID.Viewer.penColour)
             }
         }
         toolButton("arrow.uturn.backward", help: "Undo (⌘Z)", action: editor.undo)
             .disabled(editor.strokes.isEmpty)
+            .storyMark(StoryID.Viewer.strokes(editor.strokes.count))
         if density != .minimal {
             toolButton("trash", help: "Clear markup", action: editor.clear)
                 .disabled(editor.strokes.isEmpty)
@@ -579,4 +590,20 @@ final class ImageCanvasView: NSView {
     private func clamped(_ point: NSPoint) -> CGPoint {
         CGPoint(x: min(max(point.x, 0), bounds.width), y: min(max(point.y, 0), bounds.height))
     }
+}
+
+extension StoryID.Viewer {
+    /// A picture's canvas in the chat's viewer: the pen draws on it, a drag pans, a double click fits.
+    package static let canvas = StoryID(.viewer, "canvas")
+    /// The toolbar's percentage (Actual size), and the zoom it shows, as its key.
+    package static let actualSize = StoryID(.viewer, "actualsize")
+    package static func zoom(_ percent: Int) -> StoryID { StoryID(.viewer, "zoom", key: String(percent)) }
+    /// The pen, a colour by its name (`.part(.selected)` the one picked), and the strokes drawn.
+    package static let pen = StoryID(.viewer, "pen")
+    package static func swatch(_ color: String) -> StoryID { StoryID(.viewer, "swatch", key: color) }
+    /// A narrow toolbar's one swatch: its menu holds the colours.
+    package static let penColour = StoryID(.viewer, "pencolour")
+    package static func strokes(_ count: Int) -> StoryID { StoryID(.viewer, "strokes", key: String(count)) }
+    /// The image tab's plain button before its action (Copy).
+    package static let secondary = StoryID(.viewer, "secondary")
 }

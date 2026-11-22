@@ -82,8 +82,8 @@ struct NetJoinSheet: View {
                 button("Cancel") { NetJoinSheet.close() }
             case .needsSudo:
                 Button {
-                    NSPasteboard.general.clearContents()
-                    if case .copy(let line)? = join.fix { NSPasteboard.general.setString(line, forType: .string) }
+                    StoryHost.pasteboard.clearContents()
+                    if case .copy(let line)? = join.fix { StoryHost.pasteboard.setString(line, forType: .string) }
                     copied.value = true
                     Task { @MainActor in
                         try? await Task.sleep(for: Size.Net.copiedFor)
@@ -118,6 +118,7 @@ struct NetJoinSheet: View {
                     .font(Theme.Net.monoSmall)
                     .fieldWell(focused: true)
                     .onSubmit { runner?.authKey(join, key.value) }
+                    .storyID(StoryID.Net.authKeyField)
                 button("Join", go: true) { runner?.authKey(join, key.value) }
             case .signInCancelled:
                 button("Stay on SSH") {
@@ -152,8 +153,8 @@ struct NetJoinSheet: View {
 
     private func copyButton(_ line: String, title: String, id: String) -> some View {
         Button {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(line, forType: .string)
+            StoryHost.pasteboard.clearContents()
+            StoryHost.pasteboard.setString(line, forType: .string)
             copied.value = true
             Task { @MainActor in
                 try? await Task.sleep(for: Size.Net.copiedFor)

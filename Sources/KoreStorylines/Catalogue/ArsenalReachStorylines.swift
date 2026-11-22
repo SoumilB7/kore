@@ -109,7 +109,7 @@ final class ArsenalReach: ChatStoryline {
                 let tools = (AgentJSON.path(replies[2], "result", "tools") as? [[String: Any]] ?? []).compactMap { $0["name"] as? String }
                 let call = Self.text(replies[3])
                 return (AgentJSON.path(replies[1], "result", "instructions") as? String ?? "").contains("kore_new_chat")
-                    && tools.count == 27 && ["kore_new_chat", "kore_send", "kore_list_chats", "kore_read_chat", "kore_set_model"].allSatisfy(tools.contains)
+                    && tools.count == 28 && ["kore_new_chat", "kore_send", "kore_list_chats", "kore_read_chat", "kore_set_model", "kore_set_compact"].allSatisfy(tools.contains)
                     && call.error && call.text.contains("Arsenal is off for this chat") && call.text.contains("⌥⌘K")
             },
 

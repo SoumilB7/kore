@@ -395,6 +395,7 @@ private struct PDFThumbnail: View {
         }
         .buttonStyle(.plain)
         .tip("Page \(index + 1)")
+        .storyID(StoryID.Editor.PDF.thumbnail(index))
         .task(id: index) {
             await Task.yield()
             image.value = model.thumbnail(index)
@@ -420,13 +421,16 @@ private struct PDFToolbar: View {
             }
             .buttonStyle(.plain)
             .tip("Actual Size")
+            .storyID(StoryID.Editor.PDF.zoom)
             IconButton(symbol: "plus.magnifyingglass", help: "Zoom In (⌘=)", action: model.zoomIn)
             IconButton(symbol: "arrow.left.and.right", help: "Fit Width (⌘0)", action: model.fit)
             BarDivider()
             IconButton(symbol: "sidebar.left", isOn: model.thumbnails, help: "Thumbnails") { model.thumbnails.toggle() }
+                .storyID(StoryID.Editor.PDF.thumbnails)
             BarDivider()
             TextField("", text: $pageText.value)
                 .textFieldStyle(.plain)
+                .storyID(StoryID.Editor.PDF.page)
                 .font(Chrome.labelDigits)
                 .foregroundStyle(Theme.text)
                 .multilineTextAlignment(.trailing)
@@ -462,6 +466,7 @@ private struct PDFFindBar: View {
             HStack(spacing: Space.xxs) {
                 TextField("Find", text: $find.query)
                     .textFieldStyle(.plain)
+                    .storyID(StoryID.Editor.PDF.find)
                     .font(Chrome.body)
                     .foregroundStyle(Theme.text)
                     .focused($focused)
@@ -479,6 +484,7 @@ private struct PDFFindBar: View {
                 .buttonStyle(.plain)
                 .hitTargetRoom(Size.Editor.findToggleReach)
                 .tip("Match Case")
+                .storyID(StoryID.Editor.PDF.matchCase)
             }
             .padding(.horizontal, Space.sm)
             .frame(height: Size.iconButtonSmall)
@@ -518,5 +524,28 @@ enum PDFRenderer: FileRenderer {
 
     static func makeView(_ file: FileInfo, context: RendererContext) -> AnyView {
         AnyView(PDFFileView(file: file, context: context))
+    }
+}
+
+// MARK: - Storylines
+
+extension StoryID.Editor {
+    /// A PDF's toolbar, thumbnails and find bar.
+    package enum PDF {
+        package static let zoom = StoryID(.editor, "pdf.zoom")
+        package static let thumbnails = StoryID(.editor, "pdf.thumbnails")
+        package static let page = StoryID(.editor, "pdf.page")
+        package static let find = StoryID(.editor, "pdf.find")
+        package static let matchCase = StoryID(.editor, "pdf.case")
+        /// A page's thumbnail (0-based).
+        package static func thumbnail(_ index: Int) -> StoryID { StoryID(.editor, "pdf.thumb", key: String(index)) }
+    }
+}
+
+extension Workspace {
+    /// The active PDF's view: its page (0-based), scale, and the find matches it highlights.
+    package var storyPDF: (page: Int, scale: CGFloat, matches: Int)? {
+        guard let view = storyView(PlacedPDFView.self), let document = view.document, let current = view.currentPage else { return nil }
+        return (document.index(for: current), view.scaleFactor, view.highlightedSelections?.count ?? 0)
     }
 }

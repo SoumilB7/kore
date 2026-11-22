@@ -283,6 +283,8 @@ struct ComposerView: View {
                 editor.placeCaret(at: event.locationInWindow)
             }
         }
+        // Named without an identifier of its own: the text's stays the text's.
+        .storyMark(StoryID.Composer.fieldBox)
     }
 
     private var textField: some View {

@@ -23,6 +23,9 @@ package struct StoryRow: Sendable, Equatable {
 }
 
 extension Chat {
+    /// The last compaction summary's entry, for its row's story id.
+    package var storySummaryEntry: UUID? { transcript.entries.last { $0.kind == .summary }?.id }
+
     package var rows: [StoryRow] {
         transcript.entries.map { e in
             StoryRow(
@@ -54,6 +57,8 @@ extension Chat {
     package func storyAttach(_ urls: [URL]) { attach(urls) }
     /// Every chip's ×.
     package func storyDetachAll() { for a in attachments { removeAttachment(a.id) } }
+    /// The composer's chips, by file name.
+    package var storyAttachmentNames: [String] { attachments.map(\.name) }
     /// Typed into the composer.
     package func storyType(_ text: String) { draft = text }
     /// How far the composer has grown past its smallest (the message rail sits lower by half).
@@ -170,6 +175,8 @@ extension Chat {
     /// The agent map's selected agent, and its closed groups' rows as they read ("Done 2 · 1
     /// foreground · 1 background").
     package var storyAgentMapSelected: String? { agentMap.selected }
+    /// The pane the map shows in place of an agent: "chat" or "outlived".
+    package var storyAgentMapPane: String? { agentMap.pane.map { "\($0)" } }
     package var storyAgentMapGroups: [String] {
         let rows = AgentMapRows(transcript.agentTree(), folded: [], open: [])
         return AgentMapState.Fold.allCases.compactMap { fold in
@@ -361,6 +368,8 @@ extension Workspace {
 
     /// The History panel's chats, as listed: id and title.
     package var storyHistory: [(id: String, title: String)] { chats.map { ($0.id, $0.title) } }
+    /// The History's archived chats, by id.
+    package var storyArchivedHistory: [String] { chats.filter(\.archived).map(\.id) }
 
     /// ⌘R on the active tab: its chat opens again from its saved history.
     package func storyReload() { reload([activeTab]) }

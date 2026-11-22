@@ -171,7 +171,7 @@ private struct MarkdownFileView: View {
         } else if StoryHost.installed {
             TranscriptSelection.opened.append(url)
         } else {
-            NSWorkspace.shared.open(url)
+            StoryHost.open(url)
         }
     }
 

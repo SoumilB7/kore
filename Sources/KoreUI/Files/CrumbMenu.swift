@@ -109,6 +109,7 @@ struct CrumbMenu: View {
             hover: { selected.value = index }, action: action
         )
         .id(index)
+        .storyID(StoryID.Editor.crumbRow(name))
     }
 
     // MARK: Actions
