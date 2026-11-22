@@ -606,7 +606,7 @@ private struct NetSettingRow<Detail: View>: View {
     let title: String
     @Binding var on: Bool
     let story: StoryID
-    let press: () -> Void
+    let press: @MainActor () -> Void
     @ViewBuilder let detail: Detail
 
     var body: some View {
