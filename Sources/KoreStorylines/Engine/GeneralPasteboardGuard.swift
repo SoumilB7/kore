@@ -11,6 +11,10 @@ import ObjectiveC
 enum GeneralPasteboardGuard {
     /// Writes caught since the last `take()`: the method and the first app frames that called it.
     nonisolated(unsafe) private static var caught: [String] = []
+    /// The host's board, looked up once: `NSPasteboard.general` is asked for often (the text
+    /// system asks on every edit), and a lookup per ask slowed the main thread enough to miss a
+    /// composer's shrink after its draft was cleared.
+    nonisolated(unsafe) private static let host = NSPasteboard(name: StoryHost.board)
     private static var installed = false
 
     static func install() {
@@ -19,7 +23,7 @@ enum GeneralPasteboardGuard {
         // `NSPasteboard.general` is the host's board: AppKit's own copy and paste (a text view's
         // ⌘C then ⌘V) read and write it there, the owner's clipboard untouched.
         if let general = class_getClassMethod(NSPasteboard.self, #selector(getter: NSPasteboard.general)) {
-            let host: @convention(block) (AnyObject) -> NSPasteboard = { _ in NSPasteboard(name: StoryHost.board) }
+            let host: @convention(block) (AnyObject) -> NSPasteboard = { _ in Self.host }
             method_setImplementation(general, imp_implementationWithBlock(host))
         }
         redirect(#selector(NSPasteboard.clearContents), as: (@convention(c) (NSPasteboard, Selector) -> Int).self) { was, sel in
@@ -54,7 +58,7 @@ enum GeneralPasteboardGuard {
         let frames = Thread.callStackSymbols.dropFirst(2).filter { $0.contains("Kore") || $0.contains("AppKit") }.prefix(4)
             .map { $0.split(separator: " ", omittingEmptySubsequences: true).dropFirst(3).prefix(1).joined() }
         caught.append("\(NSStringFromSelector(selector)) from \(frames.joined(separator: " ← "))")
-        return NSPasteboard(name: StoryHost.board)
+        return host
     }
 
     private static func redirect<C>(_ selector: Selector, as _: C.Type, _ make: (C, Selector) -> Any) {
