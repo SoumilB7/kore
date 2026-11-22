@@ -23,17 +23,22 @@ final class BoxIdentityNameAndRoute: ChatStoryline {
             Snapshot("box-identity-row-ssh"),
             Do("the link moves to Kore's tailnet") { _ in DevicesStory.boxes?.joinNet(BoxIdentityStory.alias, tailnet: "kore") },
             BoxIdentityStory.expect("on Kore's tailnet", name: "mybox", route: "Kore's tailnet"),
-            Expect("its hover: the node, and SSH not needed now", found: { _ in BoxIdentityStory.row().flatMap(DevicesWords.help) }) { _ in
-                BoxIdentityStory.row().flatMap(DevicesWords.help)?.hasPrefix(
-                    "node mybox-kore 100.87.122.76\nSSH (mybox-cf) · not needed now; Kore's tailnet carries mybox") == true
+            Expect("its hover: the node, and SSH not needed now", found: { _ in BoxIdentityStory.row().flatMap { DevicesWords.help($0) } }) { _ in
+                BoxIdentityStory.row().flatMap { DevicesWords.help($0) }?.hasPrefix(
+                    "mybox-kore · 100.87.122.76 · via Kore's tailnet\nSSH (mybox-cf) · not needed now; Kore's tailnet carries mybox") == true
             },
+            ExpectElement(.id(StoryID.Net.sshHint(BoxIdentityStory.alias)), .visible),
             Snapshot("box-identity-row-kore-tailnet"),
             Do("its tailnet node stops: the link falls back to SSH") { _ in DevicesStory.boxes?.leaveNet(BoxIdentityStory.alias) },
             BoxIdentityStory.expect("back on SSH (mybox-cf)", name: "mybox", route: "SSH (mybox-cf)"),
             Expect("no SSH hint while SSH carries it") { _ in BoxIdentityStory.row().flatMap(DevicesWords.sshNotNeeded) == nil },
+            ExpectElement(.id(StoryID.Net.sshHint(BoxIdentityStory.alias)), .absent),
             Do("the node is back") { _ in DevicesStory.boxes?.joinNet(BoxIdentityStory.alias, tailnet: "kore") },
             BoxIdentityStory.expect("on Kore's tailnet again", name: "mybox", route: "Kore's tailnet"),
             Expect("nothing forgot the SSH route by itself") { _ in BoxIdentityStory.forgotten.isEmpty },
+            // Its row drawn on the tailnet again (⋯'s menu is made from the row as drawn).
+            ExpectElement(.id(StoryID.Net.sshHint(BoxIdentityStory.alias)), .visible),
+            WaitIdle(),
             Press(.id(StoryID.Net.more(BoxIdentityStory.alias))),
             BoxTailnetStory.menu("Forget this SSH route offered") { $0.contains("Forget this SSH route") },
             BoxTailnetStory.PressRow(title: "Forget this SSH route"),

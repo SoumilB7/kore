@@ -156,12 +156,15 @@ extension Chat {
 
     /// Whether the agent map shows over the chat (the Agents button, ⇧⌘A).
     package var isAgentMapOpen: Bool { agentMap.isOpen }
-    /// The Agents button's words and the map header's counts, as they read ("4 agents",
-    /// "4 · 2 failed").
+    /// The Agents button's words and the map header's count, as they read ("4 agents", "4").
     package var storyAgentCounts: (button: String, header: String) {
         let summary = transcript.agentSummary
-        let header = MapHeader.counts(summary)
-        return (AgentsButton.label(summary), header.counts + header.failed)
+        return (AgentsButton.label(summary), MapHeader.counts(summary))
+    }
+
+    /// An agent's row's right-hand word, as it reads ("failed", "done · 2:44").
+    package func storyAgentWord(_ id: String) -> String? {
+        transcript.agent(id).map { AgentNodeMeter.text($0, duration: $0.duration, waiting: $0.waiting > 0, background: $0.background) }
     }
 
     /// The agent map's selected agent, and its closed groups' rows as they read ("Done 2 · 1

@@ -85,6 +85,8 @@ extension Theme {
         @MainActor static var line: Font { .kore(12) }
         @MainActor static var detail: Font { .kore(11.5) }
         @MainActor static var title: Font { .kore(13, .medium) }
+        /// A setting's name at the Devices foot ("Kore's tailnet").
+        @MainActor static var setting: Font { .kore(13) }
         @MainActor static var button: Font { .kore(12, .medium) }
         @MainActor static var hint: Font { .kore(10.5) }
     }

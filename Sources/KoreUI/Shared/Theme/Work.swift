@@ -247,13 +247,14 @@ extension Theme {
     static let agentWire = timelineLine
     /// A child's elbow, by its state.
     static let agentWireLive = agentRail(accent)
-    static let agentWireFailed = danger.opacity(0.35)
+    /// A failed agent's end, in its detail: the rule beside its reason.
+    static let agentFailureRule = danger.opacity(0.55)
 }
 
 extension Layout {
     enum AgentMap {
-        /// One row per agent, before zoom.
-        static let row: CGFloat = 46
+        /// One row per agent, on one line (option C), before zoom.
+        static let row: CGFloat = 34
         /// Each level's step to the right, and the elbow's curve.
         static let step: CGFloat = 36
         static let bend: CGFloat = 12

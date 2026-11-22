@@ -317,7 +317,7 @@ struct KoreNetSystemTests {
                 return picture.own == .signedIn("me@example.com") && !picture.ownSignIn && w.net.node(w.mac.ownIP)?.state == .stopped
                     && w.mac.switcher.state == .installed
             }) { w.mac.signInOwnTailnet() }
-            #expect(DevicesWords.macDetail(Devices.shared.picture()) == "this Mac")
+            #expect(DevicesWords.macDetail(Devices.shared.picture()) == "This Mac")
             let box = try await w.sshBox("mybox")
             await w.onKoreNet(box)
             await w.plus()

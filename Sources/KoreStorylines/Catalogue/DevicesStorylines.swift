@@ -26,6 +26,9 @@ final class DevicesAddPhone: ChatStoryline {
             Press(icon),
             WaitForElement(.id(StoryID.Net.panel)),
             Expect("the popup says KoreNet is off") { _ in Devices.shared.picture().net == .off },
+            // Option B: the switch is the foot's "Kore's tailnet" setting, never the header's.
+            ExpectElement(.id(StoryID.Net.tailnet)),
+            Expect("Kore's tailnet: off") { _ in DevicesWords.tailnetSetting(Devices.shared.picture()) == OwnCue("off", nil) },
             // The + is there with KoreNet off; Add a phone turns KoreNet on, then opens the window.
             Press(.id(StoryID.Net.add)),
             WaitForElement(.id(StoryID.Options.panel)),
@@ -115,6 +118,10 @@ final class DevicesTakeOffline: ChatStoryline {
             Press(.id(StoryID.Net.icon)),
             WaitForElement(.id(StoryID.Net.panel)),
             WaitForElement(phone),
+            // Option B: two-line rows, the green dot on the box only, the settings at the foot.
+            ExpectElement(.id(StoryID.Net.tailnet)),
+            ExpectElement(.id(StoryID.Net.keepBoxes)),
+            WaitIdle(), Snapshot("devices-pane"),
             // The phone, through ⋯'s menu.
             Press(Locator("Pixel 9's ⋯") { _ in
                 guard let row = Devices.shared.picture().devices.first(where: { $0.name == "Pixel 9" }) else { return .failure(LocatorMiss("no phone", pending: true)) }

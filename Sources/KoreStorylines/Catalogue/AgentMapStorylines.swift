@@ -422,7 +422,7 @@ final class AgentMapByState: ChatStoryline {
             ExpectElement(.id(cut), .absent),
             ExpectElement(.id(gone), .absent),
             AgentMapStories.groups(["Done 1 · 1 foreground", "Stopped 2 · 1 foreground · 1 background"]),
-            AgentMapStories.counts(button: "1 running", header: "4 · 1 running"),
+            AgentMapStories.counts(button: "1 running", header: "4"),
             Expect("the chat, its running agent, then Done and Stopped") { _ in AgentMapStories.order([chat, watch, done, stopped]) },
             Expect("the rows noted") { _ in frames.note(fixed) },
             Press(.id(done)),
@@ -463,8 +463,8 @@ final class AgentMapByState: ChatStoryline {
 
 /// Failures are never folded away, for both CLIs: one turn spawns a foreground agent that
 /// finishes, one that stops, one that fails, and a background one that fails (Codex: a child
-/// thread backgrounded as the turn ends, failing after). The failed ones hang off the chat in red,
-/// above the closed Done and Stopped groups, and stay there after the next turn. The Agents
+/// thread backgrounded as the turn ends, failing after). The failed ones hang off the chat, each
+/// row's word "failed" the map's one red (option C), above the closed Done and Stopped groups, and stay there after the next turn. The Agents
 /// button and the map's header count the same four agents, the stopped one included.
 final class FailedAgentVisible: ChatStoryline {
     override class var tags: Set<Tag> { [.chat, .agents] }
@@ -511,7 +511,7 @@ final class FailedAgentVisible: ChatStoryline {
             Expect("the failed agents under the chat, above the closed groups") { _ in
                 AgentMapStories.order([chat, scan, watch, done, stopped])
             },
-            AgentMapStories.counts(button: "4 agents", header: "4 · 2 failed"),
+            AgentMapStories.counts(button: "4 agents", header: "4"),
         ]
         return [UseScript(Self.codexScript, for: "codex"), PutClaudeChat()] + super.steps() + [
             Send("Use some helpers"), TurnFinished(1), WaitIdle(),
@@ -526,8 +526,14 @@ final class FailedAgentVisible: ChatStoryline {
             Snapshot("agent-map-failed"),
         ]
             + failed
-            // The failed agent's reason first under its header, above its prompt.
-            + [Press(.id(scan)), WaitIdle(), Snapshot("failed-detail")]
+            // The failed agent's reason at the detail's end, where its run stopped.
+            + [
+                Press(.id(scan)), WaitIdle(), ExpectElement(.id(StoryID.AgentMap.failure), .visible),
+                Expect("its row's word is \"failed\"") { story in
+                    try story.activeChat().storyAgentWord("scan") == "failed"
+                },
+                Snapshot("failed-detail"),
+            ]
             + [Press(.id(StoryID.AgentMap.close)), Send("Go on"), TurnFinished(2), Press(.id(StoryID.Titlebar.agents))]
             + failed
     }

@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// An agent as a node in the agent map: an O with the agent's shape inside (phase 10 §6).
-/// Running turns a ring around it, finished fills it, failed turns it red, stopped fades it,
-/// and a waiting agent gets the amber point; a background agent's O is dashed. The chat itself
-/// is the root: a grey O with a dot.
+/// An agent as a node in the agent map: its own shape (phase 10 §6), in the accent, with no halo
+/// (devices-agents-2026-11-24, option C): the same shape and colour whatever became of it, so it
+/// stays the agent it was. Running turns a ring around it (dashed for a background agent), stopped
+/// fades it, and a waiting agent gets the amber point; how it ended is its row's word, failed the
+/// only red. The chat itself is the root: a grey O with a dot.
 struct AgentNodeMark: View {
     enum Kind: Equatable {
         case root
@@ -26,27 +27,28 @@ struct AgentNodeMark: View {
             .overlay(alignment: .topTrailing) { if waiting { point(Theme.warning) } }
     }
 
-    /// A filled O with its border inside it, and the agent's shape (the root's dot) in the middle.
+    /// The root's O with its dot; an agent's shape alone, filling most of the mark's box.
     private func mark(_ box: CGRect) -> some View {
         let border = Stroke.emphasis
         return ZStack {
-            // Dashed, the fill stays inside the border so the gaps show.
-            Circle().path(in: background ? box.insetBy(dx: border, dy: border) : box).fill(fill)
-            Circle().path(in: box.insetBy(dx: border / 2, dy: border / 2))
-                .stroke(stroke, style: StrokeStyle(lineWidth: border, dash: background ? Stroke.backgroundDash : []))
             switch kind {
             case .root:
+                Circle().path(in: box).fill(Theme.background)
+                Circle().path(in: box.insetBy(dx: border / 2, dy: border / 2)).stroke(Theme.secondary, lineWidth: border)
                 let dot = radius * 0.64
                 Circle().path(in: CGRect(x: box.midX - dot / 2, y: box.midY - dot / 2, width: dot, height: dot)).fill(Theme.secondary)
-            case let .agent(index, status, _):
-                let colour = status == .finished ? Theme.background : status == .failed ? Theme.danger : Theme.agentMark
+            case let .agent(index, _, _):
                 let shape = AgentShape(rawValue: index % AgentShape.allCases.count)!
-                let inner = CGRect(x: box.midX - radius / 2, y: box.midY - radius / 2, width: radius, height: radius)
+                let side = radius * Self.shapeShare
+                let inner = CGRect(x: box.midX - side / 2, y: box.midY - side / 2, width: side, height: side)
                 let paths = AgentShapeView.paths(shape, in: inner)
-                ForEach(paths.indices, id: \.self) { paths[$0].fill(colour) }
+                ForEach(paths.indices, id: \.self) { paths[$0].fill(Theme.agentMark) }
             }
         }
     }
+
+    /// An agent's shape across this much of the mark's radius: as big as the O's inside was.
+    static let shapeShare: CGFloat = 1.2
 
     private var status: AgentAvatar.Status? {
         if case let .agent(_, status, _) = kind { status } else { nil }
@@ -56,23 +58,14 @@ struct AgentNodeMark: View {
         if case let .agent(_, _, waiting) = kind { waiting } else { false }
     }
 
-    private var fill: Color { status == .finished ? Theme.agentMark : Theme.background }
-
-    private var stroke: Color {
-        switch status {
-        case nil: Theme.secondary
-        case .failed: Theme.danger
-        default: Theme.agentMark
-        }
-    }
-
-    /// The running ring, `gap` outside the O.
+    /// The running ring, `gap` outside the mark: dashed for a background agent.
     private var ring: some View {
         let size = 2 * (radius + Layout.AgentMap.gap)
+        let dash: [CGFloat] = background ? Stroke.backgroundDash : []
         return ZStack {
-            Circle().stroke(Theme.border, lineWidth: Stroke.emphasis)
+            Circle().stroke(Theme.border, style: StrokeStyle(lineWidth: Stroke.emphasis, dash: dash))
             if reduceMotion {
-                Circle().stroke(Theme.agentArc, lineWidth: Stroke.emphasis)
+                Circle().stroke(Theme.agentArc, style: StrokeStyle(lineWidth: Stroke.emphasis, dash: dash))
             } else {
                 SpinningArc()
             }

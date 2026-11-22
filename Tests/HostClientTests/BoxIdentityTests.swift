@@ -110,7 +110,7 @@ struct BoxIdentityTests {
         let now = DevicesPictureTests.now
         let net = Self.row(Self.facts(route: .net))
         #expect(net.name == "mybox" && DevicesWords.detail(net, now: now) == "Kore's tailnet")
-        #expect(DevicesWords.help(net) == "node mybox-kore 100.64.0.9\nSSH (mybox-cf) · not needed now; Kore's tailnet carries mybox")
+        #expect(DevicesWords.help(net) == "mybox-kore · 100.64.0.9 · via Kore's tailnet\nSSH (mybox-cf) · not needed now; Kore's tailnet carries mybox")
         // Over installed Tailscale.
         let tailscale = Self.row(Self.facts(route: .net), state: .installed)
         #expect(DevicesWords.detail(tailscale, now: now) == "Tailscale")

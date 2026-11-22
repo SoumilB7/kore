@@ -327,6 +327,8 @@ extension StoryID {
         package static let open = StoryID(.agentmap, "open")
         package static let stop = StoryID(.agentmap, "stop")
         package static let close = StoryID(.agentmap, "close")
+        /// A failed agent's end in its detail: "Failed · its reason · 17:41".
+        package static let failure = StoryID(.agentmap, "failure")
     }
 
     package enum AgentTab {

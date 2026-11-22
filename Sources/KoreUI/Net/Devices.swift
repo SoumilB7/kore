@@ -608,12 +608,16 @@ extension StoryID {
         /// The title row's network icon; a click opens Devices.
         package static let icon = StoryID(.titlebar, "net")
         package static let popup = StoryID(.titlebar, "net.popup")
-        /// The popup's KoreNet switch, its "+" (Add device) and × (the window's end).
+        /// The "Kore's tailnet" setting row at the foot, and its switch (KoreNet's); the header's
+        /// "+" (a box or a phone) and × (the Add window's end).
+        package static let tailnet = StoryID(.titlebar, "net.tailnet")
         package static let toggle = popup.part(.toggle)
         package static let add = popup.part(.add)
         package static let closeAdd = popup.part(.close)
-        /// "Keep boxes updated", under the rows while there are boxes.
+        /// "Update boxes automatically"'s switch, at the foot while there are boxes.
         package static let keepBoxes = StoryID(.titlebar, "net.keepboxes")
+        /// A box's SSH route's hint, the foot's last line, by the box's key.
+        package static func sshHint(_ id: String) -> StoryID { StoryID(.titlebar, "net.sshhint", key: id) }
         /// The Add window's countdown, and "Get the phone app".
         package static let countdown = StoryID(.titlebar, "net.countdown")
         package static let phoneApp = StoryID(.titlebar, "net.phoneapp")
