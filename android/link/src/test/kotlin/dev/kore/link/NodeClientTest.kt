@@ -46,9 +46,13 @@ class NodeClientTest {
         val clock = { scope.testScheduler.currentTime }
         val links = mutableListOf<FakeLink>()
         val dials = mutableListOf<Long>()
+        val resumes = mutableListOf<dev.kore.link.node.NetResume?>()
+        /** What [NodeClient.resume] reported: (ms, how). */
+        val heard = mutableListOf<Pair<Long, String>>()
         private val queue = ArrayDeque(plan)
-        val client = NodeClient(device, scope.backgroundScope, NodeDialer { device, _, enrolling ->
+        val client = NodeClient(device, scope.backgroundScope, NodeDialer { device, resume, enrolling ->
             dials += clock()
+            resumes += resume
             when (val next = (queue.removeFirstOrNull() ?: { NetFailure("timeout") })()) {
                 is FakeLink -> next.also { links += it }
                 is Throwable -> throw next
@@ -58,7 +62,7 @@ class NodeClientTest {
         }, clock = clock, raiseSigner = signer, machineRandom = object : kotlin.random.Random() {
             override fun nextBits(bitCount: Int) = 0
             override fun nextDouble() = 0.5
-        }, logs = logs, onLogsAsked = onLogsAsked)
+        }, logs = logs, onLogsAsked = onLogsAsked, onResumed = { ms, how -> heard += ms to how })
     }
 
     private fun TestScope.link() = FakeLink(mac(), { testScheduler.currentTime })
@@ -353,6 +357,137 @@ class NodeClientTest {
         assertEquals("abandoned", dead.ended.getCompleted())
         assertEquals(2, rig.dials.size)
         assertEquals(State.Up, rig.client.state.value)
+    }
+
+    // MARK: off screen and back (0.3.10: every app switch relinked)
+
+    private fun snapshot(vararg chats: Pair<String, String>) = buildJsonObject {
+        put("t", "snapshot"); put("rev", 3); put("windows", kotlinx.serialization.json.JsonArray(emptyList()))
+        put("chats", kotlinx.serialization.json.JsonArray(chats.map { (id, state) -> buildJsonObject { put("id", id); put("state", state) } }))
+    }
+
+    @Test fun tenSecondsInAnotherAppComesBackOnTheSameLink() = runTest {
+        val link = link()
+        val rig = Rig(this, listOf({ link }))
+        rig.client.start()
+        runCurrent()
+        rig.client.setPresence(false)
+        advanceTimeBy(10_000)
+        rig.client.setPresence(true, "c1")
+        rig.client.resume()
+        runCurrent()
+        // One ping, its pong at once: the same link, no dial, never Connecting.
+        assertEquals(1, link.pings.size)
+        assertEquals(1, rig.dials.size)
+        assertTrue(!link.ended.isCompleted)
+        assertEquals(State.Up, rig.client.state.value)
+        assertEquals(listOf(0L to "same"), rig.heard)
+        assertEquals(listOf("presence", "presence", "presence"), link.types())
+    }
+
+    @Test fun aKeptLinkThatDiedMeanwhileIsMadeAgainWithItsCursorsWithinASecond() = runTest {
+        val dead = link().apply { pongs = false }
+        val fresh = link()
+        val rig = Rig(this, listOf({ dead }, { fresh }))
+        rig.client.start()
+        runCurrent()
+        dead.push(snapshot("c1" to "idle"))
+        runCurrent()
+        rig.client.setPresence(false)
+        advanceTimeBy(4 * 60_000)
+        rig.client.resume()
+        runCurrent()
+        assertEquals(State.Up, rig.client.state.value)
+        advanceTimeBy(NodeClient.RESUME_PROBE_MS + 1)
+        runCurrent()
+        assertEquals("abandoned", dead.ended.getCompleted())
+        assertEquals(2, rig.dials.size)
+        // The new link resumes: the old link's ticket and the snapshot's rev.
+        val resume = rig.resumes[1]!!
+        assertArrayEquals(byteArrayOf(4, 2), resume.ticket)
+        assertEquals("3", (resume.cursors["snapshot"] as JsonObject).s("rev"))
+        assertEquals(State.Up, rig.client.state.value)
+        assertEquals("new", rig.heard.single().second)
+        assertTrue(rig.heard.single().first <= NodeClient.RESUME_PROBE_MS + 1)
+        // The snapshot the screen shows was never dropped.
+        assertEquals("3", rig.client.snapshot.value!!.s("rev"))
+    }
+
+    @Test fun tenMinutesAwayResumesSilentlyFromCold() = runTest {
+        val first = link()
+        val second = link()
+        val rig = Rig(this, listOf({ first }, { second }))
+        rig.client.start()
+        runCurrent()
+        first.push(snapshot("c1" to "idle"))
+        runCurrent()
+        // Past the linger: the keeper stops the clients (a bye), the tailnet goes.
+        rig.client.setPresence(false)
+        advanceTimeBy(5 * 60_000)
+        rig.client.stop()
+        runCurrent()
+        assertEquals(State.Idle, rig.client.state.value)
+        assertTrue(first.ended.isCompleted)
+        advanceTimeBy(5 * 60_000)
+        // Back: started with the tailnet, then the resume. One dial, with the cursors; the
+        // snapshot shown meanwhile is the one it had.
+        rig.client.start()
+        rig.client.post(NodeMachine.Event.Screen(true))
+        rig.client.resume()
+        assertEquals("3", rig.client.snapshot.value!!.s("rev"))
+        runCurrent()
+        assertEquals(2, rig.dials.size)
+        assertArrayEquals(byteArrayOf(4, 2), rig.resumes[1]!!.ticket)
+        assertEquals(State.Up, rig.client.state.value)
+        assertEquals(listOf(0L to "cold"), rig.heard)
+    }
+
+    @Test fun aNetworkChangeWhileAwayProbesAndRedialsOnceAndNoTimerDialsOffScreen() = runTest {
+        val dead = link().apply { pongs = false }
+        val rig = Rig(this, listOf({ dead }, { NetFailure("timeout") }, { link() }))
+        rig.client.start()
+        runCurrent()
+        rig.client.setPresence(false)
+        advanceTimeBy(30_000)
+        // Wi-Fi to mobile data while in another app: the kept link is probed (5 s), dropped,
+        // dialled once; that dial fails and nothing dials again by the clock off screen.
+        rig.client.reconnectNow()
+        advanceTimeBy(NodeClient.PROBE_MS + 1)
+        runCurrent()
+        assertEquals("abandoned", dead.ended.getCompleted())
+        assertEquals(2, rig.dials.size)
+        val away = rig.client.state.value as State.Away
+        assertEquals(null, away.at)
+        advanceTimeBy(10 * 60_000)
+        assertEquals(2, rig.dials.size)
+        // Back on screen: dialled at once.
+        rig.client.post(NodeMachine.Event.Screen(true))
+        rig.client.resume()
+        runCurrent()
+        assertEquals(3, rig.dials.size)
+        assertEquals(State.Up, rig.client.state.value)
+        assertEquals("cold", rig.heard.single().second)
+    }
+
+    @Test fun aFollowedChatWorkingIsKnownUntilItsTurnEnds() = runTest {
+        val link = link()
+        val rig = Rig(this, listOf({ link }))
+        rig.client.start()
+        runCurrent()
+        link.push(snapshot("c1" to "working", "c2" to "working"))
+        runCurrent()
+        // Only chats open in a screen count.
+        assertTrue(!rig.client.followsWork())
+        rig.client.openTranscript("c1")
+        assertTrue(rig.client.followsWork())
+        // Off screen no deltas come: the turn's end in the attention stream says it.
+        link.push(buildJsonObject { put("t", "attn.event"); put("aid", 4); put("op", "turn"); put("turn", buildJsonObject { put("chatId", "c1") }) })
+        runCurrent()
+        assertTrue(!rig.client.followsWork())
+        // A later snapshot is the truth again.
+        link.push(snapshot("c1" to "working"))
+        runCurrent()
+        assertTrue(rig.client.followsWork())
     }
 
     @Test fun aPongKeepsTheLink() = runTest {

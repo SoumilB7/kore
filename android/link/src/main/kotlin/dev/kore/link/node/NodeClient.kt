@@ -96,6 +96,11 @@ class NodeClient(
      */
     private val logs: (() -> String)? = null,
     private val onLogsAsked: () -> Unit = {},
+    /**
+     * Back on screen ([resume]): how long until the node was heard again (ms), and on what: `same`
+     * (the kept link answered), `new` (a new link, the old one dead) or `cold` (no link was kept).
+     */
+    private val onResumed: (ms: Long, how: String) -> Unit = { _, _ -> },
 ) {
     private val deviceFlow = MutableStateFlow(initial)
     val device: StateFlow<Device> = deviceFlow.asStateFlow()
@@ -245,6 +250,7 @@ class NodeClient(
                 } else {
                     up(event.link)
                     machine.on(NodeMachine.Event.Connected, clock())
+                    resumedAt?.let { (at, how) -> resumedAt = null; onResumed(clock() - at, how) }
                 }
             }
             is Internal.LinkDown -> if (event.link === session) {
@@ -376,10 +382,57 @@ class NodeClient(
                 // KoreNet's own ping on stream 0: its pong overtakes any stream traffic.
                 val pong = link.ping() ?: return@launch
                 val alive = withTimeoutOrNull(PROBE_MS) { pong.await() } != null
+                if (alive && session === link) resumedAt?.let { (at, _) -> resumedAt = null; onResumed(clock() - at, "same") }
                 if (!alive && session === link) link.close("abandoned")
             } finally {
                 probing.set(false)
             }
+        }
+    }
+
+    /** Back on screen at (ms), and how the node is being reached: reported once it's heard ([onResumed]). */
+    @Volatile private var resumedAt: Pair<Long, String>? = null
+
+    /**
+     * The app is back on screen. A kept link gets one ping, answered within [RESUME_PROBE_MS] or
+     * dropped and made again at once with the cursors (the screen keeps showing what it had, and
+     * says Reconnecting only past its own wait); with no link, the node is tried now.
+     */
+    fun resume() {
+        val link = session
+        if (link == null) {
+            resumedAt = clock() to "cold"
+            post(NodeMachine.Event.Trigger)
+            return
+        }
+        val at = clock()
+        resumedAt = at to "new"
+        if (!probing.compareAndSet(false, true)) return
+        scope.launch {
+            try {
+                val pong = link.ping() ?: return@launch
+                val alive = withTimeoutOrNull(RESUME_PROBE_MS) { pong.await() } != null
+                if (alive && session === link) {
+                    resumedAt = null
+                    onResumed(clock() - at, "same")
+                } else if (!alive && session === link) link.close("abandoned")
+            } finally {
+                probing.set(false)
+            }
+        }
+    }
+
+    /** Chats it last heard as working (a snapshot's), less those whose turn ended since (`attn.event turn`). */
+    private val endedSince = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    /** A chat this phone follows (open in a screen) is still working, as last heard. */
+    fun followsWork(): Boolean {
+        val chats = snapshotFlow.value?.get("chats") as? JsonArray ?: return false
+        val followed = synchronized(following) { following.keys.toSet() }
+        return chats.any { c ->
+            val o = c as? JsonObject ?: return@any false
+            val id = o.str("id") ?: return@any false
+            id in followed && id !in endedSince && o.str("state") == "working"
         }
     }
 
@@ -677,11 +730,18 @@ class NodeClient(
                 welcomeFlow.value = JsonObject(w + ("policy" to JsonObject(policy)))
             }
             "logs.get" -> answerLogs(message)
-            "snapshot" -> snapshotFlow.value = message
-            "delta" -> snapshotFlow.value = snapshotFlow.value?.let { merge(it, message) } ?: message
+            "snapshot" -> {
+                endedSince.clear()
+                snapshotFlow.value = message
+            }
+            "delta" -> {
+                (message["chats"] as? JsonArray)?.forEach { c -> (c as? JsonObject)?.str("id")?.let { endedSince -= it } }
+                snapshotFlow.value = snapshotFlow.value?.let { merge(it, message) } ?: message
+            }
             "tx.page", "tx.delta", "tx.reset" -> transcriptFlow.tryEmit(message)
             "attn.state", "attn.event" -> {
                 message["aid"]?.jsonPrimitive?.intOrNull?.let { if (it > lastAid) lastAid = it }
+                if (message.str("op") == "turn") (message["turn"] as? JsonObject)?.str("chatId")?.let { endedSince += it }
                 attentionFlow.tryEmit(message)
             }
             "result" -> resultFlow.tryEmit(message)
@@ -700,6 +760,8 @@ class NodeClient(
         /** Characters of the log per `logs.chunk`. */
         const val LOG_PIECE = 32 * 1024
         const val PROBE_MS = 5_000L
+        /** Back on screen, a kept link answers its ping this soon or a new one is made. */
+        const val RESUME_PROBE_MS = 1_000L
         /** The Mac waits up to 100 s for its owner on a new fingerprint key. */
         const val RAISE_KEY_MS = 110_000L
         /** Leave waits this long for each Mac's answer before signing out. */

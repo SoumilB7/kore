@@ -35,9 +35,10 @@ import kotlinx.serialization.json.JsonObject
 /**
  * The phone on KoreNet (phase 18 §5): its embedded tailnet, its identity, the devices it knows
  * (a [DeviceBook] in no-backup storage) and one [NodeClient] per device. The tailnet and the node
- * clients run only while the app is on screen, or mid sign-in (under [SignInService]): the phone
- * obeys connections only while Kore is open, so nothing links, dials or works in the background.
- * KoreNet off: nothing runs at all. When is [TailnetKeeper]'s; every start and stop goes through its switch.
+ * clients run while the app is on screen, a short while after it ([TailnetKeeper.LINGER_MS], the
+ * links kept quiet so coming back is instant, longer while a followed chat works), or mid sign-in
+ * (under [SignInService]). No service or wake lock keeps them: past that, nothing links, dials or
+ * works in the background. KoreNet off: nothing runs at all. When is [TailnetKeeper]'s; every start and stop goes through its switch.
  */
 class Mesh(private val app: KoreApp) {
     private val prefs = app.getSharedPreferences("kore", android.content.Context.MODE_PRIVATE)
@@ -96,7 +97,9 @@ class Mesh(private val app: KoreApp) {
                 // Once per spell of failures; it keeps trying by itself.
                 if (!troubled && joined) say("Tailscale didn't start · trying again")
                 troubled = true
-            })
+            },
+            realtime = android.os.SystemClock::elapsedRealtime,
+            keep = { nodesFlow.value.any(NodeClient::followsWork) })
     }
     @Volatile private var troubled = false
     private val peerWatch by lazy { dev.kore.link.node.PeerWatch(tailnet, app.scope, { nodesFlow.value }) }
@@ -178,7 +181,7 @@ class Mesh(private val app: KoreApp) {
         nodesFlow.value.forEach {
             if (on) {
                 it.post(NodeMachine.Event.Screen(true))
-                it.reconnectNow()
+                it.resume()
             } else {
                 it.setPresence(false)
             }
@@ -235,6 +238,8 @@ class Mesh(private val app: KoreApp) {
                     app.log.info("logs", "node" to shortId(d.id), "kind" to "asked")
                     say("Kore asked for this phone's logs")
                 },
+                // Back on screen to the node heard again: on the kept link, a new one, or from cold.
+                onResumed = { ms, how -> app.log.info("resume", "node" to shortId(d.id), "ms" to ms, "kind" to how) },
             ).also { client ->
                 // Each change of state, one line: which device (8 hex of its id), what, and why.
                 app.scope.launch {

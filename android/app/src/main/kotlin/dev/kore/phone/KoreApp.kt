@@ -12,7 +12,7 @@ import kotlinx.coroutines.SupervisorJob
 
 /**
  * Holds the phone's KoreNet ([Mesh]): the tailnet and a link to each device, run while a Kore
- * screen shows (and, with the background setting on, under its foreground service). Screenshots
+ * screen shows and a few minutes after (see [dev.kore.link.node.TailnetKeeper]). Screenshots
  * are allowed unless turned off in Settings; backups stay off.
  */
 class KoreApp : Application() {
