@@ -289,10 +289,12 @@ package final class ClaudeBackend: ChatBackend {
         refreshContext()
     }
 
-    /// The mode its history ended in under the chat's ceiling, and the change that says so (the
+    /// The mode its history ended in under the chat's ceiling (else the one it launched in), and the change that says so (the
     /// replay's last word on it, for every store that follows).
     private func hold(_ mode: inout String?) -> [ChatEvent] {
-        guard let ended = mode, case let held = ProviderDescriptor.claude.held(ended, under: options.modeCeiling), held != ended else { return [] }
+        // Above it: the mode it launched in, which is under it (`launch()`).
+        guard let ended = mode, ProviderDescriptor.claude.held(ended, under: options.modeCeiling) != ended else { return [] }
+        let held = options.mode
         mode = held
         return [.modeChanged(ModeChange(mode: held, previous: ended, source: .session, at: .now))]
     }

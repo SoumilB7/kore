@@ -187,7 +187,8 @@ package final class CodexBackend: ChatBackend {
             var replayed = await replay(newest?.turns ?? [], session)
             // Under the chat's ceiling (`ModeCeilings`), and the replay's last word says so.
             var held: [ChatEvent] = []
-            if let ended = replayed.carried.mode, case let mode = ProviderDescriptor.codex.held(ended, under: options.modeCeiling), mode != ended {
+            // Above it: the mode it launched in, which is under it (`launch()`).
+            if let ended = replayed.carried.mode, ProviderDescriptor.codex.held(ended, under: options.modeCeiling) != ended, case let mode = options.mode {
                 replayed.carried.mode = mode
                 held = [.modeChanged(ModeChange(mode: mode, previous: ended, source: .session, at: .now))]
             }

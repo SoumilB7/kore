@@ -217,6 +217,9 @@ extension Workspace {
             if !shown.opened { return .success((shown.chat, false)) }
             chat = shown.chat
         } else {
+            // No freer than the caller from its first start: its history may end higher, and
+            // its replay never takes it there (`ModeCeilings`); the user's pick still can.
+            if let top = capped.map(\.level).max() { ModeCeilings.put(min(ModeCeilings.at(summary.id) ?? .max, max(top, 1)), for: summary.id) }
             if quiet { openQuietly(summary) } else { open(summary) }
             guard let opened = tabs.first(where: { $0.chat?.sessionId == summary.id && $0.agent == nil })?.chat else {
                 return .failure(.init("Kore couldn't open that chat."))

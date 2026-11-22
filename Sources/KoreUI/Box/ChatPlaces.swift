@@ -182,8 +182,17 @@ extension Workspace {
     /// can't have here gives way to this Mac's own, said once.
     @discardableResult
     func land(_ landing: ChatLanding, after anchor: ChatTab? = nil) -> Chat? {
-        // Its ceiling before its chat is made: the CLI's first launch is under it.
-        if let ceiling = landing.settings.modeCeiling { ModeCeilings.put(ceiling, for: landing.session.id) }
+        // Its ceiling before its chat is made: the CLI's first launch is under it. One from a box
+        // is no higher than the mode it comes in (Auto at most), whatever its history ends in.
+        var ceiling = landing.settings.modeCeiling
+        if !landing.alias.isEmpty {
+            let cli = Registry.provider(for: landing.session.agent)
+            let known = landing.settings.mode.flatMap { mode in cli.modes.first { $0.id == mode } }
+            let comes = known.map { LinkPolicy.cappedMode($0.id, provider: cli.id) } ?? cli.modes[0].id
+            let level = max(cli.modes.first { $0.id == comes }?.level ?? 1, 1)
+            ceiling = min(ceiling ?? .max, level)
+        }
+        if let ceiling { ModeCeilings.put(ceiling, for: landing.session.id) }
         open(landing.session, after: anchor)
         guard let chat = tabs.first(where: { $0.agent == nil && $0.chat?.status.sessionId == landing.session.id })?.chat else { return nil }
         let settings = landing.settings

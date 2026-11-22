@@ -1,5 +1,6 @@
 import Foundation
 @testable import src
+import LinkProtocol
 import Testing
 
 @testable import KoreCore
@@ -91,6 +92,25 @@ struct ModeCeilingTests {
 
     /// The chat opened on its session, its CLI started and its history in.
     private func open(_ rig: Rig, fork: Bool = false) async throws -> Chat {
+        seam(rig)
+        defer { StorylineSeams.backend = nil }
+        let summary = SessionSummary(id: rig.session, agent: rig.provider.historyAgent, title: "Repos", updated: .now)
+        let chat = Chat(
+            provider: rig.provider, folder: rig.folder, resume: summary, fork: fork ? ForkPoint(from: rig.session, at: "a1") : nil, modeMemory: ModeMemory(defaults: nil))
+        return try await started(chat)
+    }
+
+    /// Its CLI started and its history in.
+    private func started(_ chat: Chat) async throws -> Chat {
+        await chat.start()
+        let bound = ContinuousClock.now + .seconds(10)
+        while chat.awaitingHistory, ContinuousClock.now < bound { await Task.yield() }
+        #expect(!chat.awaitingHistory)
+        return chat
+    }
+
+    /// Backends on the rig's stand-in CLI.
+    private func seam(_ rig: Rig) {
         StorylineSeams.backend = { _, options in
             guard rig.provider == .claude else { return CodexBackend(options) }
             // The history handed over as a fork's is: nothing is written under ~/.claude.
@@ -98,15 +118,6 @@ struct ModeCeilingTests {
             made.modeCeiling = options.modeCeiling
             return ClaudeBackend(made)
         }
-        defer { StorylineSeams.backend = nil }
-        let summary = SessionSummary(id: rig.session, agent: rig.provider.historyAgent, title: "Repos", updated: .now)
-        let chat = Chat(
-            provider: rig.provider, folder: rig.folder, resume: summary, fork: fork ? ForkPoint(from: rig.session, at: "a1") : nil, modeMemory: ModeMemory(defaults: nil))
-        await chat.start()
-        let bound = ContinuousClock.now + .seconds(10)
-        while chat.awaitingHistory, ContinuousClock.now < bound { await Task.yield() }
-        #expect(!chat.awaitingHistory)
-        return chat
     }
 
     private func done(_ rig: Rig) {
@@ -217,6 +228,60 @@ struct ModeCeilingTests {
         let last = try await open(rig)
         #expect(last.controls.mode == full)
         last.close()
+    }
+
+    /// Nothing the CLI was told is above `top`, and the chat ends there.
+    private func expectAt(_ rig: Rig, _ chat: Chat, _ top: String, _ what: String) {
+        #expect(chat.controls.mode == top, "\(what): \(chat.controls.mode)")
+        let above = rig.provider == .claude ? [ClaudeModes.fullAccess] : ["never", "danger-full-access"]
+        for line in rig.lines { #expect(!above.contains { line.contains($0) }, "\(what): \(line)") }
+    }
+
+    /// A box chat brought here comes in the mode it had there (Auto at most), and its history,
+    /// ending in Full access, doesn't take it higher.
+    @Test(arguments: [0, 1])
+    func aBoxChatLandedHereStaysInTheModeItCameIn(_ index: Int) async throws {
+        let provider: ProviderDescriptor = index == 0 ? .claude : .codex
+        let (full, auto) = index == 0 ? (ClaudeModes.fullAccess, "auto") : (CodexModes.fullAccess, "approveForMe")
+        let rig = try rig(provider, ends: full)
+        defer { done(rig) }
+        seam(rig)
+        defer { StorylineSeams.backend = nil }
+        let window = Workspace(folder: rig.folder, restore: false)
+        let session = SessionSummary(id: rig.session, agent: provider.historyAgent, title: "Repos", updated: .now)
+        let chat = try #require(window.land(ChatLanding(session: session, alias: "mybox", settings: ChatSettings(mode: full))))
+        defer { for tab in window.tabs { tab.chat?.close() } }
+        _ = try await started(chat)
+        await chat.modeSettled()
+        expectAt(rig, chat, auto, "landed")
+        #expect(ModeCeilings.at(rig.session) == 3)
+    }
+
+    /// A past chat Arsenal opens is no freer than the chat that asked, its history notwithstanding.
+    @Test(arguments: [0, 1])
+    func aPastChatArsenalOpensIsNoFreerThanTheCallerAfterItsReplay(_ index: Int) async throws {
+        let provider: ProviderDescriptor = index == 0 ? .claude : .codex
+        let rig = try rig(provider, ends: index == 0 ? ClaudeModes.fullAccess : CodexModes.fullAccess)
+        defer { done(rig) }
+        seam(rig)
+        defer { StorylineSeams.backend = nil }
+        let session = SessionSummary(id: rig.session, agent: provider.historyAgent, title: "Repos", updated: .now)
+        StorylineSeams.sessions = { cli, _ in (own: false, extra: cli == provider.id ? [session] : []) }
+        defer { StorylineSeams.sessions = nil }
+        let window = Workspace(folder: rig.folder, restore: false)
+        await window.refresh()
+        let caller = Chat(provider: provider, folder: rig.folder, modeMemory: ModeMemory(defaults: nil))
+        caller.controls.mode = provider.modes[0].id
+        defer { caller.close() }
+        let result = await window.arsenalOpen(session: rig.session, under: caller, quiet: true)
+        guard case .success(let (opened, _)) = result else {
+            Issue.record("not opened: \(result)")
+            return
+        }
+        defer { for tab in window.tabs { tab.chat?.close() } }
+        _ = try await started(opened)
+        await opened.modeSettled()
+        expectAt(rig, opened, provider.modes[0].id, "opened by Arsenal")
     }
 
     /// Arsenal and Plan's allow switch off in a copy stay off when it's opened again.
