@@ -537,6 +537,14 @@ package final class ClaudeBackend: ChatBackend {
         held(holds.tick())
     }
 
+    /// The plan once this login has gone quiet (`PlanQuietReads`): `get_usage` on this chat's
+    /// own CLI, no model request; kept as the turn's readings are.
+    private func quietRead() async {
+        guard let session, let usage = try? await session.usage(), let snapshot = PlanSnapshot.claude(usage: usage, account: planAccount) else { return }
+        PlanSnapshotLog.shared.append(snapshot)
+        options.planWindows?(snapshot)
+    }
+
     private func handle(_ event: ClaudeEvent) {
         if rollbackAt != nil, Self.writesSession(event) { forgetRollbackPoint() }
         switch event {
@@ -544,11 +552,16 @@ package final class ClaudeBackend: ChatBackend {
             KoreSessions.shared.record(cli: "claude", session: info.sessionId, folder: options.folder, launch: "started", account: planAccount)
         case .raw(let json) where json["type"]?.string == "rate_limit_event":
             // The plan's windows as this turn began: kept for usage attribution, and the usage mark.
-            let snapshot = PlanSnapshot.claude(rateLimitEvent: json, account: planAccount)
+            var snapshot = PlanSnapshot.claude(rateLimitEvent: json, account: planAccount)
+            // It comes as this chat's request begins, before it's spent: attribution places that
+            // request after it (`UsageAttribution.split`).
+            snapshot?.chat = sessionId
             PlanSnapshotLog.shared.append(snapshot)
             options.planWindows?(snapshot)
+            PlanQuietReads.shared.busy("claude", account: planAccount)
         case .turnCompleted:
             KoreUsageRefresh.soon("claude")
+            PlanQuietReads.shared.ended("claude", account: planAccount) { [weak self] in await self?.quietRead() }
         case .stderr(let text):
             stderrTail.append(text)
         case .bridgeState(let state, let detail):

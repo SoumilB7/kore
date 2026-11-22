@@ -170,7 +170,19 @@ package final class HostDaemon {
         config = HostConfig.load(paths.config)
         services.onEvent = { [weak self] chat, event in self?.noted(chat, event) }
         services.onModels = { [weak self] cli, models in self?.listed(cli, models) }
-        services.onPlanWindows = { [weak self] cli, snapshot in self?.planUsage.take(cli, snapshot: snapshot) }
+        services.onPlanWindows = { [weak self] cli, snapshot in
+            guard let self else { return }
+            self.planUsage.take(cli, snapshot: snapshot)
+            // Kept for the Mac's usage card too, as evidence of the login's windows: Claude's
+            // report names its login; Codex's is the box's one login.
+            if let snapshot {
+                let account = cli == "codex" ? self.planUsage.account(cli, login: LinkAccount.main) : snapshot.account
+                // A Claude turn's report names its chat (the session): as the ledger names it, the
+                // box chat's id. Codex's come after their request, and reads name none.
+                let chat = cli == "claude" ? snapshot.chat.flatMap { said in self.chats.first { $0.id == said || $0.chat?.sessionId == said || $0.record.session == said }?.id } : nil
+                self.usage.appendPlan(provider: cli, account: account, chat: chat, snapshot)
+            }
+        }
         services.server = { [weak self] chat in self?.server(for: chat) }
         services.onTranscript = { [weak self] chat in self?.chats.first { $0.chat === chat }?.attach(chat, replaced: true) }
         // Every rollback (a Mac's call, a phone's control, the box chat's own): the log starts
@@ -446,7 +458,12 @@ package final class HostDaemon {
     private func noted(_ chat: Chat, _ event: ChatEvent) {
         guard let hc = chats.first(where: { $0.chat === chat }) else { return }
         streamRow(hc, event)
-        if case .requestUsage(let spent) = event { usage.append(chat: hc.id, provider: hc.record.provider, spent) }
+        if case .requestUsage(let spent) = event {
+            // The login it ran on: as the CLI's own report named it, else the chat's login as the
+            // box knows it (Codex's one login, a Claude account).
+            let login = hc.record.provider == "claude" ? hc.record.account ?? LinkAccount.main : LinkAccount.main
+            usage.append(chat: hc.id, provider: hc.record.provider, spent, account: planUsage.account(hc.record.provider, login: login))
+        }
         switch event {
         case .userMessage(let text, _, _): hc.noteRecent(at: now(), line: ChatMeta.lastLine(text, mine: true))
         case .turnStarted: hc.noteRecent(at: now(), line: nil)
@@ -683,7 +700,7 @@ package final class HostDaemon {
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
             caps: ["tx", "attn", "commands", "control", "box", BoxTools.deviceCap] + (control != .watch ? ["history", "blob", "diff"] : [])
-                + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap, LinkPolicy.alwaysAllowCap] : []))
+                + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap, LinkPolicy.alwaysAllowCap, LinkPolicy.fullAccessCap] : []))
     }
 
     /// Whether a served folder's window is closed (`window.close`); one with a chat shows anyway.
@@ -769,13 +786,15 @@ package final class HostDaemon {
     ) -> LinkMessage.Result? {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
         guard control != .watch else { return fail(.deniedControl, LinkPolicy.watchOnly) }
+        // A Mac with full control may raise into Full access; a phone stays at Auto.
+        let fullAccess = control == .full && !phone
         let hc = command.chatId.flatMap(chat)
         if command.chatId != nil, hc == nil { return fail(.goneChat, "No such chat on this box.") }
         if let hc, let refusal = Self.held(hc) { return fail(refusal.code, refusal.message) }
         switch command {
         case .send(_, let text, let blobs):
             guard let hc else { return fail(.goneChat, "") }
-            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control, fullAccess: fullAccess) { return fail(code, message) }
             // A typed /rename renames as `chat.rename` does, its CLI asleep or not (the policy
             // refused one without a name).
             if blobs.isEmpty, let name = SlashCommand.renameArgument(text), !name.isEmpty {
@@ -797,7 +816,7 @@ package final class HostDaemon {
         case .answer(_, let cardId, let action, _, let answers):
             defer { if hc?.chat?.approvals.pending.contains(where: { $0.id == cardId }) == false { hc?.stream.add(.approvalWithdrawn(cardId), by: nil) } }
             guard let hc else { return fail(.goneChat, "") }
-            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control, fullAccess: fullAccess) { return fail(code, message) }
             guard let chat = hc.chat else { return fail(.goneCard, "That was answered or withdrawn.") }
             if cardId == HostMeta.planReadyID { return planReady(chat, action == .implement ? .implement : .stay, id: id) }
             guard let approval = chat.approvals.pending.first(where: { $0.id == cardId }) else { return fail(.goneCard, "That was answered or withdrawn.") }
@@ -816,7 +835,8 @@ package final class HostDaemon {
             return .init(id: id, ok: true)
         case .setMode(_, let modeId):
             guard let hc else { return fail(.goneChat, "") }
-            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control, fullAccess: fullAccess) { return fail(code, message) }
+            if let line = Self.rootRefusal(hc.provider.id, modeId) { return fail(.raiseMode, line) }
             // A sleeping chat keeps it for its next start: no chat is made for it.
             if let chat = hc.chat {
                 chat.setMode(modeId, remember: false)
@@ -829,7 +849,7 @@ package final class HostDaemon {
             return .init(id: id, ok: true)
         case .setPlan(_, let on):
             guard let hc else { return fail(.goneChat, "") }
-            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control, fullAccess: fullAccess) { return fail(code, message) }
             hc.chat?.setPlanMode(on)
             hc.setPlanMode(on)
             armIdle(hc)
@@ -837,7 +857,7 @@ package final class HostDaemon {
             return .init(id: id, ok: true)
         case .planReady(_, let choice):
             guard let hc, let chat = hc.chat else { return fail(.goneCard, "No plan is waiting.") }
-            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control) { return fail(code, message) }
+            if case .deny(let code, let message) = Self.check(command, HostMeta.facts(hc, raise: control == .full), control: control, fullAccess: fullAccess) { return fail(code, message) }
             return planReady(chat, choice, id: id)
         case .new(let windowId, let provider):
             return newChat(id: id, folder: folder(windowId: windowId), provider: provider, modelId: nil)
@@ -846,8 +866,13 @@ package final class HostDaemon {
             let provider = Registry.provider(args.provider ?? "") ?? hc?.provider
             let levels = Dictionary((provider?.modes ?? []).map { ($0.id, HostMeta.level($0)) }, uniquingKeysWith: { a, _ in a })
             let facts = hc.map { HostMeta.facts($0, raise: control == .full) }
-            if case .deny(let code, let message) = LinkPolicy.checkBox(kind, args, facts, control: control == .full ? .full : .standard, levels: levels) {
+            if case .deny(let code, let message) = LinkPolicy.checkBox(
+                kind, args, facts, control: control == .full ? .full : .standard, levels: levels, fullAccess: fullAccess)
+            {
                 return fail(code, message)
+            }
+            if kind == .chatNew, let line = Self.rootRefusal(args.provider, args.mode) ?? Self.rootRefusal(args.provider, args.settings?.mode) {
+                return fail(.raiseMode, line)
             }
             return self.control(kind, args, id: id, control: control, phone: phone, reply: reply)
         case .unknown:
@@ -1007,7 +1032,7 @@ package final class HostDaemon {
             return account(kind, args, id: id, reply: reply)
         case .chatRename, .chatFork, .chatRollback, .chatCompact, .chatSetAutoCompact, .chatRetry, .chatContinue, .chatSendAtReset,
             .chatCancelContinue, .chatSetDraft, .chatSetArsenal, .arsenalStopAll:
-            return chatOp(kind, args, id: id, control: control, reply: reply)
+            return chatOp(kind, args, id: id, control: control, phone: phone, reply: reply)
         case .historyOpen, .historyRename, .historyArchive:
             return historyOp(kind, args, id: id, reply: reply)
         default:
@@ -1080,8 +1105,8 @@ package final class HostDaemon {
 
     /// The link's policy: a full grant is full control (it may raise a chat's mode); watch and act
     /// are standard (lower only).
-    static func check(_ command: LinkCommand, _ facts: LinkPolicy.ChatFacts, control: GrantControl) -> LinkPolicy.Verdict {
-        LinkPolicy.check(command, facts, control: control == .full ? .full : .standard)
+    static func check(_ command: LinkCommand, _ facts: LinkPolicy.ChatFacts, control: GrantControl, fullAccess: Bool = false) -> LinkPolicy.Verdict {
+        LinkPolicy.check(command, facts, control: control == .full ? .full : .standard, fullAccess: fullAccess)
     }
 
     /// Where a sign-in on the box goes: Claude with a login named, that added account's folder

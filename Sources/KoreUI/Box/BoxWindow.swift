@@ -489,9 +489,13 @@ final class BoxChatServices: ChatServices {
         self.chat = chat
         if let chatId, let line = ChatPlaces.shared.takeNote(connection.alias, chatId) { chat.note(line) }
         chat.ownPopups()
-        // Box chats go up to Auto (`LinkPolicy.raiseCap`): the picker doesn't offer the modes above.
+        // Box chats go up to Auto (`LinkPolicy.raiseCap`), or to Full access from a Mac with full
+        // control of a box that takes it (owner, 2026-11-22); the picker dims the modes above.
+        // Arsenal stays at Auto either way.
         chat.controls.levelCap = LinkPolicy.raiseCap.rawValue
         chat.controls.levelCapNote = LinkPolicy.boxCapLine
+        chat.controls.levelCapLifted = { [connection] in connection.takesFullAccess }
+        chat.controls.arsenalCap = LinkPolicy.raiseCap.rawValue
         // Its tier from before (Kore or the box restarted), once it's in its window: said to the box
         // with its first look, so the box doesn't take the Mac's nothing for off.
         Task { @MainActor [weak chat] in

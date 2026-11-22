@@ -83,7 +83,7 @@ extension HostDaemon {
 
     func adoptCopy(_ args: ControlArgs, id: String, from client: LinkClient) -> MoveResult {
         func refused(_ code: ResultCode, _ message: String) -> MoveResult { .refused(id, code, message) }
-        let (args, capped) = Self.boxCapped(args)
+        let (args, capped) = Self.boxCapped(args, fullAccess: client.mayFullAccess)
         guard client.holder != nil, let phase = args.phase.flatMap(MovePhase.init(rawValue:)), let moveId = args.moveId, LinkMoves.plainMoveID(moveId)
         else { return refused(.invalid, "Name the move.") }
         let dir = staging.appendingPathComponent(moveId, isDirectory: true)

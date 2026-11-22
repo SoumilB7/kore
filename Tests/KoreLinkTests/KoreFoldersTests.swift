@@ -13,13 +13,38 @@ import Testing
     let scratch = URL(fileURLWithPath: "/private/tmp/scratch", isDirectory: true)
 
     @Test func ownerKeepsTodaysPaths() {
-        for domain in ["dev.kore.Kore", "Kore", "kore-host"] {
+        for domain in ["dev.kore.Kore", "kore-host"] {
             let places = KoreFolders.places(domain: domain, testing: false, bases: bases, scratch: scratch)
             #expect(places.support.path == "/Users/someone/Library/Application Support/Kore")
             #expect(places.logs.path == "/Users/someone/Library/Logs/Kore")
             #expect(places.caches.path == "/Users/someone/Library/Caches/Kore")
             #expect(KoreFolders.allowed(places, domain: domain, testing: false, bases: bases))
         }
+    }
+
+    /// Kore Dev (its app's domain, or the `Kore` binary run as built) keeps `Kore Dev`, with its
+    /// own agent socket, link, KoreNet identity and logs: never the owner's.
+    @Test func koreDevKeepsItsOwn() {
+        let owner = KoreFolders.owner(bases)
+        for domain in [KoreFolders.devBundleID, "Kore", "Kore Dev"] {
+            let places = KoreFolders.places(domain: domain, testing: false, bases: bases, scratch: scratch)
+            #expect(places.support.path == "/Users/someone/Library/Application Support/Kore Dev")
+            #expect(places.logs.path == "/Users/someone/Library/Logs/Kore Dev")
+            #expect(places.caches.path == "/Users/someone/Library/Caches/Kore Dev")
+            #expect(!places.touches(owner))
+            #expect(!KoreFolders.isOwner(domain: domain, testing: false))
+            #expect(KoreFolders.allowed(places, domain: domain, testing: false, bases: bases))
+            #expect(!KoreFolders.allowed(owner, domain: domain, testing: false, bases: bases))
+            // The agent socket and the KoreNet identity follow the support folder.
+            #expect(places.support.appendingPathComponent("agent/kore.sock").path == "/Users/someone/Library/Application Support/Kore Dev/agent/kore.sock")
+            #expect(FileSecrets.folder(support: places.support).path == "/Users/someone/Library/Application Support/Kore Dev/secrets")
+        }
+        // Kore Dev's own name, never the owner's, and the release's stays Kore.
+        #expect(KoreFolders.devBundleID != "dev.kore.Kore")
+        #expect(KoreFolders.ownerDomains.isDisjoint(with: KoreFolders.devDomains))
+        // A test process, even one named Kore Dev, is neither.
+        #expect(KoreFolders.places(domain: KoreFolders.devBundleID, testing: true, bases: bases, scratch: scratch, pid: 7)
+            == KoreFolders.Places(under: scratch.appendingPathComponent("kore-data-7")))
     }
 
     @Test func everyOtherDomainKeepsItsOwn() {
@@ -90,6 +115,7 @@ import Testing
         outside(KoreLog.folder, "KoreLog")
         // A chat this process launched is told of its own agent socket, never `kore`'s default.
         #expect(KoreReach.socket != nil)
+        outside(PhoneApp.folder, "PhoneApp.folder")
         outside(FileSecrets.standard, "FileSecrets.standard")
         outside(FileSecrets().folder, "FileSecrets")
         outside(ClaudeSettings.keyFile, "ClaudeSettings.keyFile")

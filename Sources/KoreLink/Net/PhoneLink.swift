@@ -106,6 +106,10 @@ package final class PhoneLink {
                 self.raise(raise)
             case .leave(let id):
                 return leave(id)
+            case .usageSince(let ask):
+                // A Mac's usage bookkeeping: never a phone's.
+                NetAudit.line("denied", ["device": self.id.uuidString.lowercased(), "kind": UsageWire.since])
+                tell((try? JSONEncoder().encode(UsageWire.Page(id: ask.id, lines: [], cursor: ask.cursor ?? 0, more: false))) ?? Data())
             case .link(.bye):
                 return end(LinkMessage.ByeReason.quit.rawValue)
             case .link(let message):

@@ -96,6 +96,7 @@ final class Runner {
         var result = RunReport.StoryResult(name: type.storyName, variant: variant.name)
         let started = ContinuousClock.now
         let story = type.init()
+        WindowSight.offscreenShows = !type.seesOcclusion
         story.variant = variant
         if type.tags.contains(.realInput), !flags.realInput {
             result.steps = [.init(label: "Needs --real-input", outcome: .skip)]
@@ -136,8 +137,9 @@ final class Runner {
         Self.current = context
 
         var failed = false
+        var skipping = false
         for step in story.steps() {
-            if failed {
+            if failed || skipping {
                 result.steps.append(.init(label: step.label, outcome: .skip))
                 continue
             }
@@ -147,6 +149,10 @@ final class Runner {
                 if let timeout = step.timeout { context.timeout = timeout } else { context.timeout = .seconds(5) }
                 try await step.run(context)
                 result.steps.append(.init(label: step.label, outcome: .pass, ms: ms(since: stepStart), stalledMs: stalled()))
+            } catch let skip as StorySkip {
+                skipping = true
+                print("\(name): \(skip)")
+                result.steps.append(.init(label: step.label, outcome: .skip, ms: ms(since: stepStart), error: "\(skip)"))
             } catch {
                 failed = true
                 result.steps.append(.init(label: step.label, outcome: .fail, ms: ms(since: stepStart), error: "\(error)", stalledMs: stalled()))

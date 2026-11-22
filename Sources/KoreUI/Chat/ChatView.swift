@@ -54,9 +54,14 @@ struct ChatView: View {
                 }
                 .onReceive(NotificationCenter.default.publisher(for: NSWindow.didChangeOcclusionStateNotification)) { note in
                     guard let changed = note.object as? NSWindow, changed === window else { return }
-                    let covered = !changed.occlusionState.contains(.visible)
+                    let covered = !WindowSight.shows(changed)
                     if occluded.value != covered { occluded.value = covered }
                 }
+                // The notification only says when it changes: a chat that opens in a window
+                // already covered (an agent's new chat while another app is in front) would draw
+                // its stream 30 times a second, unseen, until the window next changed.
+                .onAppear { syncCovered(window) }
+                .onChange(of: window.map(ObjectIdentifier.init)) { _, _ in syncCovered(window) }
         }
     }
 
@@ -75,8 +80,17 @@ struct ChatView: View {
         return { ChatMoving.sendBack(moved, from: workspace) }
     }
 
+    /// Whether the window is covered, read from the window itself (one ordered in; a window
+    /// still opening says so by notification once it shows).
+    private func syncCovered(_ window: NSWindow?) {
+        guard let window, window.isVisible else { return }
+        let covered = !WindowSight.shows(window)
+        if occluded.value != covered { occluded.value = covered }
+    }
+
     private func content(_ chat: Chat, chats: [Chat]) -> some View {
-        VStack(spacing: 0) {
+        let window = workspace.window
+        return VStack(spacing: 0) {
             ZStack {
                 ForEach(chats) { kept in
                     let shown = kept === active
@@ -84,6 +98,7 @@ struct ChatView: View {
                     TranscriptTimeline(store: kept.transcript, actions: actions(kept)).equatable()
                         // Off screen, its stream draws a couple of times a second, not 30.
                         .onChange(of: seen, initial: true) { _, seen in
+                            kept.transcript.seen(shown, in: window)
                             kept.transcript.hidden = !seen
                             kept.transcript.covered = shown && !seen
                             if seen {

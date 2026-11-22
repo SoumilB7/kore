@@ -523,11 +523,27 @@ struct CodexUsageIndex {
     }
 
     /// The plan's readings in the rollouts for a window of `minutes` (and `limit`) that resets
-    /// at `resetsAt`.
-    func points(minutes: Int, limit: String?, resetsAt: Date, slack: TimeInterval = 1800) -> [UsagePoint] {
+    /// at `resetsAt`, from the chats `thread` keeps (by each thread's root: a thread reads its
+    /// own login's plan).
+    func points(
+        minutes: Int, limit: String?, resetsAt: Date, slack: TimeInterval = 1800, thread keep: (String?, Date) -> Bool = { _, _ in true }
+    ) -> [UsagePoint] {
+        var parents: [String: String] = [:]
+        for file in files.values { if let thread = file.thread, let parent = file.parent { parents[thread] = parent } }
+        func root(_ thread: String?) -> String? {
+            guard var at = thread else { return nil }
+            var steps = 0
+            while let up = parents[at], steps < 32 {
+                at = up
+                steps += 1
+            }
+            return at
+        }
         var out: [UsagePoint] = []
         for file in files.values {
-            for point in file.points where Int(point.minutes) == minutes {
+            // A spawned thread reads its root chat's login.
+            let chat = root(file.thread)
+            for point in file.points where Int(point.minutes) == minutes && keep(chat, Date(timeIntervalSince1970: point.time)) {
                 let name = point.limit == .max ? nil : names.name(point.limit)
                 guard name == limit, abs(point.resets - resetsAt.timeIntervalSince1970) <= slack else { continue }
                 out.append(UsagePoint(time: Date(timeIntervalSince1970: point.time), used: point.used))

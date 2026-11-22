@@ -17,13 +17,14 @@ extension AgentChannelTests {
     struct FullAccessReachTests {
         typealias Rig = SendWakeTests.Rig
 
-        /// New chats would start in Full access, Claude's and Codex's, were the last pick read.
+        /// New chats would start in Auto (Codex's Approve for me), were the last pick read: the
+        /// highest kept, as Full access never is (owner, 2026-11-22).
         static func rememberFullAccess() {
             let defaults = UserDefaults(suiteName: "kore-full-access-reach")!
             defaults.removePersistentDomain(forName: "kore-full-access-reach")
             let memory = ModeMemory(defaults: defaults)
-            memory.remember(ClaudeModes.fullAccess, for: .claude)
-            memory.remember(CodexModes.fullAccess, for: .codex)
+            memory.remember("auto", for: .claude)
+            memory.remember("approveForMe", for: .codex)
             ModeMemory.standIn = memory
         }
 
@@ -51,7 +52,7 @@ extension AgentChannelTests {
             defer { rig.finish() }
             // A chat the person starts here takes the last pick: the leak's source.
             let own = Chat(provider: .claude, folder: rig.home.folder)
-            #expect(own.controls.mode == ClaudeModes.fullAccess)
+            #expect(own.controls.mode == "auto")
             let board = try #require(rig.home.linkNewBoard())
             for provider in ["claude", "codex"] {
                 let first = try #require(Registry.provider(provider)).modes[0].id

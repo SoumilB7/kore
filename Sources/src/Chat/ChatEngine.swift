@@ -166,6 +166,9 @@ package final class ChatEngine {
     /// Sees each of the backend's events as it came, before the chat takes it: a box hands them
     /// on to the Mac following the chat (link 1.5's `chat.events`).
     package var rawTap: (@MainActor (ChatEvent) -> Void)?
+    /// The login the CLI's last plan report named (`PlanSnapshot.account`): each request after it
+    /// carries it, so a box's requests count for the login they ran on.
+    package private(set) var planAccount: String?
 
     /// Waits before each start again of a CLI that wouldn't start. A storyline sets them shorter.
     package static let startRetries = HostSetting<[Duration]>([.seconds(2), .seconds(5), .seconds(10)])
@@ -191,13 +194,17 @@ package final class ChatEngine {
         if let backend { return backend }
         var options = options()
         let (cli, services) = (provider.id, services)
-        options.planWindows = { services.planWindows(cli, $0) }
+        options.planWindows = { [weak self] snapshot in
+            self?.heard(snapshot)
+            services.planWindows(cli, snapshot)
+        }
         let backend = services.makeBackend(provider, options)
         self.backend = backend
         pump = Task {
             var ran = ContinuousClock.now
             for await event in backend.events {
                 guard !Task.isCancelled, !closed else { break }
+                let event = stamped(event)
                 rawTap?(event)
                 let epoch = workEpoch
                 if let before = beforeHistory, Self.isReplay(event) || Self.isCorrection(event) {
@@ -278,6 +285,20 @@ package final class ChatEngine {
         let backend = backend
         self.backend = nil
         Task { await backend?.close() }
+    }
+
+    /// A plan report: its login is the one the requests after it ran on. One that names only the
+    /// plan ("plan:…") says nothing of the login.
+    package func heard(_ snapshot: PlanSnapshot?) {
+        guard let account = snapshot?.account, !account.hasPrefix("plan:") else { return }
+        planAccount = account
+    }
+
+    /// A request with the login it ran on, when the CLI's reports named it and it doesn't say.
+    package func stamped(_ event: ChatEvent) -> ChatEvent {
+        guard case .requestUsage(var request) = event, request.account == nil, let planAccount else { return event }
+        request.account = planAccount
+        return .requestUsage(request)
     }
 
     package static func isReplay(_ event: ChatEvent) -> Bool {

@@ -116,109 +116,114 @@ struct UsageAttributionTests {
 
     static let week = UsageWindow(minutes: 10080, resetsAt: at(10080), used: 0)
 
-    /// `count` rises of a point, each after one request of `units` (the limit's rate), the
-    /// reading 10 minutes apart.
-    static func ticks(_ count: Int, units: Double = 100, model: String = "test-opus-5-5", from start: Int = 0)
-        -> (requests: [UsageRequest], points: [UsagePoint])
-    {
-        let range = (start + 1)...(start + count)
-        let requests = range.map { UsageRequest(time: at(Double($0 * 10 - 5)), chat: "k", model: model, units: units, kore: true) }
-        return (requests, range.map { UsagePoint(time: at(Double($0 * 10)), used: Double($0)) })
+    /// 2026-11-22, the owner's login from 02:30: every reading of the 5-hour window and Kore's
+    /// requests between them (in thousands of units, summed per interval; nothing else ran on
+    /// that login). A point cost 82 thousand to 4.4 million units here. The rule before put
+    /// part of this outside Kore; every point of it was Kore's.
+    static let readings: [(Double, Double)] = [
+        (567.5, 0), (572.9, 4), (586.1, 7), (670.2, 8), (673.6, 7), (680.6, 8), (733.5, 9), (783.2, 10), (846.3, 11), (926.9, 12),
+        (1008.7, 13), (1097.7, 14), (1164.1, 15), (1587.1, 16), (1850.6, 16), (1856.9, 17), (1913.3, 18), (2297.8, 19), (2879.2, 19),
+        (2940.6, 19), (2944.1, 22), (2962.4, 23), (2984.9, 26), (2989.6, 27), (3040.7, 28), (3116.8, 29), (3281.3, 29), (3326.7, 29),
+        (3373.7, 30), (3491.1, 31), (3513.2, 32), (3562.1, 33), (3600.2, 34), (3693.2, 35), (3745.3, 36), (3826.2, 37), (3843.6, 38),
+        (3886.5, 39), (3905.0, 40), (3935.9, 41), (3972.6, 42), (4012.9, 43), (4052.7, 44),
+    ]
+    static let spent: [(Double, Double)] = [
+        (565.6, 4413), (571.4, 124), (583.3, 2678), (670.2, 954), (672.4, 82), (680.2, 90), (732.7, 932), (781.7, 998), (837.8, 1284),
+        (925.7, 857), (1007.1, 1134), (1095.0, 996), (1163.6, 1071), (1587.0, 1160), (1850.5, 1105), (1854.7, 93), (1905.4, 1122),
+        (2296.7, 1244), (2372.5, 352), (2940.3, 3453), (2944.0, 97), (2961.7, 444), (2984.8, 2767), (2987.8, 232), (3035.5, 1385),
+        (3116.7, 847), (3326.4, 236), (3373.6, 1012), (3491.0, 1066), (3512.3, 1245), (3560.6, 1215), (3599.9, 932), (3692.9, 1306),
+        (3745.1, 949), (3825.9, 1431), (3843.2, 902), (3880.1, 1187), (3904.9, 1127), (3932.2, 1123), (3971.8, 1288), (4005.7, 1238),
+        (4050.8, 1086),
+    ]
+
+    @Test func koresOwnUseIsAllKoresHoweverAPointCosts() {
+        let start = Date(timeIntervalSince1970: 1_795_262_400)
+        let window = UsageWindow(minutes: 300, resetsAt: start.addingTimeInterval(300 * 60), used: 44)
+        let requests = Self.spent.map { UsageRequest(time: start.addingTimeInterval($0.0), chat: "k", units: $0.1 * 1000, kore: true) }
+        let points = Self.readings.map { UsagePoint(time: start.addingTimeInterval($0.0), used: $0.1) }
+        let now = start.addingTimeInterval(4053)
+        let split = UsageAttribution.split(requests, points: points, window: window, now: now)
+        #expect(split.elsewhere == 0 && split.spans.isEmpty)
+        let share = UsageAttribution.share(requests, points: points, window: window, now: now)
+        #expect(abs(share.kore - 44) < 1e-9 && share.outside == 0 && !share.clamped)
     }
 
-    /// What credit is left after `count` clean ticks: each earns `slack` points and spends one.
-    static func carried(_ count: Int) -> Double { min(Double(count) * (UsageAttribution.slack - 1), UsageAttribution.carry) }
-
-    @Test func aRiseLocalUnitsExplainOnlyHalfOfGoesPartlyElsewhere() {
-        var (requests, points) = Self.ticks(8)
-        // 8 → 18 by minute 90, with local units for 5 points: Kore's 300 and another app's 200.
-        requests += [
-            UsageRequest(time: Self.at(84), chat: "k2", model: "test-opus-5-5", units: 300, kore: true),
-            UsageRequest(time: Self.at(86), chat: "o", model: "test-opus-5-5", units: 200, kore: false),
-        ]
-        var week = Self.week
-        week.used = 18
-        let split = UsageAttribution.split(requests, points: points, window: week, now: Self.at(90))
-        #expect(split.rate == 100)
-        // The units' 5 points (with the slack the rate allows) and the credit carried: the rest,
-        // nearly half, is elsewhere's.
-        let local = 5 * UsageAttribution.slack + Self.carried(8)
-        #expect(abs(split.elsewhere - (10 - local)) < 1e-9)
-        #expect(split.elsewhere > 3.5)
-        #expect(split.spans.count == 1 && split.spans.first?.from == Self.at(80))
-        // The local part split as before, by units: 3 to 2.
-        #expect(abs(split.points[8] - local * 0.6) < 1e-9)
-        #expect(abs(split.points[9] - local * 0.4) < 1e-9)
-        let share = UsageAttribution.share(requests, points: points, window: week, now: Self.at(90))
-        #expect(abs(share.kore - (8 + local * 0.6)) < 1e-9)
-    }
-
-    @Test func withNoUsageElsewhereNothingChanges() {
-        // Requests of every size, the limit read after each as the plan floors it: 1 point a
-        // 100 units, Kore's and another app's mixed.
+    /// Whatever the units say: a rise that a request of this login's made is the requests', a
+    /// rise with none is outside Kore. Cheap and dear points alike.
+    @Test func onlyARiseWithNoRequestIsOutside() {
         var requests: [UsageRequest] = []
         var points: [UsagePoint] = []
-        var total = 0.0
-        var seed: UInt64 = 7
-        for step in 0..<120 {
-            seed = seed &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
-            let units = Double(20 + (seed >> 33) % 160)
-            total += units
-            requests.append(UsageRequest(time: Self.at(Double(step * 10 + 3)), chat: step % 3 == 0 ? "o" : "k\(step % 4)", units: units, kore: step % 3 != 0))
-            points.append(UsagePoint(time: Self.at(Double(step * 10 + 5)), used: (total / 100).rounded(.down)))
+        // Ten rises of one point each, the requests behind them weighing 1 to 10,000 units.
+        for tick in 1...10 {
+            requests.append(UsageRequest(time: Self.at(Double(tick * 10 - 5)), chat: "k", units: pow(10, Double(tick % 5)), kore: true))
+            points.append(UsagePoint(time: Self.at(Double(tick * 10)), used: Double(tick)))
         }
-        var week = Self.week
-        week.used = (total / 100).rounded(.down)
-        let now = Self.at(1300)
-        let split = UsageAttribution.split(requests, points: points, window: week, now: now)
-        #expect(split.rate != nil)
-        #expect(split.elsewhere == 0)
-        // As before: each rise across its interval's requests by units.
-        var before = [Double](repeating: 0, count: requests.count)
-        var highest = 0.0
-        for (at, point) in (points + [UsagePoint(time: now, used: week.used)]).enumerated() where point.used > highest {
-            let taken = at < requests.count ? [at] : []
-            for index in taken { before[index] += point.used - highest }
-            highest = point.used
-        }
-        #expect(zip(split.points, before).allSatisfy { abs($0 - $1) < 1e-9 })
-    }
-
-    @Test func aThinHistoryKeepsEveryRiseLocal() {
-        var (requests, points) = Self.ticks(3)
-        requests.append(UsageRequest(time: Self.at(35), chat: "k", units: 10, kore: true))
+        // Then quiet: Kore's last turn is read once it's quiet, and 3 points rise elsewhere.
+        points += [UsagePoint(time: Self.at(110), used: 10), UsagePoint(time: Self.at(200), used: 13)]
         var week = Self.week
         week.used = 13
-        let split = UsageAttribution.split(requests, points: points, window: week, now: Self.at(40))
-        // 3 rises say nothing sure of the rate: 10 points on 10 units are local, as before.
-        #expect(split.rate == nil && split.scale == 100)
-        #expect(split.elsewhere == 0)
-        #expect(split.points.last == 10)
+        let split = UsageAttribution.split(requests, points: points, window: week, now: Self.at(200))
+        #expect(split.elsewhere == 3)
+        #expect(split.spans == [UsageSpan(from: Self.at(110), to: Self.at(200), points: 3)])
+        #expect(split.points.allSatisfy { $0 == 1 })
     }
 
-    @Test func aModelWeeksUsageElsewhereLowersThePlainWeeksKore() {
-        // 10 clean points of the plain week, the last 2 Fable's (50 units a Fable point).
-        var (requests, points) = Self.ticks(8)
-        requests += [
-            UsageRequest(time: Self.at(85), chat: "k", model: "test-fable-5-1", units: 100, kore: true),
-            UsageRequest(time: Self.at(95), chat: "k", model: "test-fable-5-1", units: 100, kore: true),
+    /// A turn's report comes a second after its request is written, and before it's spent. After
+    /// a quiet spell, the turn's first request is written just before its own report: it is
+    /// placed past it, so the rise from elsewhere in the quiet spell stays outside Kore. Another
+    /// chat's request just before the report stays where it is.
+    @Test func aTurnsFirstRequestCountsAfterItsOwnReport() {
+        let requests = [
+            UsageRequest(time: Self.at(5), chat: "k", units: 100, kore: true),
+            // Quiet from minute 10 (read then); the next turn's request written 1 s before its report.
+            UsageRequest(time: Self.at(60).addingTimeInterval(-1), chat: "k", units: 100, kore: true),
         ]
-        points += [UsagePoint(time: Self.at(90), used: 9), UsagePoint(time: Self.at(100), used: 10)]
-        // Then Fable 4 → 12 with no Fable request here: 400 Fable units elsewhere, 4 plain points.
-        // The plain week 10 → 18 meanwhile, with local units for 4.4 of it.
-        requests.append(UsageRequest(time: Self.at(105), chat: "k", model: "test-opus-5-5", units: 400, kore: true))
-        let fablePoints = [UsagePoint(time: Self.at(90), used: 2), UsagePoint(time: Self.at(100), used: 4)]
-        let fableWeek = UsageWindow(minutes: 10080, resetsAt: Self.at(10080), limit: nil, used: 12)
-        let fable = UsageAttribution.share(requests, points: fablePoints, window: fableWeek, now: Self.at(110), scope: "Fable")
-        #expect(fable.kore == 4)
-        #expect(fable.elsewhereUnits.map(\.points) == [400])
+        let points = [
+            UsagePoint(time: Self.at(4).addingTimeInterval(1), used: 0, before: "k"),
+            UsagePoint(time: Self.at(10), used: 2),
+            // 2 → 5 while Kore was quiet: elsewhere's.
+            UsagePoint(time: Self.at(60), used: 5, before: "k"),
+        ]
         var week = Self.week
-        week.used = 18
-        let alone = UsageAttribution.share(requests, points: points, window: week, now: Self.at(110))
-        let carried = UsageAttribution.share(requests, points: points, window: week, now: Self.at(110), elsewhereUnits: fable.elsewhereUnits)
-        // Alone, the units' credit goes to Kore; with Fable's 4 points elsewhere, only the other 4.
-        #expect(abs(alone.kore - (10 + 4 * UsageAttribution.slack + Self.carried(10))) < 1e-9)
-        #expect(abs(carried.kore - 14) < 1e-9)
+        week.used = 6
+        let split = UsageAttribution.split(requests, points: points, window: week, now: Self.at(70))
+        #expect(split.elsewhere == 3 && split.points == [2, 1])
+        // Had the report been another chat's, the request would have taken the quiet spell's 3 (and
+        // left the last point, with no request after it, outside).
+        let other = points.map { UsagePoint(time: $0.time, used: $0.used, before: $0.before.map { _ in "other" }) }
+        let unplaced = UsageAttribution.split(requests, points: other, window: week, now: Self.at(70))
+        #expect(unplaced.points == [2, 3] && unplaced.elsewhere == 1)
+    }
+
+    /// A rise in an interval with this login's requests is theirs, by units, Kore's and the
+    /// CLI's own alike: what the CLI ran outside Kore here is outside Kore.
+    @Test func aRiseSplitsByUnitsOnlyAmongItsOwnRequests() {
+        let requests = [
+            UsageRequest(time: Self.at(5), chat: "k", units: 300, kore: true),
+            UsageRequest(time: Self.at(6), chat: "o", units: 100, kore: false),
+            // A request whose tokens the CLI didn't write still made its rise.
+            UsageRequest(time: Self.at(15), chat: "k", units: 0, kore: true),
+        ]
+        let points = [UsagePoint(time: Self.at(10), used: 8), UsagePoint(time: Self.at(20), used: 9)]
+        var week = Self.week
+        week.used = 9
+        let split = UsageAttribution.split(requests, points: points, window: week, now: Self.at(20))
+        #expect(split.points == [6, 2, 1] && split.elsewhere == 0)
+        let share = UsageAttribution.share(requests, points: points, window: week, now: Self.at(20))
+        #expect(share.kore == 7 && share.outside == 2)
+    }
+
+    /// A model's week (Fable) rose with no Fable request here: that week's rise is outside Kore.
+    @Test func aModelWeeksRiseWithNoRequestOfItsModelIsOutside() {
+        let requests = [
+            UsageRequest(time: Self.at(5), chat: "k", model: "test-fable-5-1", units: 100, kore: true),
+            UsageRequest(time: Self.at(25), chat: "k", model: "test-opus-5-5", units: 100, kore: true),
+        ]
+        let points = [UsagePoint(time: Self.at(10), used: 2), UsagePoint(time: Self.at(30), used: 6)]
+        let fable = UsageWindow(minutes: 10080, resetsAt: Self.at(10080), used: 6)
+        let share = UsageAttribution.share(requests, points: points, window: fable, now: Self.at(30), scope: "Fable")
+        #expect(share.kore == 2 && share.outside == 4)
+        #expect(share.elsewhere == [UsageSpan(from: Self.at(10), to: Self.at(30), points: 4)])
     }
 
     @Test func thePlansOtherSurfacesAreAFloorUnderOutsideKore() {
@@ -474,57 +479,6 @@ struct UsageAttributionFileTests {
         #expect(abs(share.kore - 12) < 1e-6)
     }
 
-    /// 2026-11-06 as the week saw it: a model week (Fable) rose 0 → 8 with no Fable request on
-    /// this Mac, made elsewhere, while Kore's chats ran all along on another model, so each rise
-    /// of the plain week had a request of Kore's in it. The plain week gives what the units
-    /// don't explain, and what Fable's rise weighs, to elsewhere.
-    @Test func aModelWeeksRiseFromElsewhereStaysOutOfKoresWeek() async throws {
-        let sessions = KoreSessions(url: root.appendingPathComponent("support/sessions.jsonl"))
-        sessions.record(cli: "claude", session: "kore", folder: nil, launch: "new", at: now.addingTimeInterval(-86400))
-        sessions.sync()
-        let log = PlanSnapshotLog(url: root.appendingPathComponent("support/snapshots.jsonl"))
-        let resets = now.addingTimeInterval(3 * 86400)
-        func read(_ ago: Double, week: Double, fable: Double? = nil) {
-            var windows = [PlanSnapshot.Window(minutes: 10080, used: week, resetsAt: resets)]
-            if let fable { windows.append(.init(minutes: 10080, used: fable, resetsAt: resets, limit: "Fable")) }
-            log.append(PlanSnapshot(at: now.addingTimeInterval(-ago * 60), cli: "claude", account: nil, source: "stream", windows: windows))
-        }
-        var lines: [String] = []
-        // The days before: a point of the week for each 100 units (5 Opus output tokens), and one
-        // Fable request of 50 units for a Fable point.
-        for tick in 1...10 {
-            lines.append(claudeLine("o\(tick)", ago: Double(1000 - tick * 10 + 5), output: 5, session: "kore", model: "test-opus-5-5"))
-            read(Double(1000 - tick * 10), week: Double(tick), fable: 0)
-        }
-        lines.append(claudeLine("f1", ago: 895, output: 1, session: "kore"))
-        read(890, week: 11, fable: 1)
-        // The day: Fable 1 → 9 with nothing of Fable's here; the week 11 → 19, Kore's Opus
-        // requests 60 units in each of its 8 rises: 4.8 points of the 8.
-        for tick in 1...8 {
-            lines.append(claudeLine("d\(tick)", ago: Double(500 - tick * 10 + 5), output: 3, session: "kore", model: "test-opus-5-5"))
-            read(Double(500 - tick * 10), week: Double(11 + tick), fable: Double(1 + tick))
-        }
-        log.sync()
-        try write(lines, to: "claude/projects/-work-app/kore.jsonl")
-        let usage = KoreUsage(paths: paths, snapshots: log, sessions: sessions)
-        let reading = PlanReading(
-            account: PlanAccount(access: .plan),
-            limits: PlanLimits(bars: [
-                PlanLimit(title: "Weekly (7 day)", used: 19, resetsAt: resets, window: 7 * 86400),
-                PlanLimit(title: "Weekly Fable", used: 9, resetsAt: resets, window: 7 * 86400, scope: "Fable"),
-            ]))
-        let shares = try #require(await usage.shares(for: reading, cli: "claude", now: now))
-        let fable = try #require(shares.limits["Weekly Fable"])
-        let week = try #require(shares.limits["Weekly (7 day)"])
-        // Fable: its own request's point; the 8 from elsewhere, 400 Fable units.
-        #expect(abs(fable.kore - 1) < 1e-9)
-        #expect(abs(fable.elsewhereUnits.reduce(0) { $0 + $1.points } - 400) < 1e-9)
-        // The week: the 11 points before, and of the day's 8 no more than its units explain
-        // (4.8, 5.3 with the slack) and less what Fable's 400 units weigh (4 points): 4.
-        #expect(abs(week.kore - 15) < 1e-6)
-        #expect(abs(week.outside - 4) < 1e-6)
-    }
-
     // MARK: Box chats
 
     func boxRequest(_ id: String, chat: String = "mybox/c1", ago: Double, units: Double, title: String? = "ComplianceOS basecamp", account: String?)
@@ -627,6 +581,68 @@ struct UsageAttributionFileTests {
         #expect(share.chats.first?.agents == 1)
         #expect(abs((share.chats.first?.agentPoints ?? 0) - 2.5) < 1e-6)
         #expect(abs(share.outside - 13.5) < 1e-6)
+    }
+
+    /// Two Codex logins whose windows reset within minutes of each other: each thread counts,
+    /// and its rollout's readings read, only for the login Kore noted it ran on; Codex on its
+    /// own (no note) only for the main login.
+    @Test func codexThreadsAndTheirReadingsCountForTheirOwnLogin() async throws {
+        let resets = now.addingTimeInterval(3 * 3600)
+        let context = #"{"timestamp":"\#(stamp(200))","type":"turn_context","payload":{"model":"test-model"}}"#
+        try write(
+            [codexMeta("on-work", originator: "kore"), context, tokenCount(ago: 50, total: 100, input: 100, cached: 0, output: 0, used: 4, resets: resets)],
+            to: "codex/sessions/2026/10/24/rollout-w.jsonl")
+        // The other login's thread reads 60% of its own plan: never this login's timeline.
+        try write(
+            [codexMeta("on-main", originator: "kore"), context, tokenCount(ago: 40, total: 100, input: 100, cached: 0, output: 0, used: 60, resets: resets)],
+            to: "codex/sessions/2026/10/24/rollout-m.jsonl")
+        try write(
+            [codexMeta("ide", originator: "codex_vscode"), context, tokenCount(ago: 30, total: 100, input: 100, cached: 0, output: 0, used: 61, resets: resets)],
+            to: "codex/sessions/2026/10/24/rollout-i.jsonl")
+        let sessions = KoreSessions(url: root.appendingPathComponent("support/sessions.jsonl"))
+        let (main, work) = (PlanSnapshot.account(email: "you@example.com"), PlanSnapshot.account(email: "work@acme.dev"))
+        sessions.record(cli: "codex", session: "on-work", folder: nil, launch: "new", account: work, at: now.addingTimeInterval(-3600))
+        sessions.record(cli: "codex", session: "on-main", folder: nil, launch: "new", account: main, at: now.addingTimeInterval(-3600))
+        sessions.sync()
+        let usage = KoreUsage(paths: paths, sessions: sessions, added: { _ in Set([work].compactMap { $0 }) })
+        let onWork = try #require(
+            await usage.shares(for: reading("5h limit", used: 6, hours: 5, resetsIn: 3, email: "work@acme.dev"), cli: "codex", now: now))
+        let share = try #require(onWork.limits["5h limit"])
+        // 0 → 4 its own request; 4 → 6 nothing of its own: outside. The 60s never entered.
+        #expect(share.chats.map(\.id) == ["on-work"])
+        #expect(abs(share.kore - 4) < 1e-9 && abs(share.outside - 2) < 1e-9)
+        let onMain = try #require(
+            await usage.shares(for: reading("5h limit", used: 62, hours: 5, resetsIn: 3, email: "you@example.com"), cli: "codex", now: now))
+        #expect(Set(onMain.limits["5h limit"]?.chats.map(\.id) ?? []) == ["on-main"])
+    }
+
+    /// A logged reading that doesn't name its login counts only while none in its window does:
+    /// another login's percent would otherwise break this one's timeline.
+    @Test func readingsWithoutALoginGiveWayToNamedOnes() async throws {
+        try write([claudeLine("k1", ago: 50, output: 10, session: "kore")], to: "claude/projects/-work-app/kore.jsonl")
+        let sessions = KoreSessions(url: root.appendingPathComponent("support/sessions.jsonl"))
+        let work = PlanSnapshot.account(email: "work@acme.dev")
+        sessions.record(cli: "claude", session: "kore", folder: nil, launch: "new", account: work, at: now.addingTimeInterval(-3600))
+        sessions.sync()
+        let log = PlanSnapshotLog(url: root.appendingPathComponent("support/snapshots.jsonl"))
+        let resets = now.addingTimeInterval(4 * 3600)
+        func read(_ ago: Double, _ used: Double, _ account: String?) {
+            log.append(PlanSnapshot(at: now.addingTimeInterval(-ago * 60), cli: "claude", account: account, source: "read",
+                                    windows: [.init(minutes: 300, used: used, resetsAt: resets)]))
+        }
+        read(55, 0, work)
+        read(45, 3, work)
+        // Another login's 70%, unnamed: had it counted, nothing after it would rise.
+        read(40, 70, nil)
+        read(20, 3, work)
+        read(10, 5, work)
+        log.sync()
+        let usage = KoreUsage(paths: paths, snapshots: log, sessions: sessions, added: { _ in Set([work].compactMap { $0 }) })
+        let shares = try #require(
+            await usage.shares(for: reading("Session (5hr)", used: 5, hours: 5, resetsIn: 4, email: "work@acme.dev"), cli: "claude", now: now))
+        let share = try #require(shares.limits["Session (5hr)"])
+        #expect(abs(share.kore - 3) < 1e-9 && abs(share.outside - 2) < 1e-9)
+        #expect(share.elsewhere.map(\.points) == [2])
     }
 }
 

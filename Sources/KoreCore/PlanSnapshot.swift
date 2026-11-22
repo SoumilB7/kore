@@ -39,13 +39,17 @@ public struct PlanSnapshot: Sendable, Equatable {
     /// "stream" (a turn's own report), "read" (Kore asked), "rollout" (from Codex's files).
     public var source: String
     public var windows: [Window]
+    /// A turn's own report: the chat whose request it came before (the Claude session; on a
+    /// box's or another Mac's, as that device's usage keys it). Nil for a read.
+    public var chat: String?
 
-    public init(at: Date, cli: String, account: String?, source: String, windows: [Window]) {
+    public init(at: Date, cli: String, account: String?, source: String, windows: [Window], chat: String? = nil) {
         self.at = at
         self.cli = cli
         self.account = account
         self.source = source
         self.windows = windows
+        self.chat = chat
     }
 
     /// An account's key in the log: a short hash of its email, never the email.
@@ -169,6 +173,8 @@ public final class PlanSnapshotLog: @unchecked Sendable {
         public var used: Double
         public var resets: Double?
         public var limit: String?
+        /// A turn's report: the chat whose request it came before.
+        public var chat: String? = nil
 
         public var at: Date { Date(timeIntervalSince1970: t) }
         public var resetsAt: Date? { resets.map(Date.init(timeIntervalSince1970:)) }
@@ -191,7 +197,11 @@ public final class PlanSnapshotLog: @unchecked Sendable {
     public func append(_ snapshot: PlanSnapshot?) {
         guard let snapshot, url != nil else { return }
         queue.async { [self] in write(snapshot) }
+        if self === Self.shared { Self.appended.value?(snapshot) }
     }
+
+    /// Each snapshot the app's own log takes, as it's taken (the Mac's ledger for its other Macs).
+    package static let appended = HostSetting<(@Sendable (PlanSnapshot) -> Void)?>(nil)
 
     /// Waits until every snapshot so far is written.
     public func sync() { queue.sync {} }
@@ -214,7 +224,7 @@ public final class PlanSnapshotLog: @unchecked Sendable {
             let entry = Entry(
                 t: (snapshot.at.timeIntervalSince1970 * 10).rounded() / 10, cli: snapshot.cli, acct: snapshot.account,
                 src: snapshot.source, win: window.minutes, used: window.used,
-                resets: window.resetsAt.map { $0.timeIntervalSince1970.rounded() }, limit: window.limit)
+                resets: window.resetsAt.map { $0.timeIntervalSince1970.rounded() }, limit: window.limit, chat: snapshot.chat)
             let key = [entry.cli, entry.acct ?? "", String(entry.win), entry.limit ?? ""].joined(separator: "|")
             if let before = last[key], before.used == entry.used, before.resets == entry.resets, entry.t - before.t < 60 { continue }
             last[key] = entry

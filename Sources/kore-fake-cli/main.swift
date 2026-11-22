@@ -108,6 +108,9 @@ while position < process.lines.count {
                 let hit = expected.firstIndex { FakeMatch.matches(recorded: paths.restore($0.text), live: live) }!
                 ids.learn(recorded: paths.restore(expected[hit].text), live: live)
                 expected.remove(at: hit)
+            } else if let answer = FakeMatch.unrecordedAnswer(live) {
+                // A read the recording predates: answered, the recording's lines still awaited.
+                FileHandle.standardOutput.write(Data((answer + "\n").utf8))
             } else {
                 // What the lines ask for first (their key order varies), then the line itself.
                 fail(

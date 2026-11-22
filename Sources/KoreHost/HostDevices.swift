@@ -120,7 +120,7 @@ extension HostDaemon {
             client.denied(UsageWire.since)
             return client.sendRaw(StreamWire.encode(UsageWire.Page(id: ask.id, lines: [], cursor: ask.cursor ?? 0, more: false)))
         }
-        client.sendRaw(StreamWire.encode(usage.since(ask.cursor, id: ask.id)))
+        client.sendRaw(StreamWire.encode(usage.since(ask.cursor, id: ask.id, plan: ask.plan == true)))
     }
 
     /// This box's node key became known or changed: every full link hears `net.node` again.

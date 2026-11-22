@@ -1270,7 +1270,7 @@ final class AgentChannelCost: ChatStoryline {
                 AgentGrants.stopAll()
                 AgentGrants.setEnabled(false)
                 try "\(getpid())\n".write(to: story.outputs.appendingPathComponent("agent-pid"), atomically: true, encoding: .utf8)
-                cast.activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "measuring")
+                cast.activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Kore Dev: storyline timings")
             },
             SendTo("a", "hello"), TurnsDone("a", 1),
         ] + roles.dropFirst().map { CastChat($0) } + [

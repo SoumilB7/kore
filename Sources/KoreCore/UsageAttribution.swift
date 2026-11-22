@@ -1,12 +1,11 @@
 import Foundation
 
 /// How much of each plan limit Kore's chats used: the pure part, with no files. Each request
-/// the CLIs made on this Mac is weighed in token units; each rise in a limit between two
-/// snapshots is split across the requests made in that interval by their units; Kore's share
-/// is the sum over its requests, rolled up per chat. A limit with no snapshots in its window
-/// is one interval, so Kore's share is then the plan's percent × Kore's units / all local units.
-/// Every Kore figure is an estimate (the plan's weights aren't published, and usage off this
-/// Mac moves the limit too); the plan's own percent always wins.
+/// made on a login (on this Mac, a box or a paired Mac) is weighed in token units; each rise in
+/// a limit between two readings goes to the requests made in that interval, split by their
+/// units, and a rise with none is outside Kore; Kore's share is the sum over its requests,
+/// rolled up per chat. Outside Kore is only ever what the plan's readings prove (`split`); the
+/// plan's own percent always wins.
 public enum UsageAttribution {}
 
 // MARK: - Units
@@ -204,10 +203,14 @@ public struct UsageRequest: Sendable, Equatable {
 public struct UsagePoint: Sendable, Equatable {
     public var time: Date
     public var used: Double
+    /// A turn's own report (Claude's `rate_limit_event`): the chat whose request it came before,
+    /// as `UsageRequest.chat` names it. Nil for a read, or a report made after its request.
+    public var before: String?
 
-    public init(time: Date, used: Double) {
+    public init(time: Date, used: Double, before: String? = nil) {
         self.time = time
         self.used = used
+        self.before = before
     }
 }
 
@@ -294,9 +297,9 @@ public struct KoreShare: Sendable, Equatable {
     public var measured: Bool
     /// Claude's week: the plan's surfaces, Kore's taken out of the CLI's (`claude_code`).
     public var surfaces: [PlanSurface]
-    /// Where usage from elsewhere moved it, in local units (a scoped week's, carried to the
-    /// plain limits); empty without a scale to weigh it.
-    public var elsewhereUnits: [UsageSpan] = []
+    /// Where usage outside Kore moved it, in plan points: rises with no request of this login
+    /// on any device Kore knows.
+    public var elsewhere: [UsageSpan] = []
 
     public init(used: Double, kore: Double, chats: [ChatShare] = [], clamped: Bool = false, measured: Bool = false, surfaces: [PlanSurface] = []) {
         self.used = used
@@ -338,27 +341,15 @@ extension UsageAttribution {
     /// A fall this large is a reset, not a late reading: late ones were 6 points at most over
     /// 4,357 readings of every login (2026-10-29).
     static let resetDrop: Double = 15
-    /// Rises with local units the rate needs before it caps anything: fewer, and every rise with
-    /// a local request is all local, as before.
-    static let rateRises = 6
-    /// Credit that carries past a rise, in points: readings are whole points, and a reading
-    /// comes after a request, so units run up to a point or so ahead of the limit.
-    static let carry: Double = 2
-    /// How far a rise may go past what the units explain and still be local: the plan's weights
-    /// aren't list prices, and the model and cache mix moves the rate a few percent day to day
-    /// (16–21M units a point over 2026-11-05…11; at 1.1 the days without usage elsewhere kept
-    /// under half a point, the day with it gave 3.4 points away).
-    static let slack: Double = 1.1
 
     public struct Split: Sendable, Equatable {
+        /// Each request's plan points.
         public var points: [Double]
+        /// The points that rose while no request of this login was made on any device Kore
+        /// knows: usage outside Kore, proven by the plan's own readings.
         public var elsewhere: Double
-        /// Where the part from elsewhere was, in points.
+        /// Where those points rose.
         public var spans: [UsageSpan]
-        /// Local units per point, from `rateRises` rises or more.
-        public var rate: Double?
-        /// The same from whatever rises there were: a scoped week's scale, for its spans in units.
-        public var scale: Double?
     }
 
     struct Interval {
@@ -371,39 +362,36 @@ extension UsageAttribution {
 
     /// Each request's plan points: every rise between consecutive readings (from 0 at the
     /// window's start, through `points`, to `used` now) split across the requests made in that
-    /// interval by their units. A rise with no local request is usage from elsewhere. A limit
-    /// doesn't fall inside its window: a lower reading is an older one arriving late (each chat's
-    /// stream reports the limit as its own request saw it, so two chats' reports cross: 47, 46,
-    /// 47), so a rise counts only past the highest reading so far, or the same points would count
-    /// again. A fall past `resetDrop` is the limit reset (a reset credit used): what came before
-    /// it no longer counts, and the count starts again from 0. `requests` and `points` are those
-    /// inside the window.
+    /// interval by their units. A limit doesn't fall inside its window: a lower reading is an
+    /// older one arriving late (each chat's stream reports the limit as its own request saw it,
+    /// so two chats' reports cross: 47, 46, 47), so a rise counts only past the highest reading
+    /// so far, or the same points would count again. A fall past `resetDrop` is the limit reset
+    /// (a reset credit used): what came before it no longer counts, and the count starts again
+    /// from 0. `requests` and `points` are those inside the window.
     ///
-    /// Kore's chats run nearly all the time and readings come about every point, so a rise from
-    /// elsewhere (claude.ai, another device) almost always has a local request in its interval.
-    /// With history enough to know the limit's rate (`rate`: local units per point), each rise
-    /// goes to local requests only as far as their units explain it: they earn `units / rate`
-    /// points of credit (`slack` more), a rise takes from it, and what credit doesn't cover is
-    /// elsewhere's; a little credit carries to the next rise (`carry`), no more. Without that
-    /// history every rise with a local request is local, as before. `elsewhereUnits` is usage
-    /// known to be elsewhere's from another limit (a model's week), in units: at `rate`, a floor
-    /// under each rise's part from elsewhere.
-    public static func split(
-        _ requests: [UsageRequest], points: [UsagePoint], window: UsageWindow, now: Date, elsewhereUnits: [UsageSpan] = []
-    ) -> Split {
+    /// Only evidence says a point was spent elsewhere: a rise between two readings with no
+    /// request of this login in between (on this Mac, a box or a paired Mac) is elsewhere's;
+    /// any other rise is the requests', all of it. The plan reads in whole points and doesn't
+    /// weigh requests at their list prices (a point cost 0.2M to 1.4M units within one window,
+    /// 2026-11-22), so no cost model can tell a rise apart: one did, and put 4.6 of Kore's own
+    /// 29 points outside it. Readings come before each request is spent (a turn's
+    /// `rate_limit_event`) and once more when a login goes quiet (`PlanQuietReads`), so a rise
+    /// while Kore is idle never shares an interval with Kore's requests.
+    public static func split(_ requests: [UsageRequest], points: [UsagePoint], window: UsageWindow, now: Date) -> Split {
         let end = min(now, window.resetsAt)
         var marks = [UsagePoint(time: window.start, used: 0)]
         marks += points.filter { $0.time > window.start && $0.time < end }.sorted { $0.time < $1.time }
         marks.append(UsagePoint(time: end, used: window.used))
-        let order = requests.indices.sorted { requests[$0].time < requests[$1].time }
+        let times = placed(requests, after: marks)
+        let order = requests.indices.sorted { times[$0] < times[$1] }
         var intervals: [Interval] = []
         intervals.reserveCapacity(marks.count)
         var next = 0
         var highest = 0.0
         for (from, to) in zip(marks, marks.dropFirst()) {
             var taken: [Int] = []
-            while next < order.count, requests[order[next]].time <= to.time {
-                if requests[order[next]].time >= from.time { taken.append(order[next]) }
+            while next < order.count, times[order[next]] <= to.time {
+                if times[order[next]] >= from.time { taken.append(order[next]) }
                 next += 1
             }
             if to.used < highest - resetDrop {
@@ -415,76 +403,45 @@ extension UsageAttribution {
             let units = taken.reduce(0.0) { $0 + requests[$1].units }
             intervals.append(Interval(from: from.time, to: to.time, taken: taken, units: units, rise: rise))
         }
-        let ratios = ratios(intervals)
-        let scale = median(ratios)
-        let rate = ratios.count >= rateRises ? scale : nil
-        let held = rate.map { held(elsewhereUnits, over: intervals, rate: $0) } ?? []
         var shares = [Double](repeating: 0, count: requests.count)
         var spans: [UsageSpan] = []
         var elsewhere = 0.0
-        var credit = 0.0
-        for (at, interval) in intervals.enumerated() {
-            if let rate { credit += interval.units / rate * slack }
-            defer { credit = min(max(credit, 0), carry) }
-            guard interval.rise > 0 else { continue }
-            var local = interval.units > 0 ? interval.rise : 0
-            if rate != nil, local > 0 {
-                local = min(local - min(held[at], local), credit)
-                credit -= local
+        for interval in intervals where interval.rise > 0 {
+            guard !interval.taken.isEmpty else {
+                elsewhere += interval.rise
+                spans.append(UsageSpan(from: interval.from, to: interval.to, points: interval.rise))
+                continue
             }
-            let away = interval.rise - local
-            if away > 0 {
-                elsewhere += away
-                spans.append(UsageSpan(from: interval.from, to: interval.to, points: away))
+            // Requests that weigh nothing (a count the CLI left out) still made the rise: evenly.
+            for index in interval.taken {
+                shares[index] += interval.units > 0 ? interval.rise * requests[index].units / interval.units : interval.rise / Double(interval.taken.count)
             }
-            guard local > 0 else { continue }
-            for index in interval.taken { shares[index] += local * requests[index].units / interval.units }
         }
-        return Split(points: shares, elsewhere: elsewhere, spans: spans, rate: rate, scale: scale)
+        return Split(points: shares, elsewhere: elsewhere, spans: spans)
     }
 
-    /// Local units per point, one per rise that had local units: the units since the rise
-    /// before (readings without a rise between them included) over the rise.
-    static func ratios(_ intervals: [Interval]) -> [Double] {
-        var out: [Double] = []
-        var units = 0.0
-        for interval in intervals {
-            units += interval.units
-            guard interval.rise > 0 else { continue }
-            if units > 0 { out.append(units / interval.rise) }
-            units = 0
-        }
-        return out
-    }
+    /// How long before its own report a request's line may be written: the line is written as
+    /// the request begins, the report comes with its first answer (1.1 s at the median, 12.5 s
+    /// at the 90th percentile over 191 reports, 2026-11-15…22).
+    static let reportLag: TimeInterval = 30
 
-    static func median(_ values: [Double]) -> Double? {
-        guard !values.isEmpty else { return nil }
-        let sorted = values.sorted()
-        let mid = sorted.count / 2
-        return sorted.count % 2 == 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
-    }
-
-    /// Each interval's part of `spans` (units, at `rate` in points), spread over the intervals
-    /// each span overlaps by their rise, never past a rise.
-    static func held(_ spans: [UsageSpan], over intervals: [Interval], rate: Double) -> [Double] {
-        var held = [Double](repeating: 0, count: intervals.count)
-        guard rate > 0 else { return held }
-        for span in spans where span.points > 0 {
-            var weights: [(Int, Double)] = []
-            var total = 0.0
-            for (at, interval) in intervals.enumerated() where interval.rise > 0 && interval.to > span.from && interval.from < span.to {
-                let length = interval.to.timeIntervalSince(interval.from)
-                let inside = min(interval.to, span.to).timeIntervalSince(max(interval.from, span.from))
-                let weight = interval.rise * (length > 0 ? max(inside, 0) / length : 1)
-                guard weight > 0 else { continue }
-                weights.append((at, weight))
-                total += weight
-            }
-            guard total > 0 else { continue }
-            for (at, weight) in weights { held[at] += span.points / rate * weight / total }
+    /// Each request's time on the timeline: its own, except the request a turn's report came
+    /// before (that chat's latest main request within `reportLag` before it), placed just past
+    /// the report, which doesn't count it yet. Without this, a turn's first request after a
+    /// quiet spell would share the quiet interval and take the rise from elsewhere in it.
+    static func placed(_ requests: [UsageRequest], after marks: [UsagePoint]) -> [Date] {
+        var times = requests.map(\.time)
+        let reports = marks.filter { $0.before != nil }
+        guard !reports.isEmpty else { return times }
+        var byChat: [String: [Int]] = [:]
+        for (index, request) in requests.enumerated() where request.agent == nil { byChat[request.chat, default: []].append(index) }
+        for report in reports {
+            guard let chat = report.before, let mine = byChat[chat] else { continue }
+            let due = mine.filter { requests[$0].time <= report.time && requests[$0].time >= report.time.addingTimeInterval(-reportLag) }
+            guard let latest = due.max(by: { requests[$0].time < requests[$1].time }) else { continue }
+            times[latest] = max(times[latest], report.time.addingTimeInterval(0.001))
         }
-        for at in held.indices { held[at] = min(held[at], intervals[at].rise) }
-        return held
+        return times
     }
 
     /// Kore's points cut to what the plan allows (`used`, and on Claude's week what the plan
@@ -532,11 +489,11 @@ extension UsageAttribution {
     /// are a floor under what's outside Kore.
     public static func share(
         _ requests: [UsageRequest], points: [UsagePoint], window: UsageWindow, now: Date, scope: String? = nil, surfaces: [PlanSurface] = [],
-        cap: Double? = nil, elsewhereUnits: [UsageSpan] = []
+        cap: Double? = nil
     ) -> KoreShare {
         let inside = inWindow(requests, window, now: now, scope: scope)
         let pointsInside = points.filter { $0.time > window.start && $0.time < min(now, window.resetsAt) }
-        let split = split(inside, points: pointsInside, window: window, now: now, elsewhereUnits: elsewhereUnits)
+        let split = split(inside, points: pointsInside, window: window, now: now)
         let chats = rollup(inside, points: split.points)
         let kore = chats.reduce(0) { $0 + $1.points }
         var cap = cap
@@ -552,10 +509,7 @@ extension UsageAttribution {
         var share = KoreShare(
             used: window.used, kore: clamped.kore, chats: clamped.chats, clamped: clamped.clamped, measured: !pointsInside.isEmpty,
             surfaces: surfaces)
-        // In units, for the plain limits a scoped week carries its part from elsewhere to.
-        if let scale = split.rate ?? split.scale {
-            share.elsewhereUnits = split.spans.map { UsageSpan(from: $0.from, to: $0.to, points: $0.points * scale) }
-        }
+        share.elsewhere = split.spans
         return share
     }
 

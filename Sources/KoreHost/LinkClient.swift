@@ -98,6 +98,10 @@ final class LinkClient {
         return grant?.control
     }
 
+    /// A Mac with full control: it may put the box's chats in Full access (owner, 2026-11-22).
+    /// A phone never does, whatever its grant.
+    var mayFullAccess: Bool { control == .full && device?.kind != .phone }
+
     /// An owner Mac proven over KoreNet: may set the box's devices.
     var ownerMac: Bool { peer != nil && device?.kind == .mac && device?.owner == true }
 
@@ -637,7 +641,9 @@ final class LinkClient {
                 } else {
                     .setMode(chatId: signed.chatId, modeId: signed.modeId)
                 }
-            if let result = host.apply(command, id: id, control: .full, reply: { [weak self] result in self?.send(.result(result)) }) { send(.result(result)) }
+            if let result = host.apply(command, id: id, control: .full, phone: true, reply: { [weak self] result in self?.send(.result(result)) }) {
+                send(.result(result))
+            }
         case .key(let id, _):
             send(.result(.init(id: "raise.key:" + id, ok: false, code: .deniedControl, message: "A new fingerprint key is allowed on your Mac.")))
         case .malformed(let id, let type):

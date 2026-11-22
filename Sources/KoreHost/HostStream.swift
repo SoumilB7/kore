@@ -567,8 +567,14 @@ extension HostDaemon {
             return
         }
         let full = client.control == .full
-        if case .deny(let code, let message) = LinkPolicy.check(call.command, HostMeta.facts(hc, raise: full), control: full ? .full : .standard) {
+        if case .deny(let code, let message) = LinkPolicy.check(
+            call.command, HostMeta.facts(hc, raise: full), control: full ? .full : .standard, fullAccess: client.mayFullAccess)
+        {
             return answer(ChatCallResult(id: call.id, ok: false, code: code, message: message))
+        }
+        // Claude's Full access as root: refused before its CLI starts again, the chat as it was.
+        if case .setMode(let mode) = call.command, let line = Self.rootRefusal(hc.provider.id, mode) {
+            return answer(ChatCallResult(id: call.id, ok: false, code: .raiseMode, message: line))
         }
         // A message the chat took already, sent again under another key (from before the Mac
         // enrolled, or after the box restarted and forgot its answers), reaches the CLI once.

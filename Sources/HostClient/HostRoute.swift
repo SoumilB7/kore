@@ -66,7 +66,23 @@ extension HostConnection {
             units: units(
                 provider: line.provider, model: model, input: line.input, output: line.output, cacheRead: line.cacheRead,
                 cacheWrite5m: line.cacheWrite5m, cacheWrite1h: line.cacheWrite1h),
-            title: title)
+            title: title, account: line.acct)
+    }
+
+    /// A plan line (`UsageLine.plan`) as the Mac's snapshot log keeps it: the login's windows at
+    /// the line's time, from `source` ("box", "mac"), naming the chat whose request it came
+    /// before exactly as that request is kept here (`<key>/<chat>`; nil for a read or Codex's).
+    /// Nil for a request, or a line without a login: a reading that can't be put to a login is
+    /// no evidence for any.
+    package static func planSnapshot(_ line: UsageLine, key: String, source: String) -> PlanSnapshot? {
+        guard let plan = line.plan, let acct = line.acct, !acct.isEmpty, !acct.hasPrefix("plan:") else { return nil }
+        let windows = plan.map {
+            PlanSnapshot.Window(minutes: $0.minutes, used: $0.used, resetsAt: $0.resets.map { Date(timeIntervalSince1970: Double($0) / 1000) }, limit: $0.limit)
+        }
+        guard !windows.isEmpty else { return nil }
+        let chat = line.chat.isEmpty || line.provider != "claude" ? nil : key + "/" + line.chat
+        return PlanSnapshot(
+            at: Date(timeIntervalSince1970: Double(line.at) / 1000), cli: line.provider, account: acct, source: source, windows: windows, chat: chat)
     }
 }
 

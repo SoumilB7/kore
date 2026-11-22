@@ -28,9 +28,10 @@ package final class Updater {
     /// This app's version.
     package var version: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0" }
 
-    /// A window opened. Only an installed app asks: not a storyline, not a binary run from .build.
+    /// A window opened. Only an installed app asks: not a storyline, not a binary run from .build,
+    /// not Kore Dev (its update would replace the owner's Kore).
     package func windowOpened() {
-        guard !checking, Bundle.main.bundleURL.pathExtension == "app", StorylineSeams.backend == nil else { return }
+        guard !checking, Bundle.main.bundleURL.pathExtension == "app", !KoreFolders.isDev, StorylineSeams.backend == nil else { return }
         checking = true
         Task {
             defer { checking = false }

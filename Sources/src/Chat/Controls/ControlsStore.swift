@@ -113,7 +113,7 @@ package final class ControlsStore {
 
     package var availableModes: [ModeOption] {
         let modes = provider.availableModes(currentModel)
-        guard let levelCap else { return modes }
+        guard let levelCap = cap else { return modes }
         return modes.filter { $0.level <= levelCap }
     }
 
@@ -123,10 +123,16 @@ package final class ControlsStore {
     /// Why the modes past `levelCap` can't be picked here ("Box chats go up to Auto"): the picker
     /// shows them dim, saying so.
     @ObservationIgnored package var levelCapNote: String?
+    /// The most permissive level Arsenal may move this chat to: a box's chat stops at Auto, even
+    /// where the person may pick Full access. Nil: Arsenal's own rules only.
+    @ObservationIgnored package var arsenalCap: Int?
+    /// True while `levelCap` doesn't hold: a box that takes Full access from this Mac.
+    @ObservationIgnored package var levelCapLifted: (@MainActor () -> Bool)?
+    private var cap: Int? { levelCapLifted?() == true ? nil : levelCap }
 
     /// The modes this model offers past `levelCap`: shown dim, not picked.
     package var cappedModes: [ModeOption] {
-        guard let levelCap else { return [] }
+        guard let levelCap = cap else { return [] }
         return provider.availableModes(currentModel).filter { $0.level > levelCap && $0.listed }
     }
 
@@ -180,10 +186,28 @@ package struct ModeMemory {
     package init(defaults: UserDefaults?) { self.defaults = defaults }
 
     /// Dev runs (any KORE_ hook) and storylines start where a fresh install does, and leave
-    /// the owner's choice alone.
-    package func mode(for provider: ProviderDescriptor) -> String? { defaults?.string(forKey: Self.key + provider.id) }
+    /// the owner's choice alone. A Full access kept by an older Kore is dropped: new chats start
+    /// in the provider's first mode again.
+    package func mode(for provider: ProviderDescriptor) -> String? {
+        guard let id = defaults?.string(forKey: Self.key + provider.id) else { return nil }
+        guard Self.keeps(id, provider) else {
+            defaults?.removeObject(forKey: Self.key + provider.id)
+            return nil
+        }
+        return id
+    }
 
-    package func remember(_ id: String, for provider: ProviderDescriptor) { defaults?.set(id, forKey: Self.key + provider.id) }
+    /// Full access is never a default (owner, 2026-11-22): picking it is for that chat only, and
+    /// leaves the last other pick in place.
+    package func remember(_ id: String, for provider: ProviderDescriptor) {
+        guard Self.keeps(id, provider) else { return }
+        defaults?.set(id, forKey: Self.key + provider.id)
+    }
+
+    /// A mode new chats may start in: any but the top rung (Full access, and what ranks with it).
+    static func keeps(_ id: String, _ provider: ProviderDescriptor) -> Bool {
+        provider.modes.first { $0.id == id }?.rung != .danger
+    }
 
     /// Each chat's "Allow commands in Plan", by its session id ("planAllow.chat.<id>"); only kept while on.
     private static let planAllowKey = "planAllow.chat."

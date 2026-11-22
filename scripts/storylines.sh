@@ -23,6 +23,12 @@
 # (the banner and its countdown, Kore brought forward, the front given back) but posts nothing:
 # the cursor stays put, and a step that needs the real pointer's effect fails.
 set -u
+# A dev job: it runs as its own to macOS, so its energy is never charged to the Kore whose chat
+# started it (scripts/devrun, docs/dev-builds.md). Real input stays with its caller, whose
+# permission to post events it uses.
+if [[ -z ${KORE_DEVRUN_JOB-} && ${argv[(Ie)--real-input]} == 0 && ${argv[(Ie)--real-keys]} == 0 ]]; then
+  exec "${0:A:h}/devrun" --name storylines -- /bin/zsh "$0" "$@"
+fi
 cd "$(dirname "$0")/.." || exit 2
 build=debug
 out=""

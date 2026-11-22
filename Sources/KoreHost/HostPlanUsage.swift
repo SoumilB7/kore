@@ -64,6 +64,12 @@ package final class HostPlanUsage {
         update()
     }
 
+    /// A login's key in usage bookkeeping (`PlanSnapshot.account`, the email's short hash) as its
+    /// last reading or listing named it; nil while the box doesn't know who it is.
+    package func account(_ cli: String, login: String) -> String? {
+        PlanSnapshot.account(email: who[cli]?[login]?.email)
+    }
+
     /// The box's Claude accounts as last listed (`account.list`): who each one is.
     package func listed(_ accounts: [LinkAccount]) {
         for account in accounts where account.signedIn == true {

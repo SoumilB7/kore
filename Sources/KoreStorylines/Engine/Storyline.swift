@@ -17,6 +17,10 @@ package class Storyline: NSObject {
     /// so for itself only (`self == ChatStoryline.self`), since subclasses inherit the answer.
     package class var isFamily: Bool { false }
 
+    /// Its windows read as covered, as AppKit reports the harness's off-screen windows: for the
+    /// stories that test what a covered window draws. The rest count them as on screen.
+    package class var seesOcclusion: Bool { tags.contains(.energy) }
+
     /// The variant this run tells.
     package internal(set) var variant: Variant = .only
 

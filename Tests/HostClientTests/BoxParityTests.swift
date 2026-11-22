@@ -601,12 +601,12 @@ struct BoxParityTests {
         let (chat, backend) = rig.chat(connection, id: nil)
         await chat.startOnce()
         let link = try #require(backend())
-        await #expect(throws: HostRefusal.self) { try await link.setMode("bypassPermissions") }
+        // Full access from a full-control Mac is allowed since 0.3.8 (BoxFullAccessTests covers who may).
         await #expect(throws: HostRefusal.self) { _ = try await link.send("!ls", files: [], queued: nil, id: "x1") }
         await #expect(throws: HostRefusal.self) { try await link.setRemoteControl(true) }
         await link.respond(to: "nope", .allowAlways)
         // Nothing refused reached a CLI on the box (it may not have started one at all).
-        #expect(!rig.made.flatMap(\.calls).contains { $0.hasPrefix("send") || $0.hasPrefix("respond") || $0 == "mode bypassPermissions" })
+        #expect(!rig.made.flatMap(\.calls).contains { $0.hasPrefix("send") || $0.hasPrefix("respond") })
         // Remote control shows unavailable here, as the box's capabilities say.
         #expect(!link.offers("setRemoteControl") && link.offers("rollback"))
         chat.close()

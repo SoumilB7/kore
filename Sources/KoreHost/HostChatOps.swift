@@ -8,7 +8,8 @@ import src
 /// `LinkPolicy.checkBox` first. A full grant driving the chat does the same through `chat.call`.
 extension HostDaemon {
     func chatOp(
-        _ kind: ControlKind, _ args: ControlArgs, id: String, control: GrantControl, reply: @escaping @MainActor (LinkMessage.Result) -> Void
+        _ kind: ControlKind, _ args: ControlArgs, id: String, control: GrantControl, phone: Bool = false,
+        reply: @escaping @MainActor (LinkMessage.Result) -> Void
     ) -> LinkMessage.Result? {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
         let done = LinkMessage.Result(id: id, ok: true)
@@ -72,7 +73,7 @@ extension HostDaemon {
             return nil
         case .chatFork:
             guard let chat = live(hc) else { return fail(.busy, "Too many CLIs are running on this box.") }
-            Task { reply(await fork(hc, chat, args, id: id, arsenal: control == .full)) }
+            Task { reply(await fork(hc, chat, args, id: id, arsenal: control == .full, fullAccess: control == .full && !phone)) }
             return nil
         case .chatRollback:
             guard let chat = live(hc) else { return fail(.busy, "Too many CLIs are running on this box.") }
@@ -98,7 +99,8 @@ extension HostDaemon {
     /// message). It's a new chat in the same folder, "<title> (fork)", with the chat's settings
     /// (`ChatSettings`: its login, auto-compact point, fast, plan, Arsenal tier; not its draft).
     /// `arsenal` false: its Arsenal stays off (a grant without full control can't turn it on).
-    private func fork(_ hc: HostChat, _ chat: Chat, _ args: ControlArgs, id: String, arsenal: Bool) async -> LinkMessage.Result {
+    /// `fullAccess` false: a fork of a chat in Full access starts at Auto (a phone's, a standard grant's).
+    private func fork(_ hc: HostChat, _ chat: Chat, _ args: ControlArgs, id: String, arsenal: Bool, fullAccess: Bool) async -> LinkMessage.Result {
         func fail(_ code: ResultCode, _ message: String) -> LinkMessage.Result { .init(id: id, ok: false, code: code, message: message) }
         await chat.startOnce()
         guard chat.sessionId != nil else { return fail(.busy, "This chat can't be forked yet.") }
@@ -120,10 +122,12 @@ extension HostDaemon {
         let from: (from: String, at: String)? = if case .pending(let point) = start { (point.from, point.at) } else { nil }
         var settings = Self.said(hc)
         if !arsenal { settings.arsenal = nil }
+        let mode = LinkPolicy.cappedMode(chat.controls.mode, provider: hc.record.provider, fullAccess: fullAccess)
+        if let kept = settings.mode { settings.mode = LinkPolicy.cappedMode(kept, provider: hc.record.provider, fullAccess: fullAccess) }
         guard
             let made = newChat(
                 folder: hc.record.folder, provider: hc.record.provider, modelId: chat.controls.modelId ?? chat.launchModel, fork: from,
-                title: "\(chat.title) (fork)", mode: chat.controls.mode, effort: chat.controls.effort ?? chat.launchEffort, settings: settings)
+                title: "\(chat.title) (fork)", mode: mode, effort: chat.controls.effort ?? chat.launchEffort, settings: settings)
         else { return fail(.goneFolder, "That folder isn't on this box.") }
         if !draft.isEmpty {
             made.setDraft(draft)

@@ -266,10 +266,9 @@ final class UsageState {
 
     /// A limit's share of Kore, while a reading of it shows; nil while it's worked out.
     func share(_ limit: PlanLimit) -> KoreShare? {
-        guard var share = shares?.limits[limit.title] else { return nil }
-        // Never more than the plan says now (the share may be from the reading before).
-        let cut = UsageAttribution.clamp(share.kore, chats: share.chats, used: limit.used)
-        if cut.clamped { (share.used, share.kore, share.chats, share.clamped) = (limit.used, cut.kore, cut.chats, true) }
+        // Worked out for an earlier reading of the limit: not shown until this one's lands, so
+        // what rose since never reads as outside Kore.
+        guard let share = shares?.limits[limit.title], abs(share.used - limit.used) < 0.001 else { return nil }
         return share
     }
 

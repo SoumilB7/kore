@@ -124,6 +124,14 @@ enum FakeMatch {
         content?.string ?? content?.array?.compactMap { $0["type"]?.string == "text" ? $0["text"]?.string : nil }.joined(separator: "\n") ?? ""
     }
 
+    /// The answer to a read Kore makes that recordings made before it don't hold: Codex's
+    /// `account/read` (which login a thread runs on, asked beside each launch). Answered as Codex
+    /// answers when it can't name the account, so playing goes on; nil for any other line.
+    static func unrecordedAnswer(_ live: String) -> String? {
+        guard let json = try? JSONValue.parse(Data(live.utf8)), json["method"]?.string == "account/read", let id = json["id"] else { return nil }
+        return #"{"id":\#(id.compact),"result":{"account":null,"requiresOpenaiAuth":false}}"#
+    }
+
     /// What a raw line asks for, as `matches` compares it.
     static func signature(of line: String) -> String {
         (try? JSONValue.parse(Data(line.utf8))).map(signature) ?? normalized(line)

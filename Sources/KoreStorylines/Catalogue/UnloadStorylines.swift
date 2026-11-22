@@ -777,7 +777,7 @@ struct WithClaudeFile: Step {
 
     static var step: Do {
         Do("Keep the app from napping") { _ in
-            activity = activity ?? ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "A storyline's timings")
+            activity = activity ?? ProcessInfo.processInfo.beginActivity(options: [.userInitiated, .latencyCritical], reason: "Kore Dev: storyline timings")
         }
     }
 }

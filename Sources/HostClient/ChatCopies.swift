@@ -13,6 +13,9 @@ import src
 extension HostConnection {
     /// Whether the box takes 1.11's chat copies (a full grant).
     package var copiesChats: Bool { caps.contains("chatCopy") }
+    /// Whether this Mac may put the box's chats in Full access (owner, 2026-11-22): a grant with
+    /// full control, on a kore-host that says it takes it (`LinkPolicy.fullAccessCap`).
+    package var takesFullAccess: Bool { control == .full && caps.contains(LinkPolicy.fullAccessCap) }
 }
 
 /// One end of a copy: a folder on this Mac, or a box folder (its link, ssh and staging).
@@ -75,10 +78,11 @@ package struct ChatCopy: Sendable, Equatable {
 extension ChatSettings {
     /// As said to box `connection`: a tier it doesn't take is the one below (Act device to an
     /// older box is Act unlimited), and none while this Mac's chats can't use Arsenal
-    /// (`arsenal` false); a mode above Auto is Auto (box chats go up to it), each said in `notes`.
+    /// (`arsenal` false); a mode above Auto is Auto unless this Mac may put the box's chats in Full
+    /// access (`takesFullAccess`), each said in `notes`.
     @MainActor package func said(to connection: HostConnection, provider: String, arsenal allowed: Bool = true, notes: inout [String]) -> ChatSettings {
         var said = self
-        if let mode, case let capped = LinkPolicy.cappedMode(mode, provider: provider), capped != mode {
+        if let mode, case let capped = LinkPolicy.cappedMode(mode, provider: provider, fullAccess: connection.takesFullAccess), capped != mode {
             said.mode = capped
             notes.append(LinkPolicy.boxCappedLine(provider, to: capped))
         }

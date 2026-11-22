@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import HostClient
+import KoreCore
 import KoreTrust
 import KoreUI
 import Observation
@@ -35,6 +36,22 @@ package enum MacNetSwitch {
         }
         // A login's ⋯ lists the paired Macs beside the boxes.
         MacPeers.installLoginPlaces()
+        // This Mac's own Kore usage, for its paired Macs (while KoreNet is on), and theirs here
+        // before the usage card splits a limit.
+        UsageTaps.request = { session, provider, request in
+            guard MacNet.shared != nil else { return }
+            MacUsageLedger.shared.request(session: session, provider: provider, request)
+        }
+        PlanSnapshotLog.appended.value = { snapshot in
+            Task { @MainActor in
+                guard MacNet.shared != nil else { return }
+                MacUsageLedger.shared.plan(snapshot)
+            }
+        }
+        HostConnection.usageCatchUp = {
+            await HostConnection.catchUpBoxUsage()
+            await MacPeers.shared.catchUpUsage()
+        }
         // Every box link that comes up is caught up on the phones this Mac issued.
         HostConnection.devicesCatchUp = { MacNet.shared?.catchUp($0) }
         HostConnection.devicesResult = { _, result in MacNet.shared?.took(result) }
