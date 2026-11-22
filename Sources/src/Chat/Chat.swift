@@ -555,7 +555,9 @@ package final class Chat: Identifiable {
         if let error = await launchCLI() {
             guard currentWork(epoch), !Task.isCancelled, !(error is CancellationError) else { return }
             fail("Couldn't start \(provider.name): \(Self.reason(error))")
+            return
         }
+        noteActive()
     }
 
     /// Waits before each start again of a CLI that wouldn't start. A storyline sets them shorter.
@@ -621,6 +623,73 @@ package final class Chat: Identifiable {
     /// live (a dev server, a port-forward, an armed scheduled job), which dies with its process.
     private var holdsCLI: Bool { isWorking || commands.summary.total > 0 }
 
+    /// Something live would end with its CLI, or is due to go to it: a turn (a card it waits on
+    /// included), a background agent, a command (a Monitor, an armed scheduled job), a message
+    /// waiting for the network, or one queued. Arsenal's resume-after-close and the idle rest
+    /// read this one rule.
+    package var hasLiveWork: Bool { hasWork || (!closed && queuedCount > 0) }
+
+    // MARK: Rest
+
+    /// How long a chat with nothing live keeps its CLI: then it rests, its process ended quietly,
+    /// and the next send (or a key typed in its composer) starts it again on the same session, the
+    /// transcript as it was. A storyline sets it shorter.
+    package static let restAfter = HostSetting<Duration>(.seconds(600))
+    /// The rest's one timer, while the chat's CLI runs: set as it goes quiet, put off by what it
+    /// does meanwhile (`noteActive`). Nothing polls.
+    @ObservationIgnored private var restTimer: Task<Void, Never>?
+    @ObservationIgnored private var lastActive = ContinuousClock.now
+    /// Its CLI rests: the chat is idle, as before, with no process.
+    @ObservationIgnored package private(set) var resting = false
+
+    /// It did something (a turn or an agent ended, a send, a key typed): its rest is put off.
+    private func noteActive() {
+        lastActive = .now
+        // Only a running CLI does something: one that rested has started again.
+        resting = false
+        guard restTimer == nil, !closed, services.restsIdleCLI else { return }
+        armRest(after: Self.restAfter.value)
+    }
+
+    private func armRest(after wait: Duration) {
+        restTimer = Task { [weak self] in
+            try? await Task.sleep(for: wait)
+            guard !Task.isCancelled, let self else { return }
+            self.restTimer = nil
+            let due = self.lastActive + Self.restAfter.value
+            if due > .now { return self.armRest(after: due - .now) }
+            self.restIfIdle()
+        }
+    }
+
+    /// Nothing would notice: no live work, no card, no start or account change under way.
+    private var canRest: Bool {
+        !closed && !resting && services.restsIdleCLI && !services.onBox && backend != nil && !hasLiveWork && approvals.pending.isEmpty
+            && !relaunchDue && !stoppedForAccount && !accountRestartPending && !awaitingHistory
+            && reloadWhenFree == nil && !continueAfterCompaction && !compactAfterTurn && !context.compacting
+    }
+
+    private func restIfIdle() {
+        guard canRest, let backend else { return }
+        let epoch = workEpoch
+        engine.chain(after: engine.sending, epoch) { [self] in
+            // Checked again: a send may have come while the one before it finished.
+            guard canRest, lastActive + Self.restAfter.value <= .now else { return }
+            if await backend.rest() {
+                resting = true
+                services.log("chat-rest", ["cli": provider.id, "chat": status.sessionId])
+            }
+        }
+    }
+
+    /// Its CLI starts again (a send starts it too): a key in a resting chat's composer starts it,
+    /// so it's up by the time the message goes.
+    private func wake() {
+        guard resting, !closed else { return }
+        resting = false
+        Task { await start() }
+    }
+
     /// An explicit account switch closes old work even when a scheduled job or dead CLI
     /// cannot acknowledge Stop. Other credential refreshes wait for the next safe boundary.
     package func accountChanged() {
@@ -677,6 +746,7 @@ package final class Chat: Identifiable {
             services.refreshAccount(provider)
             relaunchIfDue()
         case .turnFinished, .agentFinished, .commandEnded:
+            noteActive()
             // An agent's end reaches the summary at the next draw: at once, when a start waits.
             if case .agentFinished = event, relaunchDue || reloadWhenFree != nil { transcriptView.drawNow() }
             relaunchIfDue()
@@ -914,6 +984,8 @@ package final class Chat: Identifiable {
         if let networkObserver { NotificationCenter.default.removeObserver(networkObserver) }
         networkObserver = nil
         closed = true
+        restTimer?.cancel()
+        restTimer = nil
         engine.close()
         transcriptView.sending(false)
         waitingForNetwork = false
@@ -933,6 +1005,8 @@ package final class Chat: Identifiable {
 
     package func composerDraftChanged() {
         if !restoringComposerDraft { onDraftChanged?() }
+        guard !restoringComposerDraft, !draft.isEmpty else { return }
+        if resting { wake() } else { lastActive = .now }
     }
 
     /// Something to send. During a compaction it waits, shown queued, and goes as the compaction ends.
@@ -1096,6 +1170,8 @@ package final class Chat: Identifiable {
             done?(.failure(CallRefusal("The chat can't take a message right now.")))
             return
         }
+        // Its CLI starts again with the send, if it rested.
+        noteActive()
         // A rollback under way: the CLI it would reach is ending, and the rows are about to be
         // replaced. It goes once the rollback is done (`endRollback`), under the id and queued
         // state it was sent with: its sender knows its row by that id.
@@ -2057,6 +2133,7 @@ package final class Chat: Identifiable {
         Task {
             defer { controls.fastChanging = false }
             do {
+                if resting { wake(); try await backend.start() }
                 try await backend.setFastMode(on)
                 launchFastMode = on
             } catch {

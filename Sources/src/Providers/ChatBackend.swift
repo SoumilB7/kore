@@ -119,6 +119,11 @@ package protocol ChatBackend: AnyObject {
     /// same session: after the account changed, it runs as the new one; after a turn stalled or
     /// ignored a Stop, it's a fresh process. `reason` is logged.
     func relaunch(reason: String) async
+    /// Ends an idle CLI's process, quietly, as `relaunch` does, for its chat's rest: the next
+    /// `start()` (a send, a key in the composer) resumes the same session, the transcript kept.
+    /// False when it can't rest: no process of its own (a box's chat rests on its box), none
+    /// running, or one that has to stay up (remote control).
+    func rest() async -> Bool
     /// The CLI's model list, read again from the running CLI; nil when it isn't running or can't.
     func listModels() async -> [ModelOption]?
     /// A row the chat showed of its own that the CLI isn't sent (a typed /compact): a backend whose
@@ -311,6 +316,9 @@ extension ChatBackend {
 
     /// For a backend with no process of its own.
     package func relaunch(reason: String) async {}
+
+    /// For a backend with no process of its own to rest.
+    package func rest() async -> Bool { false }
 
     /// For a backend that runs no commands of its own.
     package func stopCommand(_ id: String) async throws { throw CommandUnavailable() }

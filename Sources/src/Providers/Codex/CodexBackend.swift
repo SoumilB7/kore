@@ -1246,6 +1246,19 @@ package final class CodexBackend: ChatBackend {
     package func relaunch(reason: String) async {
         // A new account may resume what the last one couldn't.
         refused = nil
+        await end(reason: reason)
+        // A chat that's remotely controlled comes back at once, for its remote side.
+        if remoteWanted { Task { try? await start() } }
+    }
+
+    package func rest() async -> Bool {
+        guard session != nil, starting == nil, !remoteWanted else { return false }
+        await end(reason: "idle")
+        return true
+    }
+
+    /// The process ends, saying nothing to the chat: the next `start()` launches it again.
+    private func end(reason: String) async {
         guard let session else { return }
         log.relaunch("codex", chat: sessionId, reason: reason)
         // Its terminals, and the child threads it ran, end with its process.
@@ -1261,8 +1274,6 @@ package final class CodexBackend: ChatBackend {
         self.session = nil
         await session.close()
         logExit(session)
-        // A chat that's remotely controlled comes back at once, for its remote side.
-        if remoteWanted { Task { try? await start() } }
     }
 
     package func close() async {
