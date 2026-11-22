@@ -160,6 +160,27 @@ struct PinchZoomTests {
         #expect(!PinchZoom.isAdjusting(scroll) && scroll.magnification == 1 && writes == 1)
     }
 
+    /// A pinch ended early (a key, a click) leaves its gesture going: the rest of its samples
+    /// are still the pinch's, swallowed, and none reaches AppKit's own magnification. The next
+    /// pinch is a pinch again.
+    @Test func aGestureEndedEarlyKeepsItsLastSamples() {
+        let (window, scroll, _, point) = editor()
+        let pinch = PinchZoom()
+        pinch.attach(window)
+        defer { pinch.detach(); window.contentView = nil }
+        #expect(pinch.receive(0.2, phase: .began, at: point))
+        pinch.cancel(resumeFollowing: false)
+        #expect(scroll.magnification == 1)
+        #expect(pinch.receive(0.1, phase: .changed, at: point))
+        #expect(pinch.receive(0, phase: .ended, at: point))
+        #expect(scroll.magnification == 1)
+        // That gesture is over: an unphased sample after it isn't Kore's.
+        #expect(!pinch.receive(0.1, phase: [], at: point))
+        #expect(pinch.receive(0.2, phase: .began, at: point))
+        #expect(scroll.magnification > 1)
+        #expect(pinch.receive(0, phase: .ended, at: point))
+    }
+
     @Test(arguments: [true, false])
     func unsolicitedNativeScrollsAreHeldOnlyDuringTheGesture(posted: Bool) {
         let (window, scroll, _, point) = editor()

@@ -494,6 +494,42 @@ package final class InputDriver {
             pressure: type == .leftMouseUp || type == .rightMouseUp ? 0 : 1)
     }
 
+    /// A trackpad's event at a window point, built in the process and handed to the app as one
+    /// from the trackpad is (the monitors, then the window): a pinch's `magnify` step, or a
+    /// two-finger scroll's (`scrollDY` > 0 moves down the content), with its phase (1 began,
+    /// 2 changed, 4 ended) or its momentum's (1 begin, 2 continue, 3 end). Nothing is posted.
+    package func trackpad(magnify: CGFloat? = nil, scrollDY: CGFloat = 0, phase: Int64 = 0, momentum: Int64 = 0,
+                          at point: CGPoint, in window: NSWindow) throws {
+        let event: CGEvent?
+        if let magnify {
+            event = CGEvent(source: nil)
+            event?.type = CGEventType(rawValue: 29)!  // a gesture
+            event?.setIntegerValueField(CGEventField(rawValue: 110)!, value: 8)  // its kind: zoom
+            event?.setDoubleValueField(CGEventField(rawValue: 113)!, value: Double(magnify))
+            event?.setIntegerValueField(CGEventField(rawValue: 132)!, value: phase)
+        } else {
+            event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: Int32((-scrollDY).rounded()), wheel2: 0, wheel3: 0)
+            event?.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            event?.setIntegerValueField(CGEventField(rawValue: 99)!, value: phase)
+            event?.setIntegerValueField(CGEventField(rawValue: 123)!, value: momentum)
+        }
+        guard let event else { throw StoryFailure.other("can't build a trackpad event") }
+        // Its window (field 51), and the point in it from the window's top-left: the window's
+        // location setter isn't public, but the test host may look it up (Kore never does).
+        event.setIntegerValueField(CGEventField(rawValue: 51)!, value: Int64(window.windowNumber))
+        guard let setter = Self.setWindowLocation else { throw StoryFailure.other("no CGEventSetWindowLocation to aim a trackpad event") }
+        setter(event, CGPoint(x: point.x, y: window.frame.height - point.y))
+        guard let ns = NSEvent(cgEvent: event), ns.window === window, hypot(ns.locationInWindow.x - point.x, ns.locationInWindow.y - point.y) < 1 else {
+            throw StoryFailure.other("a trackpad event built in the process didn't land on its window's point")
+        }
+        NSApp.sendEvent(ns)
+    }
+
+    private static let setWindowLocation: (@convention(c) (CGEvent, CGPoint) -> Void)? = {
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGEventSetWindowLocation") else { return nil }
+        return unsafeBitCast(symbol, to: (@convention(c) (CGEvent, CGPoint) -> Void).self)
+    }()
+
     private func mouse(_ type: NSEvent.EventType, at point: CGPoint, in window: NSWindow) {
         if let event = mouseEvent(type, at: point, in: window) { NSApp.sendEvent(event) }
     }

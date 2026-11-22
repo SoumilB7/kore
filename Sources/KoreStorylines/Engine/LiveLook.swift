@@ -96,6 +96,36 @@ enum LiveEyes {
         return Double(differ) / Double((x1 - x0) * (y1 - y0))
     }
 
+    /// The same bytes: the quick answer for frames that haven't changed.
+    static func identical(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> Bool {
+        guard a.pixelsWide == b.pixelsWide, a.pixelsHigh == b.pixelsHigh, a.bytesPerRow == b.bytesPerRow,
+            a.bitsPerPixel == b.bitsPerPixel, let pa = a.bitmapData, let pb = b.bitmapData
+        else { return false }
+        return memcmp(pa, pb, a.bytesPerRow * a.pixelsHigh) == 0
+    }
+
+    /// Where two frames differ (window points, y up), as one box; nil when they don't.
+    static func changed(_ a: NSBitmapImageRep, _ b: NSBitmapImageRep) -> CGRect? {
+        guard a.pixelsWide == b.pixelsWide, a.pixelsHigh == b.pixelsHigh, a.bytesPerRow == b.bytesPerRow,
+            a.bitsPerPixel == b.bitsPerPixel, let pa = a.bitmapData, let pb = b.bitmapData
+        else { return nil }
+        let (w, h) = (a.pixelsWide, a.pixelsHigh)
+        let (bpp, row) = (a.bitsPerPixel / 8, a.bytesPerRow)
+        var (x0, x1, y0, y1) = (w, -1, h, -1)
+        for y in 0..<h {
+            for x in 0..<w {
+                let o = y * row + x * bpp
+                for c in 0..<min(bpp, 3) where abs(Int(pa[o + c]) - Int(pb[o + c])) > 12 {
+                    (x0, x1, y0, y1) = (min(x0, x), max(x1, x), min(y0, y), max(y1, y))
+                    break
+                }
+            }
+        }
+        guard x1 >= 0 else { return nil }
+        let scale = CGFloat(w) / max(a.size.width, 1)
+        return CGRect(x: CGFloat(x0) / scale, y: a.size.height - CGFloat(y1 + 1) / scale, width: CGFloat(x1 - x0 + 1) / scale, height: CGFloat(y1 - y0 + 1) / scale)
+    }
+
     /// The lines of text in a frame (Vision, in process, off the main thread); nil when it takes
     /// over `seconds` (a busy Mac): the text isn't judged then.
     static func texts(_ rep: NSBitmapImageRep, _ story: StoryContext, within seconds: Double = 5) async -> [String]? {
@@ -305,19 +335,35 @@ struct Settles: Step {
     func run(_ story: StoryContext) async throws {
         guard let window = story.window else { throw StoryFailure.modelMissing("the window") }
         let start = ContinuousClock.now
+        func elapsed() -> Int {
+            let d = ContinuousClock.now - start
+            return Int(d.components.seconds * 1000) + Int(d.components.attoseconds / 1_000_000_000_000_000)
+        }
         try await inner.run(story)
+        // Settled when a frame matches the one before: timed at that earlier frame, so the
+        // comparing (slow in a debug build) isn't counted as the app's lag.
         var previous = LiveEyes.frame(window)
+        var previousAt = elapsed()
         var ms = 0
+        var changes: [String] = []
         while true {
             try await story.idle()
             let next = LiveEyes.frame(window)
-            let d = ContinuousClock.now - start
-            ms = Int(d.components.seconds * 1000) + Int(d.components.attoseconds / 1_000_000_000_000_000)
-            if let a = previous, let b = next, LiveEyes.difference(a, b) == 0 { break }
+            let nextAt = elapsed()
+            if let a = previous, let b = next, LiveEyes.identical(a, b) || LiveEyes.difference(a, b) == 0 {
+                ms = previousAt
+                break
+            }
+            // What still moved, and where, once it's running long: a lag's note names it.
+            if nextAt > budget / 2, let a = previous, let b = next, let rect = LiveEyes.changed(a, b) {
+                changes.append("\(nextAt) ms: \(Int(rect.minX)),\(Int(rect.minY)) \(Int(rect.width))×\(Int(rect.height))")
+            }
             previous = next
-            if ms > budget * 4 { break }
+            previousAt = nextAt
+            ms = nextAt
+            if nextAt > budget * 4 { break }
         }
-        story.note("\(inner.label): settled in \(ms) ms")
+        story.note("\(inner.label): settled in \(ms) ms" + (changes.isEmpty ? "" : "; changed " + changes.suffix(6).joined(separator: ", ")))
         if ms > budget {
             let file = previous.map { LiveEyes.save($0, "\(story.name)-lag", story) } ?? ""
             throw StoryFailure.other("lag: \(inner.label) \(ms) ms (\(file))")

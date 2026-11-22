@@ -32,6 +32,7 @@ final class ZoomKeepsPlace: ChatStoryline {
             },
             WaitIdle(), Snapshot("mid-chat"),
             KeepsPlace(where: "mid-chat", at: 0.5),
+            KeepsPlace(where: "mid-chat", at: 0.5, trackpad: true),
             KeepsPlace(where: "mid-chat, scrolled far while magnified", at: 0.5, scrolledMagnified: -3000),
             // Near the end, not at it: at the end ⌘+ keeps the end in view, and what's under a
             // point above it changes with the text's size, as it should.
@@ -39,6 +40,7 @@ final class ZoomKeepsPlace: ChatStoryline {
             Do("A little above the end") { story in try story.activeChat().storyTranscript.scrollContent(by: -300) },
             WaitIdle(),
             KeepsPlace(where: "near the end", at: 0.7),
+            KeepsPlace(where: "near the end", at: 0.7, trackpad: true),
             UnloadStoryline.ToEnd(), WaitIdle(),
             Key(KeyChord(.character("="), .command)), WaitIdle(),
             Expect("at the end, ⌘+ keeps the end in view") { story in try story.activeChat().storyTranscript.readerAtEnd },
@@ -54,9 +56,12 @@ struct KeepsPlace: Step {
     /// Scrolled this far (points, up when negative) while magnified, before pinching back out:
     /// rows the stack hadn't built come in as the page shrinks.
     var scrolledMagnified: CGFloat = 0
+    /// As a trackpad sends it: magnify events with two-finger scroll events among them (the
+    /// fingers never move exactly together: small, back and forth), and momentum after.
+    var trackpad = false
     /// How far the text under a pinch may move (points), as rounding and a pass's lag allow.
     static let slack: CGFloat = 6
-    var label: String { "Zoom keeps the place \(`where`)" }
+    var label: String { "Zoom keeps the place \(`where`)" + (trackpad ? ", by trackpad" : "") }
     var timeout: Duration? { .seconds(60) }
 
     /// The text at `p`, else the nearest line up or down within 120 pt (it can fall between blocks).
@@ -114,22 +119,47 @@ struct KeepsPlace: Step {
             return d
         }
         func pinch(_ amount: CGFloat, _ name: String) async throws {
-            guard PinchZoom.storySample(in: window, amount: 0, phase: .began, at: point) else { throw StoryFailure.other("\(name): no pinch began") }
             var most: CGFloat = 0
-            for _ in 0..<30 {
-                _ = PinchZoom.storySample(in: window, amount: amount, phase: .changed, at: point)
-                try await Task.sleep(for: .milliseconds(8))
-                most = max(most, drift("\(name), live"))
+            var mostScale: CGFloat = scroll.magnification
+            if trackpad {
+                try story.input.trackpad(magnify: 0, phase: 1, at: point, in: window)
+                for i in 0..<30 {
+                    try story.input.trackpad(magnify: amount, phase: 2, at: point, in: window)
+                    if i % 3 == 1 { try story.input.trackpad(scrollDY: i % 6 == 1 ? 1 : -1, phase: i == 1 ? 1 : 2, at: point, in: window) }
+                    try await Task.sleep(for: .milliseconds(8))
+                    most = max(most, drift("\(name), live"))
+                    mostScale = max(mostScale, scroll.magnification)
+                }
+                try story.input.trackpad(magnify: 0, phase: 4, at: point, in: window)
+                try story.input.trackpad(scrollDY: 0, phase: 4, at: point, in: window)
+                // The fingers lift: momentum, small and back and forth, dying away.
+                for (i, dy) in [1, -1, 1, -1, 1, 0].enumerated() {
+                    try story.input.trackpad(scrollDY: CGFloat(dy), momentum: i == 0 ? 1 : i == 5 ? 3 : 2, at: point, in: window)
+                    try await Task.sleep(for: .milliseconds(16))
+                    most = max(most, drift("\(name), momentum"))
+                }
+            } else {
+                guard PinchZoom.storySample(in: window, amount: 0, phase: .began, at: point) else { throw StoryFailure.other("\(name): no pinch began") }
+                for _ in 0..<30 {
+                    _ = PinchZoom.storySample(in: window, amount: amount, phase: .changed, at: point)
+                    try await Task.sleep(for: .milliseconds(8))
+                    most = max(most, drift("\(name), live"))
+                }
+                _ = PinchZoom.storySample(in: window, amount: 0, phase: .ended, at: point)
+                try await story.until("\(name) to finish") { PinchZoom.storyPlacement(in: window) != nil }
             }
-            _ = PinchZoom.storySample(in: window, amount: 0, phase: .ended, at: point)
-            try await story.until("\(name) to finish") { PinchZoom.storyPlacement(in: window) != nil }
             try await story.idle()
             let end = drift("\(name), let go")
             try await Task.sleep(for: .milliseconds(400))
             let later = drift("\(name), 0.4 s on")
-            notes.append(String(format: "%@: live ≤ %.1f, let go %.1f, 0.4 s on %.1f pt (scale %.2f)", name, most, end, later, PinchZoom.storyPageScale(in: window) ?? 1))
+            notes.append(String(format: "%@: live ≤ %.1f, let go %.1f, 0.4 s on %.1f pt (page %.2f, view %.2f, most %.2f, cancelled %d)", name, most, end, later,
+                PinchZoom.storyPageScale(in: window) ?? 1, scroll.magnification, mostScale, PinchZoom.storyCounts(in: window)?.cancellations ?? -1))
         }
         try await pinch(0.02, "pinch in")
+        // The fingers' small scrolls among the samples are the pinch's: it zooms all the way.
+        if trackpad, (PinchZoom.storyPageScale(in: window) ?? 1) < 1.5 {
+            throw StoryFailure.expectation("a trackpad pinch, its fingers' scrolls among it, zoomed only to \(PinchZoom.storyPageScale(in: window) ?? 1). " + notes.joined(separator: "; "))
+        }
         if scrolledMagnified != 0 {
             for _ in 0..<10 {
                 transcript.scrollContent(by: scrolledMagnified / 10)
