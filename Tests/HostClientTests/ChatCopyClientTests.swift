@@ -367,13 +367,18 @@ struct ChatCopyClientTests {
         let folder = try m.folder("app"), files = Files(provider: "claude")
         try write(files.text(SessionFiles.real(folder), Self.session), files.file(m.env, folder, Self.session))
         drop.stays = true
-        let gone = b.rig.root.appendingPathComponent("gone")
+        // Its rsync fails only once this Mac has heard the link go, so a busy run can't turn the
+        // order round (rsync out first, the link going after the copy ended).
+        let (gone, heard) = (b.rig.root.appendingPathComponent("gone"), b.rig.root.appendingPathComponent("heard"))
         let ssh = b.rig.root.appendingPathComponent("fake-ssh")
-        try Data("#!/bin/sh\ntouch '\(gone.path)'\nsleep 0.3\nexit 255\n".utf8).write(to: ssh)
+        let script = "#!/bin/sh\ntouch '\(gone.path)'\ni=0\nwhile [ ! -f '\(heard.path)' ] && [ $i -lt 3000 ]; do sleep 0.01; i=$((i+1)); done\nexit 255\n"
+        try Data(script.utf8).write(to: ssh)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: ssh.path)
         let watch = Task { @MainActor in
             _ = await until { FileManager.default.fileExists(atPath: gone.path) }
             drop.end()
+            _ = await until { !b.connection.isOnline }
+            FileManager.default.createFile(atPath: heard.path, contents: nil)
         }
         let said = await m.copies.copy(CopySource(end: .mac(folder), id: Self.session, provider: "claude", title: "Repos"), to: b.end)
         await watch.value
