@@ -134,6 +134,22 @@ struct ChildShutdownTests {
         #expect(await gone(reaperPid))
     }
 
+    /// Its grace is the clock's, however many children it looks at on each pass (it counted
+    /// passes once: 50 of them, each a `ps` per child, ran far past 5 s with many chats open).
+    @Test func theGraceIsTimeNotPasses() async throws {
+        let reaper = ChildReaper(grace: .seconds(2))
+        let children = try (0..<20).map { _ in try spawn(Self.stubborn) }
+        for (child, _) in children { reaper.watch(child.processIdentifier) }
+        let started = ContinuousClock.now
+        reaper.end()
+        for (child, tool) in children {
+            #expect(await gone(child.processIdentifier))
+            #expect(await gone(tool))
+        }
+        let took = ContinuousClock.now - started
+        #expect(took < .milliseconds(3400), "the last went after \(took)")
+    }
+
     @Test func theReaperLeavesWhatItWasToldEnded() async throws {
         let reaper = ChildReaper(grace: .milliseconds(200))
         let (child, tool) = try spawn(Self.busy)

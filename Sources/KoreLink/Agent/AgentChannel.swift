@@ -1173,6 +1173,11 @@ package final class AgentChannel {
             fail(client, id, .invalid, "Tab ids, group names and places are short.")
             return own.id.uuidString
         }
+        // Showing brings a window forward: kore_show_tab's job, and its tier.
+        if args.show == true, tier(client) < .drive {
+            fail(client, id, .tier, AgentChannel.message(.tier))
+            return own.id.uuidString
+        }
         let ask = ArsenalArrange(
             tabs: tabs, group: args.group, to: args.to, fold: args.fold, name: args.name, ungroup: args.ungroup ?? false, show: args.show ?? false,
             asked: args.asked ?? false)

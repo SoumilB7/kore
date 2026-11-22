@@ -219,6 +219,49 @@ struct BoxCardTests {
         #expect(list.box("mybox")?.machine?.versions["codex"] == "codex-cli 0.167.0")
     }
 
+    /// SSH that connects and never answers, its output held open by a child (a ProxyCommand) that
+    /// ignores the end: each action the person starts ends at its bound, with one plain line.
+    @Test func deadSSHEndsEveryActionFastAndSaysSo() async throws {
+        // Its own name: another test's live link to "mybox" would word it as connected.
+        let alias = "dead-ssh-box"
+        let fake = try FakeSSH()
+        defer { fake.finish() }
+        try Data(detection(try box()).utf8).write(to: fake.root.appendingPathComponent("detection"))
+        let path = fake.root.appendingPathComponent("ssh")
+        func ssh(_ body: String) throws {
+            try ("#!/bin/sh\n" + body).write(to: path, atomically: true, encoding: .utf8)
+            try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: path.path)
+        }
+        var shell = fake.shell
+        shell.quick = .milliseconds(500)
+        shell.reach = .milliseconds(500)
+        let bounded = shell
+        let list = BoxList(defaults: try defaults(), hosts: { [] }, cacheRoot: fake.root, setup: { alias, grant in
+            BoxSetup(alias: alias, grant: grant, shell: bounded, binary: fake.binary())
+        })
+        let mac = try mac()
+        list.findMac = { mac }
+        list.add(alias)
+        try ssh("cat > /dev/null; cat '\(fake.root.path)/detection'\n")
+        _ = try await list.look(alias).get()
+        try ssh("(trap '' TERM HUP; sleep 20) &\ntrap '' TERM\nsleep 20\n")
+        let dead = BoxSetup.Failure(message: "Can't reach \(alias)", fix: .tryAgain)
+        func timed(_ what: String, _ action: () async -> BoxSetup.Failure?) async {
+            let started = ContinuousClock.now
+            let why = await action()
+            let took = ContinuousClock.now - started
+            #expect(why == dead, "\(what): \(String(describing: why))")
+            #expect(took < .seconds(6), "\(what) took \(took)")
+        }
+        await timed("Check again") { if case .failure(let why) = await list.look(alias) { why } else { nil } }
+        await timed("agent install") { await list.install(.codex, on: alias) }
+        await timed("git identity") { await list.setGitIdentity(name: "a", email: "b@c", on: alias) }
+        let started = ContinuousClock.now
+        let scanned = await BoxHostKey.scan(alias, shell: bounded)
+        #expect(scanned == nil)
+        #expect(ContinuousClock.now - started < .seconds(6))
+    }
+
     // MARK: 6 · The count
 
     /// The owner's card: 9 lines counted; only the older codex is Fix's to change.

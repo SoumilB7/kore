@@ -16,7 +16,7 @@ import src
 /// shell the built `kore pipe` (macOS's openrsync has no `--munge-links`: the forced options here
 /// are the rest; the Docker rig runs the box's own rsync 3 with all of them).
 final class PipeRig: @unchecked Sendable {
-    static let macForced = ["--safe-links", "--no-specials", "--no-devices"]
+    static let macForced = PipeArgv.forced
 
     let root: URL
     let home: URL
@@ -163,8 +163,21 @@ struct PipeTests {
         #expect(pulled.status == 0, "\(pulled.said)")
         #expect(try String(contentsOf: back.appendingPathComponent("a.txt"), encoding: .utf8) == "hello\n")
         #expect(try Data(contentsOf: back.appendingPathComponent("sub/b.bin")) == bytes(1 << 20))
+        // Links arrive as they are, wherever they point, both ways (forced options once dropped
+        // or rewrote them all), and a second copy sends nothing.
+        let links = ["rel": "a.txt", "folder": "sub", "absolute": mac.path + "/a.txt", "outside": "/etc/hosts", "up": "../../elsewhere", "dangling": "nowhere"]
+        for (name, to) in links { try FileManager.default.createSymbolicLink(atPath: mac.appendingPathComponent(name).path, withDestinationPath: to) }
+        let pushedLinks = try await rig.rsync(["-a", mac.path + "/", rig.spec(there.path + "/")])
+        #expect(pushedLinks.status == 0, "\(pushedLinks.said)")
+        let pulledLinks = try await rig.rsync(["-a", rig.spec(there.path + "/"), back.path + "/"])
+        #expect(pulledLinks.status == 0, "\(pulledLinks.said)")
+        for (name, to) in links {
+            for folder in [there, back] {
+                #expect((try? FileManager.default.destinationOfSymbolicLink(atPath: folder.appendingPathComponent(name).path)) == to, "\(name) in \(folder.lastPathComponent)")
+            }
+        }
         // Each spawn asked the box with openrsync's own words, quotes and all.
-        #expect(rig.asked.withLock { $0.count } == 2)
+        #expect(rig.asked.withLock { $0.count } == 4)
         #expect(rig.asked.withLock { $0.first?.first } == "rsync" && rig.asked.withLock { $0.last?.contains("--sender") } == true)
         #expect(rig.pipes.running == 0 && rig.pipes.held(by: rig.mac.device) == 0)
     }
@@ -230,6 +243,75 @@ struct PipeTests {
         let second = try await rig.rsync(["-a", "--partial", "--timeout=60", "--stats", source.path, rig.spec(there.path + "/")])
         #expect(second.status == 0, "\(second.said)")
         #expect(try Data(contentsOf: there.appendingPathComponent("big.bin")) == bytes(size, seed: 3))
+    }
+
+    /// A revoke between the ticket's spending and the splice (rsync spawned, `go` not yet said)
+    /// stops the copy as soon as there's something to stop.
+    @Test func aRevokeWhileAPipeStartsStopsIt() async throws {
+        let rig = try PipeRig()
+        defer { rig.finish() }
+        let ticket = try rig.pipes.open(argv: ["rsync", "--server", "-r", ".", rig.home.path + "/in/"], device: rig.mac.device, served: []).get()
+        let session = try rig.dial()
+        // Through `ready`, `go` not said: rsync runs, the splice isn't there yet.
+        try PipeHandshake.open(session, ticket: ticket, within: 10)
+        #expect(rig.pipes.running == 1)
+        rig.pipes.stop { _ in true }
+        try PipeHandshake.go(session)
+        #expect(await PipeRig.within(5) { rig.pipes.running == 0 })
+        let end = Date().addingTimeInterval(5)
+        while Date() < end {
+            _ = session.pump()
+            if case .closed(let why) = session.state {
+                #expect(why == "bye revoked", "\(why)")
+                return
+            }
+            try await Task.sleep(for: .milliseconds(5))
+        }
+        Issue.record("the pipe went on after the revoke")
+    }
+
+    /// A peer that vanished without a hang-up ends the pipe; one that only has nothing to say
+    /// (it answers pings) doesn't.
+    @Test func aSilentPeerEndsThePipeAndAQuietOneDoesnt() async throws {
+        func splice(answering: Bool) throws -> (ended: PipeSplice.Outcome?, after: TimeInterval) {
+            let rig = try PipeRig()
+            defer { rig.finish() }
+            let pair = try LinkPair(rig)
+            var fds: [Int32] = [-1, -1]
+            #expect(pipe(&fds) == 0)
+            defer { close(fds[1]) }
+            let done = Mutex<PipeSplice.Outcome?>(nil)
+            let splice = PipeSplice(session: pair.client, input: fds[0], output: nil, server: false, silence: .init(ask: 0.05, gone: 0.4))
+            let started = Date()
+            let thread = Thread { let outcome = splice.run(); done.withLock { $0 = outcome } }
+            thread.start()
+            while done.withLock({ $0 }) == nil, Date().timeIntervalSince(started) < 1.2 {
+                if answering { _ = pair.server.pump() }
+                usleep(5000)
+            }
+            let ended = done.withLock { $0 }
+            if ended == nil { splice.stop("test") }
+            while done.withLock({ $0 }) == nil { usleep(1000) }
+            return (ended, Date().timeIntervalSince(started))
+        }
+        let silent = try splice(answering: false)
+        #expect(silent.ended == .broken(NetControl.Reason.timeout) && silent.after < 1.2)
+        #expect(try splice(answering: true).ended == nil)
+    }
+
+    /// Sessions that bring no ticket hold a thread each: no more than a device's pipes.
+    @Test func noMoreThanTwoSessionsWaitForATicket() async throws {
+        let rig = try PipeRig()
+        defer { rig.finish() }
+        let sessions = try (0..<3).map { _ in try rig.dial() }
+        let open = { sessions.map { session -> Bool in _ = session.pump(); if case .closed = session.state { return false } else { return true } } }
+        let end = Date().addingTimeInterval(5)
+        var alive = open()
+        while alive.filter({ $0 }).count > 2, Date() < end {
+            try await Task.sleep(for: .milliseconds(10))
+            alive = open()
+        }
+        #expect(alive.filter { $0 }.count == 2)
     }
 
     /// Box to box: the receiving box expects the Mac's ticket for the sending box's pipe into a

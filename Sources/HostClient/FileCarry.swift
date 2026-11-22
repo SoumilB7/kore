@@ -738,10 +738,8 @@ package final class FileCarry {
         case .boxToBox:
             guard let a = source.alias, let b = staged.alias else { return .failed("Not a copy between boxes.") }
             // Both links on KoreNet: straight from box A to box B over a pipe.
-            if let direct = await direct(index, from: a, source.path + (count.dir ? "/" : ""), to: b, staged, dir: count.dir) {
-                if case .failure(let stop) = direct { return stop }
-                return nil
-            }
+            if await direct(index, from: a, source.path + (count.dir ? "/" : ""), to: b, staged, dir: count.dir) { return nil }
+            if let halt = halted() { return halt }
             // Else two legs, each resumable: box A to a folder kept on this Mac, then on to box B.
             guard let from = boxes[a]?.ssh, let to = boxes[b]?.ssh else {
                 return .failed("\(source.device) or \(staged.device) has no way to copy files: no KoreNet link, no SSH alias.")
@@ -765,33 +763,33 @@ package final class FileCarry {
     }
 
     /// Box A straight to box B (phase 18 "Box↔box direct"): B expects this Mac's ticket for A's
-    /// pipe into the landing's folder (`pipe.expect`), then A copies there (`pipe.send`); the
-    /// landing is measured on B as it goes. Nil when it can't go that way now (a link not on
-    /// KoreNet, a box without pipes, or one refused it): the staged route then.
-    private func direct(_ index: Int, from a: String, _ source: String, to b: String, _ staged: FilePlace, dir: Bool) async -> Result<Void, Stop>? {
+    /// pipe (`pipe.expect`), then A copies there (`pipe.send`); the landing is measured on B as it
+    /// goes. Whether it all landed: anything else (a link not on KoreNet, a refusal, A can't reach
+    /// B, a pipe that broke) goes on over the staged route from what's there, whose own failure
+    /// says why.
+    private func direct(_ index: Int, from a: String, _ source: String, to b: String, _ staged: FilePlace, dir: Bool) async -> Bool {
         guard let sending = boxes[a], let receiving = boxes[b], sending.ssh?.overPipe == true, receiving.ssh?.overPipe == true,
               let sender = sending.files as? HostConnection, let receiver = receiving.files as? HostConnection,
               let aDevice = NodeDirectory.shared.entry(forKey: a)?.device, let bDevice = NodeDirectory.shared.entry(forKey: b)?.device
-        else { return nil }
+        else { return false }
         let ticket = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
         let folder = (staged.path as NSString).deletingLastPathComponent
         if case .failure(let why) = await receiver.pipeExpect(ticket: ticket, from: aDevice, path: folder) {
             log("carry-direct", level: .info, ["item": String(index), "result": "staged", "why": why.message])
-            return nil
+            return false
         }
-        log("carry-direct", level: .debug, ["item": String(index)])
         let sent = await metering(landing: staged) {
             await sender.pipeSend(ticket: ticket, to: bDevice, from: source, into: staged.path, options: dir ? ["--delete"] : [])
         }
-        switch sent {
-        case .success(0): return .success(())
-        case .success(let status):
-            return .failure(.interrupted(BoxCopyWords.line(status: Int32(status), said: "", box: NodeNames.name(a))))
-        case .failure(let why):
-            // The other box out of reach from this one: the staged route, now.
-            if why.message.contains("can't be reached") { return nil }
-            return .failure(.interrupted(why.message))
-        }
+        let landed = Self.landedDirect(sent)
+        log("carry-direct", level: landed ? .debug : .info, ["item": String(index), "result": landed ? "direct" : "staged", "why": "\(sent)"])
+        return landed
+    }
+
+    /// Only rsync's 0 is a landing: a failure to reach B from A comes as rsync's own status
+    /// (255, 12), never as a refusal, and both go over the staged route.
+    package static func landedDirect(_ sent: Result<Int, HostRefusal>) -> Bool {
+        if case .success(0) = sent { true } else { false }
     }
 
     /// rsync into `landing`, resumable: `--partial` keeps a file cut off halfway for the next run

@@ -7,6 +7,12 @@ package enum BoxCopyWords {
     package enum Why: Equatable, Sendable {
         /// The box didn't answer over SSH (timed out, no route, refused, the link closed).
         case unreachable
+        /// Its pipe (KoreNet) couldn't be had, or broke: SSH had no part in it.
+        case pipeBroke
+        /// The box refused this Mac's pipe: access taken away.
+        case revoked
+        /// Two copies to it run already.
+        case busy
         /// It answered, and didn't take this Mac's SSH key.
         case keyRefused
         /// Its host key isn't the one this Mac knows.
@@ -26,6 +32,13 @@ package enum BoxCopyWords {
     /// Why it stopped: what it said first, then its exit code.
     package static func why(status: Int32, said: String) -> Why {
         let text = said.lowercased()
+        // `kore pipe`'s own words (rsync's remote shell on KoreNet).
+        if let pipe = text.range(of: "kore pipe: ") {
+            let words = text[pipe.upperBound...]
+            if words.contains("was revoked") { return .revoked }
+            if words.contains("two copies to this box") { return .busy }
+            return .pipeBroke
+        }
         func has(_ any: String...) -> Bool { any.contains { text.contains($0) } }
         if has("host key verification failed", "remote host identification has changed") { return .hostKey }
         if has("permission denied (publickey", "permission denied (password", "too many authentication failures") { return .keyRefused }
@@ -48,6 +61,9 @@ package enum BoxCopyWords {
     package static func line(_ why: Why, box: String) -> String {
         switch why {
         case .unreachable: "\(box) can't be reached over SSH right now"
+        case .pipeBroke: "\(box) can't be reached right now"
+        case .revoked: "\(box) no longer lets this Mac in"
+        case .busy: "two copies with \(box) are running already"
         case .keyRefused: "\(box) didn't accept this Mac's SSH key"
         case .hostKey: "\(box)'s host key isn't the one this Mac knows"
         case .noRsync: "rsync isn't installed on \(box)"
@@ -61,5 +77,5 @@ package enum BoxCopyWords {
     package static func line(status: Int32, said: String, box: String) -> String { line(why(status: status, said: said), box: box) }
 
     /// It may go again by itself once the box is reachable: the route came back, the link did.
-    package static func waitsForRoute(_ why: Why) -> Bool { why == .unreachable || why == .stalled }
+    package static func waitsForRoute(_ why: Why) -> Bool { [.unreachable, .stalled, .pipeBroke, .busy].contains(why) }
 }

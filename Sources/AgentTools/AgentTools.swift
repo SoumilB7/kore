@@ -166,7 +166,7 @@ package enum AgentTools {
                 ("to", "string", "start, end, before:<tab|group> or after:<tab|group>: for the tabs, else the group."),
                 ("fold", "boolean", "Fold (true) or open the group."), ("name", "string", "Rename the group."),
                 ("ungroup", "boolean", "Dissolve the group; tabs stay put."),
-                ("show", "boolean", "Select the first tab (out of a chat's group) and bring its window forward; a group alone: open it."),
+                ("show", "boolean", "Select the first tab (out of a chat's group) and bring its window forward; a group alone: open it (Act unlimited)."),
                 ("asked", "boolean", "The user asked here for this change to their own group."),
             ], required: []),
         Tool(

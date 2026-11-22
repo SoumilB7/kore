@@ -73,6 +73,9 @@ extension AgentChannelTests {
             #expect(own.ok && own.message.contains("[Mine: *"), "\(own.message)")
             let new = try await call(rig, "chat.new", ["group": "Mine"])
             #expect(!new.ok)
+            // Showing a tab brings a window forward: kore_show_tab's job, at its tier (Act unlimited).
+            let shown = try await call(rig, "tabs.arrange", ["tabs": [AgentReads.short(rig.caller.id.uuidString)], "show": true])
+            #expect(!shown.ok && shown.message == AgentChannel.message(.tier), "\(shown.message)")
             #expect(AgentTools.tierNeeded("tabs.arrange") == "own" && AgentCommand.arrange.tier == .own)
         }
 

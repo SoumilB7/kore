@@ -53,7 +53,7 @@ package enum BoxHostKey {
             "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "StrictHostKeyChecking=accept-new", "-o", "UserKnownHostsFile=" + scratch.path,
             "-o", "GlobalKnownHostsFile=/dev/null", "-o", "UpdateHostKeys=no", "-o", "PreferredAuthentications=none",
         ]
-        _ = await BoxShell.process(shell.ssh, Array(await BoxSSH.argv(alias, program: shell.ssh, options: options, ["exit 0"]).dropFirst()))
+        _ = await BoxShell.process(shell.ssh, Array(await BoxSSH.argv(alias, program: shell.ssh, options: options, ["exit 0"]).dropFirst()), limit: shell.reach)
         let written = (try? String(contentsOf: scratch, encoding: .utf8)) ?? ""
         let lines = written.split(whereSeparator: \.isNewline).map(String.init).filter { !$0.isEmpty && !$0.hasPrefix("#") }
         guard !lines.isEmpty else { return nil }
@@ -129,7 +129,7 @@ package enum BoxHostKey {
     /// expanded); `~/.ssh/known_hosts` when it doesn't say.
     package static func knownHostsFile(_ alias: String, shell: BoxShell, home: String = NSHomeDirectory()) async -> String {
         let address = BoxAddress(alias)
-        let said = await BoxShell.process(shell.ssh, ["-G"] + (address?.options ?? []) + ["--", address?.host ?? alias])
+        let said = await BoxShell.process(shell.ssh, ["-G"] + (address?.options ?? []) + ["--", address?.host ?? alias], limit: shell.reach)
         return knownHostsFile(config: said.ok ? said.output : "", home: home)
     }
 

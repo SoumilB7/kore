@@ -89,6 +89,18 @@ struct BoxSSHTests {
         ]
         for (status, said, why) in rows { #expect(BoxCopyWords.why(status: status, said: said) == why, "\(status) \(said)") }
         #expect(BoxCopyWords.line(status: 12, said: rows[0].1, box: "mybox") == "mybox can't be reached over SSH right now")
+        // A pipe's failures (KoreNet) never name SSH; rsync's own line follows the helper's.
+        let pipes: [(String, BoxCopyWords.Why, String)] = [
+            ("kore pipe: the pipe ended: closed\nrsync(1): error: unexpected end of file", .pipeBroke, "mybox can't be reached right now"),
+            ("kore pipe: no pipe to the box right now\nrsync: error: unexpected end of file", .pipeBroke, "mybox can't be reached right now"),
+            ("kore pipe: this Mac's access to the box was revoked", .revoked, "mybox no longer lets this Mac in"),
+            ("kore pipe: Two copies to this box are running already; it takes the next when one ends.", .busy, "two copies with mybox are running already"),
+        ]
+        for (said, why, line) in pipes {
+            #expect(BoxCopyWords.why(status: 255, said: said) == why && BoxCopyWords.line(status: 255, said: said, box: "mybox") == line)
+            #expect(!line.contains("SSH"))
+        }
+        #expect(BoxCopyWords.waitsForRoute(.busy) && BoxCopyWords.waitsForRoute(.pipeBroke) && !BoxCopyWords.waitsForRoute(.revoked))
         #expect(BoxCopyWords.line(.noRsync, box: "mybox") == "rsync isn't installed on mybox")
         #expect(BoxCopyWords.waitsForRoute(.unreachable) && BoxCopyWords.waitsForRoute(.stalled) && !BoxCopyWords.waitsForRoute(.hostKey))
     }

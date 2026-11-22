@@ -48,12 +48,16 @@ package final class HostPipes: Sendable {
     final class Run: @unchecked Sendable {
         let device: UUID
         var splice: PipeSplice?
+        /// Stopped (revoked) before its splice was there to stop: it ends as soon as it is.
+        var stopped: String?
         init(device: UUID) { self.device = device }
     }
 
     private struct State {
         var tickets: [Data: Ticket] = [:]
         var running: [ObjectIdentifier: Run] = [:]
+        /// Sessions still to bring their ticket, by device (each holds a thread).
+        var waiting: [UUID: Int] = [:]
     }
 
     private let state = Mutex(State())
@@ -61,7 +65,7 @@ package final class HostPipes: Sendable {
     private let now: @Sendable () -> Date
     /// The box's rsync, found once; nil: no pipes here.
     package let rsync: String?
-    /// The options every pipe's rsync runs with (tests on a Mac: openrsync has no `--munge-links`).
+    /// The options every pipe's rsync runs with (tests: their own).
     package let forced: [String]
 
     /// rsync before this has known holes on the receiving side (CVE-2022-29154, fixed in 3.2.5).
@@ -196,6 +200,13 @@ package final class HostPipes: Sendable {
 
     /// A pipe session, established: its ticket, then the rsync, on a thread of its own.
     package func serve(_ session: NetSession, device: UUID) {
+        // A thread each, so no more than a device's tickets could use.
+        let room = state.withLock { state -> Bool in
+            guard state.waiting[device, default: 0] < LinkPipe.perDevice else { return false }
+            state.waiting[device, default: 0] += 1
+            return true
+        }
+        guard room else { return session.close(NetControl.Reason.limit) }
         let carried = Carried(session)
         let thread = Thread { [self] in run(carried.session, device: device) }
         thread.name = "kore.pipe"
@@ -209,14 +220,33 @@ package final class HostPipes: Sendable {
 
     private func run(_ session: NetSession, device: UUID) {
         let id = device.uuidString.lowercased()
-        let control: PipeWire.Control
+        let asked: Result<PipeWire.Control, PipeHandshake.Failure>
         do {
-            control = try PipeHandshake.ticket(session, within: 10)
+            asked = .success(try PipeHandshake.ticket(session, within: 10))
         } catch {
+            asked = .failure(error)
+        }
+        // The ticket's spending and the run's start are one step: a revoke finds one or the other.
+        let run = Run(device: device)
+        let key = ObjectIdentifier(run)
+        let spent = state.withLock { state -> Ticket? in
+            state.waiting[device, default: 1] -= 1
+            if state.waiting[device] == 0 { state.waiting[device] = nil }
+            guard case .success(let control) = asked, let value = control.ticketBytes else { return nil }
+            prune(&state)
+            guard let ticket = state.tickets.removeValue(forKey: value), ticket.device == device else { return nil }
+            state.running[key] = run
+            return ticket
+        }
+        defer { state.withLock { _ = $0.running.removeValue(forKey: key) } }
+        let control: PipeWire.Control
+        switch asked {
+        case .success(let said): control = said
+        case .failure(let error):
             session.close(NetControl.Reason.protocolError)
             return HostJournal.note("pipe refused", ["device": id, "why": error.description])
         }
-        guard let value = control.ticketBytes, let ticket = redeem(value, device: device) else {
+        guard let ticket = spent else {
             session.close(PipeWire.Reason.ticket)
             return HostJournal.note("pipe refused", ["device": id, "why": "ticket"])
         }
@@ -236,10 +266,6 @@ package final class HostPipes: Sendable {
             command = parsed.command(rsync: rsync, paths: found.paths, forced: forced)
             cwd = found.cwd
         }
-        let run = Run(device: device)
-        let key = ObjectIdentifier(run)
-        state.withLock { $0.running[key] = run }
-        defer { state.withLock { _ = $0.running.removeValue(forKey: key) } }
         let started = now()
         let outcome = spawnAndSplice(session, command: command, cwd: cwd, run: run)
         HostJournal.note("pipe", [
@@ -292,7 +318,11 @@ package final class HostPipes: Sendable {
         try? stdin.fileHandleForWriting.close()
         let splice = PipeSplice(session: session, input: input, output: output, server: true, first: first) { status.withLock { $0 } }
         poke.withLock { $0 = splice }
-        state.withLock { _ in run.splice = splice }
+        let late = state.withLock { _ -> String? in
+            run.splice = splice
+            return run.stopped
+        }
+        if let late { splice.stop(late) }
         if status.withLock({ $0 }) != nil { splice.poke() }
         let outcome = splice.run()
         if process.isRunning {
@@ -311,7 +341,12 @@ package final class HostPipes: Sendable {
             state.tickets = state.tickets.filter { !gone($0.value.device) }
             return state.running.values.filter { gone($0.device) }
         }
-        for run in runs { state.withLock { _ in run.splice }?.stop(reason) }
+        for run in runs {
+            state.withLock { _ -> PipeSplice? in
+                run.stopped = reason
+                return run.splice
+            }?.stop(reason)
+        }
     }
 
     /// Pipes running now (tests).

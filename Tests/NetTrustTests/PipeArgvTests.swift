@@ -50,6 +50,7 @@ struct PipeArgvTests {
         (["rsync", "--server", "--files-from=/etc/passwd", ".", "/home/u"], .badValue("--files-from")),
         (["rsync", "--server", "--timeout=forever", ".", "/home/u"], .badValue("--timeout")),
         (["rsync", "--server", "--daemon", ".", "/home/u"], .refused("--daemon")),
+        (["rsync", "--server", "-R", "--no-implied-dirs", ".", "/home/u"], .unknown("--no-implied-dirs")),
         (["rsync", "--server", "--made-up", ".", "/home/u"], .unknown("--made-up")),
         (["rsync", "--server", "-r", "."], .noPaths),
         (["rsync", "--server", "-r", "/home/u"], .noPaths),
@@ -71,7 +72,7 @@ struct PipeArgvTests {
     @Test func theCommandRunsWithTheForcedOptions() throws {
         let argv = try PipeArgv.parse(["rsync", "--server", "--sender", "-r", ".", "/x"])
         #expect(argv.command(rsync: "/usr/bin/rsync", paths: ["/home/u/x"]) == [
-            "/usr/bin/rsync", "--server", "--sender", "-r", "--munge-links", "--safe-links", "--no-specials", "--no-devices", "--timeout=60", ".", "/home/u/x",
+            "/usr/bin/rsync", "--server", "--sender", "-r", "--no-specials", "--no-devices", "--timeout=60", ".", "/home/u/x",
         ])
         let timed = try PipeArgv.parse(["rsync", "--server", "--timeout=30", "-r", ".", "/x"])
         #expect(!timed.command().contains("--timeout=60") && timed.command().contains("--timeout=30"))

@@ -109,6 +109,18 @@ package final class PipeSplice: @unchecked Sendable {
     /// `output`'s unwritten bytes past which the socket isn't read.
     package static let receiveHigh = 1 << 20
 
+    /// A peer silent this long is asked (`ping`), and one silent for `gone` has gone: a box that
+    /// vanished leaves no hang-up, and an rsync waits on its remote shell for good.
+    package struct Silence: Sendable {
+        package var ask: TimeInterval
+        package var gone: TimeInterval
+        package init(ask: TimeInterval = 20, gone: TimeInterval = 120) {
+            self.ask = ask
+            self.gone = gone
+        }
+    }
+
+    private let silence: Silence
     private let session: NetSession
     private var input: Int32?
     private var output: Int32?
@@ -127,7 +139,8 @@ package final class PipeSplice: @unchecked Sendable {
     /// `exited` (server): the local process's status once it has ended, else nil; asked after
     /// `input` ends, and on each `poke`.
     /// `first`: messages that came before the splice began (with the server's `go`).
-    package init(session: NetSession, input: Int32?, output: Int32?, server: Bool, first: [NetMessage] = [], exited: (() -> Int32?)? = nil) {
+    package init(session: NetSession, input: Int32?, output: Int32?, server: Bool, first: [NetMessage] = [], silence: Silence = Silence(), exited: (() -> Int32?)? = nil) {
+        self.silence = silence
         self.session = session
         self.first = first
         self.input = input
@@ -174,12 +187,26 @@ package final class PipeSplice: @unchecked Sendable {
             }
             take(piece)
         }
+        var lastHeard = (bytes: session.heard, at: Date())
+        var asked = lastHeard.at
         while true {
             if let reason = stopReason.value {
                 session.close(reason)
                 return .stopped(reason)
             }
             if let outcome = settle() { return outcome }
+            let now = Date()
+            // Not reading (this side's own output is full) says nothing about the peer.
+            if session.heard != lastHeard.bytes || pending.count >= Self.receiveHigh {
+                lastHeard = (session.heard, now)
+                asked = now
+            } else if now.timeIntervalSince(lastHeard.at) >= silence.gone {
+                session.close(NetControl.Reason.timeout)
+                return .broken(NetControl.Reason.timeout)
+            } else if now.timeIntervalSince(asked) >= silence.ask {
+                asked = now
+                session.ping()
+            }
             var fds: [pollfd] = []
             let sock = session.descriptor
             let readSocket = pending.count < Self.receiveHigh
@@ -200,8 +227,8 @@ package final class PipeSplice: @unchecked Sendable {
                 return fds.count - 1
             }()
             // The server looks for its process's end now and then too (a process that closed
-            // its output and lingers); nothing else waits on a clock.
-            let n = poll(&fds, nfds_t(fds.count), server && inputEOF ? 200 : -1)
+            // its output and lingers); else only the peer's silence is on a clock.
+            let n = poll(&fds, nfds_t(fds.count), server && inputEOF ? 200 : Int32(min(silence.ask, 20) * 1000))
             if n < 0 {
                 if errno == EINTR { continue }
                 session.close(NetControl.Reason.limit)

@@ -167,8 +167,14 @@ package struct SyncBox: Sendable {
     package struct PipeLink: Sendable {
         package var usable: @MainActor @Sendable () -> Bool
         package var eCommand: @MainActor @Sendable () -> String?
+        /// Why nothing can be copied with it now, for a box with no SSH; nil: it can, or will be.
+        package var noWay: @MainActor @Sendable () -> String?
 
-        package init(usable: @escaping @MainActor @Sendable () -> Bool, eCommand: @escaping @MainActor @Sendable () -> String?) {
+        package init(
+            usable: @escaping @MainActor @Sendable () -> Bool, eCommand: @escaping @MainActor @Sendable () -> String?,
+            noWay: @escaping @MainActor @Sendable () -> String? = { nil }
+        ) {
+            self.noWay = noWay
             self.usable = usable
             self.eCommand = eCommand
         }
@@ -195,11 +201,15 @@ package struct SyncBox: Sendable {
             box.pipe = link
             return box
         }
-        guard NodeDirectory.isNodeKey(connection.alias) else { return nil }
+        guard NodeDirectory.isNodeKey(connection.alias), BoxPipe.missing(connection) == nil else { return nil }
         var box = SyncBox(alias: connection.alias, base: nil, routed: false, program: ["/usr/bin/false"], extra: [])
         box.pipe = link
+        box.pipe?.noWay = { [weak connection] in connection.flatMap(BoxPipe.missing) }
         return box
     }
+
+    /// Why a box with no SSH can't be copied with now (its kore-host or rsync serves no pipes).
+    @MainActor package var noWay: String? { pipe?.noWay() }
 
     /// Whether this spawn would go over a pipe: no SSH master, shell or alias is needed then.
     @MainActor package var overPipe: Bool { pipe?.usable() ?? false }
@@ -955,6 +965,13 @@ package final class HostSync {
     /// copies of files changed on both, pulls, deletes, pushes. False when something failed (the
     /// agreed list stays as it was).
     private func carry(_ plan: SyncPlan, low: Bool) async -> Bool {
+        // Nothing to copy over: said plainly, and the next link up looks again (never a retry loop).
+        if let why = box.noWay {
+            notice = "Sync paused · " + why
+            try? FileManager.default.removeItem(at: plan.pushList)
+            try? FileManager.default.removeItem(at: plan.pullList)
+            return false
+        }
         let moves = plan.pushes + plan.pulls + plan.deleteMac.count + plan.deleteBox.count + plan.renames.count > 0
         if moves { carrying = true }
         defer {

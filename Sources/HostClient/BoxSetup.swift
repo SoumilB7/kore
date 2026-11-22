@@ -16,6 +16,8 @@ package struct BoxRan: Sendable, Equatable {
     package var ok: Bool { status == 0 }
     /// What a run that ran past its bound ends with (`timeout`'s status), its last line saying so.
     package static let timedOut: Int32 = 124
+    /// ssh never got as far as running anything within `answer` (as ssh's own 255, said plainly).
+    static let noAnswer = "no answer over SSH in time"
     package var lastLine: String {
         output.split(whereSeparator: \.isNewline).last.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
     }
@@ -33,7 +35,15 @@ package struct BoxShell: Sendable {
         self.scp = scp
     }
 
-    static let options = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
+    /// A connection that goes dead mid-command ends in 15 s (a box that answers keeps it for as
+    /// long as the command runs).
+    static let options = [
+        "-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "-o", "ServerAliveInterval=5", "-o", "ServerAliveCountMax=3",
+    ]
+    /// How long a look at a box, or one small change there, may take: past it, SSH is dead.
+    package var quick: Duration = .seconds(30)
+    /// How long a host key scan, or a long install's first answer, may take.
+    package var reach: Duration = .seconds(20)
 
     /// `command` run by the box's shell, in its home; `input` on its stdin.
     package func run(_ alias: String, _ command: String, input: String? = nil) async -> BoxRan {
@@ -43,9 +53,20 @@ package struct BoxShell: Sendable {
 
     /// An sh script run on the box (`sh -s`, the script on stdin): the same whatever the login
     /// shell is. `limit` ends a run that takes longer (an install whose download hangs).
-    package func script(_ alias: String, _ script: String, limit: Duration? = nil) async -> BoxRan {
+    /// `answer`: the script must have begun there by then, or SSH is dead (`BoxRan.noAnswer`);
+    /// a long install is bounded on reaching the box apart from on running there.
+    package func script(_ alias: String, _ script: String, limit: Duration? = nil, answer: Duration? = nil) async -> BoxRan {
         let argv = await BoxSSH.argv(alias, program: ssh, options: Self.options, ["sh -s"])
-        return await Self.process(ssh, Array(argv.dropFirst()), input: script, limit: limit)
+        let mark = "kore-began-" + UUID().uuidString.prefix(8)
+        let said = answer == nil ? script : "echo \(mark)\n" + script
+        var ran = await Self.process(ssh, Array(argv.dropFirst()), input: said, limit: limit, answer: answer.map { ($0, mark) })
+        if answer != nil { ran.output = ran.output.replacingOccurrences(of: mark + "\n", with: "") }
+        return ran
+    }
+
+    /// An install: bounded on the box answering (`reach`), then on the whole (`limit`).
+    package func run(install script: String, on alias: String, limit: Duration) async -> BoxRan {
+        await self.script(alias, script, limit: limit, answer: reach)
     }
 
     /// Copies a file to a path under the box's home.
@@ -57,16 +78,11 @@ package struct BoxShell: Sendable {
     /// Runs `ssh` (whatever program it names) with `arguments`.
     func process(_ arguments: [String], input: String?) async -> BoxRan { await Self.process(ssh, arguments, input: input) }
 
-    static func process(_ executable: String, _ arguments: [String], input: String? = nil, limit: Duration? = nil) async -> BoxRan {
-        final class Ended: @unchecked Sendable {
-            private let lock = NSLock()
-            private var late = false
-            var timedOut: Bool {
-                get { lock.withLock { late } }
-                set { lock.withLock { late = newValue } }
-            }
-        }
-        let ended = Ended()
+    /// `limit` ends it (SIGTERM, then SIGKILL) and returns even while a child of its own (a
+    /// ProxyCommand) still holds its output open.
+    static func process(
+        _ executable: String, _ arguments: [String], input: String? = nil, limit: Duration? = nil, answer: (within: Duration, mark: String)? = nil
+    ) async -> BoxRan {
         return await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
@@ -80,24 +96,49 @@ package struct BoxShell: Sendable {
                 do { try process.run() } catch {
                     return continuation.resume(returning: BoxRan(status: 127, output: error.localizedDescription))
                 }
-                if let limit {
-                    let (seconds, attoseconds) = limit.components
-                    let wait = Double(seconds) + Double(attoseconds) / 1e18
-                    DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + wait) {
-                        guard process.isRunning else { return }
-                        ended.timedOut = true
-                        process.terminate()
-                    }
-                }
                 if let stdin, let input {
                     _ = fcntl(stdin.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
                     try? stdin.fileHandleForWriting.write(contentsOf: Data(input.utf8))
                     try? stdin.fileHandleForWriting.close()
                 }
-                let data = out.fileHandleForReading.readDataToEndOfFile()
+                let clock = ContinuousClock()
+                let started = clock.now
+                var data = Data()
+                var late = false
+                var silent = false
+                var began = answer == nil
+                var gone: ContinuousClock.Instant?
+                var buffer = [UInt8](repeating: 0, count: 16 << 10)
+                let fd = out.fileHandleForReading.fileDescriptor
+                reading: while true {
+                    let now = clock.now
+                    if !late, !silent, process.isRunning {
+                        if let limit, now - started >= limit { late = true }
+                        else if !began, let answer, now - started >= answer.within { silent = true }
+                        if late || silent {
+                            process.terminate()
+                            gone = now
+                        }
+                    }
+                    if let gone, now - gone >= .seconds(1) {
+                        if process.isRunning { kill(process.processIdentifier, SIGKILL) }
+                        if now - gone >= .seconds(2) { break reading }
+                    }
+                    // A bound reached after it exited: only its output is still held open.
+                    if gone == nil, let limit, !process.isRunning, now - started >= limit { gone = now }
+                    var ready = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                    let bounded = limit != nil || answer != nil
+                    guard poll(&ready, 1, bounded ? 100 : -1) > 0 else { continue }
+                    let n = read(fd, &buffer, buffer.count)
+                    if n < 0, errno == EINTR { continue }
+                    guard n > 0 else { break }
+                    data.append(contentsOf: buffer[0..<n])
+                    if !began, let answer, data.range(of: Data(answer.mark.utf8)) != nil { began = true }
+                }
                 process.waitUntilExit()
                 let output = String(decoding: data, as: UTF8.self)
-                if ended.timedOut, let limit {
+                if silent { return continuation.resume(returning: BoxRan(status: AttachExit.sshFailed, output: output + "\n" + BoxRan.noAnswer)) }
+                if late, let limit {
                     let minutes = Int(limit.components.seconds) / 60
                     let took = minutes >= 1 ? "\(minutes) min" : "\(Int(limit.components.seconds)) s"
                     return continuation.resume(returning: BoxRan(status: BoxRan.timedOut, output: output + "\nit took longer than \(took), so Kore stopped it"))
@@ -234,8 +275,8 @@ package struct BoxSetup: Sendable {
 
     /// What the box is, over one ssh session; `deep` runs the CLIs' `--version` too.
     package func detect(deep: Bool = true) async throws(Failure) -> BoxMachine {
-        let ran = await shell.script(alias, BoxMachine.script(deep: deep))
-        guard ran.status != AttachExit.sshFailed else { throw Self.sshFailure(alias, ran.output) }
+        let ran = await shell.script(alias, BoxMachine.script(deep: deep), limit: shell.quick)
+        if let why = await Self.dead(alias, ran) { throw why }
         guard let machine = BoxMachine.parse(ran.output) else {
             throw Failure(message: "\(NodeNames.name(alias)) didn't answer like a shell" + (ran.lastLine.isEmpty ? "" : ": " + ran.lastLine), fix: .tryAgain)
         }
@@ -374,6 +415,16 @@ package struct BoxSetup: Sendable {
         }
         if text.contains("connection refused") { return Failure(message: "\(name) refused SSH", fix: .tryAgain) }
         return Failure(message: "Can't reach \(name)", fix: .tryAgain)
+    }
+
+    /// Why a quick command's SSH is dead (ssh failed, or the command ran past its bound); nil:
+    /// SSH answered. A box whose link is up (KoreNet) is said as connected: only this needs SSH.
+    @MainActor package static func dead(_ alias: String, _ ran: BoxRan) -> Failure? {
+        guard ran.status == AttachExit.sshFailed || ran.status == BoxRan.timedOut else { return nil }
+        let name = NodeDirectory.shared.sshAlias(forKey: alias) ?? alias
+        let why = sshFailure(name, ran.status == BoxRan.timedOut ? "" : ran.output)
+        guard why.fix == .tryAgain, HostConnection.live(alias)?.isOnline == true else { return why }
+        return Failure(message: "\(NodeNames.name(alias)) is connected, but this goes over SSH, and SSH doesn't answer", fix: .tryAgain)
     }
 
     /// A new host key's line before its fingerprint is known (the box list then looks for it).

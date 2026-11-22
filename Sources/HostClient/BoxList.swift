@@ -367,7 +367,10 @@ package final class BoxList {
     /// Finds what the box is (one ssh session, reading only) and keeps it; compares it with this
     /// Mac again. Nil, with the line set, when ssh failed.
     @discardableResult
-    package func detect(_ alias: String, deep: Bool = true) async -> BoxMachine? {
+    package func detect(_ alias: String, deep: Bool = true) async -> BoxMachine? { try? await look(alias, deep: deep).get() }
+
+    /// `detect`, with why it failed (Check again says it).
+    package func look(_ alias: String, deep: Bool = true) async -> Result<BoxMachine, BoxSetup.Failure> {
         do {
             let machine = try await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).detect(deep: deep)
             machine.keep(alias, root: cacheRoot)
@@ -375,13 +378,13 @@ package final class BoxList {
             noteKeys(alias)
             update(alias) { $0.machine = machine }
             await compare(alias)
-            return machine
+            return .success(machine)
         } catch {
             // Only when nothing better is known: the link's own answer says more.
             if case .probing = box(alias)?.status {} else if box(alias)?.status != .ready {
                 update(alias) { $0.status = .unreachable(error.message, error.fix) }
             }
-            return nil
+            return .failure(error)
         }
     }
 
@@ -416,11 +419,12 @@ package final class BoxList {
         switch agent.install(on: machine, name: alias) {
         case .failure(let why): return why
         case .success(let script):
-            let ran = await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell.script(alias, script, limit: installLimit)
+            let ran = await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell.run(install: script, on: alias, limit: installLimit)
+            // SSH dead: said now (a look would only wait for it again).
+            if ran.status == AttachExit.sshFailed { return BoxSetup.dead(alias, ran) }
             // Every install ends with a fresh look, failed or not: the card shows what's there now.
             let found = await detect(alias)
             guard ran.ok else {
-                if ran.status == AttachExit.sshFailed { return BoxSetup.sshFailure(alias, ran.output) }
                 return BoxSetup.Failure(message: "\(agent.rawValue) didn't install" + (ran.lastLine.isEmpty ? "" : ": " + ran.lastLine), fix: nil)
             }
             guard let found else { return BoxSetup.Failure(message: "\(agent.rawValue) installed, but \(name) didn't answer after", fix: .tryAgain) }
@@ -441,14 +445,17 @@ package final class BoxList {
     /// A tool that installs without a password there (Homebrew), then the machine again.
     package func installTool(_ tool: String, on alias: String) async -> BoxSetup.Failure? {
         guard let machine = box(alias)?.machine, machine.installsWithoutPassword(tool), let command = machine.installCommand(tool) else { return nil }
-        let ran = await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell.script(alias, "PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\n" + command + "\n")
+        let ran = await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell.run(install: "PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\n" + command + "\n", on: alias, limit: installLimit)
+        if ran.status == AttachExit.sshFailed { return BoxSetup.dead(alias, ran) }
         await detect(alias)
         return ran.ok ? nil : BoxSetup.Failure(message: "\(tool) didn't install: \(ran.lastLine)")
     }
 
     /// This Mac's git name and email, set there.
     package func setGitIdentity(name: String?, email: String?, on alias: String) async -> BoxSetup.Failure? {
-        let ran = await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell.script(alias, BoxParity.gitScript(name: name, email: email))
+        let shell = makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell
+        let ran = await shell.script(alias, BoxParity.gitScript(name: name, email: email), limit: shell.quick)
+        if let why = BoxSetup.dead(alias, ran) { return why }
         await detect(alias, deep: false)
         return ran.ok ? nil : BoxSetup.Failure(message: "git on \(NodeNames.name(alias)) didn't take it: \(ran.lastLine)")
     }

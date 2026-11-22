@@ -306,6 +306,7 @@ package final class NetSession {
                 end("closed")
                 break reading
             }
+            heard &+= bytes.count
             guard !bytes.isEmpty else {
                 end("closed")
                 break reading
@@ -346,6 +347,9 @@ package final class NetSession {
         scheduler.enqueue(payload, queue: queue, stream: stream)
         flush()
     }
+
+    /// Bytes read off the socket so far (whether a silent peer is still there).
+    package private(set) var heard = 0
 
     /// Whether frames are waiting for the socket to take them.
     package var wantsWrite: Bool { !out.isEmpty || !scheduler.isEmpty }

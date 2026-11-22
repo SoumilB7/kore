@@ -86,6 +86,8 @@ struct BoxAgentsView: View {
     @StateObject private var checking = Local(false)
 
     private var list: BoxList { .shared }
+    /// Check again's own failure, among `failed`.
+    private static let checkKey = "check"
 
     var body: some View {
         let box = list.box(alias)
@@ -107,7 +109,10 @@ struct BoxAgentsView: View {
                 // Said, not counted: what Fix doesn't change (a newer CLI there, setup listed only).
                 ForEach(notes) { note in differenceLine(note, quiet: true) }
             }
-            HStack {
+            HStack(spacing: Space.sm) {
+                if !checking.value, let why = failed.value[Self.checkKey] {
+                    Text(why.message).font(TextStyle.caption).foregroundStyle(Theme.danger).lineLimit(2)
+                }
                 Spacer(minLength: 0)
                 Button(checking.value ? "Checking…" : "Check again") { Task { await check() } }.smallButton().disabled(checking.value)
             }
@@ -267,7 +272,7 @@ struct BoxAgentsView: View {
     private func check() async {
         checking.value = true
         failed.value = [:]
-        await list.detect(alias)
+        if case .failure(let why) = await list.look(alias) { failed.value[Self.checkKey] = why }
         await readLogins(refresh: true)
         checking.value = false
     }

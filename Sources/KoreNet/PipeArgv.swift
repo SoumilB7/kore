@@ -17,8 +17,12 @@ package struct PipeArgv: Equatable, Sendable {
     package var paths: [String]
 
     /// Options the far end always runs with, after the client's (rsync takes the last word):
-    /// links it receives can't point out, devices and specials are never made.
-    package static let forced = ["--munge-links", "--safe-links", "--no-specials", "--no-devices"]
+    /// devices and specials are never made. Not `--munge-links` or `--safe-links`: they drop or
+    /// rewrite the user's own links (every link a Mac sends, with both: real rsync 3.5,
+    /// 2026-11-25). What keeps a copy inside its folder is the argv check, each path where it
+    /// really leads, no option that follows links there (L, k, K, `--no-implied-dirs`), and rsync,
+    /// which never writes through a folder link it finds.
+    package static let forced = ["--no-specials", "--no-devices"]
     /// The far end's own I/O timeout when the client gave none (openrsync never passes one).
     package static let serverTimeout = 60
 
@@ -28,10 +32,10 @@ package struct PipeArgv: Equatable, Sendable {
     static let shortLetters = Set("glopDrtzcdRvxuSWIniOJmCb")
     /// Long options taken as they are.
     static let longFlags: Set<String> = [
-        "--dirs", "--relative", "--no-implied-dirs", "--delete", "--delete-before", "--delete-during", "--delete-after", "--delete-delay",
+        "--dirs", "--relative", "--delete", "--delete-before", "--delete-during", "--delete-after", "--delete-delay",
         "--partial", "--from0", "--compress", "--checksum", "--numeric-ids", "--size-only", "--ignore-times", "--inplace", "--append",
         "--mkpath", "--existing", "--ignore-existing", "--force", "--omit-dir-times", "--omit-link-times", "--prune-empty-dirs",
-        "--whole-file", "--sparse", "--update", "--one-file-system", "--munge-links", "--safe-links", "--no-specials", "--no-devices",
+        "--whole-file", "--sparse", "--update", "--one-file-system", "--no-specials", "--no-devices",
     ]
     /// Long options with a value, and what the value may be.
     static let longValues: [String: @Sendable (String) -> Bool] = [

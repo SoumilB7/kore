@@ -22,7 +22,8 @@ extension HostDaemon {
         guard let to = args.device.flatMap(UUID.init(uuidString:)), let ticket = args.ticket.flatMap({ Data(base64Encoded: $0) }),
               let from = args.from, let dest = args.to
         else { return refuse(.invalid, "Name the ticket, the box and both paths.") }
-        guard let record = try? devices.book.record(to), record.kind == .box else { return refuse(.goneFile, "This box doesn't know that one.") }
+        // A name rsync would read as an option never becomes its argument.
+        guard let record = try? devices.book.record(to), record.kind == .box, !record.name.hasPrefix("-") else { return refuse(.goneFile, "This box doesn't know that one.") }
         guard case .success = HostFiles(home: HostPaths.home().path, served: config.folders).place(from, .homeOrServed) else {
             return refuse(.deniedPath, "Outside your home and the folders this box serves.")
         }

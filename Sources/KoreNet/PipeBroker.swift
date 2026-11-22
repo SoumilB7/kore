@@ -49,8 +49,13 @@ package final class PipeBroker: @unchecked Sendable {
 
     /// `command` as one `-e` string: rsync splits it at spaces, so a word with one is quoted (both
     /// openrsync and rsync 3 read quotes there).
-    package func eCommand(helper: String) -> String {
-        command(helper: helper).map { $0.contains(where: { " '\"\\".contains($0) }) ? "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" : $0 }
+    package func eCommand(helper: String) -> String { Self.joined(command(helper: helper)) }
+
+    /// `-e` for a pipe that can't be had: the helper says so and ends (255), no socket, no SSH.
+    package static func noPipe(helper: String) -> String { joined([helper, "pipe", "--none"]) }
+
+    private static func joined(_ words: [String]) -> String {
+        words.map { $0.contains(where: { " '\"\\".contains($0) }) ? "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" : $0 }
             .joined(separator: " ")
     }
 
@@ -155,6 +160,7 @@ package enum PipeClient {
             switch word {
             case "--socket": socketPath = rest.first; rest = rest.dropFirst()
             case "--token": token = rest.first; rest = rest.dropFirst()
+            case "--none": return fail("no pipe to the box right now")
             case "--": break
             default: return fail(usage)
             }

@@ -54,7 +54,7 @@ package final class ChildReaper: @unchecked Sendable {
         let process = Process()
         let pipe = Pipe()
         process.executableURL = URL(fileURLWithPath: "/bin/sh")
-        process.arguments = ["-c", Self.script(tenths: Int(grace / .milliseconds(100)))]
+        process.arguments = ["-c", Self.script(milliseconds: Int(grace / .milliseconds(1)))]
         process.environment = ["PATH": "/usr/bin:/bin:/usr/sbin:/sbin"]
         process.standardInput = pipe
         process.standardOutput = FileHandle.nullDevice
@@ -68,7 +68,7 @@ package final class ChildReaper: @unchecked Sendable {
         }
     }
 
-    private static func script(tenths: Int) -> String {
+    private static func script(milliseconds: Int) -> String {
         #"""
         started() { ps -o lstart= -p "$1" 2>/dev/null | tr -d ' '; }
         ours() { [ -n "${1#*:}" ] && [ "$(started "${1%%:*}")" = "${1#*:}" ]; }
@@ -80,12 +80,16 @@ package final class ChildReaper: @unchecked Sendable {
             -) kept=; for e in $live; do [ "${e%%:*}" = "$pid" ] || kept="$kept $e"; done; live=$kept ;;
           esac
         done
+        # The grace by the clock: each pass asks ps about every child, so passes take longer
+        # the more there are.
+        now() { perl -MTime::HiRes=time -e 'printf "%d", time * 1000'; }
+        end=$(( $(now) + \#(milliseconds) ))
         n=0
         while :; do
           left=; for e in $live; do ours "$e" && left="$left $e"; done
           live=$left
           [ -z "$live" ] && exit 0
-          [ $n -ge \#(tenths) ] && break
+          [ $n -gt 0 ] && [ "$(now)" -ge "$end" ] && break
           if [ $n -eq 0 ]; then
             for e in $live; do kill -TERM -- "-${e%%:*}" 2>/dev/null; kill -TERM "${e%%:*}" 2>/dev/null; done
           fi

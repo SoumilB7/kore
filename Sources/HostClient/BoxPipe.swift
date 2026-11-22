@@ -25,9 +25,17 @@ package enum BoxPipe {
         connection.isOnline && connection.route == .net && connection.caps.contains(LinkPipe.cap) && helper != nil
     }
 
-    /// rsync's `-e` for one spawn over a pipe, its broker waiting; nil: no pipe now (SSH, if any).
+    /// Why a box reached only over KoreNet can't copy, once its link has said what it serves.
+    package static func missing(_ connection: HostConnection) -> String? {
+        guard connection.isOnline, !connection.caps.contains(LinkPipe.cap) else { return nil }
+        return "\(NodeNames.name(connection.alias)) can't copy without SSH yet · update kore-host there, and rsync to 3.2.5 or newer"
+    }
+
+    /// rsync's `-e` for one spawn over a pipe, its broker waiting (or the helper saying there's none to be
+    /// had: never SSH then); nil: the link isn't on KoreNet (SSH, if any).
     package static func eCommand(_ connection: HostConnection) -> String? {
-        guard usable(connection), let helper, let dial = connection.pipeDial else { return nil }
+        guard usable(connection), let helper else { return nil }
+        guard let dial = connection.pipeDial else { return PipeBroker.noPipe(helper: helper.path) }
         let alias = connection.alias
         let broker: PipeBroker
         do {
@@ -46,7 +54,7 @@ package enum BoxPipe {
             }
         } catch {
             HostLog.note(alias, "pipe", "no socket for it: \(error)")
-            return nil
+            return PipeBroker.noPipe(helper: helper.path)
         }
         broker.start()
         HostLog.note(alias, "pipe", "rsync over KoreNet")
