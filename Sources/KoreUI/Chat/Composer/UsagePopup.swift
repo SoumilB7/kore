@@ -562,12 +562,29 @@ struct UsagePopup: View {
             .opacity(unavailable == nil ? 1 : Theme.dimmed)
         }
         let extras = state.reading?.limits?.extras ?? []
-        if !extras.isEmpty {
-            extrasLine(extras, live: unavailable == nil && state.status != .loading)
-                .font(TextStyle.caption)
-                .foregroundStyle(Theme.secondary)
-                .padding(.top, Space.md)
-                .opacity(unavailable == nil ? 1 : Theme.dimmed)
+        // A plan's limits read: the CLI's own link to its limit resets, at the caption's end.
+        let reset = state.reading?.account.access == .plan && bars?.isEmpty == false ? wording.limitReset : nil
+        if !extras.isEmpty || reset != nil {
+            HStack(spacing: Space.md) {
+                if !extras.isEmpty { extrasLine(extras, live: unavailable == nil && state.status != .loading) }
+                Spacer(minLength: 0)
+                if let reset {
+                    CaptionButton(title: "Reset", tint: Theme.secondary, hover: Theme.accent, opens: true) {
+                        StoryHost.open(reset)
+                        state.close()
+                    }
+                    .tip("Limit resets on \(reset.host() ?? reset.absoluteString)")
+                    .storyID(StoryID.Composer.usage.part(.limitReset))
+                    .tabStop(StoryID.Composer.usage.part(.limitReset)) {
+                        StoryHost.open(reset)
+                        state.close()
+                    }
+                }
+            }
+            .font(TextStyle.caption)
+            .foregroundStyle(Theme.secondary)
+            .padding(.top, Space.md)
+            .opacity(unavailable == nil ? 1 : Theme.dimmed)
         }
         if state.resetsOpen, let caption = wording.resetsCaption {
             let rows = state.resetRows
@@ -685,12 +702,14 @@ struct UsagePopup: View {
 }
 
 /// A text button in the caption's line: `tint` at rest, `hover` under the pointer. With
-/// `unfolds`, a ⌄ after it (tertiary at rest) turned over while what it unfolds is open.
-private struct CaptionButton: View {
+/// `unfolds`, a ⌄ after it (tertiary at rest) turned over while what it unfolds is open; with
+/// `opens`, a ↗ after it, for a page in the browser.
+struct CaptionButton: View {
     let title: String
     let tint: Color
     let hover: Color
     var unfolds: Bool?
+    var opens = false
     let action: () -> Void
     @StateObject private var hovered = Local(false)
     @Environment(\.isEnabled) private var isEnabled
@@ -707,6 +726,9 @@ private struct CaptionButton: View {
                         .foregroundStyle(lit ? hover : Theme.tertiary)
                         .rotationEffect(.degrees(unfolds ? 180 : 0))
                         .animation(reduceMotion ? nil : Motion.fade, value: unfolds)
+                }
+                if opens {
+                    Image(systemName: "arrow.up.right").font(Glyph.chevron).foregroundStyle(lit ? hover : Theme.tertiary)
                 }
             }
             .foregroundStyle(isEnabled ? (lit ? hover : tint) : Theme.tertiary)

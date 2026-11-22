@@ -38,6 +38,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case signIn = "signin", signOut = "signout"
         /// An Auto ask's "Always ask for these in my settings".
         case settings
+        /// The usage popup's and a limit notice's link to the CLI's own limit resets.
+        case limitReset = "limitreset"
         /// The install card's Install, Try again and Locate….
         case install, retry, locate
         case `continue`, background, submit, other
@@ -278,6 +280,8 @@ extension StoryID {
         package static func signIn(_ turn: String) -> StoryID { StoryID(.transcript, "signin", key: turn) }
         /// A limit notice's "Continues at …", by its turn; `.part(.cancel)` is its ×.
         package static func continues(_ turn: String) -> StoryID { StoryID(.transcript, "continues", key: turn) }
+        /// A failed turn's notice, by its turn; `.part(.limitReset)` is a plan limit's Reset ↗.
+        package static func outcome(_ turn: String) -> StoryID { StoryID(.transcript, "outcome", key: turn) }
         /// A turn that failed while the Mac slept, by its turn; `.part(.continue)` is its Continue.
         package static func slept(_ turn: String) -> StoryID { StoryID(.transcript, "slept", key: turn) }
         package static func compacted(_ entry: UUID) -> StoryID { StoryID(.transcript, "compacted", key: entry.uuidString) }

@@ -106,14 +106,24 @@ struct RefusedChoices {
 /// awake continues it, one quiet part follows on the same line, or under it when the row is
 /// narrow: "Continues at 3:00 PM" and its ×, or, for a message set to go then, "“…” · sends at
 /// 3:00 PM" and its ×.
-private struct OutcomeLine: View {
+struct OutcomeLine: View {
     let turn: String
     let text: String
     let continues: Date?
     var sends: String?
     let cancel: () -> Void
     var retry: (() -> Void)?
+    /// A plan's limit hit: the CLI's own link to its limit resets.
+    var limitReset: URL?
     var refused: RefusedChoices?
+
+    /// The reset link for a notice that names the plan's limit, for a CLI with one and an
+    /// account on a plan.
+    static func limitReset(_ text: String, _ provider: ProviderDescriptor?) -> URL? {
+        guard let provider, provider.usage.limitReset != nil, PlanLimitHit.claude(text, rejected: nil) != nil else { return nil }
+        let identity: AccountIdentity? = if case .signedIn(let id) = AccountStore.shared.status(provider.id) { id } else { nil }
+        return provider.usage.limitReset(for: identity)
+    }
 
     var body: some View {
         if let continues {
@@ -142,6 +152,12 @@ private struct OutcomeLine: View {
                 // Not a failure when it continues on its own: in secondary, as "Interrupted" is.
                 .foregroundStyle(text == "Interrupted" || continues != nil ? Theme.secondary : Theme.danger)
                 .selectableOnHover()
+            if let limitReset {
+                CaptionButton(title: "Reset", tint: Theme.secondary, hover: Theme.accent, opens: true) { StoryHost.open(limitReset) }
+                    .font(TextStyle.body)
+                    .tip("Limit resets on \(limitReset.host() ?? limitReset.absoluteString)")
+                    .storyID(StoryID.Transcript.outcome(turn).part(.limitReset))
+            }
             if let refused {
                 // Safeguards flag routine work too: on the model the CLI would fall back to, or
                 // the message again with what the work is said first.
@@ -389,7 +405,7 @@ struct RowContent: View {
             Rule()
         case .outcome(let turn, let text, let continues, let sends, let retry, let refusal):
             OutcomeLine(turn: turn, text: text, continues: continues, sends: sends, cancel: actions.cancelContinue,
-                        retry: retry ? { actions.retryTurn(turn) } : nil,
+                        retry: retry ? { actions.retryTurn(turn) } : nil, limitReset: OutcomeLine.limitReset(text, actions.provider),
                         refused: refusal.map { refusal in
                             let fallback = actions.fallback(refusal)
                             return RefusedChoices(
