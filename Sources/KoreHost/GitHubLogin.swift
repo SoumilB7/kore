@@ -3,9 +3,10 @@ import Foundation
 /// `gh` on the box: whether it's signed in to github.com, and its device-code sign-in, run
 /// without a terminal. Each runs only when asked (a connect, `auth.gh`): nothing polls.
 package enum GitHubLogin {
-    /// `gh auth status` for github.com succeeds; false without `gh`.
-    package static func signedIn() -> Bool {
-        (try? run(["gh", "auth", "status", "--hostname", "github.com"])) == 0
+    /// `gh auth status` for github.com succeeds; false without `gh`. `environment`: the box's
+    /// (its `PATH` finds `gh`).
+    package static func signedIn(environment: [String: String]) async -> Bool {
+        await run(["gh", "auth", "status", "--hostname", "github.com"], environment: environment) == 0
     }
 
     /// The page and the one-time code, once `gh` has printed both.
@@ -20,9 +21,11 @@ package enum GitHubLogin {
     /// without them); `ended` whether the sign-in finished, after `gh auth setup-git`.
     @discardableResult
     package static func start(
-        started: @escaping @Sendable ((url: String, code: String)?, String) -> Void, ended: @escaping @Sendable (Bool) -> Void
+        environment: [String: String], started: @escaping @Sendable ((url: String, code: String)?, String) -> Void,
+        ended: @escaping @Sendable (Bool) -> Void
     ) -> Process? {
         let process = Process()
+        process.environment = environment
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = ["gh", "auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web"]
         process.standardInput = FileHandle.nullDevice
@@ -41,8 +44,11 @@ package enum GitHubLogin {
         process.terminationHandler = { process in
             pipe.fileHandleForReading.readabilityHandler = nil
             if !state.told { started(nil, state.text) }
-            let ok = process.terminationStatus == 0 && (try? run(["gh", "auth", "setup-git"])) == 0
-            ended(ok)
+            let ok = process.terminationStatus == 0
+            Task {
+                let set = ok ? await run(["gh", "auth", "setup-git"], environment: environment) == 0 : false
+                ended(set)
+            }
         }
         do {
             try process.run()
@@ -69,15 +75,24 @@ package enum GitHubLogin {
         }
     }
 
-    private static func run(_ arguments: [String]) throws -> Int32 {
+    static func run(_ arguments: [String], environment: [String: String]? = nil) async -> Int32? {
         let process = Process()
+        if let environment { process.environment = environment }
         process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
         process.arguments = arguments
         process.standardInput = FileHandle.nullDevice
         process.standardOutput = FileHandle.nullDevice
         process.standardError = FileHandle.nullDevice
-        try process.run()
-        process.waitUntilExit()
-        return process.terminationStatus
+        // Its end comes by its termination handler: a wait would hold one of the few threads
+        // all of the box's async work shares, for as long as `gh` takes.
+        return await withCheckedContinuation { ended in
+            process.terminationHandler = { ended.resume(returning: $0.terminationStatus) }
+            do {
+                try process.run()
+            } catch {
+                process.terminationHandler = nil
+                ended.resume(returning: nil)
+            }
+        }
     }
 }

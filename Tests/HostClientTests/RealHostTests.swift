@@ -24,6 +24,7 @@ struct RealHostTests {
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         var env = ProcessInfo.processInfo.environment
+        env["PATH"] = FakeGh.path(env["PATH"])
         env["XDG_STATE_HOME"] = root.appendingPathComponent("state").path
         env["XDG_RUNTIME_DIR"] = root.appendingPathComponent("run").path
         env["XDG_CONFIG_HOME"] = root.appendingPathComponent("config").path

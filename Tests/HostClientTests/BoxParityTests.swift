@@ -166,7 +166,7 @@ final class BoxRig {
             "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
         ])
         try HostConfig(folders: [folder.path]).save(paths.config)
-        host = HostDaemon(paths: paths)
+        host = HostDaemon.forTest(paths: paths)
         host.filesTrash = .mac(root.appendingPathComponent(".Trash").path)
         try host.start()
         grant = try GrantStore(paths.grants).allow("laptop", control: control, socket: paths.socket)

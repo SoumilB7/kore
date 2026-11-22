@@ -253,7 +253,7 @@ extension AgentChannelTests {
                     "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
                 ])
                 try HostConfig(folders: [folder.path]).save(paths.config)
-                host = HostDaemon(paths: paths)
+                host = HostDaemon.forTest(paths: paths)
                 // Before anything reads the box's accounts: the scratch home.
                 host.sessionEnv["HOME"] = root.path
                 host.pastSessions = { _, _ in [] }

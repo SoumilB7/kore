@@ -44,8 +44,7 @@ struct CarryResumeTests {
     func tree(_ parent: String, _ name: String = "proj") throws -> String {
         let root = parent + "/" + name
         try FileManager.default.createDirectory(atPath: root + "/sub", withIntermediateDirectories: true)
-        var random = SystemRandomNumberGenerator()
-        let big = Data((0..<6_000_000).map { _ in UInt8.random(in: 0...255, using: &random) })
+        let big = randomBytes(6_000_000)
         try big.write(to: URL(fileURLWithPath: root + "/big.bin"))
         try Data("hello\n".utf8).write(to: URL(fileURLWithPath: root + "/a.txt"))
         try Data("deep\n".utf8).write(to: URL(fileURLWithPath: root + "/sub/b.md"))
@@ -112,8 +111,7 @@ struct CarryResumeTests {
         }
         let source = mac + "/proj"
         try FileManager.default.createDirectory(atPath: source, withIntermediateDirectories: true)
-        var random = SystemRandomNumberGenerator()
-        let bytes = Data((0..<1_200_000).map { _ in UInt8.random(in: 0...255, using: &random) })
+        let bytes = randomBytes(1_200_000)
         try bytes.write(to: URL(fileURLWithPath: source + "/big.bin"))
         try Data("hello\n".utf8).write(to: URL(fileURLWithPath: source + "/a.txt"))
         let count = try #require(CarryCount.mac(source))

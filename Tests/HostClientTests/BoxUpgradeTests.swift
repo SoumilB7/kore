@@ -362,7 +362,7 @@ struct BoxUpgradeTests {
             $0.whois["127.0.0.1"] = try! JSONDecoder().decode(
                 TailnetWhoIs.self, from: Data(#"{"Node":{"Key":"nodekey:mac","Name":"mac.tail.ts.net."},"UserProfile":{"ID":7,"LoginName":"me@example.com"}}"#.utf8))
         }
-        let host = HostDaemon(paths: paths)
+        let host = HostDaemon.forTest(paths: paths)
         host.makeTailnet = { boxNet }
         host.netPort = 0
         try host.start()
@@ -401,6 +401,14 @@ struct BoxUpgradeTests {
                 return try attaches.dial(paths.netSocket, grant)
             }, macName: { "MacBook" })
         let alias = "nz-\(UUID().uuidString.prefix(6).lowercased())"
+        // What the Mac noted for this box (enroll's reason among them), said if it doesn't join.
+        let noted = Mutex<[String]>([])
+        let tapped = HostLog.tap
+        HostLog.tap = { line in
+            tapped?(line)
+            noted.withLock { $0.append(line) }
+        }
+        defer { HostLog.tap = tapped }
         let directory = NodeDirectory(defaults: defaults)
         let connection = HostConnection(alias: alias, grant: grantName, cache: HostCache(alias: alias, root: support.appendingPathComponent("hosts"))) {
             guard let grant = GrantStore(paths.grants).load(grantName) else { return DaemonTransport(path: "/nonexistent", grant: Grant(name: grantName, socket: "", secret: "", control: .full, created: 0)) }
@@ -439,7 +447,8 @@ struct BoxUpgradeTests {
         // upgrade ends: `facts` reads both, as the box's row does.
         let joined = await holds { upgrades.facts(alias)?.joinedAt != nil }
         let join1 = upgrades.joins[alias] ?? upgrades.joins[connection.alias]
-        #expect(joined, "\(join1?.note ?? "-") \(join1?.rows ?? []) · \(String(describing: connection.route))")
+        let said = noted.withLock { $0 }.filter { $0.hasPrefix(alias) || $0.hasPrefix(connection.alias) || $0.contains("enroll") }
+        #expect(joined, "\(join1?.note ?? "-") \(join1?.rows ?? []) · \(String(describing: connection.route)) · noted: \(said.suffix(20))")
         // Nothing after it can come: the test ends here, not in waits that never would.
         guard joined else { return switcher.set(false) }
         #expect(upgrades.started == 1)

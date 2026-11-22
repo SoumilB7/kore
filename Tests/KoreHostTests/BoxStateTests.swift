@@ -156,7 +156,7 @@ struct BoxStateTests {
         hc.stream.close()
         let id = hc.id
         // Read again by a new daemon, the old one never stopped.
-        let again = HostDaemon(paths: rig.paths)
+        let again = HostDaemon.forTest(paths: rig.paths)
         let back = try #require(again.chat(id))
         // Settled as the box starts, before any client asks: the phone's text is back in the draft.
         #expect(back.record.draft == "from the phone" && back.record.cliStarted == nil)
@@ -169,7 +169,7 @@ struct BoxStateTests {
         // The Mac's text isn't: its chat restores its own from the log.
         #expect(back.record.draft == "from the phone")
         // Read once more: nothing is closed twice.
-        let third = HostDaemon(paths: rig.paths)
+        let third = HostDaemon.forTest(paths: rig.paths)
         let count = await third.chat(id)?.stream.since(nil, log: nil).items.count
         #expect(count == items.count)
     }

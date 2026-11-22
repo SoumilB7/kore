@@ -137,12 +137,29 @@ final class PipeRig: @unchecked Sendable {
     }
 }
 
+/// `count` bytes that don't compress, the same for the same seed: eight at a time (a byte at a
+/// time held the main actor seconds for 32 MB, stalling every test beside it).
 func bytes(_ count: Int, seed: UInt8 = 7) -> Data {
     var state = UInt64(seed) &* 0x9E37_79B9_7F4A_7C15
-    return Data((0..<count).map { _ in
-        state = state &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
-        return UInt8(truncatingIfNeeded: state >> 33)
-    })
+    var data = Data(count: (count + 7) / 8 * 8)
+    data.withUnsafeMutableBytes { raw in
+        for i in 0..<raw.count / 8 {
+            // splitmix64
+            state &+= 0x9E37_79B9_7F4A_7C15
+            var z = state
+            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+            raw.storeBytes(of: z ^ (z >> 31), toByteOffset: i * 8, as: UInt64.self)
+        }
+    }
+    return data.prefix(count)
+}
+
+/// `count` random bytes, filled at once.
+func randomBytes(_ count: Int) -> Data {
+    var data = Data(count: count)
+    data.withUnsafeMutableBytes { arc4random_buf($0.baseAddress, count) }
+    return data
 }
 
 @Suite("Pipes (rsync over KoreNet)", .serialized)

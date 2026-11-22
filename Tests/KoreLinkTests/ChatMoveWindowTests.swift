@@ -48,7 +48,7 @@ struct ChatMoveWindowTests {
             "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
         ])
         try HostConfig(folders: [folder.path]).save(paths.config)
-        let host = HostDaemon(paths: paths)
+        let host = HostDaemon.forTest(paths: paths)
         try host.start()
         defer { host.stop() }
         host.sessionEnv = ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("boxclaude").path, "HOME": root.path]
@@ -171,7 +171,7 @@ struct ChatMoveWindowTests {
             "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
         ])
         try HostConfig(folders: [folder.path]).save(paths.config)
-        let host = HostDaemon(paths: paths)
+        let host = HostDaemon.forTest(paths: paths)
         try host.start()
         defer { host.stop() }
         host.sessionEnv = ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("boxclaude").path, "HOME": root.path]

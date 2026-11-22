@@ -1164,8 +1164,9 @@ package final class HostDaemon {
     private func readGitHub() {
         guard ghRead.map({ Date().timeIntervalSince($0) > 60 }) ?? true else { return }
         ghRead = Date()
+        let environment = sessionEnv
         Task { [weak self] in
-            let now = await Task.detached(priority: .utility) { GitHubLogin.signedIn() }.value
+            let now = await Task.detached(priority: .utility) { await GitHubLogin.signedIn(environment: environment) }.value
             guard let self, now != self.ghSignedIn else { return }
             self.ghSignedIn = now
             for connection in self.connections where connection.proven {
@@ -1178,7 +1179,9 @@ package final class HostDaemon {
     /// them; `<id>:done` says how it ended, and `ghSignedIn` follows in a delta.
     private func gitHub(id: String, reply: @escaping @MainActor (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
         if ghLogin?.isRunning == true { ghLogin?.terminate() }
+        let environment = sessionEnv
         ghLogin = GitHubLogin.start(
+            environment: environment,
             started: { found, said in
                 Task { @MainActor in
                     if let found {
@@ -1194,7 +1197,7 @@ package final class HostDaemon {
                     guard let self else { return }
                     self.ghLogin = nil
                     // Read off the main thread, as on a connect.
-                    self.ghSignedIn = await Task.detached(priority: .utility) { GitHubLogin.signedIn() }.value
+                    self.ghSignedIn = await Task.detached(priority: .utility) { await GitHubLogin.signedIn(environment: environment) }.value
                     reply(.init(id: id + ":done", ok: ok, message: ok ? "gh is signed in." : "gh didn't sign in."))
                     for connection in self.connections where connection.proven {
                         connection.send(.delta(rev: connection.nextRev(), windows: nil, chats: nil, removed: nil, extras: LinkExtras(ghSignedIn: self.ghSignedIn)))
