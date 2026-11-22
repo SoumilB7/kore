@@ -32,6 +32,8 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
 - Box host keys in Set up: a new key shows its fingerprint with Trust · Copy · Check again; a
   changed key says it could be an attack and offers no Trust; an alias that now points at a new
   address says so.
+- Claude: "Reset ↗" in the usage popup and on a session-limit notice opens claude.ai's usage page,
+  for accounts on a plan.
 
 ### Changed
 - Kore asks its questions in its own card over the window (unsaved files, closing a busy tab,
@@ -86,6 +88,8 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
 - Closing an unsaved tab twice asks once, and quitting asks only about files still unsaved.
 - The Welcome window opens with nothing lit from last time.
 - A box checking its GitHub sign-in no longer holds up its other work while it waits.
+- After a crash, a chat waits for the last Kore's Claude or Codex to end before it starts again on
+  the same session, and only while one is still there; Resume no longer waits a fixed time first.
 
 ## [0.3.9] - 2026-11-24
 
