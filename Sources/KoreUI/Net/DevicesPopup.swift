@@ -420,17 +420,8 @@ struct DevicesPopup: View {
             }
             .storyID(StoryID.Net.line)
         } else if picture.devices.isEmpty && picture.pending.isEmpty {
-            if picture.nudge {
-                NetLine {
-                    Text("On your tailnet")
-                    Text("·")
-                    Button("Add a device") { devices.openAddWindow() }.buttonStyle(.plain).foregroundStyle(Theme.accent).netHit()
-                        .storyID(StoryID.Net.lineAction, press: { devices.openAddWindow() })
-                }
-                .storyID(StoryID.Net.line)
-            } else {
-                NetLine { Text("No other devices yet") }.storyID(StoryID.Net.line)
-            }
+            // The header + is the one add (devices-plus.html): no add here.
+            NetLine { Text("No other devices yet") }.storyID(StoryID.Net.line)
         }
     }
 
@@ -440,17 +431,18 @@ struct DevicesPopup: View {
     private static let addMenu = "devices-add"
 
     /// The +: with the box choices open, it closes them; else its two rows, right-aligned under
-    /// it: Add a box (whatever KoreNet's state: an SSH box needs none of it) and Add a phone
-    /// (KoreNet running: the Add device window).
+    /// it: Add a box (whatever KoreNet's state: an SSH box needs none of it) and Add a phone (the
+    /// Add device window, KoreNet turned on first when it's off: `Devices.addPhone`).
     private func plusPressed(_ picture: DevicesPicture) {
         if addingBox.value != nil { return addingBox.value = nil }
         guard let view = anchors.value[Self.addMenu], let window = view.window else { return }
-        let point = view.convert(CGPoint(x: view.bounds.maxX - Layout.Options.width, y: view.isFlipped ? view.bounds.maxY : view.bounds.minY), to: nil)
+        let width = Size.Net.addMenuWidth
+        let point = view.convert(CGPoint(x: view.bounds.maxX - width, y: view.isFlipped ? view.bounds.maxY : view.bounds.minY), to: nil)
         let items = [
             OptionItem("Add a box", netGlyph: .box) { addingBox.value = .choices },
-            OptionItem("Add a phone", enabled: picture.net.adds, netGlyph: .phone) { devices.openAddWindow() },
+            OptionItem("Add a phone", netGlyph: .phone) { devices.addPhone() },
         ]
-        OptionsMenu.shared.show(items, at: point, in: window, source: Self.addMenu)
+        OptionsMenu.shared.show(items, at: point, in: window, source: Self.addMenu, width: width)
     }
 
     /// "Add a box"'s steps, at the bottom of the list (the + opens them): its choices

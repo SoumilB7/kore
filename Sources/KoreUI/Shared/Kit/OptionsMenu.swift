@@ -64,6 +64,7 @@ final class OptionsMenu {
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     @ObservationIgnored private var nativeMenu: NSMenu?
     @ObservationIgnored private var anchor = CGPoint.zero
+    @ObservationIgnored private var width: CGFloat?
     @ObservationIgnored private var source = ""
     /// Who opened the menu up now (its `source`), observed: a control lit while its own menu shows.
     private(set) var openSource: String?
@@ -160,7 +161,8 @@ final class OptionsMenu {
         }
     }
 
-    func show(_ entries: [OptionItem], at point: CGPoint, in window: NSWindow, source: String) {
+    /// `width`: a short menu's own (the Devices +'s two rows); else every option popup's.
+    func show(_ entries: [OptionItem], at point: CGPoint, in window: NSWindow, source: String, width: CGFloat? = nil) {
         close()
         let entries = entries.ruled
         guard !entries.isEmpty, window.contentView != nil else { return }
@@ -169,6 +171,7 @@ final class OptionsMenu {
         parents = []
         selected = nil
         anchor = point
+        self.width = width
         self.source = source
         openSource = source
         let host = NSHostingView(rootView: OptionsList(menu: self))
@@ -199,7 +202,7 @@ final class OptionsMenu {
         let height = CGFloat(items.filter { !$0.separator }.count + (parents.isEmpty ? 0 : 1)) * Layout.Options.menuRow
             + CGFloat(items.filter(\.separator).count) * (Stroke.hairline + Space.xxs * 2) + Space.xs * 2
         let point = content.convert(anchor, from: nil)
-        host.frame = Self.fitting(point: point, size: CGSize(width: Layout.Options.width, height: height),
+        host.frame = Self.fitting(point: point, size: CGSize(width: width ?? Layout.Options.width, height: height),
                                   bounds: content.bounds, flipped: content.isFlipped)
     }
 

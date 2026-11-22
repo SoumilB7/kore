@@ -242,6 +242,8 @@ package final class Devices {
     package func setOn(_ on: Bool) {
         net?.set(on)
         if !on {
+            phoneWaiting?.cancel()
+            phoneWaiting = nil
             signingIn = false
             phones?.closeAddWindow()
         }
@@ -251,6 +253,29 @@ package final class Devices {
     package func openAddWindow() {
         phones?.openAddWindow()
         changed()
+    }
+
+    /// + ▸ Add a phone waiting for KoreNet to run.
+    @ObservationIgnored private var phoneWaiting: Task<Void, Never>?
+
+    /// + ▸ Add a phone (devices-plus.html): the Add device window. With KoreNet off it turns on
+    /// first, as its switch does, and the window opens once KoreNet runs. Stopped on the way (a
+    /// sign-in, Tailscale off, couldn't start) it waits there, the pane's line saying why as after
+    /// the switch; it opens when KoreNet then runs, unless KoreNet is turned off meanwhile.
+    package func addPhone() {
+        phoneWaiting?.cancel()
+        phoneWaiting = nil
+        if picture().net.adds { return openAddWindow() }
+        if net?.facts.on != true { setOn(true) }
+        phoneWaiting = Task { @MainActor [weak self] in
+            await Observed.until { [weak self] in
+                guard let self, !Task.isCancelled else { return true }
+                return self.picture().net.adds || self.net?.facts.on != true
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.phoneWaiting = nil
+            if self.picture().net.adds { self.openAddWindow() }
+        }
     }
 
     package func closeAddWindow() {

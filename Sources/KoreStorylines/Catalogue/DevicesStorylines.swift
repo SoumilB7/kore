@@ -3,6 +3,7 @@ import Foundation
 import HostClient
 import KoreTrust
 import KoreUI
+import Tailnet
 
 // KoreNet's devices on the Mac (phase 18 step 7, korenet-first-connect.html): the network icon,
 // the Devices popup, the Add device window, the Allow card, taking a device offline, and an SSH
@@ -25,26 +26,15 @@ final class DevicesAddPhone: ChatStoryline {
             Press(icon),
             WaitForElement(.id(StoryID.Net.panel)),
             Expect("the popup says KoreNet is off") { _ in Devices.shared.picture().net == .off },
-            // The + is there with KoreNet off (a box needs none of it); a phone waits for KoreNet.
+            // The + is there with KoreNet off; Add a phone turns KoreNet on, then opens the window.
             Press(.id(StoryID.Net.add)),
             WaitForElement(.id(StoryID.Options.panel)),
-            Expect("the +'s two rows, Add a phone greyed while KoreNet is off") { _ in
-                StoryID.Options.rows.map(\.title) == ["Add a box", "Add a phone"]
-                    && StoryID.Options.rows.map(\.enabled) == [true, false]
+            Expect("the +'s two rows, both open with KoreNet off") { _ in
+                StoryID.Options.rows.map(\.title) == ["Add a box", "Add a phone"] && StoryID.Options.rows.allSatisfy(\.enabled)
             },
-            WaitIdle(), Snapshot("devices-plus-off"),
-            Key(.escape),
-            ExpectElement(.id(StoryID.Options.panel), .absent),
-            Press(.id(StoryID.Net.toggle)),
-            Expect("KoreNet on, on a tailnet") { _ in Devices.shared.picture().net == .running },
-            Self.icon("No other devices yet", dimmed: false),
-            WaitForElement(.id(StoryID.Net.add)),
-            Press(.id(StoryID.Net.add)),
-            WaitForElement(.id(StoryID.Options.panel)),
-            Expect("both rows open with KoreNet on") { _ in StoryID.Options.rows.map(\.enabled) == [true, true] },
             WaitIdle(), Snapshot("devices-plus-menu"),
-            Key(.escape),
-            DevicesPlus("Add a phone"),
+            Press(.id(StoryID.Options.item(1))),
+            Expect("Add a phone turned KoreNet on") { _ in Devices.shared.picture().net == .running },
             WaitForElement(.id(StoryID.Net.countdown)),
             Expect("the Add device window open, the icon's dot accent") { _ in
                 Devices.shared.picture().addOpen(at: Date()) && Devices.shared.look().dot == .accent
@@ -608,5 +598,34 @@ struct DevicesPlus: Step {
             throw StoryFailure.expectation("“\(row)” under the + (it has \(StoryMenus.open))")
         }
         try await Press(.id(StoryID.Options.item(index))).run(story)
+    }
+}
+
+/// + ▸ Add a phone with KoreNet off and Kore's tailnet not signed in: KoreNet turns on and the
+/// pane says what it needs, as after its switch; the Add device window opens once it runs.
+final class DevicesAddPhoneSignsInFirst: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            DevicesSetUp(),
+            Do("Turned on, Kore's own tailnet isn't signed in yet") { _ in
+                DevicesStory.net?.onAs = (.sidecar, TailnetStatus(backendState: .needsLogin, selfNode: nil))
+            },
+            Press(.id(StoryID.Net.icon)),
+            WaitForElement(.id(StoryID.Net.panel)),
+            DevicesPlus("Add a phone"),
+            Expect("KoreNet on and waiting for its sign-in, as after its switch: no window yet") { _ in
+                let picture = Devices.shared.picture()
+                return DevicesStory.net?.facts.on == true && picture.net == .notJoined && !picture.addOpen(at: Date())
+            },
+            ExpectElement(.id(StoryID.Net.countdown), .absent),
+            WaitIdle(), Snapshot("devices-plus-phone-needs-sign-in"),
+            Do("Signed in: Kore's tailnet runs") { _ in DevicesStory.net?.set(state: .sidecar, status: ScriptedNet.running) },
+            WaitForElement(.id(StoryID.Net.countdown)),
+            Expect("the Add device window opened by itself") { _ in Devices.shared.picture().addOpen(at: Date()) },
+            Press(.id(StoryID.Net.closeAdd)),
+            ExpectElement(.id(StoryID.Net.countdown), .absent),
+        ]
     }
 }

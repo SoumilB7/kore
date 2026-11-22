@@ -7,6 +7,8 @@ extension Size {
     enum Net {
         /// The popup under the network icon.
         @MainActor static var popupWidth: CGFloat { Zoom.pt(290) }
+        /// The header +'s two rows (devices-plus.html: 200 in a 340 pane).
+        @MainActor static var addMenuWidth: CGFloat { Zoom.pt(200) }
         /// The device card (Allow / Deny), and the claim card.
         @MainActor static var cardWidth: CGFloat { Zoom.pt(300) }
         /// The join sheet and the New box popup.

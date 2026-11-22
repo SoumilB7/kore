@@ -20,10 +20,14 @@ package final class ScriptedNet: DevicesNet {
         self.authURL = authURL
     }
 
+    /// What turning it on gives: installed Tailscale running, or (a storyline's) Kore's own
+    /// tailnet not signed in yet.
+    package var onAs: (state: NetState, status: TailnetStatus) = (.installed, ScriptedNet.running)
+
     package func set(_ on: Bool) {
         facts.on = on
-        facts.state = on ? .installed : .off
-        facts.status = on ? (facts.status ?? Self.running) : nil
+        facts.state = on ? onAs.state : .off
+        facts.status = on ? (facts.status ?? onAs.status) : nil
         Devices.shared.changed()
     }
 
