@@ -36,6 +36,9 @@ package struct ProviderDescriptor: Identifiable, Sendable {
     package var fastMode = false
     /// The "/" commands it takes before its CLI has listed its own (a chat not started yet).
     package var commands: [SlashCommand] = []
+    /// A past session's newest page, read without starting its CLI (`PastPage`); nil when
+    /// there's none to read.
+    package var pastPage: @Sendable (_ id: String, _ folder: URL) async -> PastPage? = { _, _ in nil }
 }
 
 /// The install card's words for one CLI's official installer.

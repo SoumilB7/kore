@@ -57,6 +57,12 @@ package final class HostDaemon {
         await provider.sessions(folder)
     }
     var historyKept: HostHistoryKept?
+    /// A past session's newest page, read without its CLI (`PastPage`; tests set their own), and
+    /// the chats being read in now.
+    package var pastPage: @Sendable (_ provider: ProviderDescriptor, _ id: String, _ folder: URL) async -> PastPage? = { provider, id, folder in
+        await provider.pastPage(id, folder)
+    }
+    var readingPast: Set<String> = []
     /// `kore-host mcp`'s binary: this one (a test runs the built one).
     package var mcpCommand = URL(fileURLWithPath: HostService.executable())
     package static let version = HostVersion.string

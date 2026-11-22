@@ -439,6 +439,9 @@ final class LinkClient {
             following[chatId] = (min(max(last ?? 60, 1), 2000), 0)
             hc.txFollowed = true
             page(hc, last: nil)
+            // A session the box never logged (opened before it read history in, or run in a
+            // terminal here): its history is read in, and the page sent again once it is.
+            host.readInPast(hc)
         case .txMore(let chatId, let count):
             guard let hc = host.chat(chatId), let follow = following[chatId] else { return }
             following[chatId]?.last = min(follow.last + max(count, 0), 2000)

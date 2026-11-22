@@ -53,7 +53,8 @@ extension ProviderDescriptor {
             SlashCommand(
                 name: "security-review", description: "Complete a security review of the pending changes on the current branch", hint: "",
                 kind: .command),
-        ])
+        ],
+        pastPage: PastPage.claude)
 }
 
 /// the claude CLI's permission modes as its VS Code extension's picker shows them (labels, icons,

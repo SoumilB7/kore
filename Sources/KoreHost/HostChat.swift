@@ -326,6 +326,25 @@ package final class HostChat {
         return made.count
     }
 
+    /// A session it resumes that the box never logged (a past session opened from History, one
+    /// run in a terminal here): nothing on disk yet, and no CLI has replayed it.
+    var neverLogged: Bool {
+        record.session != nil && record.forkFrom == nil && !FileManager.default.fileExists(atPath: logURL.path) && stream.isEmpty
+            && (chat?.transcriptView.log.entries.isEmpty ?? true)
+    }
+
+    /// Its session's newest page, read without its CLI (`PastPage`), in the log and the event
+    /// stream as a resumed CLI's replay would be: clients see its history before any send. The
+    /// CLI's own replay at its first start is then the wake (`expectingWake`), sent to no one again.
+    @discardableResult
+    func readIn(_ page: PastPage) -> Bool {
+        guard neverLogged, prependEarlier(page.events) > 0 else { return false }
+        stream.restart(with: [.replayed(page.events), .earlierHistory(page.more)])
+        // A chat already made (no CLI yet) takes its CLI's replay as the wake too.
+        if chat != nil { (expectingWake, wakeKept, wakeBase) = (true, nil, nil) }
+        return true
+    }
+
     /// Appends lines to the log; a reset writes it again from the start.
     private func write(_ lines: [LogLine], reset: Bool) {
         let encoder = JSONEncoder()

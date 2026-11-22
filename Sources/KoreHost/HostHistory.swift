@@ -106,6 +106,7 @@ extension HostDaemon {
                     return reply(fail(.goneFolder, "That folder isn't on this box."))
                 }
                 kept.titles[session] = nil
+                readInPast(made)
                 reply(.init(id: id, ok: true, chatId: made.id, windowId: Self.windowID(folder)))
             }
             return nil
@@ -133,6 +134,22 @@ extension HostDaemon {
             return .init(id: id, ok: true)
         default:
             return fail(.invalid, LinkPolicy.notTaken)
+        }
+    }
+
+    /// A chat resuming a session the box never logged: its newest page read in without a CLI
+    /// (`HostChat.readIn`), so it opens with its history rather than empty until a send. Once
+    /// per chat at a time; a chat with a log, a fork, or one moved away is left as it is.
+    func readInPast(_ hc: HostChat) {
+        guard let session = hc.record.session, hc.ownedHere, hc.neverLogged, readingPast.insert(hc.id).inserted else { return }
+        let read = pastPage
+        let provider = hc.provider
+        let folder = hc.folderURL
+        Task {
+            let page = await read(provider, session, folder)
+            readingPast.remove(hc.id)
+            guard let page, chats.contains(where: { $0 === hc }), hc.readIn(page) else { return }
+            HostJournal.note("history read in", ["chat": hc.id, "events": "\(page.events.count)", "earlier": "\(page.more)"])
         }
     }
 
