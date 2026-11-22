@@ -25,7 +25,15 @@ package final class PhoneConnection: @unchecked Sendable {
         /// Leave KoreNet (`{"t":"leave","id":…}`): the phone signs out next; its record goes now.
         case leave(String)
         case link(LinkMessage)
+        /// Another of the owner's Macs asks for this Mac's usage (`usage.since`).
+        case usageSince(UsageWire.Since)
         case invalid
+    }
+
+    /// A `usage.since` ask, by its type.
+    static func usageSince(_ payload: Data) -> UsageWire.Since? {
+        guard let ask = try? JSONDecoder().decode(UsageWire.Since.self, from: payload), ask.t == UsageWire.since else { return nil }
+        return ask
     }
 
     private struct Leave: Decodable {
@@ -151,6 +159,8 @@ package final class PhoneConnection: @unchecked Sendable {
                     incoming.append(.leave(id))
                 } else if let raise = LinkRaiseWire.incoming(message.payload) {
                     incoming.append(.raise(raise))
+                } else if let ask = Self.usageSince(message.payload) {
+                    incoming.append(.usageSince(ask))
                 } else if let decoded = try? LinkMessage.decode(message.payload) {
                     incoming.append(.link(decoded))
                 } else {

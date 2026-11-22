@@ -58,6 +58,7 @@ final class AppChatServices: ChatServices {
 
     func tap(_ chat: Chat, _ event: ChatEvent) {
         if case .sessionIdentified = event { Arsenal.shared.identified(chat) }
+        if case .requestUsage(let request) = event, let session = chat.sessionId { UsageTaps.request?(session, chat.provider.id, request) }
         StorylineSeams.events?(chat, event)
         if LinkTaps.on { LinkTaps.event?(chat, event) }
         if AgentTaps.on { AgentTaps.event?(chat, event) }
@@ -102,4 +103,11 @@ final class AppChatServices: ChatServices {
     func attachments(_ urls: [URL]) -> [Attachment] { urls.map(Attachment.init(url:)) }
 
     func reattach(_ sent: [Attachment]) -> [Attachment] { Chat.reattach(sent) }
+}
+
+/// Each request one of this Mac's own chats made, with its CLI session: the Mac's usage ledger
+/// for the owner's other Macs (`MacUsageLedger`; set by the link at launch).
+@MainActor
+package enum UsageTaps {
+    package static var request: ((_ session: String, _ provider: String, RequestUsage) -> Void)?
 }

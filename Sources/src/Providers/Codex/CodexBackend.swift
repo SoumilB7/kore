@@ -43,6 +43,8 @@ package final class CodexBackend: ChatBackend {
     private static let pageTurns = 10
     /// How many times the app-server was started (a relaunch, or a send after it exited, starts it again).
     private var launches = 0
+    /// The signed-in login's key in the plan snapshot log, once its app-server said it.
+    private var planAccount: String?
     /// The thread was started here and hasn't completed a turn: Codex writes a thread's rollout
     /// with its first turn, so until then there's nothing to resume, and a launch again starts a
     /// fresh thread with the chat's settings (unless a failed turn left a rollout after all).
@@ -101,6 +103,8 @@ package final class CodexBackend: ChatBackend {
     private func launch() async throws {
         try Task.checkCancellation()
         launches += 1
+        // A relaunch may be on another login (a switch): unknown until it says.
+        planAccount = nil
         // A thread with no rollout can't be resumed: a fresh one takes its place.
         let fresh = unwritten && forkAt == nil && !CodexSession.rolloutExists(rolloutPath)
         let resume = fresh ? nil : sessionId
@@ -136,7 +140,17 @@ package final class CodexBackend: ChatBackend {
         }
         let thread = await session.threadId
         log.started("codex", chat: sessionId ?? (thread.isEmpty ? nil : thread), pid: await session.process.id, launch: kind)
-        KoreSessions.shared.record(cli: "codex", session: thread.isEmpty ? sessionId : thread, folder: options.folder, launch: kind)
+        let noted = thread.isEmpty ? sessionId : thread
+        KoreSessions.shared.record(cli: "codex", session: noted, folder: options.folder, launch: kind)
+        // The login this thread runs on, for usage attribution: read from the app-server's own
+        // login (no plan request), beside the launch rather than before it.
+        let launched = launches
+        Task { [weak self, folder = options.folder] in
+            let account = PlanSnapshot.account(email: await session.accountEmail())
+            guard let self, self.launches == launched, let account else { return }
+            self.planAccount = account
+            KoreSessions.shared.record(cli: "codex", session: noted, folder: folder, launch: kind, account: account)
+        }
         let began = ContinuousClock.now
         if replayPending { log.replayStart("codex", chat: sessionId, read: "thread") }
         // A resumed or forked thread's newest turns, read while Codex resumes it.
@@ -523,14 +537,23 @@ package final class CodexBackend: ChatBackend {
         }
     }
 
+    /// The plan once this login has gone quiet (`PlanQuietReads`): `account/rateLimits/read` on
+    /// this chat's own app-server, no model request; kept as the turn's readings are.
+    private func quietRead() async {
+        guard let session, let snapshot = await session.rateLimitsSnapshot(account: planAccount) else { return }
+        PlanSnapshotLog.shared.append(snapshot)
+        options.planWindows?(snapshot)
+    }
+
     private func handle(_ event: CodexEvent) {
         reviewed(event)
         if case .raw("account/rateLimits/updated", let params) = event {
             // The plan's windows as Codex pushed them during a turn: kept for usage attribution,
             // and the usage mark.
-            let snapshot = PlanSnapshot.codex(rateLimits: params, account: nil, source: "stream")
+            let snapshot = PlanSnapshot.codex(rateLimits: params, account: planAccount, source: "stream")
             PlanSnapshotLog.shared.append(snapshot)
             options.planWindows?(snapshot)
+            PlanQuietReads.shared.busy("codex", account: planAccount)
         }
         translator.translate(event)
         flush()
@@ -540,6 +563,7 @@ package final class CodexBackend: ChatBackend {
         }
         if case .turnCompleted(let result) = event {
             KoreUsageRefresh.soon("codex")
+            PlanQuietReads.shared.ended("codex", account: planAccount) { [weak self] in await self?.quietRead() }
             // A turn that failed may have left no rollout: the next launch looks for it.
             if result.status == "completed" { unwritten = false }
             saveTitle()

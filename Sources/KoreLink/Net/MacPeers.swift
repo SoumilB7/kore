@@ -1,5 +1,6 @@
 import Foundation
 import HostClient
+import KoreCore
 import KoreNet
 import KoreTrust
 import KoreUI
@@ -108,6 +109,92 @@ package final class MacPeers {
         return result
     }
 
+    // MARK: Its usage
+
+    /// Each request a paired Mac's Kore chats made, as this Mac's forwarded usage (awaited, so the
+    /// card splits a limit only once it's in).
+    package static var requestSink: @Sendable (ForwardedRequest) async -> Void = { await KoreUsage.shared.forwarded($0) }
+    /// Each plan reading a paired Mac heard, as evidence for that login here.
+    package static var planSink: @Sendable (PlanSnapshot) -> Void = { PlanSnapshotLog.shared.append($0) }
+    /// Where each paired Mac's ledger was read to, by its id (`usage/peer-cursors.json`).
+    package var cursorsFile: URL? = KoreFolders.support.appendingPathComponent("usage/peer-cursors.json")
+    /// How long one page waits for its answer.
+    package static var pageWithin: TimeInterval = 15
+    private var pulling: [UUID: Task<Void, Never>] = [:]
+
+    /// Every paired Mac's usage brought up to date (the usage card opening): one pull each, in
+    /// parallel; a pull under way is waited for.
+    package func catchUpUsage() async {
+        let tasks = paired().filter(\.online).map { peer in Task { await self.pullUsage(peer.id) } }
+        for task in tasks { await task.value }
+    }
+
+    /// A paired Mac's ledger brought up to date, one pull at a time: one asked for while another
+    /// runs waits for it, then reads what came since.
+    func pullUsage(_ peer: UUID) async {
+        // The running pull clears itself as it ends: a waiter woken by it never sees it again
+        // (left for the caller to clear, a waiter on the main actor spun on the finished task
+        // and the caller never ran).
+        while let running = pulling[peer] { await running.value }
+        let task = Task {
+            await self.pullPages(peer)
+            self.pulling[peer] = nil
+        }
+        pulling[peer] = task
+        await task.value
+    }
+
+    /// A paired Mac's ledger after the cursor kept, a page at a time: its requests as Kore's
+    /// ("mac:<id>/<session>", for the login each ran on), its readings into the snapshot log
+    /// (source "mac"). A Mac whose Kore doesn't serve usage is left alone.
+    private func pullPages(_ peer: UUID) async {
+        guard let ready = prepared(peer) else { return }
+        let (link, dial) = ready
+        var cursor = cursors()[peer.uuidString.lowercased()]
+        for _ in 0..<100 {
+            let id = UUID().uuidString.lowercased()
+            let ask = (try? JSONEncoder().encode(UsageWire.Since(id: id, cursor: cursor, plan: true))) ?? Data()
+            let within = Self.pageWithin
+            let (raw, heard): (Data?, [String]?) = await withCheckedContinuation { done in
+                link.queue.async {
+                    // Caps first: an older Kore wouldn't answer the ask at all.
+                    guard link.ensure(dial) != nil, link.caps?.contains(MacPeerLink.usageCap) == true else { return done.resume(returning: (nil, link.caps)) }
+                    done.resume(returning: (link.request(id: id, ask, dial: dial, within: within), link.caps))
+                }
+            }
+            noteCaps(peer, heard)
+            guard let raw, let page = try? JSONDecoder().decode(UsageWire.Page.self, from: raw), page.id == id else { return }
+            let key = LoginMoves.macKey(peer)
+            for line in page.lines {
+                if line.isPlan {
+                    if let snapshot = HostConnection.planSnapshot(line, key: key, source: "mac") { Self.planSink(snapshot) }
+                } else if line.acct != nil {
+                    // Never a line without its login: on this Mac it would count for the wrong one.
+                    var request = HostConnection.forwarded(line, key: key, title: nil)
+                    request.account = line.acct
+                    await Self.requestSink(request)
+                }
+            }
+            cursor = page.cursor
+            saveCursor(peer, page.cursor)
+            guard page.more, !page.lines.isEmpty else { return }
+        }
+    }
+
+    private func cursors() -> [String: Int] {
+        guard let file = cursorsFile, let data = try? Data(contentsOf: file) else { return [:] }
+        return (try? JSONDecoder().decode([String: Int].self, from: data)) ?? [:]
+    }
+
+    private func saveCursor(_ peer: UUID, _ cursor: Int) {
+        guard let file = cursorsFile else { return }
+        var all = cursors()
+        all[peer.uuidString.lowercased()] = cursor
+        guard let data = try? JSONEncoder().encode(all) else { return }
+        try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: file, options: .atomic)
+    }
+
     /// Opens a session to read its welcome (its caps).
     private func open(_ peer: UUID) async {
         guard let ready = prepared(peer) else { return }
@@ -123,9 +210,12 @@ package final class MacPeers {
 
     private func noteCaps(_ peer: UUID, _ heard: [String]?) {
         guard let known = heard, caps[peer] != known else { return }
+        let first = caps[peer] == nil
         caps[peer] = known
         online[peer] = true
         told()
+        // Its link just came up and it serves usage: what it did meanwhile comes now.
+        if first, known.contains(MacPeerLink.usageCap) { Task { await self.pullUsage(peer) } }
     }
 
     /// The peer's link and what dialling it needs, while KoreNet runs and the peer is paired.
@@ -217,7 +307,7 @@ final class PeerLink: @unchecked Sendable {
     private func take(_ payload: Data, waiting: String? = nil) -> Data? {
         guard let object = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any], let type = object["t"] as? String else { return nil }
         if type == "welcome" { caps = object["caps"] as? [String] ?? [] }
-        if type == "result", let waiting, object["id"] as? String == waiting { return payload }
+        if type == "result" || type == UsageWire.page, let waiting, object["id"] as? String == waiting { return payload }
         return nil
     }
 

@@ -375,6 +375,19 @@ public actor CodexSession {
         return entry?["skills"]?.array ?? data.flatMap { $0["skills"]?.array ?? [] }
     }
 
+    /// Who this app-server is signed in as (`account/read`, read from its own login file, no
+    /// plan request): the email, nil when it can't say.
+    public func accountEmail() async -> String? {
+        try? await server.request("account/read")["account"]?["email"]?.string
+    }
+
+    /// The plan's windows now (`account/rateLimits/read`), as a reading of `account`; nil when it
+    /// can't say.
+    public func rateLimitsSnapshot(account: String?) async -> PlanSnapshot? {
+        guard let limits = try? await server.request("account/rateLimits/read") else { return nil }
+        return PlanSnapshot.codex(rateLimits: limits, account: account, source: "read")
+    }
+
     /// The account and its plan's limits, read from this app-server (`PlanUsage.codex`).
     public func planUsage() async throws -> PlanReading {
         try await PlanUsage.codex(server)

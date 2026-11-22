@@ -7,7 +7,9 @@ import LinkProtocol
 /// Another of the owner's Macs linked to this one over KoreNet, paired once by an Allow card (its
 /// record: kind mac, owner, in this Mac's own book). A lean link: no feed, no snapshot, no chats.
 /// It answers only a login's move (`account.import`, `account.export`, `account.fingerprints`,
-/// checked by `LinkLogins`), through this Mac's `MacLoginMoves`; anything else is refused.
+/// checked by `LinkLogins`), through this Mac's `MacLoginMoves`, and its usage ledger
+/// (`usage.since`, `MacUsageLedger`) so its Kore use counts as Kore's there; anything else is
+/// refused.
 @MainActor
 package final class MacPeerLink {
     package let id: UUID
@@ -17,7 +19,11 @@ package final class MacPeerLink {
     package private(set) var ended = false
 
     /// What the other Mac can ask of this one.
-    package static let caps = [LinkLogins.cap]
+    package static let caps = [LinkLogins.cap, usageCap]
+    /// It serves its usage ledger (`usage.since`).
+    nonisolated package static let usageCap = "usage"
+    /// The ledger it serves (tests give their own).
+    package static var ledger: @MainActor () -> MacUsageLedger = { MacUsageLedger.shared }
     /// The commands it answers.
     package static let loginKinds: Set<ControlKind> = [.accountImport, .accountExport, .accountFingerprints]
     /// The answer to anything else.
@@ -59,6 +65,9 @@ package final class MacPeerLink {
                 return end(LinkMessage.ByeReason.quit.rawValue)
             case .link(.cmd(let id, let command)):
                 perform(id, command)
+            case .usageSince(let ask):
+                let page = Self.ledger().since(ask.cursor, id: ask.id, plan: ask.plan == true)
+                if let data = try? JSONEncoder().encode(page) { write(data) }
             case .raise, .leave, .link:
                 continue
             }
@@ -79,7 +88,12 @@ package final class MacPeerLink {
     }
 
     private func answer(_ result: LoginMoveResult) {
-        guard !ended, let data = try? JSONEncoder().encode(result) else { return }
+        guard let data = try? JSONEncoder().encode(result) else { return }
+        write(data)
+    }
+
+    private func write(_ data: Data) {
+        guard !ended else { return }
         let connection = connection
         connection.queue.async { connection.write(data) }
     }

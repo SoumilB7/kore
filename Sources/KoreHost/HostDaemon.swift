@@ -170,7 +170,19 @@ package final class HostDaemon {
         config = HostConfig.load(paths.config)
         services.onEvent = { [weak self] chat, event in self?.noted(chat, event) }
         services.onModels = { [weak self] cli, models in self?.listed(cli, models) }
-        services.onPlanWindows = { [weak self] cli, snapshot in self?.planUsage.take(cli, snapshot: snapshot) }
+        services.onPlanWindows = { [weak self] cli, snapshot in
+            guard let self else { return }
+            self.planUsage.take(cli, snapshot: snapshot)
+            // Kept for the Mac's usage card too, as evidence of the login's windows: Claude's
+            // report names its login; Codex's is the box's one login.
+            if let snapshot {
+                let account = cli == "codex" ? self.planUsage.account(cli, login: LinkAccount.main) : snapshot.account
+                // A Claude turn's report names its chat (the session): as the ledger names it, the
+                // box chat's id. Codex's come after their request, and reads name none.
+                let chat = cli == "claude" ? snapshot.chat.flatMap { said in self.chats.first { $0.id == said || $0.chat?.sessionId == said || $0.record.session == said }?.id } : nil
+                self.usage.appendPlan(provider: cli, account: account, chat: chat, snapshot)
+            }
+        }
         services.server = { [weak self] chat in self?.server(for: chat) }
         services.onTranscript = { [weak self] chat in self?.chats.first { $0.chat === chat }?.attach(chat, replaced: true) }
         // Every rollback (a Mac's call, a phone's control, the box chat's own): the log starts
@@ -446,7 +458,12 @@ package final class HostDaemon {
     private func noted(_ chat: Chat, _ event: ChatEvent) {
         guard let hc = chats.first(where: { $0.chat === chat }) else { return }
         streamRow(hc, event)
-        if case .requestUsage(let spent) = event { usage.append(chat: hc.id, provider: hc.record.provider, spent) }
+        if case .requestUsage(let spent) = event {
+            // The login it ran on: as the CLI's own report named it, else the chat's login as the
+            // box knows it (Codex's one login, a Claude account).
+            let login = hc.record.provider == "claude" ? hc.record.account ?? LinkAccount.main : LinkAccount.main
+            usage.append(chat: hc.id, provider: hc.record.provider, spent, account: planUsage.account(hc.record.provider, login: login))
+        }
         switch event {
         case .userMessage(let text, _, _): hc.noteRecent(at: now(), line: ChatMeta.lastLine(text, mine: true))
         case .turnStarted: hc.noteRecent(at: now(), line: nil)

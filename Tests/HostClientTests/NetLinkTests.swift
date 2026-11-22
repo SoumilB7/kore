@@ -552,7 +552,7 @@ struct NetLinkTests {
         let connection = link(alias, router: FakeRouter(), dials: dials, clock: clock, root: root)
         let pulled = Feed<ForwardedRequest>()
         let old = HostConnection.usageSink
-        HostConnection.usageSink = { request in if request.chat.hasPrefix(alias + "/") { pulled.send(request) } else { old(request) } }
+        HostConnection.usageSink = { request in if request.chat.hasPrefix(alias + "/") { pulled.send(request) } else { await old(request) } }
         defer { HostConnection.usageSink = old }
         let up = links(connection)
         connection.retain()

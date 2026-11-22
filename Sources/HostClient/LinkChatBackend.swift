@@ -375,7 +375,8 @@ package final class LinkChatBackend: ChatBackend, HostFollower {
         usage(
             ForwardedRequest(
                 cli: provider.id, chat: connection.alias + "/" + chatId, request: request.id, time: request.at, model: model, agent: request.agent,
-                units: units, title: [connection.chats[chatId]?.title, titleSaid, making.title].compactMap { $0 }.first { !$0.isEmpty }))
+                units: units, title: [connection.chats[chatId]?.title, titleSaid, making.title].compactMap { $0 }.first { !$0.isEmpty },
+                account: request.account))
     }
 
     /// The box CLI's login, asked once a connection when its chats first make requests.

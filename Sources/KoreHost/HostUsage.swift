@@ -1,8 +1,10 @@
 import Foundation
+import KoreCore
 import LinkProtocol
 import src
 
-/// `usage/ledger.jsonl`: a line per model request the box's chats made, a week of them, numbered
+/// `usage/ledger.jsonl`: a line per model request the box's chats made, with the login it ran
+/// on, and a line per plan reading the box heard (`UsageLine.plan`), a week of them, numbered
 /// so the Mac asks for what follows its cursor. Append-only; nothing runs on a timer: a write
 /// whose oldest line is past a week and a day rewrites the file without the lines past a week
 /// (so at most about once a day), and reads skip lines past a week.
@@ -23,14 +25,35 @@ package final class UsageLedger {
         self.now = now
     }
 
-    package func append(chat: String, provider: String, _ usage: RequestUsage) {
+    /// A request, counted for `account` (the login it ran on; nil when the box doesn't know).
+    package func append(chat: String, provider: String, _ usage: RequestUsage, account: String? = nil) {
         let lines = loadIfNeeded()
         let n = next ?? 1
         let line = UsageLine(
             n: n, at: Int64(usage.at.timeIntervalSince1970 * 1000), chat: chat, provider: provider, id: usage.id, model: usage.model,
             agent: usage.agent, input: usage.input, output: usage.output, cacheRead: usage.cacheRead, cacheWrite5m: usage.cacheWrite5m,
-            cacheWrite1h: usage.cacheWrite1h)
+            cacheWrite1h: usage.cacheWrite1h, acct: usage.account ?? account)
         next = n + 1
+        write(line, lines)
+    }
+
+    /// The plan's windows as a turn reported them (or a quiet read), for `account`: a line of their
+    /// own, naming the box chat whose request the report came before (`chat`, as the request
+    /// lines name it; nil for a read). A report that doesn't name its login isn't kept.
+    package func appendPlan(provider: String, account: String?, chat: String? = nil, _ snapshot: PlanSnapshot) {
+        guard let account, !account.hasPrefix("plan:"), !snapshot.windows.isEmpty else { return }
+        let lines = loadIfNeeded()
+        let n = next ?? 1
+        let readings = snapshot.windows.map {
+            PlanWindowWire(minutes: $0.minutes, used: $0.used, resets: $0.resetsAt.map { Int64($0.timeIntervalSince1970 * 1000) }, limit: $0.limit)
+        }
+        let line = UsageLine.plan(
+            n: n, at: Int64(snapshot.at.timeIntervalSince1970 * 1000), provider: provider, acct: account, readings: readings, chat: chat)
+        next = n + 1
+        write(line, lines)
+    }
+
+    private func write(_ line: UsageLine, _ lines: [UsageLine]?) {
         let time = now()
         if let oldest, time.timeIntervalSince(oldest) > Self.keep + Self.slack {
             let kept = (lines ?? read()).filter { !old($0, at: time) } + [line]
@@ -52,13 +75,17 @@ package final class UsageLedger {
         }
     }
 
-    /// The lines after `cursor` within the week, at most `pageMax`. Reads the whole file (a week of
-    /// lines, asked once per link-up): left so, a seek index would cost more than it saves.
-    package func since(_ cursor: Int?, id: String) -> UsageWire.Page {
+    /// The lines after `cursor` within the week, at most `pageMax`; plan lines only for an asker
+    /// that takes them (`plan`). Reads the whole file (a week of lines, asked once per link-up
+    /// and when the Mac's usage card opens): left so, a seek index would cost more than it saves.
+    package func since(_ cursor: Int?, id: String, plan: Bool = false) -> UsageWire.Page {
         let time = now()
-        let all = read().filter { $0.n > (cursor ?? 0) && !old($0, at: time) }
+        let after = read().filter { $0.n > (cursor ?? 0) && !old($0, at: time) }
+        let all = plan ? after : after.filter { !$0.isPlan }
         let page = Array(all.prefix(Self.pageMax))
-        return UsageWire.Page(id: id, lines: page, cursor: page.last?.n ?? cursor ?? 0, more: all.count > page.count)
+        // Past the last line read, plan lines skipped included: the next ask starts after them.
+        let end = page.count < all.count ? page.last?.n : after.last?.n
+        return UsageWire.Page(id: id, lines: page, cursor: end ?? cursor ?? 0, more: all.count > page.count)
     }
 
     private func old(_ line: UsageLine, at time: Date) -> Bool { time.timeIntervalSince1970 * 1000 - Double(line.at) > Self.keep * 1000 }

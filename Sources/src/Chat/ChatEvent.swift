@@ -248,10 +248,13 @@ package struct RequestUsage: Sendable, Equatable, Codable {
     package var cacheRead: Int
     package var cacheWrite5m: Int
     package var cacheWrite1h: Int
+    /// The login it ran on (`PlanSnapshot.account`), as the chat's last plan report named it;
+    /// nil while unknown. A box sends it so the Mac counts the request for that login.
+    package var account: String?
 
     package init(
         id: String, at: Date, model: String?, agent: String? = nil, input: Int, output: Int, cacheRead: Int = 0, cacheWrite5m: Int = 0,
-        cacheWrite1h: Int = 0
+        cacheWrite1h: Int = 0, account: String? = nil
     ) {
         self.id = id
         self.at = at
@@ -262,11 +265,12 @@ package struct RequestUsage: Sendable, Equatable, Codable {
         self.cacheRead = cacheRead
         self.cacheWrite5m = cacheWrite5m
         self.cacheWrite1h = cacheWrite1h
+        self.account = account
     }
 
     private enum CodingKeys: String, CodingKey {
         case id = "id", at = "at", model = "model", agent = "agent", input = "input", output = "output", cacheRead = "cacheRead"
-        case cacheWrite5m = "cacheWrite5m", cacheWrite1h = "cacheWrite1h"
+        case cacheWrite5m = "cacheWrite5m", cacheWrite1h = "cacheWrite1h", account = "account"
     }
 }
 

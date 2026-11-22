@@ -50,6 +50,7 @@ public actor KoreUsage {
         let since = Self.horizon(bars, now: now)
         var requests: [UsageRequest]
         var codexIndex: CodexUsageIndex?
+        var codexKeep: (String?, Date) -> Bool = { _, _ in true }
         let account = PlanSnapshot.account(email: reading.account.email)
         switch cli {
         case "claude":
@@ -69,6 +70,21 @@ public actor KoreUsage {
             refreshCodex(since: since)
             codexIndex = codex
             requests = codexIndex?.requests() ?? []
+            // Each thread for the login Kore noted it ran on; one it didn't note (Codex on its
+            // own) for the main login. Threads from before Kore noted logins keep the window
+            // match below (`inWindow`).
+            if let account {
+                let known = sessions.known()
+                let addedLogin = added(cli).contains(account)
+                requests = requests.filter { request in
+                    if let noted = known.account(cli, request.chat, at: request.time) { return noted == account }
+                    return request.kore || !addedLogin
+                }
+                codexKeep = { thread, time in
+                    guard let thread, let noted = known.account(cli, thread, at: time) else { return !addedLogin }
+                    return noted == account
+                }
+            }
         default:
             return nil
         }
@@ -77,25 +93,24 @@ public actor KoreUsage {
         requests += forwardedRequests(cli: cli, since: since, account: account, main: account == nil || !added(cli).contains(account ?? ""))
         let logged = snapshots.entries(since: since).filter { $0.cli == cli }
         var limits: [String: KoreShare] = [:]
-        // Claude's model weeks first: what they put elsewhere, the plain limits put there too.
-        var carried: [UsageSpan] = []
-        for bar in bars.filter({ cli == "claude" && $0.scope != nil }) + bars.filter({ cli != "claude" || $0.scope == nil }) {
+        for bar in bars {
             guard let resetsAt = bar.resetsAt, let length = bar.window, length > 0 else { continue }
             let minutes = Int((length / 60).rounded())
             let window = UsageWindow(minutes: minutes, resetsAt: resetsAt, limit: cli == "codex" ? bar.scope : nil, used: bar.used)
-            var points = logged.filter { entry in
+            let inWindow = logged.filter { entry in
                 entry.win == minutes && entry.limit == bar.scope && Self.sameAccount(entry.acct, account)
                     && entry.resetsAt.map { abs($0.timeIntervalSince(resetsAt)) <= 600 } ?? false
             }
-            .map { UsagePoint(time: $0.at, used: $0.used) }
-            if let codexIndex { points += codexIndex.points(minutes: minutes, limit: bar.scope, resetsAt: resetsAt) }
+            // A reading that doesn't name its login (an older Codex one) counts only while none
+            // in the window does: another login's percent would break this one's timeline.
+            let named = inWindow.contains { $0.acct.map { !$0.hasPrefix("plan:") } ?? false }
+            var points = inWindow.filter { !named || ($0.acct.map { !$0.hasPrefix("plan:") } ?? false) }
+                .map { UsagePoint(time: $0.at, used: $0.used, before: $0.chat) }
+            if let codexIndex { points += codexIndex.points(minutes: minutes, limit: bar.scope, resetsAt: resetsAt, thread: codexKeep) }
             points.sort { $0.time < $1.time }
             let cap = bar.surfaces.first(where: \.estimated)?.points
-            let scoped = cli == "claude" && bar.scope != nil
             let share = UsageAttribution.share(
-                requests, points: points, window: window, now: now, scope: cli == "claude" ? bar.scope : nil, surfaces: bar.surfaces,
-                cap: cap, elsewhereUnits: scoped || cli != "claude" ? [] : carried)
-            if scoped { carried += share.elsewhereUnits }
+                requests, points: points, window: window, now: now, scope: cli == "claude" ? bar.scope : nil, surfaces: bar.surfaces, cap: cap)
             limits[bar.title] = share
             if !bar.surfaces.isEmpty { noteBreakdown(bar, kore: share.kore) }
         }

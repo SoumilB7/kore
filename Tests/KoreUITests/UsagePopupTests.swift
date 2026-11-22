@@ -55,17 +55,20 @@ struct UsagePopupTests {
         let shares = KoreShares(
             at: Self.now,
             limits: [
-                // Worked out from a reading before: more than the plan says now, so cut to it.
-                "Session (5hr)": KoreShare(used: 12, kore: 11, chats: [ChatShare(id: "a", points: 11)]),
+                "Session (5hr)": KoreShare(used: 9, kore: 9, chats: [ChatShare(id: "a", points: 9)]),
                 "Weekly (7 day)": KoreShare(used: 2, kore: 0),
             ])
         state.open(provider: "test-\(UUID())", read: { reading }, useReset: { _, _ in .reset }, shares: { _ in shares })
         for _ in 0..<100 where state.shares == nil { try await Task.sleep(for: .milliseconds(10)) }
         let session = try #require(reading.limits?.bars.first)
         #expect(state.share(session)?.kore == 9)
-        #expect(state.share(session)?.clamped == true)
         #expect(state.share(session)?.chats.first?.points == 9)
         #expect(state.barHelp(session, now: Self.now) == "~9% in Kore")
+        // A share worked out for another reading of the limit (12%) isn't shown against this one
+        // (9%): the bar waits for its own, and never reads what rose between as outside Kore.
+        let olderSession = PlanLimit(title: "Session (5hr)", used: 12, resetsAt: reset, window: 5 * 3600)
+        #expect(state.share(olderSession) == nil)
+        #expect(state.barHelp(olderSession, now: Self.now).hasPrefix("Resets "))
         // Nothing from Kore: the reset, as before.
         let week = try #require(reading.limits?.bars.last)
         #expect(state.barHelp(week, now: Self.now).hasPrefix("Resets "))

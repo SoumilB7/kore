@@ -133,7 +133,12 @@ package final class HostConnection {
     /// A command unanswered this long probes the link.
     @ObservationIgnored package var unansweredAfter: Duration = .seconds(10)
     /// Each box usage ledger line pulled on link-up (`usage.since`), as forwarded usage.
-    package static var usageSink: @Sendable (ForwardedRequest) -> Void = { request in Task { await KoreUsage.shared.forwarded(request) } }
+    package static var usageSink: @Sendable (ForwardedRequest) async -> Void = { await KoreUsage.shared.forwarded($0) }
+    /// Each plan reading a box heard, pulled with its ledger: evidence for that login's windows.
+    package static var planSink: @Sendable (PlanSnapshot) -> Void = { PlanSnapshotLog.shared.append($0) }
+    /// Brings every device's usage up to date before the usage card splits a limit: each linked
+    /// box's ledger now, and (set by the link at launch) each paired Mac's.
+    package static var usageCatchUp: @MainActor @Sendable () async -> Void = { await HostConnection.catchUpBoxUsage() }
     @ObservationIgnored private var skipNet = false
     /// KoreNet dials that failed in a row: the first falls back to SSH and the next `net.node`
     /// tries again; from the second, SSH holds and one more try comes after `netRetryAfter` (a
@@ -158,8 +163,8 @@ package final class HostConnection {
     @ObservationIgnored private var watchdog: Task<Void, Never>?
     @ObservationIgnored private var usageWaits: [String: CheckedContinuation<UsageWire.Page?, Never>] = [:]
     @ObservationIgnored private var netSwitchWaits: [String: CheckedContinuation<NetSwitchWire.Result?, Never>] = [:]
-    @ObservationIgnored private var pullingUsage = false
     @ObservationIgnored private var usageCursor: Int?
+    @ObservationIgnored private var usagePull: Task<Void, Never>?
     /// Writes to the copy wait while its folder moves (a rekey).
     @ObservationIgnored private var cacheHeld = false
     @ObservationIgnored private var heldWrites = false
@@ -1198,19 +1203,43 @@ package final class HostConnection {
         }
     }
 
-    /// The box's usage ledger since the cursor kept, a page at a time, into forwarded usage.
+    /// The box's usage ledger since the cursor kept, a page at a time: requests into forwarded
+    /// usage, plan readings into the snapshot log. One pull at a time.
     private func pullUsage() {
-        guard !pullingUsage else { return }
-        pullingUsage = true
-        Task { [weak self] in
-            defer { self?.pullingUsage = false }
-            for _ in 0..<100 {
-                guard let self, let page = await self.usagePage(after: self.usageCursor) else { return }
-                for line in page.lines { Self.usageSink(Self.forwarded(line, key: self.alias, title: self.chats[line.chat]?.title)) }
-                self.usageCursor = page.cursor
-                self.saveSoon()
-                guard page.more, !page.lines.isEmpty else { return }
+        guard usagePull == nil else { return }
+        usagePull = Task { [weak self] in
+            await self?.pullUsagePages()
+            self?.usagePull = nil
+        }
+    }
+
+    /// The same, awaited (the usage card opening): a pull under way is waited for.
+    package func catchUpUsage() async {
+        guard boxMinor >= 12, control == .full else { return }
+        pullUsage()
+        await usagePull?.value
+    }
+
+    private func pullUsagePages() async {
+        for _ in 0..<100 {
+            guard let page = await usagePage(after: usageCursor) else { return }
+            for line in page.lines {
+                if line.isPlan {
+                    if let snapshot = Self.planSnapshot(line, key: alias, source: "box") { Self.planSink(snapshot) }
+                } else {
+                    await Self.usageSink(Self.forwarded(line, key: alias, title: chats[line.chat]?.title))
+                }
             }
+            usageCursor = page.cursor
+            saveSoon()
+            guard page.more, !page.lines.isEmpty else { return }
+        }
+    }
+
+    /// Every linked box's usage, brought up to date at once.
+    package static func catchUpBoxUsage() async {
+        await withTaskGroup(of: Void.self) { group in
+            for connection in linked where !connection.forgotten { group.addTask { await connection.catchUpUsage() } }
         }
     }
 
@@ -1218,7 +1247,7 @@ package final class HostConnection {
         guard ready, let transport else { return nil }
         serial += 1
         let id = "u\(serial).\(tag)"
-        transport.send(StreamWire.encode(UsageWire.Since(id: id, cursor: cursor)))
+        transport.send(StreamWire.encode(UsageWire.Since(id: id, cursor: cursor, plan: true)))
         let (sleep, wait) = (sleep, handshakeLimit)
         let timeout = Task { [weak self] in
             await sleep(wait)
