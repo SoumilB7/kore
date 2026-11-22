@@ -250,7 +250,7 @@ struct ImageViewer: View {
     /// text; for a video, Space plays and pauses. Other plain keys are swallowed so nothing
     /// types into the hidden composer; other ⌘ shortcuts (⌘W, ⌘T…) still work.
     private func handleKey(_ event: NSEvent) -> NSEvent? {
-        guard let window = editor?.window ?? video.value.window, event.window === window else { return event }
+        guard let window = editor?.window ?? video.value.window, event.window === window, !KoreAsk.shared.holds(window) else { return event }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if flags.contains(.command) {
             guard let editor, flags.subtracting(.shift) == .command else { return event }

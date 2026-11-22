@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import KoreUI
+import src
 
 // What a question must not do (review of 0.3.10): wait in a closed window, let the window behind
 // take keys or its title bar's buttons, or ask twice about one file; and a cut pasted twice is
@@ -183,25 +184,28 @@ final class AskHoldsWindowKeys: OpenEndStoryline {
     }
 }
 
-/// A question over `story.window`, its keys pressed there, then answered: the steps around what
-/// must not move behind it.
-@MainActor private func behindAQuestion(_ what: String, _ keys: [KeyChord], found: @escaping @MainActor (StoryContext) -> String?, unmoved: @escaping @MainActor (StoryContext) throws -> Bool) -> [any Step] {
+/// A question over `window` (the storyline's), its keys pressed there, then answered: the steps
+/// around what must not move behind it.
+@MainActor private func behindAQuestion(_ what: String, _ keys: [KeyChord], in window: @escaping @MainActor (StoryContext) -> NSWindow? = { $0.window }, found: @escaping @MainActor (StoryContext) -> String?, unmoved: @escaping @MainActor (StoryContext) throws -> Bool) -> [any Step] {
     [
         Do("A question") { story in
             let answers = answers(story)
-            KoreAsk.storyAsk("behind", in: story.window) { answers.first = $0 }
+            KoreAsk.storyAsk("behind", in: window(story)) { answers.first = $0 }
         },
         Expect("it's up") { _ in KoreAsk.storyOpen == "behind" && cardSeen() },
         WaitIdle(),
         BoxStep("\(what), in the question's window") { story in
-            guard let window = story.window else { throw StoryFailure.modelMissing("the window") }
+            guard let window = window(story) else { throw StoryFailure.modelMissing("the window") }
             for key in keys { try await story.input.key(key, in: window) }
         },
         WaitIdle(),
         BoxStep("What a key did would show by now") { _ in try await Task.sleep(for: .milliseconds(500)) },
         Expect("nothing moved behind it", found: found) { story in KoreAsk.storyOpen == "behind" ? try unmoved(story) : false },
-        Key(.escape),
-        Expect("answered") { story in answers(story).first == 0 && KoreAsk.storyOpen == nil },
+        BoxStep("Esc, in the question's window") { story in
+            guard let window = window(story) else { throw StoryFailure.modelMissing("the window") }
+            try await story.input.key(.escape, in: window)
+        },
+        Expect("answered", found: { _ in KoreAsk.storyOpen.map { "“\($0)” still up" } }) { story in answers(story).first == 0 && KoreAsk.storyOpen == nil },
     ]
 }
 
@@ -272,6 +276,197 @@ final class AskHoldsTerminalKeys: ChatStoryline {
         }) + [
             Key(toggle),
             Expect("now ⌃` opens a terminal") { story in story.app.workspace?.storyTerminal.open == true && story.app.workspace?.storyTerminal.count == 1 },
+        ]
+    }
+}
+
+/// The picture viewer behind a question: ⌘= doesn't zoom it and Esc is the question's; answered,
+/// ⌘= zooms it.
+final class AskHoldsViewerKeys: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+    private typealias Viewer = DriveWindowViewerImage
+
+    override func steps() -> [any Step] {
+        let canvas = Locator.id(StoryID.Viewer.canvas)
+        let was = DriveChatNote<Int?>(nil)
+        return super.steps() + [
+            Do("A picture bigger than the window, attached") { story in
+                let file = story.folder.appendingPathComponent(Viewer.name)
+                try Viewer.picture(width: 1600, height: 1200).write(to: file)
+                try story.activeChat().storyAttach([file])
+            },
+            Expect("its chip shows it") { try $0.activeChat().storyChipShowsPicture(Viewer.name) },
+            Press(.id(StoryID.Composer.attachment(Viewer.name))),
+            WaitForElement(canvas),
+            Expect("fitted, under 100%") { _ in (Viewer.zoom ?? 100) < 100 },
+            Do("note its zoom") { _ in was.value = Viewer.zoom },
+        ] + behindAQuestion("⌘=", [.cmd("=")], found: { _ in "\(Viewer.zoom ?? -1)%, was \(was.value ?? -1)%" }, unmoved: { _ in
+            Viewer.zoom == was.value
+        }) + [
+            ExpectElement(canvas),
+            Key(.cmd("=")),
+            Expect("now ⌘= zooms it") { _ in (Viewer.zoom ?? 0) > (was.value ?? 0) },
+        ]
+    }
+}
+
+/// The changes view behind a question: ↓ picks no other file and Esc is the question's; answered,
+/// ↓ picks the next.
+final class AskHoldsChangesKeys: DriveChangesView {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+
+    @MainActor private static func picked(_ name: String) -> Bool {
+        StoryRegistry.ids.contains { $0.hasPrefix("changes.file[") && $0.contains(name + "]") && $0.hasSuffix(".selected") }
+    }
+
+    override func steps() -> [any Step] {
+        opening + [
+            WaitForElement(DriveTranscript.changedFile("a.txt").action(.selected)),
+        ] + behindAQuestion("↓", [.down], found: { _ in "a.txt picked \(Self.picked("a.txt")), b.txt picked \(Self.picked("b.txt"))" }, unmoved: { _ in
+            Self.picked("a.txt") && !Self.picked("b.txt")
+        }) + [
+            ExpectElement(.id(StoryID.Changes.done)),
+            Key(.down),
+            WaitForElement(DriveTranscript.changedFile("b.txt").action(.selected)),
+        ]
+    }
+}
+
+/// The agent map behind a question: ↓ selects no other agent and Esc is the question's; answered,
+/// ↓ selects the next.
+final class AskHoldsAgentMapKeys: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .agents, .gate] }
+    override class var script: CLIScript { AgentMapOpen.script }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("Tell me a lot"), TurnFinished(1), Send("Use some helpers"), TurnFinished(2),
+            Press(.id(StoryID.Titlebar.agents)),
+            Press(.id(StoryID.AgentMap.ended("done"))),
+            WaitForElement(.id(StoryID.AgentMap.row("writer"))),
+            Press(.id(StoryID.AgentMap.row("writer"))),
+            Expect("the writer selected") { try $0.activeChat().storyAgentMapSelected == "writer" },
+        ] + behindAQuestion("↓", [.down], found: { $0.app.chat?.storyAgentMapSelected }, unmoved: { story in
+            try story.activeChat().storyAgentMapSelected == "writer"
+        }) + [
+            Expect("the map still open") { try $0.activeChat().isAgentMapOpen },
+            Key(.down),
+            Expect("now ↓ selects the next") { try $0.activeChat().storyAgentMapSelected == "scout" },
+        ]
+    }
+}
+
+/// The Usage extended card behind a question: ↓ picks no other limit and Esc is the question's;
+/// answered, ↓ picks the next.
+final class AskHoldsUsageKeys: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+
+    override func steps() -> [any Step] {
+        let codex = variant == .codex
+        let (first, second) = codex ? ("5h limit", "Weekly limit") : ("Session (5hr)", "Weekly (7 day)")
+        let extended = Locator.id(StoryID.Composer.usage.part(.extended))
+        let card = Locator.id(StoryID.UsageModal.card)
+        return [
+            UseScript(UsagePopup.claude, for: "claude"), UseScript(UsagePopup.codex(.codex), for: "codex"), OpenFolder(), StartChat(),
+            WaitForFocus(.id(StoryID.Composer.field)),
+            Expect("the chat has its session") { $0.app.chat?.sessionId != nil },
+            Press(.id(StoryID.Composer.slash)),
+            Press(.id(StoryID.Composer.command("usage"))),
+            WaitForElement(extended, timeout: .seconds(10)),
+            Click(extended),
+            WaitForElement(card),
+            Click(.id(StoryID.UsageModal.limit(first))),
+            Expect("the first limit picked", found: { $0.app.chat?.storyUsagePicked }) { $0.app.chat?.storyUsagePicked == first },
+        ] + behindAQuestion("↓", [.down], found: { $0.app.chat?.storyUsagePicked }, unmoved: { story in
+            story.app.chat?.storyUsagePicked == first
+        }) + [
+            Expect("the card still open") { $0.app.chat?.isUsageExtendedOpen == true },
+            Key(.down),
+            Expect("now ↓ picks the next") { $0.app.chat?.storyUsagePicked == second },
+        ]
+    }
+}
+
+/// The Welcome window behind a question: ↓ lights no other folder and Esc is the question's;
+/// answered, ↓ lights the next.
+final class AskHoldsWelcomeKeys: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+
+    @MainActor private static var lit: [String] { StoryRegistry.ids.filter { $0.hasPrefix("welcome.") && $0.hasSuffix(".lit") } }
+
+    override func steps() -> [any Step] {
+        let was = DriveChatNote([String]())
+        return super.steps() + [
+            OpenAnotherFolder(), ShowWelcome(),
+            KeyIn(ListKeys.welcome, .down),
+            Expect("a folder lit") { _ in
+                was.value = Self.lit
+                return was.value.count == 1
+            },
+        ] + behindAQuestion("↓", [.down], in: { _ in DevicesFromWelcome.welcome }, found: { _ in "lit \(Self.lit), was \(was.value)" }, unmoved: { _ in
+            Self.lit == was.value
+        }) + [
+            KeyIn(ListKeys.welcome, .down),
+            Expect("now ↓ lights the next", found: { _ in "\(Self.lit)" }) { _ in Self.lit.count == 1 && Self.lit != was.value },
+        ]
+    }
+}
+
+/// A chat's own question card behind Kore's question: 2 ticks nothing on it and Esc is Kore's;
+/// answered, 2 ticks.
+final class AskHoldsChatQuestionKeys: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .approvals, .gate] }
+    private static let question = "Which settings should sync?"
+    private static let options = ["Appearance", "Shortcuts", "Accounts"]
+    override class var script: CLIScript {
+        let question = Approval.Question(
+            id: question, text: question, header: "Sync", options: options.map { .init(label: $0, description: "") }, multiple: true)
+        let approval = Approval(id: "q1", title: "", detail: nil, body: nil, canAlwaysAllow: false, questions: [question])
+        return CLIScript(turns: [[.startTurn, .approval(approval, allow: Beat.answer("Got it."), deny: []), .finishTurn(.completed)]])
+    }
+
+    @MainActor private static var ticked: [String] {
+        options.filter { StoryRegistry.ids.contains(StoryID.Approval.option(question, $0).part(.ticks).raw) }
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Send("Ask me"),
+            WaitForElement(.id(StoryID.Approval.card("q1").part(.focus))),
+        ] + behindAQuestion("2", [.key("2")], found: { _ in "ticked \(Self.ticked)" }, unmoved: { _ in Self.ticked.isEmpty }) + [
+            WaitForElement(.id(StoryID.Approval.card("q1").part(.focus))),
+            Key(.key("2")),
+            Expect("now 2 ticks the second") { _ in Self.ticked == ["Shortcuts"] },
+        ]
+    }
+}
+
+/// Return answers a question, alone: with ⌘, ⇧, ⌥ or ⌃ held it's another key, and answers nothing.
+final class AskPlainReturn: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat, .gate] }
+
+    private static func held(_ name: String, _ flags: NSEvent.ModifierFlags) -> [any Step] {
+        [
+            BoxStep("\(name)Return, in the question's window") { story in
+                guard let window = story.window else { throw StoryFailure.modelMissing("the window") }
+                try await story.input.key(KeyChord(.returnKey, flags), in: window)
+            },
+            WaitIdle(),
+            Expect("\(name)Return answered nothing") { story in KoreAsk.storyOpen == "return" && answers(story).first == nil },
+        ]
+    }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            Do("A question") { story in
+                let answers = answers(story)
+                KoreAsk.storyAsk("return", in: story.window) { answers.first = $0 }
+            },
+            Expect("it's up") { _ in KoreAsk.storyOpen == "return" && cardSeen() },
+            WaitIdle(),
+        ] + Self.held("⇧⌘", [.shift, .command]) + Self.held("⌘", .command) + Self.held("⇧", .shift) + Self.held("⌥", .option) + Self.held("⌃", .control) + [
+            Key(.returnKey),
+            Expect("Return answers it") { story in answers(story).first == 1 && KoreAsk.storyOpen == nil },
         ]
     }
 }

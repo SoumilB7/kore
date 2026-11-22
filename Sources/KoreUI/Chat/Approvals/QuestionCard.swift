@@ -467,7 +467,7 @@ struct QuestionCard: View {
             }
             return event
         }
-        guard holding.value else { return event }
+        guard holding.value, !KoreAsk.shared.holds(window) else { return event }
         // Another text has the keys (the composer, a find field): they're its own.
         if editing.value == nil, let text = window.firstResponder as? NSTextView, !text.isFieldEditor {
             holding.value = false

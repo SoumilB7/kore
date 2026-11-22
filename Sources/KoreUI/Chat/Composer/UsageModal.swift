@@ -328,7 +328,7 @@ struct UsageModal: View {
     /// While open it has this window's keys: Esc and Return close, ↑ ↓ / k j step through the
     /// limits. Other plain keys are swallowed; ⌘ shortcuts pass through.
     private func handleKey(_ event: NSEvent) -> NSEvent? {
-        guard let window = window.value, event.window === window else { return event }
+        guard let window = window.value, event.window === window, !KoreAsk.shared.holds(window) else { return event }
         if event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command) { return event }
         if stops.value.handle(event) { return nil }
         switch event.keyCode {

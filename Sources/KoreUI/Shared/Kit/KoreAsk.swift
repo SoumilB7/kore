@@ -194,7 +194,10 @@ package final class KoreAsk {
         case .keyDown:
             switch event.keyCode {
             case 53: cancel(); return nil
-            case 36, 76: answer(ring); return nil
+            case 36, 76:
+                // Return alone: held with ⌘, ⇧, ⌥ or ⌃ it's another key, and answers nothing.
+                if event.modifierFlags.isDisjoint(with: [.command, .shift, .option, .control]) { answer(ring) }
+                return nil
             case 48: moveRing(event.modifierFlags.contains(.shift) ? -1 : 1); return nil
             case 123 where question.field == nil, 124 where question.field == nil: moveRing(event.keyCode == 123 ? -1 : 1); return nil
             case 49 where question.field == nil: answer(ring); return nil

@@ -249,7 +249,7 @@ struct AgentMapView: View {
     // MARK: Keys
 
     private func handleKey(_ event: NSEvent) -> NSEvent? {
-        guard map.isOpen, let window = window.value, event.window === window else { return event }
+        guard map.isOpen, let window = window.value, event.window === window, !KoreAsk.shared.holds(window) else { return event }
         let flags = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         if flags.contains(.command) { return event }
         let rows = layout()
