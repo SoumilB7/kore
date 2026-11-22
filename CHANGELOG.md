@@ -75,7 +75,17 @@ Notable changes to Kore, newest first. Versions follow [semver](https://semver.o
 - A box host key is compared by the key itself, so a reordered or hashed known_hosts no longer
   looks like a new key.
 - A dead SSH link to a box ends with a line saying so instead of waiting.
-- TODO(Resource): terminal busy on a slow shell start; box probe line.
+- Checking a box's link keeps its own status line; looking up the machine beside it no longer
+  writes over it.
+- While Kore asks a question, the window's keys are the question's: arrows, Esc and shortcuts no
+  longer move the tabs, lists, picture viewer, agent map or chat card behind it, and Esc over an
+  open popup cancels the question. Return held with ⌘, ⇧, ⌥ or ⌃ no longer answers it.
+- A question no longer waits unseen in a window that closed; it comes up in the front window, and
+  a window put away in the Dock comes back to show it.
+- Pasting a cut chat twice quickly moves it once instead of copying it.
+- Closing an unsaved tab twice asks once, and quitting asks only about files still unsaved.
+- The Welcome window opens with nothing lit from last time.
+- A box checking its GitHub sign-in no longer holds up its other work while it waits.
 
 ## [0.3.9] - 2026-11-24
 
