@@ -78,3 +78,44 @@ the run's folder), a part over its budget as `✘ <part>: slow`, and the total w
 Detail (every read text, settle time and size) goes to `<out>/live-check.log` and
 `<out>/<shard>/live-notes.txt`; the run's folder is under `$TMPDIR/kore-live-check`. Without
 `--bin` it builds once in release first; the gate passes its own build.
+
+`--scale` adds the UI at scale (below) after the rest, on the same build.
+
+## UI at scale
+
+`scripts/ui-scale.sh [--bin <release bin dir>] [--sizes narrow,laptop,large] [--out <dir>]` works
+every area of the window as a person does and times it, at three window sizes and two loads. It
+exists because element checks at one size missed what breaks at a large window, in a long chat or
+with many tabs, and because clicking a control isn't checking that it worked.
+
+- **Areas** (`Catalogue/ScaleStorylines.swift`, tag `scale`), at the **light load** each area's own
+  storyline with its checks (the effect, not just the click):
+  - tabs (select, ⇧-select, ⌘W, ⇧⌘T, drafts back where they were) and groups;
+  - the model and mode pickers;
+  - Devices (the KoreNet switch on and off, a phone allowed and denied);
+  - the agent map, History (search, then open at the message);
+  - the explorer (copy, paste, rename with undo, trash, Open in Terminal);
+  - table and code copy (the pasteboard holds exactly the text);
+  - the rail (a mark's click lands on its message);
+  - the composer (sends, answered by the scripted CLI) and the terminal (a shell echoes).
+- **Heavy loads**: 30 tabs (tabs, Devices); a chat of 300 turns (open, scroll, rail, both copies,
+  both pickers at their anchors, a message sent); 500 files (the explorer expands, renames,
+  trashes).
+- **Sizes**: narrow 560×700, laptop 1440×860, large 3008×1692 (`--size` per app).
+- **Timing**: each click or key is timed from the action to the first frame that two more follow
+  at the display's pace (the main thread free and drawing again), against 100 ms; its own
+  main-thread work (`busy`) and the longest frame gap on the way (`worst`) are logged beside it.
+  A scroll's frames are timed at p95 against 16 ms. Over budget is a ✘ but doesn't stop the area:
+  its later steps are still timed.
+- **Layout**: popups whole in the window and at their anchor; each area ends with the live
+  check's Look (frames steady, no work word left, nothing clipped) and its edge controls whole.
+
+Claude's and Codex's apps run at once, each going through the three sizes in turn (six apps at
+once loaded the Mac enough to time the load, not the app), each off screen under
+its own name (defaults, pasteboard, Kore folders), input in process, the scripted CLI, ≤10 min.
+Areas that don't depend on the CLI run in one of the two. The output is one ✔/✘ per
+area × load × size × CLI with its slowest step, the ten slowest steps, then the total with the Mac's load at the start and end (a note when it's high: times over
+budget may then be the load's, so rerun that area alone); the detail
+is `<out>/<size>-<cli>/ui-scale.jsonl`, `report.txt` and `shots/`, under
+`$TMPDIR/kore-ui-scale`. Not covered: a live model's turns, the phone, real pointer hover
+(storylines hover in process), and the terminal and agent map at a heavy load.

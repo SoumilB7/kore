@@ -1,5 +1,5 @@
 #!/bin/zsh
-# scripts/live-check.sh [--bin <release bin dir>] [--tests <test scratch path> | --no-relay] [--devices [--switch]] [--out <dir>]
+# scripts/live-check.sh [--bin <release bin dir>] [--tests <test scratch path> | --no-relay] [--devices [--switch]] [--scale] [--out <dir>]
 #
 # Kore looked at as a person would, on top of the gate (docs/dev-builds.md, "Live check"):
 #   tour  the screen tour, the `livecheck` storylines: the Claude and Codex tellings side by side,
@@ -15,6 +15,7 @@
 #         bundle, so there is no smaller build of them). --no-relay leaves them out.
 #   --devices  the real box, `ssh mybox`: kore-host's version and daemon, the link over SSH and
 #         over the tailnet, and which tailnet each side says it's on.
+#   --scale    after the rest, the UI at scale (scripts/ui-scale.sh, ≤10 min) on the same build
 #   --switch   (with --devices; ~6 min, never by default) stops tailscaled on mybox, root restore
 #         timers armed first (300 s and 600 s), and reads the box's journal for the move to Kore's
 #         own tailnet and back.
@@ -27,7 +28,7 @@ set -u
 zmodload zsh/datetime
 cd "${0:A:h}/.." || exit 2
 root=$PWD
-bin=""; tests=""; relay=1; devices=0; switch=0; out=""
+bin=""; tests=""; relay=1; devices=0; switch=0; scale=0; out=""
 while (( $# )); do
   case $1 in
     --bin) bin=${2:A}; shift ;;
@@ -35,6 +36,7 @@ while (( $# )); do
     --no-relay) relay=0 ;;
     --devices) devices=1 ;;
     --switch) switch=1 ;;
+    --scale) scale=1 ;;
     --out) out=$2; shift ;;
     *) print "live-check.sh: unknown $1" >&2; exit 2 ;;
   esac
@@ -264,4 +266,9 @@ print(f"{passed}/{total}", end="")
 open(os.path.join(out, "passed"), "w").write("1" if passed == total else "0")
 PY
 print " · tour $(human $tour_s) · net $(human $net_s)${dev_s:+ · devices $(human $dev_s)} · total $(human $(secs $start)) · $out"
-[[ $(cat $out/passed 2>/dev/null) == 1 ]]
+scale_ok=1
+if (( scale )); then
+  print "\n== UI at scale"
+  KORE_DEVRUN_JOB=${KORE_DEVRUN_JOB-ui-scale} /bin/zsh $root/scripts/ui-scale.sh --bin $bin --out $out/scale || scale_ok=0
+fi
+[[ $(cat $out/passed 2>/dev/null) == 1 ]] && (( scale_ok ))
