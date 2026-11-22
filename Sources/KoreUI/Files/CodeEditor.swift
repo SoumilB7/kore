@@ -10,7 +10,7 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
     unowned let document: FileDocument
     let scrollView = EditorScrollView()
     let textView: EditorTextView
-    private let gutter: GutterView
+    let gutter: GutterView
     let lines = LineIndex()
     private(set) var colorer: SyntaxColorer
     /// `.env` values show as bullets (`SecretMask`) but on these lines: the caret's while the

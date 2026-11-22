@@ -255,17 +255,29 @@ package final class PinchZoom {
     }
 
     /// Sideways only while magnified: trackpad panning then, even without a visible scroller. At
-    /// the natural size the page is as wide as its view, and its left edge is the view's.
+    /// the natural size a page as wide as its view goes back to its left edge; a page wider than
+    /// its view (a file's long lines, unwrapped) scrolls sideways itself, and keeps its place.
     private func fitSides(_ scroll: NSScrollView, _ page: Page) {
         guard let original = page.original else { return }
         let magnified = scroll.magnification > 1.001
         let sides: NSScrollView.Elasticity = magnified ? .allowed : original.horizontalElasticity
         if scroll.horizontalScrollElasticity != sides { scroll.horizontalScrollElasticity = sides }
         guard !magnified else { return }
+        Self.naturalSides(scroll)
+    }
+
+    /// At the natural size: a page as wide as its view at its left edge; a wider one where it is,
+    /// held only inside what it can scroll to. The clip's own insets count: the code editor's
+    /// gutter sits over the clip's left, so its text's left edge is left of 0.
+    private static func naturalSides(_ scroll: NSScrollView) {
         let clip = scroll.contentView
-        let left = scroll.documentView?.frame.minX ?? 0
-        guard abs(clip.bounds.minX - left) > 0.5 else { return }
-        clip.scroll(to: CGPoint(x: left, y: clip.bounds.minY))
+        let document = scroll.documentView?.frame ?? .zero
+        let insets = clip.contentInsets
+        var place = clip.bounds
+        if document.width <= place.width - insets.left - insets.right + 0.5 { place.origin.x = document.minX - insets.left }
+        let x = clip.constrainBoundsRect(place).minX
+        guard abs(clip.bounds.minX - x) > 0.5 else { return }
+        clip.scroll(to: CGPoint(x: x, y: clip.bounds.minY))
         scroll.reflectScrolledClipView(clip)
     }
 
@@ -281,11 +293,7 @@ package final class PinchZoom {
         scroll.maxMagnification = original.maximum
         scroll.allowsMagnification = original.allows
         scroll.horizontalScrollElasticity = original.horizontalElasticity
-        let clip = scroll.contentView, left = scroll.documentView?.frame.minX ?? 0
-        if abs(clip.bounds.minX - left) > 0.5 {
-            clip.scroll(to: CGPoint(x: left, y: clip.bounds.minY))
-            scroll.reflectScrolledClipView(clip)
-        }
+        Self.naturalSides(scroll)
         page.original = nil
         self.magnified(scroll)
     }

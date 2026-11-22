@@ -273,6 +273,29 @@ package final class InputDriver {
         await pass()
     }
 
+    /// A sideways (and/or vertical) scroll over what shows of the element: a few continuous
+    /// wheel events, in-process, as a mouse's or trackpad's deltas arrive. `dx` > 0 moves the view
+    /// right (the content left).
+    package func scrollSideways(_ element: StoryElement, dx: CGFloat, dy: CGFloat = 0) async throws {
+        // A scroll view's document is wider or taller than the window: aim at what shows of it.
+        guard let window = element.window, let content = window.contentView, let frame = element.frame else {
+            throw StoryFailure.modelMissing("\(element.id)'s window")
+        }
+        let shown = frame.intersection(content.bounds)
+        guard !shown.isEmpty, let view = content.hitTest(CGPoint(x: shown.midX, y: shown.midY)) else {
+            throw StoryFailure.expectation("\(element.id) on screen")
+        }
+        for share in [0.25, 0.25, 0.25, 0.25] as [CGFloat] {
+            guard let event = CGEvent(
+                scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
+                wheel1: Int32((-dy * share).rounded()), wheel2: Int32((-dx * share).rounded()), wheel3: 0),
+                let ns = NSEvent(cgEvent: event)
+            else { throw StoryFailure.other("can't make a scroll event") }
+            view.scrollWheel(with: ns)
+            await pass()
+        }
+    }
+
     /// Text pasted into the focused text view, as ⌘V pastes it, from a pasteboard of the
     /// storyline's own: the owner's clipboard is never touched.
     package func paste(_ text: String) async throws {

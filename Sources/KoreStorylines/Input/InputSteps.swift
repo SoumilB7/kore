@@ -144,6 +144,23 @@ package struct Wheel: Step {
     }
 }
 
+/// A sideways (and/or vertical) scroll over what shows of an element (in-process wheel deltas).
+package struct ScrollSideways: Step {
+    let target: Locator
+    let dx: CGFloat
+    let dy: CGFloat
+    package var label: String { "Scroll \(target) by (\(Int(dx)), \(Int(dy)))" }
+    package init(_ target: Locator, dx: CGFloat, dy: CGFloat = 0) {
+        self.target = target
+        self.dx = dx
+        self.dy = dy
+    }
+
+    package func run(_ story: StoryContext) async throws {
+        try await story.input.scrollSideways(try await story.element(target), dx: dx, dy: dy)
+    }
+}
+
 /// Text pasted into whatever has focus, without the clipboard.
 package struct PasteText: Step {
     let text: String
