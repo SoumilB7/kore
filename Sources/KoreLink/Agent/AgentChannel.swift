@@ -500,6 +500,14 @@ package final class AgentChannel {
             guard let chat = changeable(args, client, id) else { return nil }
             done(chat.arsenalCompact(), chat, client, id)
             return chat.id.uuidString
+        case AgentCommand.autoCompact.name:
+            guard let chat = changeable(args, client, id) else { return nil }
+            guard let point = args.point, !point.isEmpty, point.utf8.count <= 16 else {
+                fail(client, id, .invalid, "Say a point: 50, 60, 70, 80, 90 or off.")
+                return chat.id.uuidString
+            }
+            done(chat.arsenalAutoCompact(point), chat, client, id)
+            return chat.id.uuidString
         case AgentCommand.new.name:
             return newChat(args, client, id)
         case AgentCommand.fork.name:

@@ -50,6 +50,8 @@ package struct AgentCommand: Sendable, Equatable {
     package static let fast = Self(name: "chat.fast", tier: .own)
     package static let mode = Self(name: "chat.mode", tier: .own)
     package static let compact = Self(name: "chat.compact", tier: .own)
+    /// Its auto-compact point, as the context wheel sets it: 50, 60, 70, 80, 90 or off.
+    package static let autoCompact = Self(name: "chat.autocompact", tier: .own)
 
     // Drive: the caller's window, at or below its own mode. Own's changes reach those chats too.
     package static let new = Self(name: "chat.new", tier: .drive)
@@ -74,7 +76,7 @@ package struct AgentCommand: Sendable, Equatable {
 
     package static let all: [Self] = [
         whoami, caps, chats, show, read, follow, unfollow, cards, history, wait, options, rename, model, effort, fast, mode, compact,
-        arrange, new, fork, send, stop, showTab, answer, open, close, ask, reply, fetch,
+        autoCompact, arrange, new, fork, send, stop, showTab, answer, open, close, ask, reply, fetch,
     ]
 
     /// Why `tier` may not run `name`; nil when it may.
@@ -144,6 +146,8 @@ package struct AgentArgs: Codable, Sendable, Equatable {
     /// `chat.mode`'s mode), and `chat.fast` on or off.
     package var to: String?
     package var on: Bool?
+    /// `chat.autocompact`: the point, "50" to "90" or "off".
+    package var point: String?
     /// Drive's: `chat.new`'s CLI (`claude`, `codex`), model and mode; a message (`chat.new`'s first,
     /// `chat.send`'s); `cards.answer`'s card, an answer per question, or deny.
     package var provider: String?

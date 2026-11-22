@@ -429,7 +429,7 @@ final class AgentChannelAll: ChatStoryline {
         ])
     static let long = (1...40).map { "Sentence \($0) of the streamed answer, long enough to arrive in many pieces." }.joined(separator: " ")
     static let forbidden = [
-        "chat.send", "chat.new", "chat.stop", "chat.queue", "chat.rename", "chat.model", "chat.effort", "chat.mode", "chat.compact",
+        "chat.send", "chat.new", "chat.stop", "chat.queue", "chat.rename", "chat.model", "chat.effort", "chat.mode", "chat.compact", "chat.autocompact",
         "chat.fork", "chat.rollback", "chat.close", "chat.archive", "cards.answer", "window.open", "file.open", "terminal.open",
         "usage.read", "tx.search", "agent.setTier", "agent.grant", "agent.enable", "agent.stopAll", "chat.ask", "chat.reply", "file.fetch",
     ]

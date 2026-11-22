@@ -160,6 +160,21 @@ struct HostArsenalTests {
         }
     }
 
+    /// The box answers kore_set_compact itself: the live chat's point and the record kept for
+    /// its next start.
+    @Test func setCompactIsKeptInTheBoxsRecord() async throws {
+        let made = Made()
+        let (rig, hc, _) = try rig(made)
+        defer { rig.finish() }
+        rig.host.arsenalSaid("own", hc)
+        let me = try caller(rig, hc)
+        let said = await ask("kore_set_compact", me, socket: rig.paths.agentSocket.path, ["point": 60])
+        #expect(said.ok && Self.data(said.text)["message"] as? String == "Auto-compact at 60%.", "\(said.text)")
+        #expect(hc.record.autoCompact == 60 && hc.chat?.context.autoCompactAt == 60)
+        let off = await ask("kore_set_compact", me, socket: rig.paths.agentSocket.path, ["point": "off"])
+        #expect(off.ok && hc.record.autoCompact == 0 && hc.chat?.context.autoCompactAt == nil, "\(off.text)")
+    }
+
     @Test func theTierIsTheBoxsOwnRulesAndSurvivesARestart() async throws {
         let made = Made()
         let (rig, hc, target) = try rig(made)

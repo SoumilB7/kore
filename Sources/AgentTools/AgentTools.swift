@@ -92,6 +92,10 @@ package enum AgentTools {
             name: "kore_lower_mode", command: "chat.mode",
             description: "Lower a chat's mode, to one kore_options marks allowed: this chat (Act limited), or another it reaches (Act unlimited). Only the user raises a mode.",
             args: [ownChatArg, ("to", "string", "The mode's id or label.")], required: ["to"]),
+        Tool(
+            name: "kore_set_compact", command: "chat.autocompact",
+            description: "Set a chat's auto-compact point, as its context wheel does: this chat (Act limited), or another it reaches (Act unlimited).",
+            args: [ownChatArg, ("point", "string", "50, 60, 70, 80 or 90 (percent of the context), or off.")], required: ["point"]),
         Tool(name: "kore_compact", command: "chat.compact", description: "Compact this chat once the current turn ends, or another it reaches with Act unlimited (Act limited).", args: [ownChatArg], required: []),
         Tool(
             name: "kore_new_chat", command: "chat.new",
@@ -190,7 +194,7 @@ package enum AgentTools {
         return "watch"
     }
 
-    package static let ownCommands = ["chat.options", "chat.rename", "chat.model", "chat.effort", "chat.fast", "chat.mode", "chat.compact"]
+    package static let ownCommands = ["chat.options", "chat.rename", "chat.model", "chat.effort", "chat.fast", "chat.mode", "chat.compact", "chat.autocompact"]
 
     /// A tier's name as the user sees it, from its wire id (`watch`, `own`, `drive`, `device`, `full`, `off`).
     package static func tierName(_ id: String) -> String {
@@ -238,6 +242,8 @@ package enum AgentTools {
     package static func arguments(_ tool: Tool, _ given: Object) -> Object {
         var args = given.filter { key, _ in tool.args.contains { $0.0 == key } }
         if ownCommands.contains(tool.command) { args["chat"] = args["chat"] ?? "." }
+        // A point given as a number (50) is the same as "50".
+        if let point = args["point"] as? NSNumber { args["point"] = point.stringValue }
         return args
     }
 

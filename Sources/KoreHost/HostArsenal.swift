@@ -159,7 +159,7 @@ extension HostDaemon {
         case AgentCommand.wait.name:
             return await wait(hc, args)
         case AgentCommand.options.name, AgentCommand.rename.name, AgentCommand.model.name, AgentCommand.effort.name,
-            AgentCommand.mode.name, AgentCommand.fast.name, AgentCommand.compact.name:
+            AgentCommand.mode.name, AgentCommand.fast.name, AgentCommand.compact.name, AgentCommand.autoCompact.name:
             return change(hc, name, args)
         case AgentCommand.new.name:
             return newChat(hc, args)
@@ -394,6 +394,12 @@ extension HostDaemon {
                 return Self.done(chat.arsenalFast(on), target)
             case AgentCommand.compact.name:
                 return Self.done(chat.arsenalCompact(), target)
+            case AgentCommand.autoCompact.name:
+                guard let point = args.point, !point.isEmpty, point.utf8.count <= 16 else { return Self.failed(.invalid, "Say a point: 50, 60, 70, 80, 90 or off.") }
+                let outcome = chat.arsenalAutoCompact(point)
+                // The box's record keeps it, as the wheel's change from a client does.
+                if case .success = outcome { target.setAutoCompact(chat.context.autoCompactAt) }
+                return Self.done(outcome, target)
             default:
                 guard let value = args.to, !value.isEmpty, value.utf8.count <= 1024 else { return Self.failed(.invalid, "Say what to set it to.") }
                 let outcome = switch name {
