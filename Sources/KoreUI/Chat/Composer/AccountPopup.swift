@@ -170,7 +170,7 @@ final class AccountState {
         let aim: AccountStore.Aim =
             switch palette {
             case .add: .new
-            case .login(let id): CLIProfiles.active(provider) == id ? .active : .login(id)
+            case .login(let id): store.isActive(provider, id) ? .active : .login(id)
             case .methods, nil: .active
             }
         start(method, aim: aim)
@@ -195,8 +195,8 @@ final class AccountState {
 
     /// Signed in, with logins Kore can keep side by side: the row's sign-in adds one.
     var addsLogins: Bool {
-        // A box's accounts are added on the box itself.
-        guard !store.onBox, case .signedIn = store.status(provider) else { return false }
+        // A box adds Claude accounts there; its Codex keeps one login.
+        guard !store.onBox || store.addsOnBox(provider), case .signedIn = store.status(provider) else { return false }
         return !store.logins(provider).isEmpty
     }
 
@@ -516,7 +516,8 @@ struct AccountPopup: View {
     @ViewBuilder private var content: some View {
         let provider = chat.provider.id
         switch store.status(provider) {
-        case .signedIn(let identity) where store.logins(provider).count > 1:
+        // One login is a list of one too: its usage shows as each login's does.
+        case .signedIn(let identity) where !store.logins(provider).isEmpty:
             loginList(identity)
         case .unknown where store.logins(provider).count > 1:
             // Just switched: the list stays, the new login's caption to come.

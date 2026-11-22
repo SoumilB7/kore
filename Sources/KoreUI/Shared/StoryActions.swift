@@ -226,18 +226,18 @@ extension Chat {
     /// The Account popup's logins as listed, "✓ " before the active one's email, and its cue
     /// after it (" · Duplicate", " · Signed out").
     package var storyLogins: [String] {
-        AccountStore.shared.logins(provider.id).map { login in
+        accountStore.logins(provider.id).map { login in
             let cue = login.duplicate ? AccountText.duplicate : login.signedOut ? AccountText.loginSignedOut : nil
             return (login.active ? "✓ " : "") + (login.email ?? "?") + (cue.map { " · " + $0 } ?? "")
         }
     }
     /// The account-list's displayed totals (not Kore shares), by login id.
     package var storyLoginUsage: [String: [String]] {
-        let store = AccountStore.shared
+        let store = accountStore
         return Dictionary(uniqueKeysWithValues: store.logins(provider.id).map { login in
             let key = LoginUsage.Key(provider.id, login, generation: store.generation(provider.id))
             let lines: [String]
-            switch LoginUsage.shared.state(key) {
+            switch store.loginUsage.state(key) {
             case .idle: lines = ["Not read"]
             case .loading: lines = ["Reading usage…"]
             case .unavailable: lines = ["Usage unavailable"]
@@ -248,11 +248,11 @@ extension Chat {
     }
     /// Each login's limits that show a reset, with the reset at the row's end ("Session ↻ 2h").
     package var storyLoginResets: [String: [String]] {
-        let store = AccountStore.shared
+        let store = accountStore
         return Dictionary(uniqueKeysWithValues: store.logins(provider.id).map { login in
             let key = LoginUsage.Key(provider.id, login, generation: store.generation(provider.id))
             let lines: [String]
-            if case .ready(let reading, _) = LoginUsage.shared.state(key) {
+            if case .ready(let reading, _) = store.loginUsage.state(key) {
                 let now = Date()
                 lines = LoginUsage.bars(reading).filter { !UsageText.resetsShort($0.resetsAt, now: now).isEmpty }.map { UsageText.label($0.title) + " " + LoginMeters.reset($0, now: now) }
             } else { lines = [] }
@@ -261,14 +261,14 @@ extension Chat {
     }
     /// The logins' emails as the card shows them (masked in privacy mode), in its order.
     package var storyLoginTitles: [String] {
-        AccountStore.shared.logins(provider.id).map { $0.email.map(AccountPrivacy.shared.shown) ?? "?" }
+        accountStore.logins(provider.id).map { $0.email.map(AccountPrivacy.shared.shown) ?? "?" }
     }
     /// Each login's plan pill, by login id; logins without one are left out.
     package var storyLoginPlans: [String: String] {
-        let store = AccountStore.shared
+        let store = accountStore
         let identity: AccountIdentity? = if case .signedIn(let identity) = store.status(provider.id) { identity } else { nil }
         return Dictionary(uniqueKeysWithValues: store.logins(provider.id).compactMap { login in
-            let usage = LoginUsage.shared.state(LoginUsage.Key(provider.id, login, generation: store.generation(provider.id)))
+            let usage = store.loginUsage.state(LoginUsage.Key(provider.id, login, generation: store.generation(provider.id)))
             return LoginRow.pill(usage, plan: login.active ? identity?.plan : nil).map { (AccountStore.loginKey(login.id), $0) }
         })
     }
@@ -284,7 +284,7 @@ extension Chat {
     /// The caption under the action row ("Also signs out Terminal and VS Code on this Mac.",
     /// "Kept in a file only you can read.", "Pick Console account, then …").
     package var storyAccountCaption: String? {
-        let store = AccountStore.shared
+        let store = accountStore
         if account.askingSignOut {
             return AccountText.signOutCaption(working: store.workingChats(provider.id), setting: account.identity?.isKoreSetting == true)
         }
@@ -326,7 +326,12 @@ extension Chat {
     /// Whether a field or form is open in the popup, and has the keys.
     package var storyAccountEditing: Bool { account.isEditing }
     /// The account changed since the chat's CLI started: it hasn't started again yet.
-    package var storyAccountGeneration: Int { AccountStore.shared.generation(provider.id) }
+    /// A login's ⋯, then its sign-in: that login signed in again where it is.
+    package func storySignInLogin(_ id: String?) {
+        account.toggleLoginMenu(id)
+        account.signIn()
+    }
+    package var storyAccountGeneration: Int { accountStore.generation(provider.id) }
 
     /// The turn whose refused login shows its notice, newest first.
     package var storySignInNoticeTurn: String? {

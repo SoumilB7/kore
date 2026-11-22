@@ -57,7 +57,7 @@ struct BoxClaudeAccountsTests {
         #expect(hc.record.account == "ajinkya")
 
         // One account's usage, read on the box.
-        #expect(try await accounts.claudeUsage("ajinkya").account.email == "ajinkya@onfinance.in")
+        #expect(try await accounts.usage("claude", "ajinkya").account.email == "ajinkya@onfinance.in")
         // The chat's own status: its account's.
         let said = await connection.command { HostWire.refresh(id: $0, provider: "claude", chatId: hc.id) }
         #expect(said.account?.email == "ajinkya@onfinance.in")

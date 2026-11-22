@@ -30,8 +30,8 @@ final class AccountLogins: ChatStoryline {
             UseScript(AccountPopup.script(provider), for: provider), SeedLogins(provider: provider), OpenFolder(), StartChat(),
             WaitForFocus(.id(StoryID.Composer.field)),
             Press(.id(StoryID.Composer.slash)), Press(.id(StoryID.Composer.command("account"))), WaitForElement(popup),
-            logins("main alone, the account in the header", ["✓ you@example.com"]),
-            ExpectElement(.id(StoryID.Composer.accountLogin("main")), .absent),
+            logins("main alone, listed with its usage", ["✓ you@example.com"]),
+            WaitForElement(.id(StoryID.Composer.accountLogin("main"))),
             // Add account: its palette, then a sign-in in a folder of its own, kept as someone new.
             Press(part(.switch)),
             Expect("only the methods that make a login", found: { $0.app.chat?.storyAccountMenu?.joined(separator: " | ") }) {
@@ -306,6 +306,9 @@ final class AccountLoginEdges: ChatStoryline {
                     return true
                 },
                 logins("the new login active", ["you@example.com", "✓ work@acme.dev"]),
+                // Main's row is up from the start (one login lists too): pressed only once the
+                // sign-in has ended, as a row can't switch while one runs.
+                Expect("the sign-in's outcome", found: { $0.app.chat?.storyAccount.last }) { $0.app.chat?.storyAccount.last == "Switched accounts." },
                 status("main's status, as its folder reads", me),
                 Press(.id(main)),
                 logins("main active", ["✓ you@example.com", "work@acme.dev"]),
