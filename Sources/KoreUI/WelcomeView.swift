@@ -47,7 +47,7 @@ struct WelcomeView: View {
                     // The box's route now, as the link moves: "Kore's tailnet", "SSH (mybox-cf)".
                     if let place, let route = Devices.shared.boxRoute(place) {
                         Text(route.line).font(Chrome.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
-                            .help(route.help ?? "")
+                            .tip(route.help ?? "")
                             .storyID(StoryID.Boxes.route)
                     }
                     if let place {
