@@ -1396,6 +1396,12 @@ package final class Workspace {
         return tabs.first { $0.agent == nil && ($0.chat?.services as? BoxChatServices)?.chatId == session.id }?.chat
     }
 
+    /// A History row whose chat is the one this window's tab shows (its current row).
+    func historyIsCurrent(_ row: SessionSummary) -> Bool {
+        guard let open = openChat(row), let shown = activeTab.chat else { return false }
+        return open === shown
+    }
+
     /// What a History row's logo shows of Arsenal: its open tab's chat (the logo reads its tier,
     /// so it follows the tab), else the tier kept for it in `kept` (`ArsenalMemory.all()`, read
     /// once per list load). `on`: the paired box the row is on.

@@ -155,7 +155,7 @@ struct UsageModal: View {
                     let reset = UsageText.resetsShort(bar.resetsAt, now: now)
                     let spoken = [
                         UsageText.label(bar.title), UsageText.percent(bar.used), kore > 0 ? "about \(UsageText.kore(kore).dropFirst()) in Kore" : nil,
-                        reset.isEmpty ? nil : UsageText.resets(bar.resetsAt, now: now).lowercased(),
+                        bar.idle == true ? UsageText.notStarted.lowercased() : reset.isEmpty ? nil : UsageText.resets(bar.resetsAt, now: now).lowercased(),
                     ]
                     UsagePickRow(
                         selected: bar.title == state.pickedLimit?.title, help: state.barHelp(bar, now: now),

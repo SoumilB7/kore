@@ -28,6 +28,19 @@ package enum UsageText {
     package static func inKore(_ points: Double) -> String { kore(points) + " in Kore" }
 
     /// "Resets in 3h", "Resets in 12m", "Resets in 6d", "Resets soon"; nothing without a time.
+    /// A window that hasn't begun (`PlanLimit.idle`): what its row says where a reset would be.
+    package static let notStarted = "Starts with your next message"
+
+    /// A bar's reset as a phrase, or `notStarted` for a window not begun.
+    package static func resets(_ bar: PlanLimit, now: Date) -> String {
+        bar.idle == true ? notStarted : resets(bar.resetsAt, now: now)
+    }
+
+    /// A bar's reset as its hover reads it, or `notStarted` for a window not begun.
+    package static func resetsAt(_ bar: PlanLimit, now: Date) -> String {
+        bar.idle == true ? notStarted : resetsAt(bar.resetsAt, now: now)
+    }
+
     package static func resets(_ date: Date?, now: Date) -> String {
         let short = resetsShort(date, now: now)
         return short.isEmpty ? "" : short == "now" ? "Resets soon" : "Resets in \(short)"

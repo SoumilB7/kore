@@ -20,6 +20,26 @@ extension Theme {
         /// well apart from the selection.
         static func hoverQuiet(_ ground: Ground) -> Color { ground == .window ? quietOnWindow : quietOnSurface }
 
+        /// A list with one current item and a moving highlight (History, owner's pick C,
+        /// 2026-11-24): the current row sits raised, its name in light blue, and stays so while the
+        /// list is open; the pointer's or the keys' row takes a faint accent tint, a step stronger
+        /// while pressed. Fills only, never a border.
+        enum Current {
+            static let name = Blue.b200
+
+            static func fill(current: Bool, lit: Bool, pressed: Bool) -> Color? {
+                switch (current, lit || pressed) {
+                case (true, false): surfaceRaised
+                case (true, true): pressed ? surfaceRaisedPressed : surfaceRaisedHover
+                case (false, true): pressed ? pressedTint : litTint
+                case (false, false): nil
+                }
+            }
+
+            private static let litTint = Blue.b400.opacity(0.09)
+            private static let pressedTint = Blue.b400.opacity(0.17)
+        }
+
         private static let hoverOnWindow = surface.opacity(0.6)
         private static let hoverOnSurface = surfaceHover.opacity(0.6)
         private static let quietOnWindow = surface.opacity(0.3)

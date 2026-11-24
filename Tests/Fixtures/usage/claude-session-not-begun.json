@@ -1,0 +1,19 @@
+{
+  "account": {"email": "you@example.com", "subscriptionType": "max", "organization": "Example Org"},
+  "usage": {
+    "subscription_type": "max",
+    "rate_limits_available": true,
+    "rate_limits": {
+      "five_hour": null,
+      "seven_day": {"utilization": 55, "resets_at": "2026-11-26T21:00:00.816183+00:00", "limit_dollars": null, "used_dollars": null, "remaining_dollars": null, "locked_reason": null},
+      "seven_day_sonnet": null,
+      "model_scoped": [{"display_name": "Fable", "utilization": 0, "resets_at": "2026-11-26T20:59:59.816414+00:00"}],
+      "limits": [
+        {"kind": "weekly_all", "group": "weekly", "percent": 55, "severity": "normal", "resets_at": "2026-11-26T21:00:00.816183+00:00", "scope": null, "is_active": true},
+        {"kind": "weekly_scoped", "group": "weekly", "percent": 0, "severity": "normal", "resets_at": "2026-11-26T20:59:59.816414+00:00", "scope": {"model": {"id": null, "display_name": "Fable"}, "surface": null}, "is_active": false}
+      ],
+      "weekly_scoped_shares": [{"limit_index": 1, "used_percent_of_weekly": 0, "allowance_percent_of_weekly": 50}],
+      "extra_usage": null
+    }
+  }
+}

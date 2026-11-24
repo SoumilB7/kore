@@ -95,6 +95,8 @@ struct HistoryPanel: View {
                                 session: chat,
                                 hit: search.value.hits[chat.id],
                                 lit: (lit.value ?? 0) == index,
+                                tinted: lit.value == index,
+                                current: isOpen && workspace.historyIsCurrent(chat),
                                 showsActions: lit.value == index,
                                 isRenaming: renaming.value == chat.id,
                                 open: { open(chat) },
@@ -312,6 +314,10 @@ private struct HistoryRow: View {
     let hit: ChatTextIndex.Hit?
     /// The panel's one highlight: the pointer's row, or the keys'.
     let lit: Bool
+    /// Lit by the pointer or the keys (not only Return's first row): its faint accent tint.
+    var tinted = false
+    /// Its chat is the one this tab shows: raised, its name in light blue, while the panel is open.
+    var current = false
     /// Rename and Archive: on the row the pointer or the keys moved to.
     let showsActions: Bool
     let isRenaming: Bool
@@ -333,6 +339,8 @@ private struct HistoryRow: View {
     var clip: (Bool) -> Void = { _ in }
     var paste: (() -> Void)? = nil
     @StateObject private var draft = Local("")
+    /// The row's button is held down: its fill one step stronger.
+    @StateObject private var pressed = Local(false)
     /// Return and the focus loss that follows it both end a rename; only the first counts.
     @StateObject private var finished = Local(false)
     @FocusState private var fieldFocused: Bool
@@ -349,13 +357,18 @@ private struct HistoryRow: View {
         }
         // Archive is built only on hover: pressed through its action meanwhile.
         .storyAction(StoryID.History.row(session.id).part(.archive)) { if locked == nil { toggleArchive() } }
-        .hoverFill(lit || isRenaming, Theme.Row.selected(.surface))
+        .hoverFill(fill != nil, fill ?? .clear)
+        .background(StoryAnchor(id: current ? StoryID.History.row(session.id).part(.selected).raw : nil, press: nil))
         .koreContextMenu("history") {
             HistoryMenu.items(session, locked: locked, open: open, rename: startRename, archive: toggleArchive, clip: clip, paste: paste)
         }
         // Built only on the lit row: VoiceOver and the keyboard reach them on any row.
         .accessibilityAction(named: "Rename", startRename)
         .accessibilityAction(named: session.archived ? "Unarchive" : "Archive", toggleArchive)
+    }
+
+    private var fill: Color? {
+        Theme.Row.Current.fill(current: current, lit: tinted || isRenaming, pressed: pressed.value)
     }
 
     @ViewBuilder private var logo: some View {
@@ -382,7 +395,7 @@ private struct HistoryRow: View {
             .padding(.vertical, Space.md)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(PressFill(pressed: { pressed.value = $0 }))
         .tip(session.title)
     }
 
@@ -390,7 +403,7 @@ private struct HistoryRow: View {
         HStack(spacing: Space.md) {
             Text(session.title)
                 .font(Chrome.body)
-                .foregroundStyle(session.archived ? Theme.secondary : Theme.text)
+                .foregroundStyle(current ? Theme.Row.Current.name : session.archived ? Theme.secondary : Theme.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
             // A chat Kore made by an import names where it came from.
@@ -498,5 +511,14 @@ enum HistoryMenu {
         if let paste { items.append(OptionItem("Paste Chat", key: "⌘V", action: paste)) }
         if let locked { items += [.rule, OptionItem(locked, enabled: false)] }
         return items
+    }
+}
+
+/// A plain button that says when it's held down, for its row's pressed fill.
+private struct PressFill: ButtonStyle {
+    let pressed: (Bool) -> Void
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.onChange(of: configuration.isPressed) { _, down in pressed(down) }
     }
 }

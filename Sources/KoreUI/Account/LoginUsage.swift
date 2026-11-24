@@ -271,9 +271,10 @@ final class LoginUsage {
         return true
     }
 
-    /// The two account-wide limits keep a login compact; model-specific windows remain in
-    /// Usage. These are the plan's totals, so the list never invents a Kore share or hatch.
+    /// The same limits Usage lists, model-scoped weeks included, so a login's rows and the Usage
+    /// popup always agree (owner, 2026-11-24). These are the plan's totals, so the list never
+    /// invents a Kore share or hatch.
     static func bars(_ reading: PlanReading) -> [PlanLimit] {
-        Array((reading.limits?.bars ?? []).filter { $0.scope == nil }.prefix(2))
+        reading.limits?.bars ?? []
     }
 }

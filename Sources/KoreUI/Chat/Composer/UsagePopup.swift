@@ -274,7 +274,7 @@ final class UsageState {
 
     /// A bar's tooltip: Kore's share of it, else (none, or not worked out yet) when it resets.
     func barHelp(_ limit: PlanLimit, now: Date) -> String {
-        guard let kore = share(limit)?.kore, kore > 0 else { return UsageText.resetsAt(limit.resetsAt, now: now) }
+        guard let kore = share(limit)?.kore, kore > 0 else { return UsageText.resetsAt(limit, now: now) }
         return UsageText.inKore(kore)
     }
 
@@ -419,7 +419,7 @@ final class UsageState {
         let now = Date()
         let bars = (reading?.limits?.bars ?? []).map { bar in
             let kore = share(bar).flatMap { $0.kore > 0 ? UsageText.inKore($0.kore) : nil }
-            return [bar.title, UsageText.percent(bar.used), UsageText.resets(bar.resetsAt, now: now), kore].compactMap { $0 }
+            return [bar.title, UsageText.percent(bar.used), UsageText.resets(bar, now: now), kore].compactMap { $0 }
                 .joined(separator: " · ")
         }
         guard resetsOpen else { return bars }
@@ -645,7 +645,7 @@ struct UsagePopup: View {
     /// share starts the bar's fill, hatched, and is the bar's tooltip ("~12% in Kore").
     private func row(_ limit: PlanLimit?, placeholder: String, now: Date) -> some View {
         let reset = limit.map { UsageText.resetsShort($0.resetsAt, now: now) } ?? ""
-        let help = limit.map { UsageText.resetsAt($0.resetsAt, now: now) } ?? ""
+        let help = limit.map { UsageText.resetsAt($0, now: now) } ?? ""
         let kore = limit.flatMap { state.share($0)?.kore } ?? 0
         return GridRow {
             CappedWidth(cap: Size.usageTitleMax) {

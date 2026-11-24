@@ -58,7 +58,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case card
         /// A tab's title: the room its name gets in the strip.
         case title
-        /// A tab picked with others (⇧ or ⌘-click): its quiet highlight.
+        /// A tab picked with others (⇧ or ⌘-click): its quiet highlight. A History row whose chat
+        /// is the one this tab shows: its raised fill.
         case selected
         /// A chat's logo in Arsenal's colour: it has Arsenal on.
         case arsenal

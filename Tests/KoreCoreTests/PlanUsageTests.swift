@@ -63,7 +63,58 @@ struct PlanUsageTests {
             "seven_day": nil,
             "model_scoped": [["display_name": "Fable", "utilization": nil], ["utilization": 5], ["display_name": "Lark", "utilization": 101.5]],
         ])
-        #expect(reading.limits?.bars == [PlanLimit(title: "Weekly Lark", used: 101.5, resetsAt: nil, window: 7 * 86400, scope: "Lark")])
+        // The plan has a session (its key is there): the row stays, at 0%, not begun.
+        #expect(reading.limits?.bars == [
+            PlanLimit(title: "Session (5hr)", used: 0, resetsAt: nil, window: 5 * 3600, idle: true),
+            PlanLimit(title: "Weekly Lark", used: 101.5, resetsAt: nil, window: 7 * 86400, scope: "Lark"),
+        ])
+    }
+
+    /// Today's real answer (2026-11-24, scrubbed): `five_hour` null, the week and Fable's week set.
+    @Test func aSessionNotBegunStaysAsAZeroRow() throws {
+        let json = try Self.fixture("claude-session-not-begun")
+        let reading = PlanReading.claude(account: json["account"], usage: json["usage"] ?? .null, locale: Self.us)
+        let bars = try #require(reading.limits?.bars)
+        #expect(bars.map(\.title) == ["Session (5hr)", "Weekly (7 day)", "Weekly Fable"])
+        #expect(bars.map(\.used) == [0, 55, 0])
+        #expect(bars[0].idle == true && bars[0].resetsAt == nil)
+        #expect(bars[1].idle == nil && bars[2].idle == nil)
+    }
+
+    @Test func noSessionKeyNoSessionRow() {
+        let reading = Self.claude(["seven_day": ["utilization": 10, "resets_at": nil]])
+        #expect(reading.limits?.bars.map(\.title) == ["Weekly (7 day)"])
+    }
+
+    @Test func theLimitsListFillsWhatTheOldFieldsLeaveOut() {
+        let reading = Self.claude([
+            "limits": [
+                ["kind": "session", "group": "session", "percent": 12, "resets_at": "2026-11-24T18:00:00Z"],
+                ["kind": "weekly_all", "group": "weekly", "percent": 55, "resets_at": "2026-11-26T21:00:00Z"],
+                ["kind": "weekly_scoped", "group": "weekly", "percent": 3, "resets_at": "2026-11-26T21:00:00Z",
+                 "scope": ["model": ["display_name": "Fable"]]],
+            ],
+        ])
+        let bars = reading.limits?.bars ?? []
+        #expect(bars.map(\.title) == ["Session (5hr)", "Weekly (7 day)", "Weekly Fable"])
+        #expect(bars.map(\.used) == [12, 55, 3])
+        #expect(bars[2].scope == "Fable")
+        #expect(bars[1].resetsAt == Self.iso("2026-11-26T21:00:00Z"))
+    }
+
+    @Test func theOldFieldsWinAndTheListNeverDoublesARow() {
+        let reading = Self.claude([
+            "seven_day": ["utilization": 40, "resets_at": nil],
+            "model_scoped": [["display_name": "Fable", "utilization": 7]],
+            "limits": [
+                ["kind": "weekly_all", "percent": 41],
+                ["kind": "weekly_scoped", "percent": 8, "scope": ["model": ["display_name": "Fable"]]],
+                ["kind": "weekly_scoped", "percent": 2, "scope": ["model": ["display_name": "Lark"]]],
+            ],
+        ])
+        let bars = reading.limits?.bars ?? []
+        #expect(bars.map(\.title) == ["Weekly (7 day)", "Weekly Fable", "Weekly Lark"])
+        #expect(bars.map(\.used) == [40, 7, 2])
     }
 
     @Test func extraUsageShowsWhileItIsOn() {
