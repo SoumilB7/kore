@@ -237,6 +237,8 @@ final class UsagePopup: ChatStoryline {
                     : extras.hasPrefix("Extra usage On · ") && extras.contains("12.40 of ") && extras.hasSuffix(" this month")
             },
             ExpectElement(.id(StoryID.Composer.usage.part(.open))),
+            // Claude's link to its own limit resets, at the caption's end; Codex uses its own here.
+            ExpectElement(.id(StoryID.Composer.usage.part(.limitReset)), codex ? .absent : .exists),
         ]
         if codex {
             // Folded at first: the count and its ⌄. Unfolded, one row each, the soonest to

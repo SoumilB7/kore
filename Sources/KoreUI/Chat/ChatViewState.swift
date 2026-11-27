@@ -69,7 +69,8 @@ extension Chat {
 
     /// The logins this chat's CLI uses: this Mac's, or its box's.
     var accountStore: AccountStore {
-        (services as? BoxChatServices).map { BoxAccountStores.store($0.connection) } ?? .shared
+        if let store = StorylineSeams.accountStore?(provider.id) { return store }
+        return (services as? BoxChatServices).map { BoxAccountStores.store($0.connection) } ?? .shared
     }
 
     /// Opens the Account popup for this chat's CLI.
@@ -79,8 +80,8 @@ extension Chat {
         if let box = services as? BoxChatServices {
             // The box's accounts are listed for this chat: the one it runs on is the active row.
             box.connection.accounts.viewing = (box.chatId, box.folder)
-            store.box?.switched = { [weak self] in self?.usage.accountChanged() }
         }
+        store.box?.switched = { [weak self] in self?.usage.accountChanged() }
         account.open(provider: provider.id, folder: folder, store: store)
     }
 

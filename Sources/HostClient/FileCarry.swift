@@ -730,15 +730,19 @@ package final class FileCarry {
             }
             return nil
         case .macToBox:
-            guard let alias = staged.alias, let ssh = boxes[alias]?.ssh else { return .failed("\(staged.device) isn't an SSH alias Kore can use.") }
+            guard let alias = staged.alias, let ssh = boxes[alias]?.ssh else { return .failed("\(staged.device) has no way to copy files: no KoreNet link, no SSH alias.") }
             return await rsync(ssh, source.path + (count.dir ? "/" : ""), ssh.spec(staged.path), landing: staged, dir: count.dir)
         case .boxToMac:
-            guard let alias = source.alias, let ssh = boxes[alias]?.ssh else { return .failed("\(source.device) isn't an SSH alias Kore can use.") }
+            guard let alias = source.alias, let ssh = boxes[alias]?.ssh else { return .failed("\(source.device) has no way to copy files: no KoreNet link, no SSH alias.") }
             return await rsync(ssh, ssh.spec(source.path + (count.dir ? "/" : "")), staged.path, landing: staged, dir: count.dir)
         case .boxToBox:
-            // Two legs, each resumable: box A to a folder kept on this Mac, then on to box B.
-            guard let a = source.alias, let b = staged.alias, let from = boxes[a]?.ssh, let to = boxes[b]?.ssh else {
-                return .failed("\(source.device) or \(staged.device) isn't an SSH alias Kore can use.")
+            guard let a = source.alias, let b = staged.alias else { return .failed("Not a copy between boxes.") }
+            // Both links on KoreNet: straight from box A to box B over a pipe.
+            if await direct(index, from: a, source.path + (count.dir ? "/" : ""), to: b, staged, dir: count.dir) { return nil }
+            if let halt = halted() { return halt }
+            // Else two legs, each resumable: box A to a folder kept on this Mac, then on to box B.
+            guard let from = boxes[a]?.ssh, let to = boxes[b]?.ssh else {
+                return .failed("\(source.device) or \(staged.device) has no way to copy files: no KoreNet link, no SSH alias.")
             }
             let between = macStaging.appendingPathComponent(journal.items[index].token).path
             try? FileManager.default.createDirectory(at: macStaging, withIntermediateDirectories: true)
@@ -758,6 +762,36 @@ package final class FileCarry {
         }
     }
 
+    /// Box A straight to box B (phase 18 "Box↔box direct"): B expects this Mac's ticket for A's
+    /// pipe (`pipe.expect`), then A copies there (`pipe.send`); the landing is measured on B as it
+    /// goes. Whether it all landed: anything else (a link not on KoreNet, a refusal, A can't reach
+    /// B, a pipe that broke) goes on over the staged route from what's there, whose own failure
+    /// says why.
+    private func direct(_ index: Int, from a: String, _ source: String, to b: String, _ staged: FilePlace, dir: Bool) async -> Bool {
+        guard let sending = boxes[a], let receiving = boxes[b], sending.ssh?.overPipe == true, receiving.ssh?.overPipe == true,
+              let sender = sending.files as? HostConnection, let receiver = receiving.files as? HostConnection,
+              let aDevice = NodeDirectory.shared.entry(forKey: a)?.device, let bDevice = NodeDirectory.shared.entry(forKey: b)?.device
+        else { return false }
+        let ticket = Data((0..<16).map { _ in UInt8.random(in: 0...255) })
+        let folder = (staged.path as NSString).deletingLastPathComponent
+        if case .failure(let why) = await receiver.pipeExpect(ticket: ticket, from: aDevice, path: folder) {
+            log("carry-direct", level: .info, ["item": String(index), "result": "staged", "why": why.message])
+            return false
+        }
+        let sent = await metering(landing: staged) {
+            await sender.pipeSend(ticket: ticket, to: bDevice, from: source, into: staged.path, options: dir ? ["--delete"] : [])
+        }
+        let landed = Self.landedDirect(sent)
+        log("carry-direct", level: landed ? .debug : .info, ["item": String(index), "result": landed ? "direct" : "staged", "why": "\(sent)"])
+        return landed
+    }
+
+    /// Only rsync's 0 is a landing: a failure to reach B from A comes as rsync's own status
+    /// (255, 12), never as a refusal, and both go over the staged route.
+    package static func landedDirect(_ sent: Result<Int, HostRefusal>) -> Bool {
+        if case .success(0) = sent { true } else { false }
+    }
+
     /// rsync into `landing`, resumable: `--partial` keeps a file cut off halfway for the next run
     /// to finish, what's there already with the same size and time is skipped, and `--delete`
     /// (a folder: only ever the hidden landing) drops what a source no longer has. The bytes
@@ -770,7 +804,12 @@ package final class FileCarry {
         let spawn = spawn
         let why = await metering(landing: landing) { await spawn.run([command], output: { meter.set(parser.feed($0)) }) }
         log("carry-rsync", level: spawn.lastStatus == 0 ? .debug : .warn, ["code": String(spawn.lastStatus), "to": landing.alias ?? "mac"])
-        return why.map { .interrupted($0) }
+        // One plain line (`BoxCopyWords`); rsync's own in hosts.log.
+        return why.map { said in
+            guard said != "Cancelled" else { return .interrupted(said) }
+            HostLog.note(ssh.alias, "carry stopped", "exit \(spawn.lastStatus): " + said)
+            return .interrupted(BoxCopyWords.line(status: spawn.lastStatus, said: said, box: NodeNames.name(ssh.alias)))
+        }
     }
 
     /// On a copy that doesn't count the same: the first paths each side lacks, in hosts.log.
@@ -1000,6 +1039,8 @@ package final class Spawn: @unchecked Sendable {
     /// for the log.
     package var lastStatus: Int32 { lock.withLock { status } }
     package var lastErrors: String { lock.withLock { errorLines } }
+
+    package var isStopped: Bool { lock.withLock { stopped } }
 
     package func stop() {
         let running: [Process] = lock.withLock {

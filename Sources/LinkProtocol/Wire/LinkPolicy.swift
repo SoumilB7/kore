@@ -215,6 +215,8 @@ package enum LinkPolicy {
             guard let provider = args.provider, LinkLogins.clis.contains(provider) else { return .deny(.invalid, "Name the CLI.") }
         case .accountPrivacy:
             guard args.on != nil else { return .deny(.invalid, "Say on or off.") }
+        case .chatCopyVia:
+            return copyVia(args.copy)
         case .chatSetArsenal:
             let tier = args.tier ?? ""
             if tier == "full" { return .deny(.invalid, "Arsenal's Full tier isn't built yet.") }
@@ -222,6 +224,34 @@ package enum LinkPolicy {
             if tier != "off", let why = chat?.arsenalUnavailable { return .deny(.busy, why) }
         default: break
         }
+        return .allow
+    }
+
+    /// A box's cap: it checks the phone a copy is made for (`ControlArgs.phone`) against its own devices.
+    package static let copyForCap = "copyFor"
+
+    /// `chat.copyVia` (cap "copyVia"), as the Mac takes it: a source that is one chat or one past session, a
+    /// target that is a window, plain ids (the ask's own too), a CLI Kore runs, a one-line title. Where each end is,
+    /// and that the Mac knows it, the Mac checks as it runs it.
+    package static func copyVia(_ ask: CopyAsk?) -> Verdict {
+        guard let ask else { return .deny(.invalid, "Name the chat and where it goes.") }
+        func plain(_ id: String?) -> Bool {
+            guard let id else { return true }
+            return (1...128).contains(id.count) && id.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || "-_.:".contains($0)) }
+        }
+        guard plain(ask.id) else { return .deny(.invalid, "Name the ask.") }
+        for end in [ask.from, ask.to] {
+            guard plain(end.windowId), plain(end.device), end.device.map({ UUID(uuidString: $0) != nil }) ?? true else {
+                return .deny(.invalid, "Name the windows and devices.")
+            }
+        }
+        guard (ask.from.chatId == nil) != (ask.from.sessionId == nil), plain(ask.from.chatId), plain(ask.from.sessionId) else {
+            return .deny(.invalid, "Name one chat to copy.")
+        }
+        guard ask.to.chatId == nil, ask.to.sessionId == nil else { return .deny(.invalid, "A copy goes to a window.") }
+        guard ["claude", "codex"].contains(ask.provider) else { return .deny(.invalid, "That isn't a CLI Kore runs.") }
+        let title = ask.title.trimmingCharacters(in: .whitespaces)
+        guard title.count <= maxTitle, !title.contains(where: \.isNewline) else { return .deny(.invalid, "A title is one line, up to 200 characters.") }
         return .allow
     }
 
@@ -478,6 +508,11 @@ package enum LinkPolicy {
             if kind == .accountSwitch, args.chatId == nil, args.folder == nil { return .deny(.invalid, "Name the chat or the folder.") }
             if let folder = args.folder, !folder.hasPrefix("/") || folder.contains("\0") { return .deny(.invalid, "Name the folder.") }
             return .allow
+        // 1.16: rsync over KoreNet, full grants only. The words are checked here as the box takes
+        // them (`PipeArgv`, in KoreNet), and where each path leads by the box (`HostPipes`).
+        case .pipeOpen, .pipeExpect, .pipeSend:
+            if case .deny(let code, let message) = full() { return .deny(code, message) }
+            return LinkPipe.check(kind, args)
         // 1.14: a login moved, full grants only (`LinkClient` also requires the owner Mac on KoreNet).
         case .accountImport, .accountExport, .accountFingerprints:
             if case .deny(let code, let message) = full() { return .deny(code, message) }
@@ -584,10 +619,30 @@ package enum LinkPolicy {
         return mode
     }
 
+    /// The mode a copy a phone asked for starts in (`chat.copyVia`): as a phone's new chat does, no
+    /// higher than where tools still ask (`leavePlanMaxLevel`; more takes a signed raise). Its own
+    /// when it's at or below, else its CLI's first mode, also when it says none.
+    package static func askedMode(_ mode: String?, provider id: String) -> String? {
+        guard let provider = Registry.provider(id) else { return nil }
+        if let own = provider.modes.first(where: { $0.id == mode }), (ModeLevel(rawValue: own.level) ?? .danger) <= leavePlanMaxLevel { return own.id }
+        return provider.modes[0].id
+    }
+
     /// The highest a full-control client may raise a mode: Auto, or Full access for a Mac with
     /// full control of a box (`fullAccess`, owner 2026-11-22). Phones, act and standard grants and
     /// Arsenal stay at Auto.
     package static func raiseTop(_ fullAccess: Bool) -> ModeLevel { fullAccess ? .danger : raiseCap }
+    /// A new chat from a session's message (a fork), as a link may make it: its history may end
+    /// higher than it starts, so its ceiling (`ModeCeilings`) is what the link may start one at.
+    package static func forkHeld(_ args: ControlArgs, control: LinkControlLevel, fullAccess: Bool) -> ControlArgs {
+        let top = control == .full ? raiseTop(fullAccess) : leavePlanMaxLevel
+        guard args.sessionId != nil, top < .danger else { return args }
+        var held = args
+        var settings = args.settings ?? ChatSettings()
+        settings.modeCeiling = min(settings.modeCeiling ?? .max, top.rawValue)
+        held.settings = settings
+        return held
+    }
 
     /// What a box says in its welcome when a Mac with full control may put its chats in Full access.
     package static let fullAccessCap = "fullAccess"

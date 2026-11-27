@@ -22,7 +22,11 @@ extension Workspace {
     /// A tab's click: shown alone, or picked with others.
     func click(_ tab: ChatTab, _ kind: TabClick) {
         switch kind {
-        case .select: select(tab)
+        case .select:
+            // The tab in front, clicked again: its chat comes back from the agent map, as the
+            // map's × does.
+            if tab.id == activeID, tab.agent == nil, let map = tab.chat?.agentMap, map.isOpen { map.close() }
+            select(tab)
         case .range: selectRange(to: tab)
         case .toggle: toggleSelected(tab)
         }

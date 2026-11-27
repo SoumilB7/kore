@@ -73,7 +73,8 @@ struct PairedBoxTests {
 
     func seams(_ pair: SyncPair?) -> () -> [(BoxPlace, String?)] {
         var opened: [(BoxPlace, String?)] = []
-        PairedBox.pairFor = { _ in pair }
+        // Its own folder only: other suites' windows beside it aren't paired.
+        PairedBox.pairFor = { folder in pair.flatMap { $0.mac == folder.standardizedFileURL.path ? $0 : nil } }
         PairedBox.openBox = { opened.append(($0, $1)) }
         return { opened }
     }

@@ -460,3 +460,66 @@ func TestLogoutSignsOutAndKeepsRunning(t *testing.T) {
 	default:
 	}
 }
+
+// refs is how many descriptors this process has open on fd's socket (its device and inode).
+func refs(t *testing.T, fd int) int {
+	t.Helper()
+	var want unix.Stat_t
+	if err := unix.Fstat(fd, &want); err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for i := 0; i < 512; i++ {
+		var st unix.Stat_t
+		if unix.Fstat(i, &st) == nil && st.Mode&unix.S_IFMT == unix.S_IFSOCK && st.Ino == want.Ino && st.Ino != 0 {
+			n++
+		}
+	}
+	return n
+}
+
+func settles(want int, count func() int) bool {
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end); time.Sleep(2 * time.Millisecond) {
+		if count() == want {
+			return true
+		}
+	}
+	return false
+}
+
+// macOS may flush a socket whose last reference is in flight (the pipe broker did, 2026-11-25):
+// the helper keeps its copy until the client has the descriptor, for a dial and for a listen.
+func TestHelperHoldsEachDescriptorUntilTheClientHasIt(t *testing.T) {
+	h := serveFake(t, os.Getuid(), nil)
+	h.start()
+	c, m, fd := h.ask(map[string]any{"op": "dial", "addr": "100.104.65.22", "port": 47470})
+	if m["ok"] != true || fd < 0 {
+		t.Fatalf("dial: %v %d", m, fd)
+	}
+	defer syscall.Close(fd)
+	time.Sleep(50 * time.Millisecond)
+	if n := refs(t, fd); n != 2 {
+		t.Fatalf("dial: %d copies before the client let go, want ours and the helper's", n)
+	}
+	c.Close()
+	if !settles(1, func() int { return refs(t, fd) }) {
+		t.Fatal("dial: the helper's copy stayed open")
+	}
+
+	l := serveFake(t, os.Getuid(), nil)
+	l.start()
+	lc, _, _ := l.ask(map[string]any{"op": "listen", "port": 47470})
+	_, got := recvMsg(t, lc)
+	if got < 0 {
+		t.Fatal("listen: no descriptor")
+	}
+	defer syscall.Close(got)
+	time.Sleep(50 * time.Millisecond)
+	if n := refs(t, got); n != 2 {
+		t.Fatalf("listen: %d copies before the ack", n)
+	}
+	writeMsg(lc, map[string]any{"v": 1, "op": "ack"}, -1)
+	if !settles(1, func() int { return refs(t, got) }) {
+		t.Fatal("listen: the helper's copy stayed open after the ack")
+	}
+}

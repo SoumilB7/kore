@@ -158,7 +158,8 @@ class WindowActivity : NodeActivity() {
     /** A chat's row card (spec §5), the Device screen's own: lead, title and age, symbols and its state or last word. */
     private fun chatRow(chat: JsonObject?, fallback: String?, board: Array<String>? = null, control: Boolean = false): View? {
         if (chat == null) return null
-        val row = DeviceList.chatRow(chat, windowId, "", false, System.currentTimeMillis(), kore.seen)?.let { if (fallback != null && chat.str("title") == null) it.copy(title = fallback) else it } ?: return null
+        // Pinned shows as the pin; the order stays the Mac's tabs'.
+        val row = DeviceList.chatRow(chat, windowId, "", false, System.currentTimeMillis(), kore.seen, kore.pins.of(host))?.let { if (fallback != null && chat.str("title") == null) it.copy(title = fallback) else it } ?: return null
         val v = chatCard()
         bindChatCard(v, row) {
             startActivity(Intent(this, ChatActivity::class.java).putExtra("chat", chat.str("id")).apply { if (board != null) putExtra("board", board) })

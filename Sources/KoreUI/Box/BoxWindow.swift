@@ -220,15 +220,33 @@ final class BoxBinding {
         } else {
             workspace.tabs += tabs
         }
+        // A pasted chat the box listed after the paste ended: beside the tab it was pasted at.
+        for tab in tabs {
+            guard let id = (tab.chat?.services as? BoxChatServices)?.chatId, let wanted = placeAfter.removeValue(forKey: id) else { continue }
+            if let anchor = wanted.tab { workspace.move(tab, after: anchor) }
+            workspace.select(tab)
+        }
     }
+
+    /// The tab a pasted chat goes after, until the box lists it.
+    private final class Anchor {
+        weak var tab: ChatTab?
+        init(_ tab: ChatTab) { self.tab = tab }
+    }
+    private var placeAfter: [String: Anchor] = [:]
 
     /// A box chat in front here: its tab, made when the window doesn't show it yet (a chat that
     /// came back from this Mac as a new one).
-    func show(_ chatId: String) {
+    /// A paste's: right after `anchor` (past its group).
+    func show(_ chatId: String, after anchor: ChatTab? = nil) {
         // Asked for by name (a paired folder's History opened it again): no longer closed here.
         closedIds.remove(chatId)
         adoptChats()
-        guard let workspace, let tab = workspace.tabs.first(where: { ($0.chat?.services as? BoxChatServices)?.chatId == chatId }) else { return }
+        guard let workspace, let tab = workspace.tabs.first(where: { ($0.chat?.services as? BoxChatServices)?.chatId == chatId }) else {
+            if let anchor { placeAfter[chatId] = Anchor(anchor) }
+            return
+        }
+        if let anchor { workspace.move(tab, after: anchor) }
         workspace.select(tab)
     }
 
@@ -355,11 +373,13 @@ final class BoxBinding {
     /// A past chat back as a box chat (a closed one, or a session its CLI keeps), for a tab here.
     /// One a tab here shows already (an open chat's row, or a session an open chat holds) is that
     /// tab's chat: never a second chat following the same box chat.
-    func openSession(_ session: SessionSummary) async -> Chat? {
+    /// `ceiling`: the box holds its mode under it from its CLI's first start (`ModeCeilings`).
+    func openSession(_ session: SessionSummary, ceiling: Int? = nil) async -> Chat? {
         if let shown = shownChat(session.id) { return shown }
         let provider = Registry.provider(for: session.agent)
         guard connection.keepsHistory else { return await reopen(session.id, provider: provider, title: session.title) }
-        let args = ControlArgs(windowId: windowId, title: session.title, provider: provider.id, sessionId: session.id)
+        let args = ControlArgs(
+            windowId: windowId, title: session.title, provider: provider.id, sessionId: session.id, settings: ceiling.map { ChatSettings(modeCeiling: $0) })
         guard case .success(let result) = await connection.history(.historyOpen, args), let chatId = result.chatId else { return nil }
         closedIds.remove(chatId)
         if let shown = shownChat(chatId) { return shown }
@@ -441,10 +461,22 @@ final class BoxChatServices: ChatServices {
         self.making = making
     }
 
-    func makeBackend(_ provider: ProviderDescriptor, _ options: BackendOptions) -> any ChatBackend {
+    /// What the box makes it with. Under a ceiling (a phone's fork): the mode it has now, not its
+    /// original's, and the box keeps the ceiling (`ModeCeilings`).
+    func made(with options: BackendOptions) -> LinkChatBackend.Making {
         var making = making ?? LinkChatBackend.Making(mode: options.mode, effort: options.effort)
         making.model = making.model ?? options.model
-        let backend = LinkChatBackend(connection: connection, provider: provider, folder: folder, chatId: chatId, making: making)
+        if let ceiling = options.modeCeiling {
+            making.mode = options.mode
+            making.settings = making.settings ?? ChatSettings()
+            making.settings?.mode = options.mode
+            making.settings?.modeCeiling = ceiling
+        }
+        return making
+    }
+
+    func makeBackend(_ provider: ProviderDescriptor, _ options: BackendOptions) -> any ChatBackend {
+        let backend = LinkChatBackend(connection: connection, provider: provider, folder: folder, chatId: chatId, making: made(with: options))
         backend.mirror = mirror
         // A rename on the box (from another Mac, or its CLI's own title) shows in this tab.
         backend.onTitle = { [weak self] title in

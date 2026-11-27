@@ -10,7 +10,7 @@ import Testing
 /// Link 1.10 in the windows: a box chat offers Bring to this Mac; once here it runs in a local
 /// window on the pair's Mac folder with "from <box>", the box window keeps a read-only replica,
 /// and both offer Send back. The moves are kept in a scratch store, never the app's.
-@Suite("chat moves in the windows", .serialized) @MainActor
+@Suite("chat moves in the windows", .ownCeilings, .serialized) @MainActor
 struct ChatMoveUITests {
     static let session = "7d1e3c40-0000-4000-8000-00000000abcd"
 

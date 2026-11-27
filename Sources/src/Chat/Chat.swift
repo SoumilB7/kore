@@ -40,6 +40,9 @@ package final class Chat: Identifiable {
     }
     /// The window schedules its own debounced persistence, independently of SwiftUI bodies.
     @ObservationIgnored package var onDraftChanged: (() -> Void)?
+    /// Its turn, its sub-agents or its background commands started or ended: its window keeps a
+    /// note of what was working, for Resume after a close it didn't choose (`Workspace.work(of:)`).
+    @ObservationIgnored package var onWorkChanged: (() -> Void)?
     @ObservationIgnored package var restoringComposerDraft = false
     /// The / menu was closed (Esc, a click away, another popup) for the "/word" at the caret;
     /// the next one opens it again.
@@ -71,9 +74,13 @@ package final class Chat: Identifiable {
     /// while a Mac drives it: that Mac's chat does both, once.
     @ObservationIgnored package var automatic = true
     private var backend: (any ChatBackend)? { engine.backend }
+    /// Storylines: the CLI's backend now (the same one while the chat isn't reloaded).
+    package var storyBackend: AnyObject? { backend }
     @ObservationIgnored private let resume: SessionSummary?
     /// When the session it resumed was last written (nil for a new chat).
     package var resumedUpdated: Date? { resume?.updated }
+    /// The transcript the session it resumed was listed with, while it's still that session.
+    package var resumedFile: String? { resume.flatMap { $0.id == status.sessionId ? $0.file?.path : nil } }
     /// A fork the CLI makes when it starts (Codex) or on its first message (Claude).
     @ObservationIgnored package let fork: ForkPoint?
     /// The chat this one was forked from, for the line after its history.
@@ -87,7 +94,7 @@ package final class Chat: Identifiable {
     @ObservationIgnored private var importedEvents: [ChatEvent]?
     /// A past session's history hasn't been shown yet; messages sent meanwhile wait in `held`,
     /// so they come after it rather than above it.
-    @ObservationIgnored private var awaitingHistory: Bool
+    @ObservationIgnored package private(set) var awaitingHistory: Bool
     @ObservationIgnored private var held: [ChatEvent] = []
     /// Messages sent while a turn ran, by Kore's id, until the CLI takes or drops them.
     @ObservationIgnored private var waiting: [String: (text: String, files: [Attachment])] = [:]
@@ -203,6 +210,9 @@ package final class Chat: Identifiable {
             ownAutoCompact = true
         }
         if fork == nil, let id = session?.id { controls.restorePlanAllow(chat: id) }
+        // A fork starts under its original's, and keeps it under its own session once that comes.
+        modeCeiling = session.flatMap { ModeCeilings.at($0.id) }
+        controls.mode = provider.held(controls.mode, under: modeCeiling)
         status = ChatStatus(resume: fork == nil ? session : nil)
         if fork != nil { status.name = session?.title }
         transcriptView.providerName = provider.name
@@ -394,6 +404,8 @@ package final class Chat: Identifiable {
             approvals.apply(event)
         }
         controls.apply(event)
+        // Whatever its history ended in: the owner's to raise.
+        if case .replayed = event { controls.mode = provider.held(controls.mode, under: modeCeiling) }
         arsenalFollowMode()
         noteAgentModeChange(event)
         dropUnofferedMode(event)
@@ -404,6 +416,12 @@ package final class Chat: Identifiable {
         }
         if case .sessionIdentified(let id) = event, controls.planAllow, id != status.sessionId, !(backend?.keepsPlanAllow ?? false) {
             controls.keepPlanAllow(chat: id)
+        }
+        // Its ceiling goes with the chat to a session of its own (a fork's) or a new one (/clear).
+        switch event {
+        case .sessionIdentified(let id), .conversationReset(let id):
+            if let modeCeiling, id != status.sessionId { ModeCeilings.put(modeCeiling, for: id) }
+        default: break
         }
         if case .sessionIdentified(let id) = event, let record = imported?.record, record.target.session != id {
             Task.detached { HandoffRecords.alias(record, session: id) }
@@ -427,6 +445,7 @@ package final class Chat: Identifiable {
         if let start { services.logReplay(ContinuousClock.now - start) }
         if case .replayed = event { showHeld() }
         services.tap(self, event)
+        if Self.changesWork(event) { onWorkChanged?() }
         // A stopped turn took the compaction in it along, whether or not the CLI said so.
         if case .turnFinished = event, stoppingCompaction, context.compacting { dispatch(.compactionStopped) }
         noteModelList(event)
@@ -434,6 +453,14 @@ package final class Chat: Identifiable {
         case .earlierHistory: unloadOld(opening: true)
         case .turnFinished: unloadOld()
         default: break
+        }
+    }
+
+    /// A turn, a sub-agent or a background command starting or ending.
+    static func changesWork(_ event: ChatEvent) -> Bool {
+        switch event {
+        case .turnStarted, .turnFinished, .exited, .agentSpawned, .agentFinished, .agentResumed, .commandStarted, .commandEnded: true
+        default: false
         }
     }
 
@@ -555,7 +582,9 @@ package final class Chat: Identifiable {
         if let error = await launchCLI() {
             guard currentWork(epoch), !Task.isCancelled, !(error is CancellationError) else { return }
             fail("Couldn't start \(provider.name): \(Self.reason(error))")
+            return
         }
+        noteActive()
     }
 
     /// Waits before each start again of a CLI that wouldn't start. A storyline sets them shorter.
@@ -575,8 +604,10 @@ package final class Chat: Identifiable {
             var options = BackendOptions(
                 folder: folder, resume: resume, mode: controls.mode, planMode: controls.planMode,
                 model: launchModel, effort: launchEffort, fork: fork, forkTitle: fork == nil ? nil : status.name)
+            options.modeCeiling = modeCeiling
             options.fastMode = launchFastMode
             options.environment = launchEnvironment
+            options.started = { [weak self] in self?.noteActive() }
             if services.agentTools {
                 options.agentPass = agentPass
             } else if let server = services.agentServer(self) {
@@ -601,6 +632,12 @@ package final class Chat: Identifiable {
     /// a switch of its login stops.
     package var hasWork: Bool { !closed && (isWorking || waitingForNetwork || commands.summary.total > 0) }
 
+    /// Work a close or an idle rest would cut off, one rule for both: a turn running (a card
+    /// waiting in it included), live sub-agents, background commands (a Monitor, an armed cron job
+    /// included), or a send queued. Resume after a close offers the chats that had it
+    /// (`Workspace.work(of:)`); an idle CLI never rests while its chat has it.
+    package var hasLiveWork: Bool { hasWork || (!closed && queuedCount > 0) }
+
     /// Its login is going (a sign-out) or moving (a switch): the turn, the background agents
     /// and the commands stop, and the CLI starts again as the new login once they have.
     package func stopAllWork() {
@@ -620,6 +657,67 @@ package final class Chat: Identifiable {
     /// Starting the CLI again would end something: a turn, a background agent, or a command left
     /// live (a dev server, a port-forward, an armed scheduled job), which dies with its process.
     private var holdsCLI: Bool { isWorking || commands.summary.total > 0 }
+
+    // MARK: Rest
+
+    /// How long a chat with nothing live keeps its CLI: then it rests, its process ended quietly,
+    /// and the next send (or a key typed in its composer) starts it again on the same session, the
+    /// transcript as it was. A storyline sets it shorter.
+    package static let restAfter = HostSetting<Duration>(.seconds(600))
+    /// The rest's one timer, while the chat's CLI runs: set as it goes quiet, put off by what it
+    /// does meanwhile (`noteActive`). Nothing polls.
+    @ObservationIgnored private var restTimer: Task<Void, Never>?
+    @ObservationIgnored private var lastActive = ContinuousClock.now
+    /// Its CLI rests: the chat is idle, as before, with no process.
+    @ObservationIgnored package private(set) var resting = false
+
+    /// It did something (a turn or an agent ended, a send, a key typed): its rest is put off.
+    private func noteActive() {
+        lastActive = .now
+        // Only a running CLI does something: one that rested has started again.
+        resting = false
+        guard restTimer == nil, !closed, services.restsIdleCLI else { return }
+        armRest(after: Self.restAfter.value)
+    }
+
+    private func armRest(after wait: Duration) {
+        restTimer = Task { [weak self] in
+            try? await Task.sleep(for: wait)
+            guard !Task.isCancelled, let self else { return }
+            self.restTimer = nil
+            let due = self.lastActive + Self.restAfter.value
+            if due > .now { return self.armRest(after: due - .now) }
+            self.restIfIdle()
+        }
+    }
+
+    /// Nothing would notice: no live work, no card, no start or account change under way.
+    private var canRest: Bool {
+        !closed && !resting && services.restsIdleCLI && !services.onBox && backend != nil && !hasLiveWork && approvals.pending.isEmpty
+            && !relaunchDue && !stoppedForAccount && !accountRestartPending && !awaitingHistory
+            && reloadWhenFree == nil && !continueAfterCompaction && !compactAfterTurn && !context.compacting
+    }
+
+    private func restIfIdle() {
+        guard canRest, let backend else { return }
+        let epoch = workEpoch
+        engine.chain(after: engine.sending, epoch) { [self] in
+            // Checked again: a send may have come while the one before it finished.
+            guard canRest, lastActive + Self.restAfter.value <= .now else { return }
+            if await backend.rest() {
+                resting = true
+                services.log("chat-rest", ["cli": provider.id, "chat": status.sessionId])
+            }
+        }
+    }
+
+    /// Its CLI starts again (a send starts it too): a key in a resting chat's composer starts it,
+    /// so it's up by the time the message goes.
+    private func wake() {
+        guard resting, !closed else { return }
+        resting = false
+        Task { await start() }
+    }
 
     /// An explicit account switch closes old work even when a scheduled job or dead CLI
     /// cannot acknowledge Stop. Other credential refreshes wait for the next safe boundary.
@@ -677,6 +775,7 @@ package final class Chat: Identifiable {
             services.refreshAccount(provider)
             relaunchIfDue()
         case .turnFinished, .agentFinished, .commandEnded:
+            noteActive()
             // An agent's end reaches the summary at the next draw: at once, when a start waits.
             if case .agentFinished = event, relaunchDue || reloadWhenFree != nil { transcriptView.drawNow() }
             relaunchIfDue()
@@ -910,10 +1009,13 @@ package final class Chat: Identifiable {
 
     package func close(reason: String = "tab closed") {
         onDraftChanged = nil
+        onWorkChanged = nil
         if !closed, backend != nil { SessionLog.shared.closing(provider.id, chat: sessionId, reason: reason) }
         if let networkObserver { NotificationCenter.default.removeObserver(networkObserver) }
         networkObserver = nil
         closed = true
+        restTimer?.cancel()
+        restTimer = nil
         engine.close()
         transcriptView.sending(false)
         waitingForNetwork = false
@@ -933,6 +1035,8 @@ package final class Chat: Identifiable {
 
     package func composerDraftChanged() {
         if !restoringComposerDraft { onDraftChanged?() }
+        guard !restoringComposerDraft, !draft.isEmpty else { return }
+        if resting { wake() } else { lastActive = .now }
     }
 
     /// Something to send. During a compaction it waits, shown queued, and goes as the compaction ends.
@@ -1096,6 +1200,8 @@ package final class Chat: Identifiable {
             done?(.failure(CallRefusal("The chat can't take a message right now.")))
             return
         }
+        // Its CLI starts again with the send, if it rested.
+        noteActive()
         // A rollback under way: the CLI it would reach is ending, and the rows are about to be
         // replaced. It goes once the rollback is done (`endRollback`), under the id and queued
         // state it was sent with: its sender knows its row by that id.
@@ -1857,19 +1963,48 @@ package final class Chat: Identifiable {
     /// The end of a command's output, for its opened row: its file read from the end off the
     /// main thread, or what streamed, or the CLI's own tail when Kore can't read the file. Read
     /// only while the row is open.
-    package func commandTail(_ id: String, lines: Int = 40) async -> OutputTail? {
+    package func commandTail(_ id: String, lines: Int = 40, maxBytes: UInt64 = 256 * 1024) async -> OutputTail? {
         guard let command = commands.command(id) else { return nil }
         switch command.output {
         case .stream:
-            return OutputTail(lines: commands.streamedTail(id, lines: lines), modified: command.lastOutputAt)
+            return OutputTail(lines: commands.streamedTail(id, lines: lines, maxBytes: Int(clamping: maxBytes)), modified: command.lastOutputAt)
         case .file(let path):
             let file = URL(fileURLWithPath: path)
-            if let tail = await Task.detached(priority: .utility, operation: { OutputTail.read(file, lines: lines) }).value { return tail }
+            if let tail = await Task.detached(priority: .utility, operation: { OutputTail.read(file, lines: lines, maxBytes: maxBytes) }).value { return tail }
             fallthrough
         case .none:
             guard command.isLive, let text = await backend?.commandOutput(id) else { return nil }
             return OutputTail(lines: OutputTail.lines(of: text, count: lines))
         }
+    }
+
+    /// A command's output since `follower` last read it (`OutputFollower`): a file read off the
+    /// main thread, a stream from what Kore kept of it. nil: neither (the CLI's own tail, or gone).
+    package func followCommand(_ id: String, _ follower: OutputFollower) async -> (OutputFollower, OutputFollower.Step)? {
+        guard let command = commands.command(id) else { return nil }
+        switch command.output {
+        case .stream:
+            var follower = follower
+            guard let step = commands.followStream(id, &follower) else { return (follower, .none) }
+            return (follower, step)
+        case .file(let path):
+            let file = URL(fileURLWithPath: path)
+            return await Task.detached(priority: .utility) {
+                var follower = follower
+                return follower.read(file).map { (follower, $0) }
+            }.value
+        case .none:
+            return nil
+        }
+    }
+
+    /// The Claude user settings file this chat's CLI reads: its process's `CLAUDE_CONFIG_DIR` as it
+    /// starts (the active login's folder, then the chat's own variables, a box account's), else
+    /// ~/.claude's. What Kore changes there for this chat goes to its login, not always ~/.claude.
+    package var claudeSettingsFile: URL {
+        var environment = CLIProfiles.environment
+        if let own = try? launchEnvironment?() { environment.merge(own) { $1 } }
+        return ClaudeAskSettings.file(environment: environment)
     }
 
     /// A pane listing commands is showing (or not): the CLI is asked about them more often.
@@ -1900,7 +2035,28 @@ package final class Chat: Identifiable {
     /// time, in order: one made while another is under way (Full access starting the CLI again)
     /// waits for it, and only the latest of those waiting goes. The pill and the remembered mode
     /// end on the mode the CLI is in.
-    package func setMode(_ id: String, remember: Bool = true) {
+    /// How high its mode may go without its owner (`ModeCeilings`); nil: no ceiling.
+    @ObservationIgnored package private(set) var modeCeiling: Int?
+
+    /// Moves its ceiling, for the CLI's next launch and replay too. `nil`: none.
+    package func setModeCeiling(_ level: Int?) {
+        modeCeiling = level
+        if let id = status.sessionId { ModeCeilings.put(level, for: id) }
+        backend?.setModeCeiling(level)
+    }
+
+    /// The owner picked `id` (here, or a phone's fingerprint): a ceiling below it comes up to it.
+    /// The ceiling before, to put back if the CLI doesn't take it.
+    package func raiseCeiling(to id: String) -> Int? {
+        let before = modeCeiling
+        if provider.held(id, under: before) != id { setModeCeiling(provider.ceiling(picking: id)) }
+        return before
+    }
+
+    /// `raises`: the owner's own pick, which lifts a ceiling below it; any other stays under it.
+    package func setMode(_ picked: String, remember: Bool = true, raises: Bool = true) {
+        let id = raises ? picked : provider.held(picked, under: modeCeiling)
+        let ceiling = raises ? raiseCeiling(to: id) : modeCeiling
         controls.changedBy = nil
         settingsChangedAt = Date()
         if modeInEffect == nil { modeInEffect = controls.mode }
@@ -1921,6 +2077,7 @@ package final class Chat: Identifiable {
                 if remember { self.controls.remember(id) }
             } catch {
                 if pick == self.modePicks, let back = self.modeInEffect { self.controls.mode = back }
+                if pick == self.modePicks, self.modeCeiling != ceiling { self.setModeCeiling(ceiling) }
                 self.fail("Couldn't switch mode: \(error)")
             }
             if pick == self.modePicks {
@@ -2057,6 +2214,7 @@ package final class Chat: Identifiable {
         Task {
             defer { controls.fastChanging = false }
             do {
+                if resting { wake(); try await backend.start() }
                 try await backend.setFastMode(on)
                 launchFastMode = on
             } catch {
@@ -2087,6 +2245,8 @@ package final class Chat: Identifiable {
         // Allow dim with a reason (a call Auto never runs): nothing, and the card stays.
         if approval.allowNote != nil, !Self.denies(decision) { return }
         if case .allowAlways = decision { alwaysAllowed = true }
+        // The owner's (a phone's is refused before here): it raises as a pick does.
+        if case .approvePlan(autoAcceptEdits: true) = decision { _ = raiseCeiling(to: "acceptEdits") }
         approvals.remove(approval.id)
         transcriptView.approvalSettled(approval.id)
         if case .deny = decision { transcriptView.actionDenied() }

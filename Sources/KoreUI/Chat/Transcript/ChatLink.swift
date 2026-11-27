@@ -88,7 +88,7 @@ extension Workspace {
         // link opens here; nothing else does.
         if let box {
             if ["http", "https", "mailto"].contains(url.scheme?.lowercased()) {
-                NSWorkspace.shared.open(url)
+                StoryHost.open(url)
                 return
             }
             guard let (path, line) = Self.boxFile(url, box: box) else { return }
@@ -113,7 +113,7 @@ extension Workspace {
                 store.expand(path)
             }
         default:
-            if !story { NSWorkspace.shared.open(url) }
+            if !story { StoryHost.open(url) }
         }
     }
 

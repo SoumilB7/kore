@@ -173,9 +173,15 @@ struct PairedBoxCue: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
+            .storyID(StoryID.Boxes.pairedOpen)
             .onHover { hovered.value = $0 }
-            .help("\(NodeNames.name(paired.alias)) · \(paired.folder)")
+            .tip("\(NodeNames.name(paired.alias)) · \(paired.folder)")
             .layoutPriority(-1)
         }
     }
+}
+
+extension StoryID.Boxes {
+    /// A synced Mac folder's title-row cue, "mybox · 1 chat here · Open" (storylines).
+    package static let pairedOpen = StoryID(.titlebar, "boxes.paired.open")
 }

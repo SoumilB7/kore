@@ -111,7 +111,7 @@ struct MacNetTests {
         #expect(rig.audits("enroll").count == 1 && rig.audits("allow").count == 1)
         #expect(Array(phone.types.prefix(3)) == ["welcome", "snapshot", "attn.state"])
         let welcome = await phone.next("welcome")
-        #expect(welcome["caps"] as? [String] == ["tx", "attn", "blob", "commands", "control", "raise", "history", "diff", "group", "board"])
+        #expect(welcome["caps"] as? [String] == ["tx", "attn", "blob", "commands", "control", "raise", "history", "diff", "group", "board", "copyVia"])
         #expect(rig.net.phones[pixel.id] != nil)
     }
 

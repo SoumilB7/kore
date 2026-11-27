@@ -6,11 +6,57 @@ import SwiftUI
 /// of the app. In Kore it stays false and nothing below is ever used.
 @MainActor
 package enum StoryHost {
-    package static var installed = false
+    package static var installed = false { didSet { hosted = installed } }
+    /// A drive storyline's window, never key, takes a first click in its gestures as a key window
+    /// does. Set before its window opens; always false in Kore.
+    package static var firstClicks = false
+
+    /// What a run drove: every control's name pressed or clicked, every menu item chosen, every
+    /// chord. The run's `touched.txt`, for the coverage check.
+    package private(set) static var touched: Set<String> = []
+    package static func touch(_ what: @autoclosure () -> String) { if installed { touched.insert(what()) } }
+    /// `installed`, readable off the main actor: set once, before the app starts.
+    nonisolated(unsafe) private static var hosted = false
 
     /// The host's own pasteboard, never the owner's clipboard: named after the process, so storyline
     /// hosts run side by side (a gate's shards, each under a name of its own) never share one.
     package nonisolated static var board: NSPasteboard.Name { .init(ProcessInfo.processInfo.processName) }
+
+    /// Where a copy goes and a paste reads: the clipboard in Kore, the host's own board under a
+    /// storyline host, so a run never writes the owner's.
+    package nonisolated static var pasteboard: NSPasteboard { hosted ? NSPasteboard(name: board) : .general }
+
+    /// What a storyline host was asked to open (a page, a file in its app) and to show in Finder:
+    /// recorded, never opened, so a run never brings the browser or Finder up over the owner's apps.
+    package static var opened: [URL] = []
+    package static var revealed: [URL] = []
+
+    /// Opens `url` as the system does (its default app, the browser); recorded under a storyline host.
+    package static func open(_ url: URL) {
+        if installed { opened.append(url) } else { NSWorkspace.shared.open(url) }
+    }
+
+    /// The folder a storyline host answers a folder picker with, in place of the system's open
+    /// panel (a modal one would come up over the owner's apps); nil is Cancel.
+    package static var pickedFolder: URL?
+    /// Where a storyline host's save panel saves (Save As…); nil cancels it.
+    package static var pickedSave: URL?
+    /// The pickers a storyline host was shown, by their button's word ("Open", "Sync", "Locate").
+    package static var picks: [String] = []
+
+    /// The Claude settings file Kore changes on the person's click (Take Kore's old ask list out):
+    /// theirs in Kore; under a storyline host the run's own Claude config dir's (`CLAUDE_CONFIG_DIR`),
+    /// never the owner's, and nil when the run has none.
+    package static func claudeSettings(_ real: @autoclosure () -> URL) -> URL? {
+        guard installed else { return real() }
+        guard let dir = ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"], !dir.isEmpty else { return nil }
+        return URL(fileURLWithPath: dir, isDirectory: true).appendingPathComponent("settings.json")
+    }
+
+    /// Shows `urls` selected in Finder; recorded under a storyline host.
+    package static func reveal(_ urls: [URL]) {
+        if installed { revealed += urls } else { NSWorkspace.shared.activateFileViewerSelecting(urls) }
+    }
 }
 
 /// The elements a storyline can act on, by StoryID (phase 12, §3): what is in a window right now,

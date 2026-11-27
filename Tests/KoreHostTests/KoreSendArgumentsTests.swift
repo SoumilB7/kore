@@ -60,9 +60,9 @@ struct KoreSendArgumentsTests {
         #expect(Reads.run("new", ["--folder"], unreachable: "") { Recorder() } == 2)
         #expect(Reads.run("new", ["--silent", "a", "b"], unreachable: "") { Recorder() } == 2)
         // The tools take the same.
-        #expect(AgentTools.tool("kore_new_chat")!.args.map { $0.0 } == ["provider", "model", "mode", "text", "folder", "silent"])
-        #expect(AgentTools.tool("kore_new_chat", box: true)!.args.map { $0.0 } == ["provider", "model", "mode", "text", "folder", "silent", "place"])
-        #expect(AgentTools.tool("kore_open_chat")!.args.map { $0.0 } == ["session", "folder", "silent"])
+        #expect(AgentTools.tool("kore_new_chat")!.args.map { $0.0 } == ["provider", "model", "mode", "text", "folder", "silent", "group"])
+        #expect(AgentTools.tool("kore_new_chat", box: true)!.args.map { $0.0 } == ["provider", "model", "mode", "text", "folder", "silent", "group", "place"])
+        #expect(AgentTools.tool("kore_open_chat")!.args.map { $0.0 } == ["session", "folder", "silent", "group"])
         #expect(Reads.usage.contains("kore new [--claude|--codex] [--model M] [--mode X] [--folder F] [--silent]"))
     }
 }

@@ -103,6 +103,7 @@ package final class CodexBackend: ChatBackend {
     private func launch() async throws {
         try Task.checkCancellation()
         launches += 1
+        options.mode = ProviderDescriptor.codex.held(options.mode, under: options.modeCeiling)
         // A relaunch may be on another login (a switch): unknown until it says.
         planAccount = nil
         // A thread with no rollout can't be resumed: a fresh one takes its place.
@@ -127,7 +128,11 @@ package final class CodexBackend: ChatBackend {
                 launch.pathFirst = server.pathFolder
                 launch.developerInstructions = KoreReach.instructions(with: instructions, server)
             }
-            let task = Task { try await CodexSession.launch(launch) }
+            // Not on a thread the last Kore's app-server may still be on.
+            let task = Task { [log] in
+                if let resume { log.waitedOut("codex", chat: resume, try await LastKore.shared.value.gone()) }
+                return try await CodexSession.launch(launch)
+            }
             opening = task
             session = try await task.value
         } catch {
@@ -183,7 +188,14 @@ package final class CodexBackend: ChatBackend {
             replayPending = false
             earlierFrom = newest?.earlier
             rollout = await session.rolloutPath.map(CodexRolloutReader.init)
-            let replayed = await replay(newest?.turns ?? [], session)
+            var replayed = await replay(newest?.turns ?? [], session)
+            // Under the chat's ceiling (`ModeCeilings`), and the replay's last word says so.
+            var held: [ChatEvent] = []
+            // Above it: the mode it launched in, which is under it (`launch()`).
+            if let ended = replayed.carried.mode, ProviderDescriptor.codex.held(ended, under: options.modeCeiling) != ended, case let mode = options.mode {
+                replayed.carried.mode = mode
+                held = [.modeChanged(ModeChange(mode: mode, previous: ended, source: .session, at: .now))]
+            }
             translator.adopt(replayed.carried)
             // It carries on with the settings its history ended with (the pill shows them), not
             // the ones it launched with.
@@ -195,7 +207,7 @@ package final class CodexBackend: ChatBackend {
                 options.planMode = replayed.carried.planMode
                 await session.setPlanMode(replayed.carried.planMode)
             }
-            yield(.replayed(replayed.events))
+            yield(.replayed(replayed.events + held))
             yield(.earlierHistory(earlierFrom != nil))
             log.replayEnd(
                 "codex", chat: sessionId, read: "thread", lines: newest?.turns.count ?? 0, bytes: nil,
@@ -207,6 +219,7 @@ package final class CodexBackend: ChatBackend {
             throw CancellationError()
         }
         self.session = session
+        options.started?()
         opening = nil
         pump = Task {
             for await event in session.events {
@@ -374,8 +387,12 @@ package final class CodexBackend: ChatBackend {
 
     /// A confirmed reset stays on this server's account. If it dies during an account switch,
     /// fail and let the user retry after a fresh reading; a new server could use another login.
+    /// A resting chat starts none for it: the user sends a message first.
     package func useReset(credit: String?, attempt: UUID) async throws -> PlanResetOutcome {
-        guard let session else { throw CodexAppServer.Failure.notRunning }
+        guard let session else {
+            if accountBlocked || accountClosing != nil { throw CodexAppServer.Failure.notRunning }
+            throw ResetNeedsMessage()
+        }
         return try await session.useReset(credit: credit, attempt: attempt)
     }
 
@@ -870,6 +887,8 @@ package final class CodexBackend: ChatBackend {
         if !instructions.isEmpty { yield(.notice("Codex compacts without instructions, so yours weren't used")) }
     }
 
+    package func setModeCeiling(_ level: Int?) { options.modeCeiling = level }
+
     package func setMode(_ id: String) async throws {
         options.mode = id
         translator.userChanged(mode: id)
@@ -891,6 +910,9 @@ package final class CodexBackend: ChatBackend {
             try await session.setServiceTier(fastTier(id))
             options.fastMode = true
             reportFast(await session.serviceTier)
+        } else if session == nil, options.fastMode == nil, fastReported == true {
+            // Picked while its CLI rests: the preference survives as above, for the next launch.
+            options.fastMode = true
         }
         options.model = id
         await session?.setModel(id)
@@ -1246,6 +1268,19 @@ package final class CodexBackend: ChatBackend {
     package func relaunch(reason: String) async {
         // A new account may resume what the last one couldn't.
         refused = nil
+        await end(reason: reason)
+        // A chat that's remotely controlled comes back at once, for its remote side.
+        if remoteWanted { Task { try? await start() } }
+    }
+
+    package func rest() async -> Bool {
+        guard session != nil, starting == nil, !remoteWanted else { return false }
+        await end(reason: "idle")
+        return true
+    }
+
+    /// The process ends, saying nothing to the chat: the next `start()` launches it again.
+    private func end(reason: String) async {
         guard let session else { return }
         log.relaunch("codex", chat: sessionId, reason: reason)
         // Its terminals, and the child threads it ran, end with its process.
@@ -1261,8 +1296,6 @@ package final class CodexBackend: ChatBackend {
         self.session = nil
         await session.close()
         logExit(session)
-        // A chat that's remotely controlled comes back at once, for its remote side.
-        if remoteWanted { Task { try? await start() } }
     }
 
     package func close() async {

@@ -19,6 +19,14 @@ struct UsageCueTests {
 
     static func steps(_ risen: [(limit: UsageCueBook.Limit, step: Int)]) -> [Int] { risen.map(\.step) }
 
+    @Test func aSessionNotBegunIsNoReading() {
+        let reading = PlanReading(account: .init(access: .plan), limits: .init(bars: [
+            PlanLimit(title: "Session (5hr)", used: 0, resetsAt: nil, window: 5 * 3600, idle: true),
+            PlanLimit(title: "Weekly (7 day)", used: 55, resetsAt: Self.weekReset, window: 7 * 86400),
+        ]))
+        #expect(UsageCueBook.Reading.from(reading) == [Self.week(55)])
+    }
+
     @Test func stepsAreEveryFivePercentFromEighty() {
         #expect(UsageCueBook.step(79.9) == nil)
         #expect(UsageCueBook.step(80) == 80)

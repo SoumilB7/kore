@@ -455,7 +455,11 @@ final class FileDocument: Identifiable {
             file.stamp = try file.write(text, to: url)
         } catch {
             if automatically { autoSaveFailed(error.localizedDescription) }
-            else { NSAlert(error: error).runModal() }
+            else {
+                let window = NSApp.keyWindow
+                let message = error.localizedDescription
+                Task { @MainActor in await KoreAsk.tell("“\(self.name)” couldn't be saved.", detail: message, key: "save-failed", in: window) }
+            }
             return false
         }
         saved = text

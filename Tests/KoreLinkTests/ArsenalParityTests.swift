@@ -146,12 +146,14 @@ extension AgentChannelTests {
             Call(tool: "kore_options", args: [:]), Call(tool: "kore_rename", args: ["to": "p-{tier}-{side}"]),
             Call(tool: "kore_set_model", args: ["to": "no-such-model"]), Call(tool: "kore_set_effort", args: ["to": "high"]),
             Call(tool: "kore_set_fast", args: ["on": true]), Call(tool: "kore_lower_mode", args: ["to": "{mode}"]), Call(tool: "kore_compact", args: [:]),
+            Call(tool: "kore_set_compact", args: ["point": 50]),
             Call(tool: "kore_wait", args: ["chat": "{target}"]), Call(tool: "kore_stop", args: ["chat": "{target}"]),
             Call(tool: "kore_show_tab", args: ["chat": "{target}"]), Call(tool: "kore_answer", args: ["chat": "{target}", "card": "no-card"]),
             Call(tool: "kore_ask", args: ["chat": "{target}", "text": "which file?"]), Call(tool: "kore_reply", args: ["ask": "nope1234", "text": "this"]),
             Call(tool: "kore_fetch", args: ["path": ".env"]), Call(tool: "kore_close", args: ["chat": "zzzzzzzz"]),
             Call(tool: "kore_open_chat", args: ["session": "no-such-session"]), Call(tool: "kore_fork", args: ["chat": "."]),
             Call(tool: "kore_new_chat", args: [:]), Call(tool: "kore_send", args: ["chat": "{target}", "text": "hello"]),
+            Call(tool: "kore_arrange", args: ["tabs": ["zzzzzzzz"], "to": "end"]),
         ]
 
         /// Fills in a side's tokens.
@@ -251,7 +253,7 @@ extension AgentChannelTests {
                     "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
                 ])
                 try HostConfig(folders: [folder.path]).save(paths.config)
-                host = HostDaemon(paths: paths)
+                host = HostDaemon.forTest(paths: paths)
                 // Before anything reads the box's accounts: the scratch home.
                 host.sessionEnv["HOME"] = root.path
                 host.pastSessions = { _, _ in [] }
@@ -355,6 +357,34 @@ extension AgentChannelTests {
         @Test func everyToolIsInTheTable() {
             #expect(Set(Self.calls.map(\.tool)) == Set(AgentTools.tools(box: true).map(\.name)))
             #expect(Set(Self.calls.map(\.tool)) == Set(AgentTools.tools().map(\.name)))
+        }
+
+        /// kore_set_compact moves the chat's point as its context wheel does: its own at Act
+        /// limited, on the Mac and for a box chat alike; a point the wheel hasn't is refused.
+        @Test(arguments: ["claude", "codex"])
+        func setCompactMovesThePoint(_ cli: String) async throws {
+            let rig = try Rig(cli)
+            defer { rig.finish() }
+            rig.open(.own)
+            let (path, pass) = (rig.socket, rig.macCaller.agentPass)
+            let tool = try #require(AgentTools.tool("kore_set_compact"))
+            let answers: [(Bool, String)] = await off {
+                guard let client = AgentTestClient(path: path), client.hello(pass: pass) != nil else { return [] }
+                defer { client.close() }
+                return [["point": 50], ["point": "50"], ["point": "55"], ["point": "off"]].enumerated().map { n, args in
+                    guard let line = client.command("c\(n)", tool.command, AgentTools.arguments(tool, args)) else { return (false, "no answer") }
+                    let said = AgentTools.answer(line.object, box: false)
+                    return (said.ok, said.text)
+                }
+            }
+            try #require(answers.count == 4)
+            #expect(answers[0].0 && answers[0].1.contains("Auto-compact at 50%."), "\(answers[0])")
+            #expect(answers[1].0 && answers[1].1.contains("Already: auto-compact at 50%."), "\(answers[1])")
+            #expect(!answers[2].0 && answers[2].1.contains("50, 60, 70, 80, 90 or off"), "\(answers[2])")
+            #expect(answers[3].0 && answers[3].1.contains("Auto-compact off."), "\(answers[3])")
+            #expect(rig.macCaller.context.autoCompactAt == nil)
+            let boxSaid = await AgentBoxCalls.answer(rig.connection, BoxToolCall(id: "b1", chatId: "bc1", tool: "kore_set_compact", args: .object(["point": .string("70")])))
+            #expect(boxSaid.ok && boxSaid.text.contains("Auto-compact at 70%."), "\(boxSaid.text)")
         }
 
         @Test(arguments: ["claude", "codex"])

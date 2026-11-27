@@ -246,7 +246,8 @@ extension UsageCueBook.Reading {
     public static func from(_ reading: PlanReading) -> [Self] {
         guard reading.account.access == .plan else { return [] }
         return (reading.limits?.bars ?? []).compactMap { bar in
-            guard let window = bar.window, let limit = UsageCueBook.Limit(minutes: Int((window / 60).rounded()), scope: bar.scope) else {
+            // A window not begun has nothing to track: its 0% isn't a reading.
+            guard bar.idle != true, let window = bar.window, let limit = UsageCueBook.Limit(minutes: Int((window / 60).rounded()), scope: bar.scope) else {
                 return nil
             }
             return Self(limit, used: bar.used, resetsAt: bar.resetsAt)

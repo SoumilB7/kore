@@ -11,9 +11,9 @@ import Testing
 /// on every fork: model, effort, mode, fast, plan, Plan's allow switch, the auto-compact point,
 /// the draft, the Arsenal tier while the chat can have it here (else off, said once), and a login
 /// this Mac doesn't have said once. Arsenal's memory is a scratch one; no CLI starts.
-@Suite("chat settings where they land", .serialized) @MainActor
+@Suite("chat settings where they land", .ownCeilings, .serialized) @MainActor
 struct ChatSettingsLandingTests {
-    static let session = "7d1e3c40-0000-4000-8000-00000000beef"
+    static let session = "7d1e3c40-0000-4000-8000-00000000c5e7"
 
     struct Rig {
         let root: URL
@@ -157,6 +157,14 @@ struct ChatSettingsLandingTests {
         #expect(settings.planAllow == true && settings.autoCompact == 70 && settings.fast == true && settings.arsenal == "own" && settings.draft == nil)
         let agents = box.forkChat(of: original, from: "s1", at: "u1", title: "Repos (fork)", arsenal: false)
         #expect((agents.services as? BoxChatServices)?.making?.settings?.arsenal == nil)
+        // A phone's fork of a Full access chat: the box makes it at Auto, and holds it there.
+        let full = box.forkChat(of: original, from: "s1", at: "u1", title: "Repos (fork)", arsenal: false)
+        full.controls.mode = ClaudeModes.fullAccess
+        Workspace.linkCaps(full)
+        var options = BackendOptions(folder: box.folderURL, mode: full.controls.mode)
+        options.modeCeiling = full.modeCeiling
+        let made = try #require((full.services as? BoxChatServices)?.made(with: options))
+        #expect(made.mode == "auto" && made.settings?.mode == "auto" && made.settings?.modeCeiling == 3)
         // On the wire to the box: `chat.new` with them.
         let wire = HostWire.newChat(id: "1", folder: "/home/me/app", provider: "claude", fork: ("s1", "u1"), settings: settings)
         let object = try #require(try JSONSerialization.jsonObject(with: wire) as? [String: Any])

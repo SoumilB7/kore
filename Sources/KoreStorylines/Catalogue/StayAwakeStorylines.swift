@@ -127,6 +127,7 @@ final class LimitContinue: ChatStoryline {
                 StoryAwake.line?.hasPrefix("Keeping awake · continues ") == true
                     && StoryAwake.held == "Kore: a chat continues when its limit resets"
             },
+        ] + Self.resetLink(provider) + [
             Snapshot("limit-continues"),
             // The × cancels it.
             Press(line.action(.cancel)),
@@ -151,6 +152,22 @@ final class LimitContinue: ChatStoryline {
             },
             ExpectElement(line, .absent),
             Expect.rows("“Continue” as the user's message") { $0.contains { $0.kind == "user" && $0.text == "Continue" } },
+        ]
+    }
+
+    /// Claude's limit notice links to the CLI's own limit resets (Kore can't use one); Codex's
+    /// has none, its resets being the usage popup's.
+    static func resetLink(_ provider: String) -> [any Step] {
+        let link = Locator("the limit notice's Reset ↗") { app in
+            guard let turn = app.chat?.storyContinuesTurn else { return .failure(LocatorMiss("no limit notice", pending: true)) }
+            return .success(StoryID.Transcript.outcome(turn).part(.limitReset))
+        }
+        guard provider == "claude" else { return [ExpectElement(link, .absent)] }
+        let page = URL(string: "https://claude.ai/settings/usage")!
+        return [
+            ExpectElement(link),
+            Click(link),
+            Expect("claude.ai's usage page opened", found: { _ in "\(StoryHost.opened)" }) { _ in StoryHost.opened.last == page },
         ]
     }
 }

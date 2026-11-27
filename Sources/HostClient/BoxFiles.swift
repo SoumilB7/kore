@@ -437,10 +437,40 @@ extension HostConnection: BoxFileSource {
         return .success(BoxStat(files: count, bytes: result.size ?? 0, free: result.free ?? 0))
     }
 
+    /// 1.16: a ticket for one pipe session, for the remote command rsync gave `kore pipe`.
+    package func pipeOpen(_ argv: [String]) async -> Result<Data, HostRefusal> {
+        var args = ControlArgs()
+        args.argv = argv
+        let result = await files(.pipeOpen, args)
+        guard result.ok, let ticket = result.ticket.flatMap({ Data(base64Encoded: $0) }) else { return .failure(refusal(result)) }
+        return .success(ticket)
+    }
+
     package func find(_ path: String) async -> Result<Set<String>?, HostRefusal> {
         let result = await files(.fsFind, ControlArgs(path: path))
         guard result.ok, let paths = result.paths else { return .failure(refusal(result)) }
         return .success(result.more == true ? nil : Set(paths))
+    }
+
+    /// 1.16 box to box: this box will take a pipe from `device` into `path`, with `ticket`.
+    package func pipeExpect(ticket: Data, from device: UUID, path: String) async -> Result<Void, HostRefusal> {
+        var args = ControlArgs(path: path)
+        args.ticket = ticket.base64EncodedString()
+        args.device = device.uuidString
+        let result = await files(.pipeExpect, args)
+        return result.ok ? .success(()) : .failure(refusal(result))
+    }
+
+    /// 1.16 box to box: this box copies `from` into `to` on `device` over a pipe, `ticket` the one
+    /// that box expects; answered when its rsync ends (its status, 0: copied).
+    package func pipeSend(ticket: Data, to device: UUID, from: String, into: String, options: [String]) async -> Result<Int, HostRefusal> {
+        var args = ControlArgs(from: from, to: into)
+        args.ticket = ticket.base64EncodedString()
+        args.device = device.uuidString
+        args.argv = options
+        let result = await files(.pipeSend, args)
+        if let status = result.status { return .success(status) }
+        return .failure(refusal(result))
     }
 
     package func trashLanding(_ path: String) async -> Result<Void, HostRefusal> {

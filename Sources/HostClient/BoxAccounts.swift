@@ -72,9 +72,9 @@ package final class BoxAccounts {
         return nil
     }
 
-    /// One account's plan and limits, read on the box.
-    package func claudeUsage(_ login: String) async throws -> PlanReading {
-        let result = await connection.command { HostWire.accountUsage(id: $0, provider: "claude", login: login) }
+    /// One account's plan and limits, read on the box (Codex: its one login, "main").
+    package func usage(_ provider: String, _ login: String) async throws -> PlanReading {
+        let result = await connection.command { HostWire.accountUsage(id: $0, provider: provider, login: login) }
         guard result.ok, let reading = result.reading else {
             throw HostRefusal(message: result.message ?? "Couldn't read usage on \(NodeNames.name(alias))")
         }

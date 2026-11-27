@@ -35,7 +35,7 @@ struct NetworkButton: View {
             anchor.value = view
             DispatchQueue.main.async { NetAnchors.icon(view) }
         })
-        .help(look.line)
+        .tip(look.line)
         .accessibilityLabel(Text("Devices"))
         .accessibilityValue(Text(look.line))
         .storyID(StoryID.Net.icon, press: press)
@@ -56,11 +56,14 @@ extension NetIconLook.Dot {
     }
 }
 
-/// Devices (frame A2, C): this Mac, then each box and phone with its glyph, name, one detail and
-/// dot; the devices waiting at a box; at most one line with at most one action. "+" opens the
-/// Add device window; ⋯ (in the dot's place on hover) renames, takes offline or brings online,
-/// joins an SSH box to KoreNet, and removes. A folder window shows the same list as its trailing
-/// pane (`DevicesSidebar`); the Welcome, and Kore ▸ Devices… with no folder window, the popup.
+/// Devices (devices-agents-2026-11-24, option B): this Mac, then each box and phone with its
+/// glyph, name and, under it, one detail; a green dot only on a box reachable now. The devices
+/// waiting at a box; at most one line with at most one action. Under a rule, two settings of one
+/// kind: "Kore's tailnet" (who's signed in, its switch KoreNet's) and "Update boxes
+/// automatically"; last, the SSH route's quiet hint. "+" adds a box or a phone; ⋯ (in the dot's
+/// place on hover) renames, takes offline or brings online, joins an SSH box to KoreNet, and
+/// removes. A folder window shows the same list as its pane (`DevicesSidebar`); the Welcome, and
+/// Kore ▸ Devices… with no folder window, the popup.
 struct DevicesPopup: View {
     /// As a window's trailing pane (`DevicesSidebar`) rather than a popup.
     var pane = false
@@ -135,9 +138,9 @@ struct DevicesPopup: View {
         VStack(alignment: .leading, spacing: 0) {
             macRow(picture)
             ForEach(picture.devices) { row in deviceRow(row, now: now) }
-            if picture.devices.contains(where: { $0.kind == .box }) { keepBoxesRow }
             lines(picture, now: now)
             addBox(picture)
+            settings(picture)
         }
     }
 
@@ -149,23 +152,18 @@ struct DevicesPopup: View {
             Text(adding ? "Adding devices" : "Devices").font(Theme.Net.line).fontWeight(.medium).foregroundStyle(Theme.text)
             if adding, let until = picture.addUntil { Countdown(until: until) }
             Spacer(minLength: Space.md)
-            // While adding, the header is the window's (mockup C): its countdown and ×.
-            if !adding {
-                Toggle("", isOn: Binding(get: { picture.net != .off }, set: { devices.setOn($0) }))
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .labelsHidden()
-                    .tint(Theme.accent)
-                    .help(picture.net == .off ? "KoreNet is off" : "KoreNet is on")
-                    .accessibilityLabel("KoreNet")
-                    .storyID(StoryID.Net.toggle, press: { devices.setOn(picture.net == .off) })
-            }
+            // While adding, the header is the window's (mockup C): its countdown and ×. Else the + only.
             if adding {
                 NetHeaderButton(glyph: .close, lit: true, help: "Stop adding") { devices.closeAddWindow() }
                     .storyID(StoryID.Net.closeAdd, press: { devices.closeAddWindow() })
-            } else if picture.net.adds {
-                NetHeaderButton(glyph: .plus, lit: false, help: "Add device") { devices.openAddWindow() }
-                    .storyID(StoryID.Net.add, press: { devices.openAddWindow() })
+            } else {
+                // The one add (devices-plus.html): a box or a phone. Lit while its popup or the
+                // box choices are open; with the choices open it closes them.
+                NetHeaderButton(glyph: .plus, lit: OptionsMenu.shared.openSource == Self.addMenu || addingBox.value != nil, help: "Add device") {
+                    plusPressed(picture)
+                }
+                .background(BoxAnchor { [anchors] view in anchors.value[Self.addMenu] = view })
+                .storyID(StoryID.Net.add, press: { plusPressed(picture) })
             }
         }
         .padding(.leading, Space.xl)
@@ -176,30 +174,69 @@ struct DevicesPopup: View {
 
     // MARK: Rows
 
-    /// "Keep boxes updated": one quiet line with its switch, while there are boxes.
-    private var keepBoxesRow: some View {
-        @Bindable var updates = BoxUpdates.shared
-        return NetLine {
-            Text("Keep boxes updated")
-            Spacer(minLength: Space.md)
-            Toggle("", isOn: $updates.keep)
-                .toggleStyle(.switch)
-                .controlSize(.mini)
-                .labelsHidden()
-                .tint(Theme.accent)
-                .accessibilityLabel("Keep boxes updated")
-                .storyID(StoryID.Net.keepBoxes, press: { updates.keep.toggle() })
+    // MARK: Settings
+
+    /// The foot, under a rule: two settings of the same kind, then the SSH route's hint.
+    private func settings(_ picture: DevicesPicture) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            NetRule()
+            tailnetRow(picture)
+            if picture.devices.contains(where: { $0.kind == .box }) { updatesRow }
+            ForEach(picture.devices.filter { DevicesWords.sshNotNeeded($0) != nil }) { row in
+                let hint = DevicesWords.sshNotNeeded(row) ?? ""
+                // Two lines at most where the pane is narrow, never cut in the middle.
+                NetLine { Text(hint).lineLimit(2).fixedSize(horizontal: false, vertical: true) }
+                    .tip(hint)
+                    .storyID(StoryID.Net.sshHint(row.id))
+            }
         }
     }
+
+    /// "Kore's tailnet": who's signed in (or its one action), and KoreNet's switch.
+    private func tailnetRow(_ picture: DevicesPicture) -> some View {
+        let setting = DevicesWords.tailnetSetting(picture)
+        return NetSettingRow(
+            title: "Kore's tailnet", on: Binding(get: { picture.net != .off }, set: { devices.setOn($0) }), story: StoryID.Net.toggle,
+            press: { devices.setOn(picture.net == .off) }
+        ) {
+            HStack(spacing: Space.sm) {
+                if picture.net == .starting || picture.signingIn { NetSpinner() }
+                Text(setting.line).lineLimit(1).truncationMode(.middle)
+                if let action = setting.action {
+                    Text("·")
+                    Button(action.title) { tailnetAction(action) }.buttonStyle(.plain).foregroundStyle(Theme.accent)
+                        .storyID(StoryID.Net.lineAction, press: { tailnetAction(action) })
+                }
+            }
+        }
+        .tip(DevicesWords.macHelp(picture))
+        .storyID(StoryID.Net.tailnet)
+    }
+
+    private func tailnetAction(_ action: OwnCue.Action) {
+        switch action {
+        case .signIn: devices.signIn()
+        case .cancel: devices.cancelSignIn()
+        }
+    }
+
+    /// "Update boxes automatically", while there are boxes.
+    private var updatesRow: some View {
+        @Bindable var updates = BoxUpdates.shared
+        return NetSettingRow(title: "Update boxes automatically", on: $updates.keep, story: StoryID.Net.keepBoxes, press: { updates.keep.toggle() }) {
+            EmptyView()
+        }
+    }
+
+    // MARK: Rows
 
     private func macRow(_ picture: DevicesPicture) -> some View {
         NetRowFrame(lit: false) {
             NetGlyph(kind: .mac).foregroundStyle(Theme.Net.glyph)
-            Text(picture.macName).font(Theme.Net.name).foregroundStyle(Theme.text).lineLimit(1)
-            Text(DevicesWords.macDetail(picture)).font(Theme.Net.detail).foregroundStyle(Theme.tertiary).lineLimit(1)
+            NetNameAndDetail(name: picture.macName, detail: DevicesWords.macDetail(picture), dimmed: false)
             Spacer(minLength: 0)
         }
-        .help(DevicesWords.macHelp(picture))
+        .tip(DevicesWords.macHelp(picture))
         .storyID(StoryID.Net.row("this-mac"))
     }
 
@@ -226,9 +263,8 @@ struct DevicesPopup: View {
                     .accessibilityLabel(Text("Name"))
                     .storyID(StoryID.Net.rename(row.id))
             } else {
-                Text(row.name).font(Theme.Net.name).foregroundStyle(dimmed ? Theme.tertiary : Theme.text).lineLimit(1).layoutPriority(1)
+                NetNameAndDetail(name: row.name, detail: detail, dimmed: dimmed)
             }
-            if let detail { Text(detail).font(Theme.Net.detail).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail) }
             Spacer(minLength: 0)
             if lit {
                 NetMoreButton(lit: menuFor.value == row.id, name: row.name) { openMenu(row) }
@@ -240,7 +276,7 @@ struct DevicesPopup: View {
         .onHover { inside in
             if inside { hoveredRow.value = row.id } else if hoveredRow.value == row.id { hoveredRow.value = nil }
         }
-        .help(DevicesWords.help(row) ?? "")
+        .tip(DevicesWords.help(row, hint: false) ?? "")
         .background(BoxAnchor { [anchors] view in anchors.value["row:" + row.id] = view })
         .storyID(StoryID.Net.row(row.id))
         .background {
@@ -256,17 +292,11 @@ struct DevicesPopup: View {
         }
     }
 
+    /// One meaning: green, a box reachable now. A phone or a Mac has none; what else a row is,
+    /// its detail says.
     private func rowDot(_ row: DeviceRow) -> NetDot.Fill? {
-        if row.needsTailscale { return nil }
-        if row.paused { return .offline }
-        if let own = row.own, !own.signedIn, row.status != .offline { return .needsYou }
-        switch row.status {
-        case .connected: return .connected
-        case .offline: return .offline
-        case .needsAllow, .stopped, .notSetUp: return .hollow
-        case .needsUpdate: return .needsYou
-        case .unknown: return nil
-        }
+        guard row.kind == .box, !row.paused, !row.needsTailscale, row.status == .connected || row.status == .needsUpdate else { return nil }
+        return .connected
     }
 
     private func openMenu(_ row: DeviceRow) {
@@ -293,8 +323,8 @@ struct DevicesPopup: View {
         switch row.upgradeFix {
         case .copy(let line)?:
             items.append(OptionItem(line == BoxNetJoin.sudoLine ? "Copy sudo line" : "Copy line") {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(line, forType: .string)
+                StoryHost.pasteboard.clearContents()
+                StoryHost.pasteboard.setString(line, forType: .string)
             })
         case .signIn(let page)?:
             if let url = URL(string: page) { items.append(OptionItem("Sign in ↗") { devices.openURL(url) }) }
@@ -307,6 +337,10 @@ struct DevicesPopup: View {
             items.append(OptionItem(fix.title) { Task { await BoxList.shared.act(fix, on: row.id) } })
         default:
             break
+        }
+        // The SSH route it was set up by, while the tailnet carries it: only when asked.
+        if devices.canForgetSSH(row), let ssh = row.ssh {
+            items.append(OptionItem("Forget this SSH route", children: [OptionItem("Forget \(NodeDirectory.sshRoute(ssh))") { devices.forgetSSH(row) }]))
         }
         if !items.isEmpty { items.append(.rule) }
         let forget = DevicesWords.remove(row.name, kind: row.kind, enrolled: row.enrolled)
@@ -343,18 +377,10 @@ struct DevicesPopup: View {
             ForEach(picture.pending) { row in pendingRow(row, now: now) }
             ForEach(signatures) { row in signatureRow(row) }
         }
-        // Tailscale carries the links now and Kore's own hasn't signed in: one line until it has.
-        if picture.ownSignIn, picture.net == .running {
-            NetRule()
-            signInLine(picture)
-        }
+        // Off, starting and Kore's tailnet's sign-in are the "Kore's tailnet" row's (`settings`).
         switch picture.net {
-        case .off:
-            NetLine { Text("KoreNet is off") }
-        case .starting:
-            NetLine { NetSpinner(); Text("Starting KoreNet") }
-        case .notJoined:
-            signInLine(picture)
+        case .off, .starting, .notJoined:
+            EmptyView()
         case .stopped, .signedOut:
             NetRule()
             NetLine {
@@ -379,7 +405,7 @@ struct DevicesPopup: View {
                 .buttonStyle(.plain).foregroundStyle(Theme.accent).netHit()
                 .storyID(StoryID.Net.lineAction, press: { devices.unavailableAction(why) })
             }
-            .help(why)
+            .tip(why)
             .storyID(StoryID.Net.line)
         case .running:
             runningLines(picture, now: now)
@@ -392,14 +418,14 @@ struct DevicesPopup: View {
             NetRule()
             NetLine { NetSpinner(); Text("On the phone or box, choose Join KoreNet") }
             ForEach(picture.refusals, id: \.name) { refusal in
-                NetLine { Text(refusal.line) }.help(refusal.help)
+                NetLine { Text(refusal.line) }.tip(refusal.help)
             }
             NetAction(title: "Get the phone app", glyph: .external, trailing: false) { devices.getPhoneApp() }
                 .storyID(StoryID.Net.phoneApp, press: { devices.getPhoneApp() })
         } else if picture.lockedOut {
             NetRule()
             NetLine { Text("This Mac waits for a Tailnet Lock signature") }
-                .help("Sign it from a device that holds your lock key")
+                .tip("Sign it from a device that holds your lock key")
                 .storyID(StoryID.Net.line)
         } else if let expiry = picture.macKeyExpiry, expiry.timeIntervalSince(now) < DevicesPicture.expirySoon {
             NetRule()
@@ -411,27 +437,34 @@ struct DevicesPopup: View {
             }
             .storyID(StoryID.Net.line)
         } else if picture.devices.isEmpty && picture.pending.isEmpty {
-            if picture.nudge {
-                NetLine {
-                    Text("On your tailnet")
-                    Text("·")
-                    Button("Add a device") { devices.openAddWindow() }.buttonStyle(.plain).foregroundStyle(Theme.accent).netHit()
-                        .storyID(StoryID.Net.lineAction, press: { devices.openAddWindow() })
-                }
-                .storyID(StoryID.Net.line)
-            } else {
-                NetLine { Text("No other devices yet") }.storyID(StoryID.Net.line)
-            }
+            // The header + is the one add (devices-plus.html): no add here.
+            NetLine { Text("No other devices yet") }.storyID(StoryID.Net.line)
         }
     }
 
     // MARK: Add a box
 
-    /// "Add a box", whatever KoreNet's state (an SSH box needs none of it): one click opens its
-    /// choices under it (`BoxAddChoicesList`, the Welcome "+"'s too), a second closes them.
+    /// The header +'s menu: its anchor's key and its menu's source (the + lit while it shows).
+    private static let addMenu = "devices-add"
+
+    /// The +: with the box choices open, it closes them; else its two rows, right-aligned under
+    /// it: Add a box (whatever KoreNet's state: an SSH box needs none of it) and Add a phone (the
+    /// Add device window, KoreNet turned on first when it's off: `Devices.addPhone`).
+    private func plusPressed(_ picture: DevicesPicture) {
+        if addingBox.value != nil { return addingBox.value = nil }
+        guard let view = anchors.value[Self.addMenu], let window = view.window else { return }
+        let width = Size.Net.addMenuWidth
+        let point = view.convert(CGPoint(x: view.bounds.maxX - width, y: view.isFlipped ? view.bounds.maxY : view.bounds.minY), to: nil)
+        let items = [
+            OptionItem("Add a box", netGlyph: .box) { addingBox.value = .choices },
+            OptionItem("Add a phone", netGlyph: .phone) { devices.addPhone() },
+        ]
+        OptionsMenu.shared.show(items, at: point, in: window, source: Self.addMenu, width: width)
+    }
+
+    /// "Add a box"'s steps, at the bottom of the list (the + opens them): its choices
+    /// (`BoxAddChoicesList`, the Welcome "+"'s too), the alias field, New box…, the box's line.
     @ViewBuilder private func addBox(_ picture: DevicesPicture) -> some View {
-        NetAction(title: "Add a box", glyph: .plus, trailing: false) { toggleAddBox() }
-            .storyID(StoryID.Net.addBox, press: { toggleAddBox() })
         switch addingBox.value {
         case nil:
             EmptyView()
@@ -460,10 +493,6 @@ struct DevicesPopup: View {
         }
     }
 
-    private func toggleAddBox() {
-        addingBox.value = addingBox.value == nil ? .choices : nil
-    }
-
     /// Use SSH…'s alias: listed now (its row above, its Welcome chip), asked once; its line
     /// shows here in the field's place.
     private func addAlias(_ typed: String) {
@@ -478,25 +507,6 @@ struct DevicesPopup: View {
         devices.adder.addBox(key)
         devices.changed()
         addingBox.value = nil
-    }
-
-    /// Kore's own tailnet's sign-in: its page, or "finish in the browser" while it's open.
-    @ViewBuilder private func signInLine(_ picture: DevicesPicture) -> some View {
-        if picture.signingIn {
-            NetLine {
-                NetSpinner()
-                Text("Finish signing in in the browser")
-                Text("·")
-                Button("Cancel") { devices.cancelSignIn() }.buttonStyle(.plain).foregroundStyle(Theme.accent).netHit()
-                    .storyID(StoryID.Net.lineAction, press: { devices.cancelSignIn() })
-            }
-            .storyID(StoryID.Net.line)
-        } else {
-            // Its sign-in went with the key change (0.3.7): that's the line until it's signed in again.
-            NetAction(title: KoreNetSwitch.shared?.signInAgainNote ?? DevicesWords.signIn, glyph: .external, trailing: true) { devices.signIn() }
-                .help("Kore's own tailnet, inside the app")
-                .storyID(StoryID.Net.lineAction, press: { devices.signIn() })
-        }
     }
 
     private func pendingRow(_ row: PendingRow, now: Date) -> some View {
@@ -533,7 +543,7 @@ struct DevicesPopup: View {
                     .storyID(StoryID.Net.sign(row.nodeKey), press: { Task { await devices.sign(row) } })
             }
         }
-        .help(row.canSign ? "" : SignatureRow.help)
+        .tip(row.canSign ? "" : SignatureRow.help)
         .storyID(StoryID.Net.pending(row.nodeKey))
     }
 
@@ -576,7 +586,51 @@ struct DevicesPopup: View {
     }
 }
 
-/// The popup's row: glyph, name, detail, then its dot or ⋯.
+/// A row's name, and its one detail under it.
+private struct NetNameAndDetail: View {
+    let name: String
+    let detail: String?
+    let dimmed: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(name).font(Theme.Net.name).foregroundStyle(dimmed ? Theme.tertiary : Theme.text).lineLimit(1)
+            if let detail { Text(detail).font(Theme.Net.detail).foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.tail) }
+        }
+        .layoutPriority(1)
+    }
+}
+
+/// A setting at the foot: its name, what it is now under it, and its switch.
+private struct NetSettingRow<Detail: View>: View {
+    let title: String
+    @Binding var on: Bool
+    let story: StoryID
+    let press: @MainActor () -> Void
+    @ViewBuilder let detail: Detail
+
+    var body: some View {
+        HStack(spacing: Space.md) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title).font(Theme.Net.setting).foregroundStyle(Theme.text).lineLimit(1)
+                detail.font(Theme.Net.detail).foregroundStyle(Theme.tertiary)
+            }
+            Spacer(minLength: Space.md)
+            Toggle("", isOn: $on)
+                .toggleStyle(.switch)
+                .controlSize(.mini)
+                .labelsHidden()
+                .tint(Theme.accent)
+                .accessibilityLabel(Text(title))
+                .storyID(story, press: press)
+        }
+        .padding(.horizontal, Space.xl)
+        .padding(.vertical, Space.xxs + 1)
+        .frame(maxWidth: .infinity, minHeight: Size.Net.row, alignment: .leading)
+    }
+}
+
+/// The popup's row: glyph, name over its detail, then its dot or ⋯.
 private struct NetRowFrame<Content: View>: View {
     let lit: Bool
     @ViewBuilder let content: Content

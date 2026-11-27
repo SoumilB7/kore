@@ -46,7 +46,7 @@ struct ChangesView: View {
         .background(WindowReader { window.value = $0 })
         .transition(.opacity)
         .onAppear {
-            keyMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { handleKey($0) }
+            keyMonitor.value = WindowEvents.monitor(.keyDown) { handleKey($0) }
         }
         .onDisappear {
             if let monitor = keyMonitor.value { NSEvent.removeMonitor(monitor) }
@@ -64,6 +64,12 @@ struct ChangesView: View {
                         selected.value = index
                     }
                     .storyID(StoryID.Changes.file(Self.relative(change.path, folder)))
+                    // The picked file's row, for a storyline.
+                    .background {
+                        if index == selected.value {
+                            Color.clear.storyMark(StoryID.Changes.file(Self.relative(change.path, folder)).part(.selected))
+                        }
+                    }
                 }
             }
             .padding(Space.sm)
@@ -82,10 +88,12 @@ struct ChangesView: View {
                     Text(Self.name(change.path)).font(TextStyle.label).foregroundStyle(Theme.Git.color(change.kind)).lineLimit(1)
                     ChangeCounts(added: change.added, removed: change.removed)
                 }
+                .background(Color.clear.storyMark(StoryID.Changes.file(Self.relative(change.path, folder)).part(.selected)))
             }
         }
         .buttonStyle(.plain)
         .fixedSize()
+        .storyID(StoryID.Changes.menu)
     }
 
     private var diffs: some View {
@@ -225,7 +233,7 @@ private struct FileListRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(change.path)
+        .tip(change.path)
     }
 
     private var directory: String {

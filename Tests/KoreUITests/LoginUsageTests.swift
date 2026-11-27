@@ -22,6 +22,20 @@ struct LoginUsageTests {
         ]))
     }
 
+    /// A login's rows are Usage's rows: the model-scoped weeks too, and a session not begun.
+    @Test func aLoginListsTheSameRowsAsUsage() {
+        let bars = [
+            PlanLimit(title: "Session (5hr)", used: 0, resetsAt: nil, window: 18000, idle: true),
+            PlanLimit(title: "Weekly (7 day)", used: 55, resetsAt: now.addingTimeInterval(86400), window: 604_800),
+            PlanLimit(title: "Weekly Fable", used: 0, resetsAt: now.addingTimeInterval(86400), window: 604_800, scope: "Fable"),
+        ]
+        let reading = PlanReading(account: .init(email: "me@example.com", access: .plan), limits: .init(bars: bars))
+        #expect(LoginUsage.bars(reading) == bars)
+        #expect(UsageText.resets(bars[0], now: now) == "Starts with your next message")
+        #expect(UsageText.resetsAt(bars[0], now: now) == "Starts with your next message")
+        #expect(UsageText.resets(bars[1], now: now) == "Resets in 1d")
+    }
+
     @Test func theCardReadsOnlyTheActiveLoginAndAHoverReadsAnother() async throws {
         var calls: [String?] = []
         var time = now

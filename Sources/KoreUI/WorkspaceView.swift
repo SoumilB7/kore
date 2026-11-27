@@ -421,7 +421,17 @@ struct TabBar: View {
                     [OptionItem("New Tab") { workspace.newTab() }, OptionItem("New Board") { workspace.newBoard() }] + ChatPasting.menuItems(workspace)
                 }
                 .storyID(StoryID.Titlebar.newtab)
+            // The strip's empty end: what the + menu has, a held chat pasted at the end. Its
+            // target a tab tall over the spacer (a bare Spacer is 0 tall, so a right-click found
+            // nothing), without changing how the strip lays out.
             Spacer(minLength: Space.xl)
+                .overlay {
+                    Color.clear.frame(height: tabHeight)
+                        .koreContextMenu("strip") {
+                            [OptionItem("New Tab") { workspace.newTab() }, OptionItem("New Board") { workspace.newBoard() }]
+                                + ChatPasting.menuItems(workspace, after: workspace.tabs.last)
+                        }
+                }
             // A box folder's name too; its box's cue is on the box button.
             Text(workspace.folder.lastPathComponent)
                 .font(Chrome.label)
@@ -429,7 +439,9 @@ struct TabBar: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .layoutPriority(-1)
-                .help(workspace.box?.label ?? workspace.folder.path)
+                .tip(workspace.box?.label ?? workspace.folder.path)
+            // Chats that were working when this window last went: one quiet line, Resume on it.
+            ResumeCue(workspace: workspace)
             // Kore's tailnet of this window's device not signed in: one quiet line, Sign in on it.
             OwnCueLine(box: workspace.box?.alias, story: StoryID.Net.titleCue(workspace.box?.alias)).layoutPriority(-1)
             // A Mac folder synced with a box folder that has chats open there: one quiet line.
@@ -680,7 +692,7 @@ extension TabBar {
         let frames = tabFrames
         let area = stripFrame
         let workspace = workspace
-        doubleClicks.value = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak window] event in
+        doubleClicks.value = WindowEvents.monitor(.leftMouseDown) { [weak window] event in
             guard let window, event.window === window, event.clickCount == 2, let content = window.contentView else { return event }
             // Window coordinates (bottom-left) to SwiftUI's global ones (top-left).
             let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
@@ -1041,7 +1053,7 @@ private struct ActiveTabName: View {
             .lineLimit(1)
             .truncationMode(Workspace.forkBase(tab.title) != nil ? .middle : .tail)
             .padding(.leading, Space.sm)
-            .help(tab.title)
+            .tip(tab.title)
             .storyID(StoryID.Titlebar.tabName)
     }
 }
@@ -1069,7 +1081,7 @@ private struct OverflowButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help("Hidden tabs")
+        .tip("Hidden tabs")
         .accessibilityLabel(Text("Hidden tabs"))
         .accessibilityValue(Text("\(hidden)"))
         .background(Color.clear.storyMark(StoryID.Titlebar.hiddenCount(hidden)))
@@ -1124,7 +1136,7 @@ private struct HiddenTabsList: View {
         .background(WindowReader { window.value = $0 })
         .storyID(StoryID.Titlebar.hiddenTabs)
         .onAppear {
-            monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { handle($0) }
+            monitor.value = WindowEvents.monitor([.leftMouseDown, .rightMouseDown, .keyDown]) { handle($0) }
         }
         .onDisappear {
             if let m = monitor.value { NSEvent.removeMonitor(m) }
@@ -1230,8 +1242,6 @@ private struct TabItem: View {
     /// A dragged tab rests on this one: a drop groups them, in this colour.
     var groupTarget: TabGroupColor? = nil
     @StateObject private var hovered = Local(false)
-    @StateObject private var renaming = Local(false)
-    @StateObject private var newName = Local("")
 
     @StateObject private var closeHovered = Local(false)
 
@@ -1311,15 +1321,10 @@ private struct TabItem: View {
             }
         }
         .onHover { hovered.value = $0 }
-        .help(workspace.asking(tab) ? "Closing the tab stops its turn" : help)
+        .tip(workspace.asking(tab) ? "Closing the tab stops its turn" : help)
         .koreContextMenu("tab") {
             let many = workspace.menuTabs(for: tab)
-            return many.count > 1 ? TabMenu.items(many, in: workspace) : TabMenu.items(tab, in: workspace) { startRename() }
-        }
-        .alert("Rename chat", isPresented: $renaming.value) {
-            TextField("Name", text: $newName.value)
-            Button("Rename") { tab.chat?.rename(newName.value) }
-            Button("Cancel", role: .cancel) {}
+            return many.count > 1 ? TabMenu.items(many, in: workspace, at: tab) : TabMenu.items(tab, in: workspace) { startRename() }
         }
     }
 
@@ -1393,7 +1398,7 @@ private struct TabItem: View {
         }
         .buttonStyle(.plain)
         // Attach to the selection button too: its hit area owns hover over a clipped name.
-        .help(help)
+        .tip(help)
         .accessibilityLabel(tab.title)
         .storyID(storyKey)
     }
@@ -1459,15 +1464,18 @@ private struct TabItem: View {
         .hitTargetRoom(Self.closeRoom)
         .onHover { closeHovered.value = $0 }
         .opacity(closeShown ? 1 : 0)
-        .help("Close tab")
+        .tip("Close tab")
         // Hidden on an inactive tab until hover: pressed by its action.
         .storyID(storyKey.part(.close), press: { workspace.requestClose(tab) })
     }
 
+    /// Kore's own question with the name in its field (`KoreAsk.name`), over this tab's window.
     private func startRename() {
-        guard tab.chat != nil else { return }
-        newName.value = tab.title
-        renaming.value = true
+        guard let chat = tab.chat else { return }
+        let window = workspace.window
+        Task { @MainActor in
+            if let name = await KoreAsk.name("Rename chat", current: tab.title, key: "rename-chat", in: window) { chat.rename(name) }
+        }
     }
 }
 
@@ -1556,12 +1564,12 @@ private struct TabMark: View {
             } else if !running, tab.agent == nil, chat.interruptedByAccount {
                 // Its work stopped for an account switch or sign-out: worth a look.
                 TabWarning()
-                    .help("Stopped by an account change")
+                    .tip("Stopped by an account change")
                     .storyMark(story.part(.stoppedForAccount))
             } else if running, tab.agent == nil, chat.isBusy || chat.isWaitingForNetwork, chat.connection.stuck {
                 // Offline or stalled: nothing to spin for (the chat's row says which).
                 TabWarning()
-                    .help(chat.connection.word ?? "")
+                    .tip(chat.connection.word ?? "")
                     .storyMark(story.part(.stuck))
             } else if running, tab.agent == nil, TabWork.kind(chat) == .background {
                 // Only background commands run: ">_", the amber point on it while an approval waits.
@@ -1656,7 +1664,7 @@ private struct NewTabButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help("New tab (⌘T)")
+        .tip("New tab (⌘T)")
     }
 }
 
@@ -1752,7 +1760,7 @@ private struct ProviderButton: View {
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
         .disabled(missing && elsewhere != nil)
-        .help(missing ? elsewhere.map { "Not on \($0)" } ?? "Not installed · click to install" : "")
+        .tip(missing ? elsewhere.map { "Not on \($0)" } ?? "Not installed · click to install" : "")
     }
 }
 
@@ -1916,15 +1924,16 @@ enum TabMenu {
             }
         }
         items.append(.rule)
-        // 1.11: a chat copied or cut from any window's History, as a new tab here.
-        let paste = ChatPasting.menuItems(workspace)
-        if !paste.isEmpty { items += paste + [.rule] }
+        // 1.11: the tab's chat copied or cut, as History's row; a chat held pasted right after
+        // this tab (past its group).
+        let clip = ChatPasting.tabItems(tab, in: workspace) + ChatPasting.menuItems(workspace, after: tab)
+        if !clip.isEmpty { items += clip + [.rule] }
         items.append(OptionItem("Close Tab") { workspace.requestClose(tab) })
         return items
     }
 
     /// A picked tab's right-click: what makes sense for all of them at once.
-    static func items(_ many: [ChatTab], in workspace: Workspace) -> [OptionItem] {
+    static func items(_ many: [ChatTab], in workspace: Workspace, at clicked: ChatTab? = nil) -> [OptionItem] {
         var items: [OptionItem] = []
         let previews = many.filter(\.isPreview)
         if !previews.isEmpty { items.append(OptionItem("Keep Open") { previews.forEach(workspace.keep) }) }
@@ -1953,6 +1962,9 @@ enum TabMenu {
             items.append(OptionItem("Remove from Group") { workspace.removeFromGroup(many) })
         }
         items.append(.rule)
+        // The clipboard holds one chat: copying is a single tab's; a held one pastes after the clicked tab.
+        let paste = ChatPasting.menuItems(workspace, after: clicked)
+        if !paste.isEmpty { items += paste + [.rule] }
         items.append(OptionItem("Close \(n) Tabs") { workspace.requestClose(many) })
         return items
     }

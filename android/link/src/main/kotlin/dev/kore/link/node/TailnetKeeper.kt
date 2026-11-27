@@ -6,13 +6,17 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
  * When the phone's tailnet runs (phase 18 §5): KoreNet on, joined or joining, and on screen or mid
- * sign-in. Nothing keeps it up behind the owner's back: off screen (after the app's grace) the
- * links say bye and the tailnet stops. A sign-in ([JoinFlow.signingIn]) keeps it up whatever the
+ * sign-in. Off screen it stays a short while ([LINGER_MS], the links quiet: the Mac sends
+ * attention only), so a trip to another app comes back to the same links at once; longer while a
+ * chat the phone follows is working, never past [LINGER_CAP_MS]. Then the links say bye and the
+ * tailnet stops. No wake lock or service holds it: a phone that freezes or sleeps the app just
+ * finds the time up when it runs again. A sign-in ([JoinFlow.signingIn]) keeps it up whatever the
  * screen: tsnet holds the pending node key in memory only, so a stop while the owner is in the
  * browser would finish a sign-in for a key that no longer exists, and the sign-in would loop.
  * Every start and stop goes through [switch]; the join's step changes re-run [apply].
@@ -31,6 +35,10 @@ class TailnetKeeper(
     /** A start failed (it's tried again, [RETRY_MS] doubling): the app may say so. */
     private val onTrouble: (Exception) -> Unit = {},
     private val io: CoroutineDispatcher = Dispatchers.IO,
+    /** Time that counts while the phone sleeps (ms): the app's `SystemClock.elapsedRealtime`. */
+    private val realtime: () -> Long = { System.nanoTime() / 1_000_000 },
+    /** Off screen past [LINGER_MS]: a chat the phone follows is still working, so it stays (to the cap). */
+    private val keep: () -> Boolean = { false },
 ) {
     data class Settings(val networkOn: Boolean, val joined: Boolean)
 
@@ -39,20 +47,48 @@ class TailnetKeeper(
         private set
     private var onScreen = false
     private var settle: Job? = null
+    /** Off screen and still up, for a while ([onScreen]); its timer. */
+    @Volatile var lingering = false
+        private set
+    private var linger: Job? = null
 
     init {
         scope.launch { join.step.collect { apply() } }
     }
 
-    /** The app came on screen or went off it (after its grace). */
-    fun onScreen(on: Boolean) {
+    /**
+     * The app came on screen or went off it (after its grace). Off screen while up, it stays up
+     * [LINGER_MS] (to [LINGER_CAP_MS] while [keep]), timed in [realtime], looked at least every
+     * [LINGER_CHECK_MS] it runs; back on screen meanwhile, nothing went down.
+     */
+    @Synchronized fun onScreen(on: Boolean) {
         onScreen = on
+        linger?.cancel()
+        linger = null
+        // A joined phone's links only: the Join flow's tailnet follows the screen and the sign-in as before.
+        lingering = !on && running && settings().joined
+        if (lingering) {
+            val since = realtime()
+            linger = scope.launch {
+                while (true) {
+                    val held = realtime() - since
+                    if (held >= LINGER_CAP_MS || (held >= LINGER_MS && !keep())) break
+                    delay(minOf(LINGER_CHECK_MS, if (held < LINGER_MS) LINGER_MS - held else LINGER_CHECK_MS))
+                }
+                synchronized(this@TailnetKeeper) {
+                    if (!isActive) return@launch
+                    lingering = false
+                    linger = null
+                    apply()
+                }
+            }
+        }
         apply()
     }
 
     /** Runs or stops the tailnet as the screen, the settings and the join say. */
     @Synchronized fun apply() {
-        val want = wants(settings(), join.step.value, onScreen)
+        val want = wants(settings(), join.step.value, onScreen || lingering)
         if (want == running) return
         running = want
         settle?.cancel()
@@ -110,6 +146,9 @@ class TailnetKeeper(
     /** Leave KoreNet: down, the node key dropped on the control plane, the local state gone. */
     @Synchronized fun leave(): Job {
         running = false
+        linger?.cancel()
+        linger = null
+        lingering = false
         settle?.cancel()
         onDown()
         switch.want(false)
@@ -122,6 +161,11 @@ class TailnetKeeper(
         const val RETRY_MS = 2_000L
         const val RETRY_CAP_MS = 60_000L
         const val BYE_MS = 500L
+        /** Off screen, the links and the tailnet stay this long: a trip to another app and back. */
+        const val LINGER_MS = 5 * 60_000L
+        /** …and while a followed chat works, never longer than this. */
+        const val LINGER_CAP_MS = 20 * 60_000L
+        const val LINGER_CHECK_MS = 60_000L
 
         fun wants(s: Settings, step: JoinFlow.Step, onScreen: Boolean): Boolean {
             val signingIn = JoinFlow.signingIn(step)

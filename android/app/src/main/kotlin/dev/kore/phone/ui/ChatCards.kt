@@ -11,7 +11,7 @@ import androidx.recyclerview.widget.RecyclerView
 /**
  * A chat row card (spec §5): `l1`, radius 14, a hair edge, 8 apart. The lead is the CLI's logo,
  * or the working spinner in its colour while the chat works (a window's row: a folder). Line 1:
- * the title (Body medium when unread, working or needing you) and the age; line 2 (Callout):
+ * the title (Body medium when unread, working or needing you), a pin when pinned, and the age; line 2 (Callout):
  * the window and the state or last word, warn when it needs you, err when it failed.
  */
 fun android.app.Activity.chatCard(): LinearLayout = LinearLayout(this).apply {
@@ -31,6 +31,12 @@ fun android.app.Activity.chatCard(): LinearLayout = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             addView(label("").apply { type(Type.Body); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+            // Pinned on this phone: a small pin, faint, left of the age.
+            addView(android.widget.ImageView(context).apply {
+                setImageResource(dev.kore.phone.R.drawable.i_pin)
+                imageTintList = android.content.res.ColorStateList.valueOf(Tone.faint)
+                visibility = View.GONE
+            }, LinearLayout.LayoutParams(dp(12), dp(12)).apply { marginStart = dp(8) })
             addView(label("").apply { type(Type.Caption); setTextColor(Tone.faint); setPadding(dp(8), 0, 0, 0) })
         })
         addView(label("").apply { type(Type.Callout); setTextColor(Tone.dim); maxLines = 1; ellipsize = android.text.TextUtils.TruncateAt.END; setPadding(0, dp(2), 0, 0) })
@@ -45,7 +51,8 @@ fun android.app.Activity.bindChatCard(v: LinearLayout, row: DeviceList.Row, open
     val text = v.getChildAt(1) as LinearLayout
     val top = text.getChildAt(0) as LinearLayout
     val title = top.getChildAt(0) as TextView
-    val age = top.getChildAt(1) as TextView
+    val pin = top.getChildAt(1)
+    val age = top.getChildAt(2) as TextView
     val line = text.getChildAt(1) as TextView
     val working = row.cue == DeviceList.Cue.WORKING
     if (row.chatId == null) {
@@ -66,6 +73,7 @@ fun android.app.Activity.bindChatCard(v: LinearLayout, row: DeviceList.Row, open
     title.type(if (strong) Type.BodyMedium else Type.Body)
     title.setTextColor(Tone.text)
     age.text = row.age
+    pin.visibility = if (row.pinned) View.VISIBLE else View.GONE
     line.text = row.waiting?.let { android.text.SpannableStringBuilder(waitingPrefix(it)).append(row.line) } ?: row.line
     line.visibility = if (row.line.isEmpty() && row.waiting == null) View.GONE else View.VISIBLE
     line.setTextColor(when (row.cue) {
@@ -73,7 +81,7 @@ fun android.app.Activity.bindChatCard(v: LinearLayout, row: DeviceList.Row, open
         DeviceList.Cue.FAILED -> Tone.err
         else -> Tone.dim
     })
-    v.contentDescription = listOf(row.title, row.age, if (row.unread) "unread" else "", if (row.prompt) "background commands running" else if (working) "working" else "", row.waiting?.words ?: "", row.line).filter { it.isNotEmpty() }.joinToString(", ")
+    v.contentDescription = listOf(row.title, if (row.pinned) "pinned" else "", row.age, if (row.unread) "unread" else "", if (row.prompt) "background commands running" else if (working) "working" else "", row.waiting?.words ?: "", row.line).filter { it.isNotEmpty() }.joinToString(", ")
     v.setOnClickListener {
         if (open != null) open()
         else if (row.chatId != null) startActivity(Intent(this, ChatActivity::class.java).putExtra("chat", row.chatId))

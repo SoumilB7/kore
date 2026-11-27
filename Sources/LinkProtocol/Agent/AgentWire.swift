@@ -50,6 +50,8 @@ package struct AgentCommand: Sendable, Equatable {
     package static let fast = Self(name: "chat.fast", tier: .own)
     package static let mode = Self(name: "chat.mode", tier: .own)
     package static let compact = Self(name: "chat.compact", tier: .own)
+    /// Its auto-compact point, as the context wheel sets it: 50, 60, 70, 80, 90 or off.
+    package static let autoCompact = Self(name: "chat.autocompact", tier: .own)
 
     // Drive: the caller's window, at or below its own mode. Own's changes reach those chats too.
     package static let new = Self(name: "chat.new", tier: .drive)
@@ -68,10 +70,13 @@ package struct AgentCommand: Sendable, Equatable {
     package static let ask = Self(name: "chat.ask", tier: .drive)
     package static let reply = Self(name: "chat.reply", tier: .drive)
     package static let fetch = Self(name: "file.fetch", tier: .drive)
+    /// The caller's window's tabs and groups arranged: layout only, so Act limited's
+    /// (the owner via Kore-main, 2026-11-24).
+    package static let arrange = Self(name: "tabs.arrange", tier: .own)
 
     package static let all: [Self] = [
         whoami, caps, chats, show, read, follow, unfollow, cards, history, wait, options, rename, model, effort, fast, mode, compact,
-        new, fork, send, stop, showTab, answer, open, close, ask, reply, fetch,
+        autoCompact, arrange, new, fork, send, stop, showTab, answer, open, close, ask, reply, fetch,
     ]
 
     /// Why `tier` may not run `name`; nil when it may.
@@ -141,6 +146,8 @@ package struct AgentArgs: Codable, Sendable, Equatable {
     /// `chat.mode`'s mode), and `chat.fast` on or off.
     package var to: String?
     package var on: Bool?
+    /// `chat.autocompact`: the point, "50" to "90" or "off".
+    package var point: String?
     /// Drive's: `chat.new`'s CLI (`claude`, `codex`), model and mode; a message (`chat.new`'s first,
     /// `chat.send`'s); `cards.answer`'s card, an answer per question, or deny.
     package var provider: String?
@@ -169,6 +176,18 @@ package struct AgentArgs: Codable, Sendable, Equatable {
     /// `chat.new`, `chat.open` and `chat.send`'s wake: the tab made or opened without being put in
     /// front, its window left where it is and Kore not activated.
     package var silent: Bool?
+    /// Tab groups and the strip (the owner via Kore-main, 2026-11-24): `chat.new`, `chat.open` and
+    /// `chat.fork`'s group for the tab; `tabs.arrange`'s tabs, group, place (`to`), fold, name, end
+    /// of the group, tab shown, and whether the user asked for a change to their own group.
+    /// `chats.list`: one window only.
+    package var group: String?
+    package var tabs: [String]?
+    package var fold: Bool?
+    package var name: String?
+    package var ungroup: Bool?
+    package var show: Bool?
+    package var asked: Bool?
+    package var window: String?
 
     package init(
         chat: String? = nil, last: Int? = nil, before: String? = nil, folder: String? = nil, query: String? = nil,
@@ -190,6 +209,14 @@ package struct AgentArgs: Codable, Sendable, Equatable {
         self.ask = nil
         self.path = nil
         self.silent = nil
+        self.group = nil
+        self.tabs = nil
+        self.fold = nil
+        self.name = nil
+        self.ungroup = nil
+        self.show = nil
+        self.asked = nil
+        self.window = nil
         self.chat = chat
         self.last = last
         self.before = before
@@ -326,8 +353,13 @@ package struct AgentChat: Encodable, Sendable, Equatable {
     package var cards: Int
     /// The caller's own chat.
     package var own: Bool?
+    /// Told Always allow on a card since its CLI started: a chat not told so doesn't drive it.
+    package var alwaysAllowed: Bool?
 
-    package init(id: String, short: String, title: String, provider: String, folder: String, window: String, state: String, mode: String, modeLabel: String? = nil, planOn: Bool? = nil, model: String? = nil, queued: Int, cards: Int, own: Bool? = nil) {
+    package init(
+        id: String, short: String, title: String, provider: String, folder: String, window: String, state: String, mode: String, modeLabel: String? = nil, planOn: Bool? = nil,
+        model: String? = nil, queued: Int, cards: Int, own: Bool? = nil, alwaysAllowed: Bool? = nil
+    ) {
         self.id = id
         self.short = short
         self.title = title
@@ -342,6 +374,7 @@ package struct AgentChat: Encodable, Sendable, Equatable {
         self.queued = queued
         self.cards = cards
         self.own = own
+        self.alwaysAllowed = alwaysAllowed
     }
 }
 
@@ -477,9 +510,47 @@ package struct AgentCards: Encodable, Sendable {
 
 package struct AgentChats: Encodable, Sendable {
     package var chats: [AgentChat]
+    /// Each window's strip: its tabs once each, by id, and its groups as lists of those ids.
+    package var windows: [AgentWindow]?
 
-    package init(chats: [AgentChat]) {
+    package init(chats: [AgentChat], windows: [AgentWindow]? = nil) {
         self.chats = chats
+        self.windows = windows
+    }
+}
+
+/// A window's strip as an agent reads it: a chat's tab by its chat's short id, any other tab by a
+/// tab id named in `other`; the tab in front; its groups, `by` `user` or the short id of the chat
+/// that made one; `here`, the caller's own window (the one `tabs.arrange` acts on).
+package struct AgentWindow: Encodable, Sendable, Equatable {
+    package struct Group: Encodable, Sendable, Equatable {
+        package var name: String
+        package var by: String
+        package var folded: Bool?
+        package var tabs: [String]
+
+        package init(name: String, by: String, folded: Bool?, tabs: [String]) {
+            self.name = name
+            self.by = by
+            self.folded = folded
+            self.tabs = tabs
+        }
+    }
+
+    package var name: String
+    package var selected: String?
+    package var tabs: [String]
+    package var groups: [Group]?
+    package var other: [String: String]?
+    package var here: Bool?
+
+    package init(name: String, selected: String?, tabs: [String], groups: [Group]?, other: [String: String]?, here: Bool?) {
+        self.name = name
+        self.selected = selected
+        self.tabs = tabs
+        self.groups = groups
+        self.other = other
+        self.here = here
     }
 }
 

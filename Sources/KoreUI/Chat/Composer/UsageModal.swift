@@ -4,6 +4,11 @@ import KoreCore
 import src
 import SwiftUI
 
+extension StoryID.UsageModal {
+    /// What lies around the card: a click there closes it.
+    package static let backdrop = StoryID(.usage, "backdrop")
+}
+
 /// The Usage popup's extended view (usage-monitor.html §10), a card centred over the chat: the
 /// plan's limits on top, as in the popup but roomier (a 6pt bar with Kore's hatch, the plan's %,
 /// Kore's ~%), which pick the limit shown below; then that limit's distribution: In Kore, every
@@ -26,6 +31,7 @@ struct UsageModal: View {
             let width = max(min(Size.usageModalWidth, geometry.size.width - Size.QuickOpen.windowMargin), 0)
             ZStack {
                 Color.clear.contentShape(Rectangle()).onTapGesture { state.closeExtended() }
+                    .storyID(StoryID.UsageModal.backdrop)
                 card(width: width, room: max(geometry.size.height - Size.QuickOpen.windowMargin, 0))
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
@@ -33,7 +39,7 @@ struct UsageModal: View {
         .background(WindowReader { window.value = $0 })
         .transition(.opacity)
         .onAppear {
-            keyMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { handleKey($0) }
+            keyMonitor.value = WindowEvents.monitor(.keyDown) { handleKey($0) }
         }
         .onDisappear {
             if let monitor = keyMonitor.value { NSEvent.removeMonitor(monitor) }
@@ -114,7 +120,7 @@ struct UsageModal: View {
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .help(account.map(UsageText.who) ?? "")
+                .tip(account.map(UsageText.who) ?? "")
             Spacer(minLength: 0)
             if let readAt = state.readAt {
                 Text("as of " + readAt.formatted(date: .omitted, time: .shortened))
@@ -126,11 +132,11 @@ struct UsageModal: View {
             HStack(spacing: Space.xxs) {
                 if let url = account?.manage {
                     IconButton(symbol: "arrow.up.right", kind: .small, font: Glyph.chevron, help: "Manage usage on \(url.host() ?? url.absoluteString)") {
-                        NSWorkspace.shared.open(url)
+                        StoryHost.open(url)
                         state.closeExtended()
                     }
                     .tabStop(StoryID.UsageModal.card.part(.open)) {
-                        NSWorkspace.shared.open(url)
+                        StoryHost.open(url)
                         state.closeExtended()
                     }
                 }
@@ -155,7 +161,7 @@ struct UsageModal: View {
                     let reset = UsageText.resetsShort(bar.resetsAt, now: now)
                     let spoken = [
                         UsageText.label(bar.title), UsageText.percent(bar.used), kore > 0 ? "about \(UsageText.kore(kore).dropFirst()) in Kore" : nil,
-                        reset.isEmpty ? nil : UsageText.resets(bar.resetsAt, now: now).lowercased(),
+                        bar.idle == true ? UsageText.notStarted.lowercased() : reset.isEmpty ? nil : UsageText.resets(bar.resetsAt, now: now).lowercased(),
                     ]
                     UsagePickRow(
                         selected: bar.title == state.pickedLimit?.title, help: state.barHelp(bar, now: now),
@@ -252,7 +258,7 @@ struct UsageModal: View {
                     let split = share.surfaces
                         .map { "\($0.name) \($0.estimated ? UsageText.kore($0.points) : UsageText.percent($0.points))" }
                         .joined(separator: " · ")
-                    note(split).help(split)
+                    note(split).tip(split)
                 }
                 if let quality = quality(limit, share) { note(quality) }
             } else {
@@ -358,7 +364,7 @@ private struct UsagePickRow: View {
         .buttonStyle(.plain)
         .hoverFill(selected || hovered.value, selected ? Theme.Row.selected(.surface) : Theme.Row.hover(.surface))
         .onHover { hovered.value = $0 }
-        .help(help)
+        .tip(help)
         .accessibilityLabel(label)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
@@ -481,7 +487,7 @@ private struct UsageChatRow: View {
             }
             .foregroundStyle(Theme.secondary)
             .lineLimit(1)
-            .help("\(share.agents) \(share.agents == 1 ? "agent" : "agents") · \(UsageText.kore(share.agentPoints))")
+            .tip("\(share.agents) \(share.agents == 1 ? "agent" : "agents") · \(UsageText.kore(share.agentPoints))")
         }
     }
 }

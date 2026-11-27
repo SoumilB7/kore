@@ -104,22 +104,30 @@ struct BoxSyncButton: View {
                 switch pairing.state {
                 case .checking:
                     Button("Cancel") { close() }.smallButton()
+                        .storyID(StoryID.Boxes.pairing("checking.cancel"))
                 case .ask(_, _, let mac):
                     // The level is the button: Files, or Files + chats.
                     Button("Cancel") { close() }.smallButton()
+                        .storyID(StoryID.Boxes.pairing("ask.cancel"))
                     Button("Files") { finishPairing(mac) }.smallButton()
+                        .storyID(StoryID.Boxes.pairing("files"))
                     Button("Files + chats") { finishPairing(mac, chats: true) }.smallButton(prominent: true)
+                        .storyID(StoryID.Boxes.pairing("chats"))
                 case .failed:
                     Button("Close") { close() }.smallButton()
+                        .storyID(StoryID.Boxes.pairing("failed.close"))
                     Button("Pick another…") { startPairing() }.smallButton(prominent: true)
+                        .storyID(StoryID.Boxes.pairing("failed.pick"))
                 case .blocked(_, let other, let mac):
                     Button("Pick another…") { startPairing() }.smallButton()
+                        .storyID(StoryID.Boxes.pairing("blocked.pick"))
                     Button("Unpair that first") {
                         SyncPairList.shared.unpair(alias: other.alias, box: other.box)
                         BoxBinding.pairsChanged()
                         check(mac)
                     }
                     .smallButton(prominent: true)
+                    .storyID(StoryID.Boxes.pairing("blocked.unpair"))
                 }
             }
         }
@@ -154,8 +162,8 @@ struct BoxSyncButton: View {
             pairing.value = BoxPairing(place: place, state: other.map { .blocked(why, $0, mac) } ?? .failed(why))
             return
         }
-        guard let ssh = SyncBox.ssh(box.alias) else {
-            pairing.value = BoxPairing(place: place, state: .failed("\(NodeNames.name(box.alias)) isn't an SSH alias Kore can use"))
+        guard let ssh = SyncBox.box(box.connection) ?? SyncBox.ssh(box.alias) else {
+            pairing.value = BoxPairing(place: place, state: .failed("\(NodeNames.name(box.alias)) has no way to copy files yet: no KoreNet link, no SSH alias"))
             return
         }
         pairing.value = BoxPairing(place: place, state: .checking(SyncPairs.shown(mac: mac.path)))
@@ -202,7 +210,7 @@ enum BoxSyncOptions {
             },
             .rule,
             OptionItem("Open on this Mac") { ChatMoving.openLocal(URL(fileURLWithPath: pair.mac)) },
-            OptionItem("Show in Finder") { NSWorkspace.shared.open(URL(fileURLWithPath: pair.mac)) },
+            OptionItem("Show in Finder") { StoryHost.open(URL(fileURLWithPath: pair.mac)) },
             OptionItem("Stop syncing") {
                 pairs.unpair(alias: box.alias, box: box.folder)
                 BoxBinding.pairsChanged()
@@ -272,7 +280,7 @@ struct BoxSyncPopup<Content: View>: View {
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame.value = $0 }
             .background(WindowReader { window.value = $0 })
             .onAppear {
-                monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { event in
+                monitor.value = WindowEvents.monitor([.leftMouseDown, .rightMouseDown, .keyDown]) { event in
                     guard let window = window.value, event.window === window, let view = window.contentView else { return event }
                     if event.type == .keyDown {
                         guard event.keyCode == 53 else { return event }
@@ -342,6 +350,7 @@ struct BoxOfflineDialog: View {
                         connection.bringOnline()
                         Devices.shared.changed()
                     }.smallButton()
+                    .storyID(StoryID.Boxes.offlineBringOnline)
                 }
             } else {
                 HStack(spacing: Space.sm) {
@@ -355,6 +364,7 @@ struct BoxOfflineDialog: View {
                     Text(Self.status(box, note: note)).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(2)
                     Spacer(minLength: Space.sm)
                     Button("Try again") { connection.retry() }.smallButton()
+                        .storyID(StoryID.Boxes.offlineRetry)
                 }
             }
         }
@@ -389,4 +399,14 @@ struct BoxOfflineDialog: View {
         default: return state.note
         }
     }
+}
+
+extension StoryID.Boxes {
+    /// The link-down card's Try again and Bring online (storylines).
+    package static let offlineRetry = offline.part(.retry)
+    package static let offlineBringOnline = offline.part(.open)
+    /// The Sync button's pairing card: a button by its state and role ("checking.cancel",
+    /// "ask.cancel", "files", "chats", "failed.close", "failed.pick", "blocked.pick",
+    /// "blocked.unpair") (storylines).
+    package static func pairing(_ role: String) -> StoryID { StoryID(.titlebar, "boxsync.pairing", key: role) }
 }

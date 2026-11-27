@@ -37,6 +37,14 @@ extension Chat {
         return Self.noFreer(mine.id, unreviewed: mine.unreviewed, than: theirs.id, unreviewed: theirs.unreviewed)
     }
 
+    /// Why Drive from `other` doesn't reach it (`noFreer` false), as the list can show it.
+    package func freerLine(than other: Chat) -> String { Self.freerLine(always: alwaysAllowed && !other.alwaysAllowed) }
+
+    /// `always`: told Always allow where the caller wasn't, which no mode shows.
+    package static func freerLine(always: Bool) -> String {
+        always ? "That chat was told Always allow and this one wasn't: only you drive it." : "That chat's mode is above this one's: only you drive it."
+    }
+
     /// A message from another chat's agent: shown with where it came from, then sent as the
     /// composer would, queued while a turn runs. A "/" command only from the chat's own "/" list,
     /// and never one of `userCommands` (the owner, 2026-11-15); a "!" shell line never.

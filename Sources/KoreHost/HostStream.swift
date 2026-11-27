@@ -731,7 +731,13 @@ extension HostDaemon {
                 }
                 hc.stream.add(.approvalWithdrawn(approval), by: grant)
             case .setMode(let mode):
-                try await backend.setMode(mode)
+                let ceiling = chat.raiseCeiling(to: mode)
+                do {
+                    try await backend.setMode(mode)
+                } catch {
+                    chat.setModeCeiling(ceiling)
+                    throw error
+                }
                 chat.controls.mode = mode
                 hc.stamp()
                 hc.noted(chat)

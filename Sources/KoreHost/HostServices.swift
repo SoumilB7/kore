@@ -22,6 +22,8 @@ package final class HostServices: ChatServices {
     /// The box's paragraph for every chat (`HostDaemon` writes it): where it runs, and when
     /// Kore's tools are there.
     package var instructions: URL?
+    /// One box in a process shares this machine's lists; tests run several, each its own.
+    package var modelScope: String?
     /// No `kore` on a box, and no Arsenal notes of its own: the Mac's come with its messages.
     package var agentTools: Bool { false }
     /// kore-host's `kore_app` server for a chat whose Arsenal is on (`HostAgent`).

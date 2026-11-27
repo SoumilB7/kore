@@ -123,7 +123,9 @@ final class BoxNode {
     }
 
     private func start() throws {
-        let host = HostDaemon(paths: paths)
+        let host = HostDaemon.forTest(paths: paths)
+        // The box says its own name, as a real one says its host name.
+        host.deviceName = alias
         let tailnet = NodeNet(net, ip: ip)
         if beside {
             let (net, ip, ownIP, ownKey, alias) = (net, ip, ownIP, ownKey, alias)

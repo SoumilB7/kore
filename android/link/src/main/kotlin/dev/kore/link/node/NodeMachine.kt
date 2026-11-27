@@ -19,6 +19,8 @@ import kotlin.random.Random
  *   same way (backoff capped at [WAITING_CAP_MS] on screen; off screen on the app opening or a network
  *   change), its refused dials meanwhile kept as NET_OFF. `refused` (the owner's Deny) stays Denied.
  * - SignedOut: the phone's tailnet needs a sign-in; nothing dials until it's back.
+ * - Off screen (the links kept a while, [TailnetKeeper.LINGER_MS]) no timer dials: a node that
+ *   went away waits for a trigger (the app opening, a network change, the peer coming online).
  */
 class NodeMachine(private val random: Random = Random.Default, private val box: Boolean = false) {
     /**
@@ -114,9 +116,11 @@ class NodeMachine(private val random: Random = Random.Default, private val box: 
             Event.Tick -> if (s is State.Away && s.at != null && now >= s.at) connecting(reset = false) else s
             is Event.Screen -> {
                 onScreen = event.on
-                if (!event.on && s is State.Away && (s.why == AwayWhy.WAITING || s.why == AwayWhy.NET_OFF)) s.copy(at = null) else s
+                s
             }
         }
+        // Off screen nothing dials by the clock; on screen again the app's trigger dials at once.
+        (state as? State.Away)?.let { if (!onScreen && it.at != null) state = it.copy(at = null) }
         return state
     }
 

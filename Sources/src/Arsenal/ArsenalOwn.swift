@@ -211,6 +211,24 @@ extension Chat {
         return .success(ends ? "Mode \(mode.label). Kore access ends with it: Codex's sandbox blocks it there." : "Mode \(mode.label).")
     }
 
+    /// The context wheel's auto-compact point, kept for the chat's session as the wheel keeps it.
+    package func arsenalAutoCompact(_ said: String) -> Result<String, ArsenalRefusal> {
+        let word = said.trimmingCharacters(in: .whitespaces).lowercased().replacingOccurrences(of: "%", with: "")
+        let point: Int?
+        if word == "off" {
+            point = nil
+        } else if let n = Int(word), ContextStore.snapPoints.contains(n) {
+            point = n
+        } else {
+            return .failure(.init("Auto-compact points: " + ContextStore.snapPoints.map { "\($0)" }.joined(separator: ", ") + " or off."))
+        }
+        let line = point.map { "Auto-compact at \($0)%." } ?? "Auto-compact off."
+        guard point != context.autoCompactAt else { return .success("Already: " + line.lowercased()) }
+        setAutoCompact(point)
+        note("Arsenal · auto-compact " + (point.map { "\($0)%" } ?? "off"))
+        return .success(line)
+    }
+
     /// Now when the chat is idle, or once the turn running now ends (the agent asking is in it).
     package func arsenalCompact() -> Result<String, ArsenalRefusal> {
         if canCompact {

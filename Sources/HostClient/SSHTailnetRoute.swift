@@ -33,6 +33,13 @@ package enum SSHTailnetRoute {
     /// This Mac's tailnet status as KoreNet last heard it (its bus and its reads): what an SSH
     /// launched on the main actor decides from, with no socket round trip there.
     private static let lastStatus = Mutex<TailnetStatus?>(nil)
+    /// The route last said in hosts.log, per alias.
+    private static let said = Mutex<[String: String]>([:])
+    /// Posted at each change to what routes come out (KoreNet chose another tailnet, a box's link
+    /// came up on a node): a sync paused on an unreachable box tries again (`HostSync`).
+    package static let changed = Notification.Name("SSHTailnetRoute.changed")
+    private static func announce() { NotificationCenter.default.post(name: changed, object: nil) }
+
     /// `ssh -G` per alias, briefly (one process per spawn otherwise).
     private static let resolved = Mutex<[String: (at: Date, host: String, jump: Bool, keyAlias: Bool)]>([:])
 
@@ -40,10 +47,18 @@ package enum SSHTailnetRoute {
     package static func set(_ now: Current?) {
         current.withLock { $0 = now }
         lastStatus.withLock { $0 = nil }
+        announce()
     }
 
     /// A box's KoreNet link came up on `node` (nil: it ended).
-    package static func linked(_ alias: String, node: String?) { live.withLock { $0[alias] = node } }
+    package static func linked(_ alias: String, node: String?) {
+        let before = live.withLock { nodes -> String? in
+            let old = nodes[alias]
+            nodes[alias] = node
+            return old
+        }
+        if before != node, node != nil { announce() }
+    }
 
     /// KoreNet heard this Mac's tailnet status.
     package static func heard(_ status: TailnetStatus?) { lastStatus.withLock { $0 = status } }
@@ -59,7 +74,9 @@ package enum SSHTailnetRoute {
         let status = Thread.isMainThread ? lastStatus.withLock({ $0 }) : (try? now.tailnet.status()) ?? lastStatus.withLock({ $0 })
         let made = decide(
             host: found.host, jump: found.jump, keyAlias: found.keyAlias, status: status, own: now.own, live: live.withLock { $0[alias] })
-        if !made.isEmpty { HostLog.note(alias, "ssh route", made.filter { !$0.hasPrefix("-") }.joined(separator: " ")) }
+        // Said when it changes: a sync spawns ssh many times a round.
+        let line = made.filter { !$0.hasPrefix("-") }.joined(separator: " ")
+        if !made.isEmpty, said.withLock({ $0.updateValue(line, forKey: alias) }) != line { HostLog.note(alias, "ssh route", line) }
         return made
     }
 
@@ -135,7 +152,9 @@ package enum SSHTailnetRoute {
             if !keyAlias { options += ["-o", "HostKeyAlias=\(host)"] }
         }
         if let own {
-            options += ["-o", "ProxyCommand='\(own.helper)' nc -socket '\(own.socket)' %h %p"]
+            // Double quotes: sh reads them as ssh runs it, and rsync's `-e` keeps them inside the
+            // single quotes it takes a word with spaces in (`SyncBox.sshCommand`).
+            options += ["-o", "ProxyCommand=\"\(own.helper)\" nc -socket \"\(own.socket)\" %h %p"]
         }
         return options
     }

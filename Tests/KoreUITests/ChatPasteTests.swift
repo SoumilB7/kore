@@ -1,6 +1,7 @@
 import Foundation
 import HostClient
 import KoreCore
+import AppKit
 import Testing
 
 @testable import KoreUI
@@ -99,5 +100,65 @@ struct ChatPasteTests {
         let again = ChatCopyMarks()
         again.url = url
         #expect(again.line("claude", "n1") == "Copied from “Repos” · app on mybox" && again.line("codex", "n1") == nil)
+    }
+
+    // MARK: Tabs (0.3.10)
+
+    @Test func aTabsMenuCopiesAndCutsItsChatOnceItHasOne() {
+        let workspace = Workspace(folder: FileManager.default.temporaryDirectory, restore: false)
+        defer { workspace.closeAll() }
+        // An empty tab: nothing to copy.
+        #expect(ChatPasting.tabItems(workspace.activeTab, in: workspace).isEmpty)
+        workspace.activeTab.chat = Chat(provider: .claude, folder: workspace.folder)
+        // A chat with nothing sent yet: the items, off.
+        let items = ChatPasting.tabItems(workspace.activeTab, in: workspace)
+        #expect(items.map(\.title) == ["Copy Chat", "Cut Chat"] && items.allSatisfy { !$0.enabled })
+        #expect(ChatPasting.clip(of: workspace.activeTab, in: workspace, cut: false) == nil)
+        #expect(TabMenu.items(workspace.activeTab, in: workspace) {}.map(\.title).contains("Copy Chat"))
+    }
+
+    @Test func theKeysGoToAChatOnlyOutsideText() {
+        let window = NSWindow(contentRect: CGRect(x: 0, y: 0, width: 200, height: 200), styleMask: [.borderless], backing: .buffered, defer: false)
+        let text = NSTextView(frame: .zero)
+        let plain = NSView(frame: .zero)
+        #expect(ChatPasting.outsideText(nil, in: window))
+        #expect(ChatPasting.outsideText(window, in: window))
+        #expect(ChatPasting.outsideText(plain, in: window))
+        #expect(!ChatPasting.outsideText(text, in: window))
+        // Held, and nothing copied since: ⌘V means the chat; text copied after it wins.
+        let saved = (ChatClipboard.shared.clip, ChatClipboard.shared.changeCount)
+        defer {
+            ChatClipboard.shared.changeCount = saved.1
+            if let clip = saved.0 { ChatClipboard.shared.put(clip) } else { ChatClipboard.shared.clear() }
+        }
+        var count = 1
+        ChatClipboard.shared.changeCount = { count }
+        ChatClipboard.shared.put(clip(Self.macA, cut: false))
+        #expect(ChatPasting.pastesOnKey(plain, in: window) && !ChatPasting.pastesOnKey(text, in: window))
+        count = 2
+        #expect(!ChatPasting.pastesOnKey(plain, in: window))
+    }
+
+    @Test func aPastedTabGoesRightAfterTheOneClickedPastItsGroup() {
+        let workspace = Workspace(folder: FileManager.default.temporaryDirectory, restore: false)
+        defer { workspace.closeAll() }
+        for _ in 1..<5 { workspace.newTab() }
+        let tabs = workspace.tabs
+        workspace.group(tabs[2], onto: tabs[1])
+        workspace.group(tabs[3], onto: tabs[2])
+        workspace.select(tabs[0])
+        // After a tab outside a group: right after it.
+        workspace.newTab(after: tabs[0])
+        #expect(workspace.tabs.firstIndex { $0 === workspace.activeTab } == 1)
+        // After a group's middle: past the group, which stays whole.
+        workspace.newTab(after: tabs[2])
+        let group = workspace.tabGroups.member[tabs[1].id]
+        #expect(workspace.tabs.firstIndex { $0 === workspace.activeTab } == 5)
+        #expect(workspace.tabs.indices.filter { workspace.tabGroups.member[workspace.tabs[$0].id] == group } == [2, 3, 4])
+        // A tab moved beside one (a box's listed chat): the same place.
+        let last = workspace.tabs[workspace.tabs.count - 1]
+        workspace.move(last, after: tabs[1])
+        #expect(workspace.tabs.firstIndex { $0 === last } == 5)
+        #expect(workspace.tabs.indices.filter { workspace.tabGroups.member[workspace.tabs[$0].id] == group } == [2, 3, 4])
     }
 }

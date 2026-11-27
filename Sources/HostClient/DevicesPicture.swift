@@ -133,6 +133,12 @@ package struct DeviceRow: Identifiable, Equatable, Sendable {
     package var ownStep: String?
     /// Its sign-in page while Kore's own there is signed out (the row's "Sign in ↗").
     package var ownPage: String? { own.flatMap { $0.signedIn ? nil : $0.page } }
+    /// A box's SSH route: the alias (or destination) it was set up by, kept as a fallback.
+    package var ssh: String?
+    /// The tailnet its link goes over: "Kore's tailnet" or "Tailscale".
+    package var tailnetName: String?
+    /// The tailnet node its link reaches: "mybox-kore · 100.87.122.76".
+    package var node: String?
 
     package init(id: String, kind: Kind, name: String, status: Status, route: Route? = nil) {
         self.id = id
@@ -279,6 +285,7 @@ extension DevicesPicture {
         guard net.on else {
             for box in boxes where box.listed != nil {
                 var row = DeviceRow(id: box.key, kind: .box, name: box.name, status: boxStatus(box), route: .ssh)
+                row.ssh = sshRoute(box)
                 row.paused = box.paused
                 row.update = updateLine(box)
                 row.lastSeen = box.lastHeard
@@ -304,6 +311,11 @@ extension DevicesPicture {
         for box in boxes {
             var row = DeviceRow(id: box.key, kind: .box, name: box.name, status: boxStatus(box))
             let tailnetPeer = net.on ? peer(box.entry.flatMap { $0.nodeKey ?? $0.lastNodeKey }) : nil
+            row.ssh = sshRoute(box)
+            row.tailnetName = net.state == .installed ? "Tailscale" : "Kore's tailnet"
+            // The node the link reaches: the box's online node, the one it listens on first.
+            let reached = (box.entry?.knownKeys ?? []).lazy.compactMap { peer($0) }.first { $0.online } ?? tailnetPeer
+            row.node = reached.map { peer in ([peer.hostName] + Array(peer.tailscaleIPs.filter { !$0.contains(":") }.prefix(1))).filter { !$0.isEmpty }.joined(separator: " · ") }
             row.paused = box.paused
             row.keyExpiry = tailnetPeer?.keyExpiry
             row.lastSeen = tailnetPeer?.lastSeen ?? box.lastHeard
@@ -402,6 +414,13 @@ extension DevicesPicture {
         return out
     }
 
+    /// A box's SSH route: its entry's alias, else its key when that's an alias (nil: claimed over
+    /// the tailnet, or its SSH route forgotten).
+    static func sshRoute(_ box: BoxFacts) -> String? {
+        if let entry = box.entry { return entry.ssh }
+        return NodeDirectory.isNodeKey(box.key) ? nil : box.key
+    }
+
     static func net(_ facts: NetFacts) -> Net {
         guard facts.on else { return .off }
         switch facts.state {
@@ -494,14 +513,16 @@ package enum DevicesWords {
         case .needsUpdate: return "needs an update"
         case .stopped: return "kore-host stopped"
         case .notSetUp: return "not set up"
-        case .offline: return row.lastSeen.map { "last seen " + ago($0, now: now) } ?? "offline"
+        case .offline: return away(row, now: now)
         case .unknown where row.tailscaleOff, .connected where row.tailscaleOff:
             if row.koreTailnet { return "Sign in for \(row.name)" }
             return row.macOS ? BoxNetJoin.openLine(row.name) : "Tailscale is off on \(row.name)"
-        case .unknown: return row.route == .ssh ? "via SSH" : nil
+        case .unknown: return row.route == .ssh ? route(row) : nil
         case .connected: break
         }
         if let expiry = row.keyExpiry, expiry.timeIntervalSince(now) < DevicesPicture.expirySoon { return "key expires " + expiresIn(expiry, now: now) }
+        // A box: the route its link is on now, as it moves ("Kore's tailnet", "SSH (mybox-cf)").
+        if row.kind == .box { return route(row) }
         switch row.route {
         case .ssh?: return "via SSH"
         case .relayed?: return "relayed"
@@ -511,9 +532,47 @@ package enum DevicesWords {
         return row.presence.map { "in " + $0 }
     }
 
-    /// A row's hover, where its detail has more to say; Kore's tailnet there, as it last said.
-    package static func help(_ row: DeviceRow) -> String? {
+    /// A box's active route in words: "Kore's tailnet", "Tailscale", "Kore's tailnet · relayed",
+    /// "SSH (mybox-cf)"; nil while it has none.
+    package static func route(_ row: DeviceRow) -> String? {
+        switch row.route {
+        case .tailnet?: return row.tailnetName ?? "tailnet"
+        case .relayed?: return (row.tailnetName ?? "tailnet") + " · relayed"
+        case .ssh?: return row.ssh.map(NodeDirectory.sshRoute) ?? "SSH"
+        case nil: return nil
+        }
+    }
+
+    /// The quiet hint while the tailnet carries a box set up over SSH: the SSH route stays (Kore
+    /// falls back to it), it just isn't needed now.
+    package static func sshNotNeeded(_ row: DeviceRow) -> String? {
+        guard row.kind == .box, row.status == .connected, row.route == .tailnet || row.route == .relayed, let ssh = row.ssh else { return nil }
+        return NodeDirectory.sshRoute(ssh) + " · not needed now; \(row.tailnetName ?? "the tailnet") carries \(row.name)"
+    }
+
+    /// Why a device is away, and since when: a phone "asleep since 11:24" (its app closed or
+    /// its screen off), a box or Mac "offline since 11:24".
+    package static func away(_ row: DeviceRow, now: Date) -> String {
+        let word = row.kind == .phone ? "asleep" : "offline"
+        return row.lastSeen.map { word + " since " + since($0, now: now) } ?? word
+    }
+
+    /// "11:24" (today), "12 Nov" (before).
+    package static func since(_ date: Date, now: Date, calendar: Calendar = .current) -> String {
+        let locale = Locale(identifier: "en_GB")
+        if calendar.isDate(date, inSameDayAs: now) { return date.formatted(Date.FormatStyle(date: .omitted, time: .shortened).locale(locale)) }
+        return date.formatted(.dateTime.day().month(.abbreviated).locale(locale))
+    }
+
+    /// A row's hover, where its detail has more to say: the node the link reaches ("mybox-kore ·
+    /// 100.87.122.76 · via Kore's tailnet"), the SSH route's hint (`hint`; the Devices pane
+    /// shows it as a line of its own), Kore's tailnet there, as it last said.
+    package static func help(_ row: DeviceRow, hint: Bool = true) -> String? {
         var lines: [String] = []
+        if row.kind == .box, row.status == .connected, row.route == .tailnet || row.route == .relayed, let node = row.node {
+            lines.append(([node] + [route(row).map { "via " + $0 }].compactMap { $0 }).joined(separator: " · "))
+        }
+        if hint, let hint = sshNotNeeded(row) { lines.append(hint) }
         if row.route == .relayed, row.status == .connected { lines.append("UDP is blocked there, so syncs run slower") }
         if let own = row.own { lines.append(own.line) }
         return lines.isEmpty ? nil : lines.joined(separator: "\n")
@@ -560,10 +619,30 @@ package enum DevicesWords {
         return OwnCue(own.line, row.ownPage != nil || row.koreTailnet ? .signIn : nil)
     }
 
-    /// This Mac's row: its detail ("this Mac", or signed out) and its hover.
-    package static func macDetail(_ picture: DevicesPicture) -> String {
-        if let own = picture.own, !own.signedIn, !picture.ownSignIn, picture.net == .running || picture.net.tailscaleOff { return ownOut }
-        return "this Mac"
+    /// This Mac's row's second line (its tailnet's state is the "Kore's tailnet" row's), and its hover.
+    package static func macDetail(_ picture: DevicesPicture) -> String { "This Mac" }
+
+    /// The "Kore's tailnet" setting row's second line, and its one action: who's signed in,
+    /// "not signed in · Sign in", "finish signing in in the browser · Cancel", "off".
+    package static func tailnetSetting(_ picture: DevicesPicture) -> OwnCue {
+        switch picture.net {
+        case .off: return OwnCue("off", nil)
+        case .starting: return OwnCue("starting", nil)
+        case .unavailable: return OwnCue("couldn't start", nil)
+        case .stopped, .signedOut, .notJoined, .running: break
+        }
+        if picture.signingIn { return OwnCue("finish signing in in the browser", .cancel) }
+        let tailscale = picture.usingTailscale ? " · Tailscale carries the links" : ""
+        if picture.net == .notJoined || picture.ownSignIn { return OwnCue("not signed in", .signIn) }
+        if let own = picture.own {
+            if own.signedIn { return OwnCue("signed in" + (own.login.map { " as \($0)" } ?? "") + tailscale, nil) }
+            switch own.why {
+            case .never?: return OwnCue("not signed in", .signIn)
+            case .expired?: return OwnCue("signed out · key expired", .signIn)
+            case .unreadable?, .loggedOut?, nil: return OwnCue("signed out", .signIn)
+            }
+        }
+        return OwnCue(picture.usingTailscale ? "Tailscale carries the links" : "on", nil)
     }
 
     package static func macHelp(_ picture: DevicesPicture) -> String {

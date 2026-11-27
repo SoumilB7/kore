@@ -48,7 +48,7 @@ struct IconButton: View {
         .buttonStyle(.plain)
         .hitTargetRoom(reach)
         .onHover { hovered.value = $0 }
-        .help(help)
+        .tip(help)
         .accessibilityLabel(Text(help))
     }
 }

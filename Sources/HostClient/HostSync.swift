@@ -154,24 +154,79 @@ package struct SyncBox: Sendable {
     package let alias: String
     /// Where new copies go; nil: `~/Code` on the box.
     package let base: String?
-    /// The ssh program and its options, before `--` and the alias.
-    let ssh: [String]
+    /// Through `BoxSSH` (a real box): the route the tailnet takes now, decided at each use. Nil:
+    /// `program` as it is (tests' stand-ins).
+    private let routed: Bool
+    /// The ssh program and Kore's options; `extra` goes after the alias's options and the route.
+    private let program: [String]
+    private let extra: [String]
+    /// The box's link, for rsync over KoreNet (`BoxPipe`): asked at each spawn. Nil: SSH only.
+    package var pipe: PipeLink?
+
+    /// A box's pipe as a spawn asks it: whether one goes now, and rsync's `-e` for one.
+    package struct PipeLink: Sendable {
+        package var usable: @MainActor @Sendable () -> Bool
+        package var eCommand: @MainActor @Sendable () -> String?
+        /// Why nothing can be copied with it now, for a box with no SSH; nil: it can, or will be.
+        package var noWay: @MainActor @Sendable () -> String?
+
+        package init(
+            usable: @escaping @MainActor @Sendable () -> Bool, eCommand: @escaping @MainActor @Sendable () -> String?,
+            noWay: @escaping @MainActor @Sendable () -> String? = { nil }
+        ) {
+            self.noWay = noWay
+            self.usable = usable
+            self.eCommand = eCommand
+        }
+    }
 
     package static let sshOptions = ["-T", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"]
 
-    /// `ssh <alias>`, the user's own config and agent. Nil for an alias that isn't one.
-    package static func ssh(_ alias: String) -> SyncBox? {
-        guard validAlias(alias), let address = BoxAddress(alias) else { return nil }
-        return SyncBox(alias: alias, base: nil, ssh: [SSHTransport.ssh] + sshOptions + address.options)
+    /// `ssh <alias>`, the user's own config and agent, on the route the tailnet takes now
+    /// (`BoxSSH`). Nil for an alias that isn't one.
+    package static func ssh(_ alias: String, program: String = SSHTransport.ssh) -> SyncBox? {
+        guard validAlias(alias), BoxAddress(alias) != nil else { return nil }
+        return SyncBox(alias: alias, base: nil, routed: true, program: [program] + sshOptions, extra: [])
+    }
+
+    /// The box a connection reaches: over a pipe while its link is on KoreNet (owner, 2026-11-24:
+    /// then always, even where SSH would work), else over its SSH alias. A box with no SSH alias
+    /// (claimed over the tailnet) copies only over a pipe. Nil: neither could ever reach it.
+    @MainActor package static func box(_ connection: HostConnection) -> SyncBox? {
+        let link = PipeLink(
+            usable: { [weak connection] in connection.map(BoxPipe.usable) ?? false },
+            eCommand: { [weak connection] in connection.flatMap(BoxPipe.eCommand) })
+        let sshAlias = NodeDirectory.isNodeKey(connection.alias) ? NodeDirectory.shared.sshAlias(forKey: connection.alias) : connection.alias
+        if let sshAlias, var box = ssh(sshAlias) {
+            box.pipe = link
+            return box
+        }
+        guard NodeDirectory.isNodeKey(connection.alias), BoxPipe.missing(connection) == nil else { return nil }
+        var box = SyncBox(alias: connection.alias, base: nil, routed: false, program: ["/usr/bin/false"], extra: [])
+        box.pipe = link
+        box.pipe?.noWay = { [weak connection] in connection.flatMap(BoxPipe.missing) }
+        return box
+    }
+
+    /// Why a box with no SSH can't be copied with now (its kore-host or rsync serves no pipes).
+    @MainActor package var noWay: String? { pipe?.noWay() }
+
+    /// Whether this spawn would go over a pipe: no SSH master, shell or alias is needed then.
+    @MainActor package var overPipe: Bool { pipe?.usable() ?? false }
+
+    /// The ssh program and its options, before `--` and the alias: for a real box, `BoxSSH`'s
+    /// words now (its route decided as this is read: each spawn reads it once).
+    var ssh: [String] {
+        (routed ? BoxSSH.head(alias, program: program[0], options: Array(program.dropFirst())) : program) + extra
     }
 
     /// The host ssh and rsync are given: the alias, or a typed destination's host (its user and
     /// port are options in `ssh`).
-    var host: String { BoxAddress(alias)?.host ?? alias }
+    var host: String { BoxSSH.host(alias) }
 
     /// Through another ssh program (tests: one that runs the command here, as sshd's shell would).
     package static func via(_ program: String, alias: String, base: String?) -> SyncBox {
-        SyncBox(alias: alias, base: base, ssh: [program])
+        SyncBox(alias: alias, base: base, routed: false, program: [program], extra: [])
     }
 
     /// An SSH alias (letters, digits, `.`, `_`, `-`, not starting with `-`), or `user@host[:port]`
@@ -179,11 +234,14 @@ package struct SyncBox: Sendable {
     package static func validAlias(_ alias: String) -> Bool { BoxAddress.valid(alias) }
 
     /// rsync's name for a path on the box: the alias, then the path quoted for the box's shell.
-    func spec(_ path: String) -> String { host + ":" + ShellQuote.single(path) }
+    package func spec(_ path: String) -> String { host + ":" + ShellQuote.single(path) }
 
     /// `remoteTimeout`: the box's rsync gives up after that many seconds without I/O too (the
     /// Mac's openrsync never passes its own `--timeout` on to the box's).
-    func rsyncOptions(_ low: Bool, remoteTimeout: Int? = nil) -> [String] {
+    /// Over a pipe: the box runs its rsync niced with its own timeout, and takes no `--rsync-path`.
+    @MainActor package func rsyncOptions(_ low: Bool, remoteTimeout: Int? = nil) -> [String] {
+        // A pipe that can't be had ends at once: never SSH instead (its alias may name a dead address).
+        if let pipe, pipe.usable() { return ["-e", pipe.eCommand() ?? "/usr/bin/false"] }
         let path = (low ? "nice -n 10 " : "") + "rsync" + (remoteTimeout.map { " --timeout=\($0)" } ?? "")
         return ["-e", sshCommand] + (low || remoteTimeout != nil ? ["--rsync-path=" + path] : [])
     }
@@ -194,10 +252,15 @@ package struct SyncBox: Sendable {
         (ssh + ["--"]).map { $0.contains(where: { " '\"\\".contains($0) }) ? ShellQuote.single($0) : $0 }.joined(separator: " ")
     }
 
+    /// The box as a held connection knows it: the same whatever route the tailnet takes now.
+    var channelKey: String { (program + extra + ["--", host]).joined(separator: "\u{0}") }
+
     /// Through a master connection's socket (`SyncChannel`): each ssh this box runs rides it, no
     /// key exchange of its own. With no master there (not up yet, or gone), ssh connects itself.
     func through(socket: String) -> SyncBox {
-        SyncBox(alias: alias, base: base, ssh: ssh + ["-o", "ControlMaster=no", "-o", "ControlPath=" + socket])
+        var box = SyncBox(alias: alias, base: base, routed: routed, program: program, extra: extra + ["-o", "ControlMaster=no", "-o", "ControlPath=" + socket])
+        box.pipe = pipe
+        return box
     }
 
     /// The master connection's command: `ssh -M` on `socket`, its one session a remote `cat` that
@@ -561,6 +624,13 @@ package final class HostSync {
     @ObservationIgnored var runRsync: @Sendable (_ arguments: [String], _ low: Bool) async -> SyncProcess.Output = {
         await SyncProcess.run("/usr/bin/rsync", $0, low: $1)
     }
+    /// Paused on a box SSH can't reach: the next route change, link up or `routeRetry` tries again.
+    @ObservationIgnored package private(set) var waitingRoute = false
+    @ObservationIgnored private var routeRetryTask: Task<Void, Never>?
+    @ObservationIgnored private var routeObserver: NSObjectProtocol?
+    /// While it waits, it tries again this often anyway (a box that answers again by itself).
+    package static var routeRetry: Duration = .seconds(60)
+
     /// Paths one rsync's list holds at most (tests: fewer).
     @ObservationIgnored var batch = SyncBatch.size
 
@@ -574,7 +644,7 @@ package final class HostSync {
 
     /// Nil for a pair whose alias isn't one (`SyncBox.validAlias`).
     package init?(pair: SyncPair, connection: HostConnection, box: SyncBox? = nil, root: URL = HostCache.root(), defaults: UserDefaults = .standard) {
-        guard let box = box ?? .ssh(pair.alias) else { return nil }
+        guard let box = box ?? .box(connection) ?? .ssh(pair.alias) else { return nil }
         self.pair = pair
         self.connection = connection
         self.box = box
@@ -619,12 +689,17 @@ package final class HostSync {
             }
             self.gathered()
         }
-        if heldConnection { channel = SyncChannel.open(box, folder: channelFolder) }
+        // Over a pipe there's no SSH to hold (and an alias may lead nowhere while KoreNet is up).
+        if heldConnection, !box.overPipe { channel = SyncChannel.open(box, folder: channelFolder) }
         connection.onSync(pair.box) { [weak self] raw in self?.received(raw) }
         connection.onSnapshot(key) { [weak self] in
             // The link came (back): a held connection from before a drop may be dead.
+            self?.waitingRoute = false
             self?.channel?.renew()
             self?.watch()
+        }
+        routeObserver = NotificationCenter.default.addObserver(forName: SSHTailnetRoute.changed, object: nil, queue: nil) { [weak self] _ in
+            Task { @MainActor in self?.resume() }
         }
         if connection.isOnline { watch() }
     }
@@ -644,6 +719,11 @@ package final class HostSync {
         gathering = nil
         channel?.close()
         channel = nil
+        routeRetryTask?.cancel()
+        routeRetryTask = nil
+        waitingRoute = false
+        if let routeObserver { NotificationCenter.default.removeObserver(routeObserver) }
+        routeObserver = nil
         connection.onSync(pair.box, nil)
         connection.onSnapshot(key, nil)
         if connection.isOnline {
@@ -734,14 +814,14 @@ package final class HostSync {
             if changed.missing == true {
                 listing?.close()
                 listing = nil
-                notice = "Sync paused: \(shownBox) is missing on \(NodeNames.name(pair.alias))"
+                notice = "Sync paused · \(shownBox) is missing on \(NodeNames.name(pair.alias))"
                 return
             }
             if let capped = changed.capped {
                 // Too many files to list: no round runs on part of a list.
                 listing?.close()
                 listing = nil
-                notice = "Sync paused: over \(capped.formatted()) files on \(NodeNames.name(pair.alias))"
+                notice = "Sync paused · over \(capped.formatted()) files on \(NodeNames.name(pair.alias))"
                 return
             }
             if listing == nil { listing = SyncLines.Writer(scratch.appendingPathComponent("box-\(UUID().uuidString).tsv")) }
@@ -823,7 +903,7 @@ package final class HostSync {
     func whole(_ boxFile: URL) async {
         defer { try? FileManager.default.removeItem(at: boxFile) }
         guard tree.rootExists else {
-            notice = "Sync paused: \(shownMac) is missing on this Mac"
+            notice = "Sync paused · \(shownMac) is missing on this Mac"
             return
         }
         let seed = pair.fresh == true && !manifest.exists
@@ -859,11 +939,11 @@ package final class HostSync {
         if let clash = plan.clash { notice = "Can't sync \(clash) to a Mac that ignores case" }
         if whole, plan.agreedBefore > 0 {
             if plan.boxFiles == 0 {
-                notice = "Sync paused: \(shownBox) is empty on \(NodeNames.name(pair.alias))"
+                notice = "Sync paused · \(shownBox) is empty on \(NodeNames.name(pair.alias))"
                 return false
             }
             if plan.macFiles == 0 {
-                notice = "Sync paused: \(shownMac) is empty on this Mac"
+                notice = "Sync paused · \(shownMac) is empty on this Mac"
                 return false
             }
         }
@@ -871,7 +951,7 @@ package final class HostSync {
         if !deletesAllowed, deletes >= Self.bulk, deletes * 2 > plan.agreedBefore {
             let side = plan.deleteMac.count >= plan.deleteBox.count ? "this Mac" : pair.alias
             askDeletes = deletes
-            notice = "Sync paused: \(deletes.formatted()) files would be deleted on \(side)"
+            notice = "Sync paused · \(deletes.formatted()) files would be deleted on \(side)"
             return false
         }
         deletesAllowed = false
@@ -885,6 +965,13 @@ package final class HostSync {
     /// copies of files changed on both, pulls, deletes, pushes. False when something failed (the
     /// agreed list stays as it was).
     private func carry(_ plan: SyncPlan, low: Bool) async -> Bool {
+        // Nothing to copy over: said plainly, and the next link up looks again (never a retry loop).
+        if let why = box.noWay {
+            notice = "Sync paused · " + why
+            try? FileManager.default.removeItem(at: plan.pushList)
+            try? FileManager.default.removeItem(at: plan.pullList)
+            return false
+        }
         let moves = plan.pushes + plan.pulls + plan.deleteMac.count + plan.deleteBox.count + plan.renames.count > 0
         if moves { carrying = true }
         defer {
@@ -894,7 +981,7 @@ package final class HostSync {
         }
         // Each rsync and shell of the round through the box's held connection.
         var box = self.box
-        if let channel { box = await channel.box() }
+        if let channel, !box.overPipe { box = await channel.box() }
         let mac = tree.root.path + "/", remote = box.spec(pair.box + "/")
         let rsync = Self.rsyncArguments(box, low: low)
         // rename(2): a case-only rename on a volume that ignores case.
@@ -937,7 +1024,7 @@ package final class HostSync {
         }
         if !plan.deleteBox.isEmpty {
             if let why = await Self.deleteOnBox(plan.deleteBox, in: pair.box, files: connection, box: box, low: low) {
-                notice = "Sync paused: " + why
+                notice = "Sync paused · " + why
                 return false
             }
         }
@@ -965,19 +1052,46 @@ package final class HostSync {
         do {
             return try await SyncBatch.each(list, in: scratch, size: batch, run)
         } catch {
-            notice = "Sync paused: couldn't write a list (\(error.localizedDescription))"
+            notice = "Sync paused · couldn't write a list (\(error.localizedDescription))"
             return false
         }
     }
 
     /// An rsync of a round went: 23/24 (a file went between the listing and the copy) too, the
-    /// next round sees it. Else the sync pauses with its last line.
+    /// next round sees it. Else the sync pauses with one plain line (`BoxCopyWords`); rsync's
+    /// own text goes to hosts.log.
     private func ok(_ output: SyncProcess.Output) -> Bool {
         guard [0, 23, 24].contains(output.status) else {
-            notice = "Sync paused: " + output.said
+            paused(status: output.status, said: output.said)
             return false
         }
         return true
+    }
+
+    private func paused(status: Int32, said: String) {
+        let why = BoxCopyWords.why(status: status, said: said)
+        HostLog.note(pair.alias, "sync paused", "exit \(status): " + said)
+        notice = "Sync paused · " + BoxCopyWords.line(why, box: NodeNames.name(pair.alias))
+        guard BoxCopyWords.waitsForRoute(why) else { return }
+        waitingRoute = true
+        routeRetryTask?.cancel()
+        let wait = Self.routeRetry
+        routeRetryTask = Task { [weak self] in
+            try? await Task.sleep(for: wait)
+            guard !Task.isCancelled else { return }
+            self?.resume()
+        }
+    }
+
+    /// The route may be back (it changed, or a minute went): a sync paused on an unreachable box
+    /// goes again, the whole lists compared as after a drop.
+    package func resume() {
+        guard started, waitingRoute else { return }
+        waitingRoute = false
+        routeRetryTask?.cancel()
+        routeRetryTask = nil
+        channel?.renew()
+        if connection.isOnline { watch() }
     }
 
     /// A round's rsync options: a stalled link ends on both sides (`--timeout` here, and on the
@@ -1007,7 +1121,10 @@ package final class HostSync {
             """
         let output = await box.shell(script, [folder], input: Data(paths.joined(separator: "\0").utf8), low: low)
         // 23/24 are rsync's; a shell says 0.
-        guard [0, 23, 24].contains(output.status) else { return output.said }
+        guard [0, 23, 24].contains(output.status) else {
+            HostLog.note(box.alias, "sync delete", "exit \(output.status): " + output.said)
+            return BoxCopyWords.line(status: output.status, said: output.said, box: NodeNames.name(box.alias))
+        }
         let folders = Set(paths.compactMap { path in path.lastIndex(of: "/").map { String(path[..<$0]) } })
         if !folders.isEmpty {
             let script = "cd -- \"$1\" && xargs -0 rmdir -p -- 2>/dev/null; true"

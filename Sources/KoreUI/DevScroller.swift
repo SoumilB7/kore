@@ -5,7 +5,7 @@ import AppKit
 /// `clip` moves the clip view; `event` sends pixel scroll-wheel events, with phases and
 /// momentum, to the scroll view itself.
 @MainActor
-enum DevScroller {
+package enum DevScroller {
     enum Mode: String {
         case clip, event
     }
@@ -18,7 +18,7 @@ enum DevScroller {
 
     /// The scroll view under the middle of the chat area: the transcript, not the explorer or
     /// a code block inside it (a nested scroll view is skipped for its larger ancestor).
-    static func transcript(in window: NSWindow) -> NSScrollView? {
+    package static func transcript(in window: NSWindow) -> NSScrollView? {
         guard let content = window.contentView else { return nil }
         let middle = NSPoint(x: content.bounds.midX + content.bounds.width * 0.1, y: content.bounds.midY)
         var view = content.hitTest(content.convert(middle, to: content.superview))

@@ -35,8 +35,13 @@ extension Workspace {
         case .moveTabLeft: moveActive(by: -1)
         case .save: activeFile?.save()
         case .saveAll: saveAll()
-        case .goToFile: quickOpen = .files
-        case .goToLine: quickOpen = .line
+        case .goToFile:
+            // A file still opening must not take the caret from the field.
+            activeFile?.editor.dropPendingFocus()
+            quickOpen = .files
+        case .goToLine:
+            activeFile?.editor.dropPendingFocus()
+            quickOpen = .line
         case .toggleExplorer:
             if explorerOpen, sidebar == .explorer {
                 explorerOpen = false

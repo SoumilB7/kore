@@ -43,6 +43,8 @@ package protocol ChatBackend: AnyObject {
     var peerAddress: String? { get }
     /// Before `start()`, sets what the CLI launches with.
     func setMode(_ id: String) async throws
+    /// The owner moved the chat's ceiling (`ModeCeilings`); a box keeps its own chats'.
+    func setModeCeiling(_ level: Int?)
     /// A no-op for providers without a plan toggle.
     func setPlanMode(_ on: Bool) async
     func setModel(_ id: String) async throws
@@ -119,6 +121,11 @@ package protocol ChatBackend: AnyObject {
     /// same session: after the account changed, it runs as the new one; after a turn stalled or
     /// ignored a Stop, it's a fresh process. `reason` is logged.
     func relaunch(reason: String) async
+    /// Ends an idle CLI's process, quietly, as `relaunch` does, for its chat's rest: the next
+    /// `start()` (a send, a key in the composer) resumes the same session, the transcript kept.
+    /// False when it can't rest: no process of its own (a box's chat rests on its box), none
+    /// running, or one that has to stay up (remote control).
+    func rest() async -> Bool
     /// The CLI's model list, read again from the running CLI; nil when it isn't running or can't.
     func listModels() async -> [ModelOption]?
     /// A row the chat showed of its own that the CLI isn't sent (a typed /compact): a backend whose
@@ -145,6 +152,8 @@ package struct BackendOptions {
     /// The provider's mode id to launch in.
     package var mode: String
     package var planMode = false
+    /// The highest mode level it may launch in or carry on from its history in (`ModeCeilings`).
+    package var modeCeiling: Int?
     /// Launch on this model and effort instead of the CLI's defaults (a fork keeps the
     /// original's; the dev hook's cheap test models).
     package var model: String?
@@ -169,6 +178,9 @@ package struct BackendOptions {
     package var environment: (@MainActor () throws -> [String: String])?
     /// Where the plan's windows a turn reports go besides the log (the app's usage mark).
     package var planWindows: (@MainActor @Sendable (PlanSnapshot?) -> Void)?
+    /// Its CLI is up, whatever started it (a send, or a call that needs it: an earlier page, a
+    /// fork, a rename): a resting chat is awake again.
+    package var started: (@MainActor @Sendable () -> Void)?
 
     package init(
         folder: URL, resume: SessionSummary? = nil, mode: String, planMode: Bool = false, model: String? = nil,
@@ -299,6 +311,8 @@ extension ChatBackend {
 
     /// For a backend whose chat's settings are this Mac's.
     package func keepAutoCompact(_ point: Int?) {}
+    package func setModeCeiling(_ level: Int?) {}
+
     package var keepsPlanAllow: Bool { false }
     package var tellsAnnouncedName: Bool { true }
     package func keepPlanAllow(_ on: Bool) {}
@@ -311,6 +325,9 @@ extension ChatBackend {
 
     /// For a backend with no process of its own.
     package func relaunch(reason: String) async {}
+
+    /// For a backend with no process of its own to rest.
+    package func rest() async -> Bool { false }
 
     /// For a backend that runs no commands of its own.
     package func stopCommand(_ id: String) async throws { throw CommandUnavailable() }
@@ -340,6 +357,11 @@ package struct RemoteControlUnavailable: LocalizedError {
 
 /// Said once in the chat when an account switch ends its remote control.
 package let remoteEndedForAccount = "Remote control is off: the account changed."
+
+/// A reset asked of a chat with no CLI up: it isn't worth starting one, which could be on another login.
+package struct ResetNeedsMessage: LocalizedError {
+    package var errorDescription: String? { "send a message first, then use the reset" }
+}
 
 package struct UsageUnavailable: LocalizedError {
     package init() {}

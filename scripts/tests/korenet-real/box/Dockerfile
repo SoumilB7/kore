@@ -5,7 +5,7 @@
 FROM debian:trixie
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       systemd systemd-sysv dbus dbus-user-session libpam-systemd openssh-server sudo iptables \
-      socat procps iproute2 xz-utils ca-certificates \
+      socat procps iproute2 xz-utils ca-certificates rsync \
     && rm -rf /var/lib/apt/lists/* /usr/share/doc /usr/share/man
 COPY tailscaled /usr/sbin/tailscaled
 COPY tailscale /usr/bin/tailscale

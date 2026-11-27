@@ -33,7 +33,10 @@ struct AgentMapView: View {
         return GeometryReader { geometry in
             let narrow = geometry.size.width < Size.changesListMinWindow
             ZStack(alignment: .topTrailing) {
-                Theme.background
+                // Paint only: taking clicks, this fill took the title row's too while the map was
+                // open (its tabs, Agents, +), though its frame ends below the row. The tree, the
+                // sash and the pane take the map's own.
+                Theme.background.allowsHitTesting(false)
                 HStack(spacing: 0) {
                     if !narrow {
                         // Every row counts, its group open or closed: opening one, or an agent
@@ -76,7 +79,7 @@ struct AgentMapView: View {
         .transition(.opacity)
         .onAppear {
             map.markSeen(chat.transcript.agentSummary.failed)
-            keyMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { handleKey($0) }
+            keyMonitor.value = WindowEvents.monitor(.keyDown) { handleKey($0) }
             reveal()
         }
         .onDisappear {
@@ -222,6 +225,7 @@ struct AgentMapView: View {
         }
         .buttonStyle(.plain)
         .fixedSize()
+        .storyID(StoryID.AgentMap.menu)
     }
 
     /// An ended agent says how it ended after its name ("Watch the build — stopped"); one
@@ -421,25 +425,22 @@ struct AgentMapRows {
     }
 }
 
-/// "Agents  24 · 2 running · 1 failed" over the graph: every agent, the stopped ones included,
-/// as the Agents button counts them.
+/// "Agents  24" over the graph: every agent, the stopped ones included, as the Agents button
+/// counts them. Each row says its own state (option C): a failed one's word is the map's one red.
 struct MapHeader: View {
     let summary: TranscriptStore.AgentSummary
 
-    /// "24 · 2 running", then the failed part, in red; nothing at 0, where the chat's own row
-    /// speaks for itself.
-    static func counts(_ summary: TranscriptStore.AgentSummary) -> (counts: String, failed: String) {
-        guard summary.total > 0 else { return ("", "") }
-        return ("\(summary.total)" + (summary.running.isEmpty ? "" : " · \(summary.running.count) running"),
-                summary.failed.isEmpty ? "" : " · \(summary.failed.count) failed")
+    /// "24"; nothing at 0, where the chat's own row speaks for itself.
+    static func counts(_ summary: TranscriptStore.AgentSummary) -> String {
+        summary.total > 0 ? "\(summary.total)" : ""
     }
 
     var body: some View {
-        let (counts, failed) = Self.counts(summary)
+        let counts = Self.counts(summary)
         HStack(spacing: Space.md) {
             Text("Agents").font(TextStyle.labelStrong).foregroundStyle(Theme.text)
             if !counts.isEmpty {
-                (Text(counts) + Text(failed).foregroundColor(Theme.danger))
+                Text(counts)
                     .font(TextStyle.caption.monospacedDigit())
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
@@ -471,21 +472,21 @@ private struct GraphRootRow: View {
         let m = Layout.AgentMap.self
         return HStack(spacing: m.labelGap) {
             AgentNodeMark(kind: .root, radius: m.rootRadius)
-            VStack(alignment: .leading, spacing: 0) {
-                Text(chat.title)
-                    .font(TextStyle.labelMedium)
-                    .foregroundStyle(Theme.text)
-                    .lineLimit(1)
-                HStack(spacing: 0) {
-                    Text((["this chat"] + [chat.controls.currentModel?.name ?? chat.controls.modelId].compactMap { $0 }
-                        + [AgentMeter.clock(chat.transcript.workedFor)]).joined(separator: " · "))
-                        .font(TextStyle.caption.monospacedDigit())
-                        .foregroundStyle(Theme.tertiary)
-                        .lineLimit(1)
-                    CommandCue(count: commands)
-                }
+            Text(chat.title)
+                .font(TextStyle.labelMedium)
+                .foregroundStyle(Theme.text)
+                .lineLimit(1)
+            Spacer(minLength: Space.md)
+            // Its state, the right-hand word: how long it has worked, and its own commands.
+            HStack(spacing: 0) {
+                Text(AgentMeter.clock(chat.transcript.workedFor))
+                    .font(TextStyle.caption.monospacedDigit())
+                    .foregroundStyle(Theme.tertiary)
+                CommandCue(count: commands)
             }
-            Spacer(minLength: 0)
+            .lineLimit(1)
+            .fixedSize()
+            .padding(.trailing, Space.md)
         }
         .padding(.leading, m.leading - m.rootRadius)
         .frame(height: m.row * Zoom.shared.scale)
@@ -494,10 +495,12 @@ private struct GraphRootRow: View {
         }
         .hoverFill(selected || hovered.value, selected ? Theme.Row.selected(.window) : Theme.Row.hover(.window))
         .contentShape(Rectangle())
+        .tip((["this chat"] + [chat.controls.currentModel?.name ?? chat.controls.modelId].compactMap { $0 }).joined(separator: " · "))
     }
 }
 
-/// "Done  20  ·  2 foreground · 18 background" below the running agents, its chevron where the
+/// "Done  20" below the running agents (its split by kind, "2 foreground · 18 background", is its
+/// hover), its chevron where the
 /// chat's O is: it opens and closes the group, whose rows hang off it as the running ones hang
 /// off the chat. It has the selection's fill while the selected agent waits closed inside it.
 private struct ClosedGroupRow: View {
@@ -515,9 +518,7 @@ private struct ClosedGroupRow: View {
             HStack(spacing: m.labelGap) {
                 Disclosure(isOpen: open).foregroundStyle(Theme.tertiary)
                 (Text(AgentMapRows.title(fold)).font(TextStyle.labelMedium).foregroundColor(Theme.secondary)
-                    + Text("  \(nodes.count)").font(TextStyle.caption.monospacedDigit()).foregroundColor(Theme.tertiary)
-                    + Text(split.isEmpty ? "" : "  ·  \(split)").font(TextStyle.caption.monospacedDigit())
-                    .foregroundColor(Theme.tertiary))
+                    + Text("  \(nodes.count)").font(TextStyle.caption.monospacedDigit()).foregroundColor(Theme.tertiary))
                     .lineLimit(1)
                 Spacer(minLength: 0)
             }
@@ -533,6 +534,7 @@ private struct ClosedGroupRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
+        .tip(split)
         .accessibilityLabel(
             ([AgentMapRows.title(fold), "\(nodes.count)"] + (split.isEmpty ? [] : split.components(separatedBy: " · ")))
                 .joined(separator: ", "))
@@ -540,8 +542,8 @@ private struct ClosedGroupRow: View {
     }
 }
 
-/// One agent in the graph: its O at its depth, then its name and live meter. The wires are
-/// drawn behind it (`GraphWires`).
+/// One agent in the graph, on one line: its shape at its depth, its name, and its state as the
+/// right-hand word ("bg · 17:56", "done · 2:44", "failed"). The wires are drawn behind it (`GraphWires`).
 private struct AgentGraphRow: View {
     let node: TranscriptStore.AgentNode
     let selected: Bool
@@ -564,17 +566,17 @@ private struct AgentGraphRow: View {
         Button(action: select) {
             HStack(spacing: m.labelGap) {
                 AgentNodeMark(kind: .agent(index: info.index, status: info.status, waiting: waiting), background: info.background)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(info.name)
-                        .font(TextStyle.labelMedium)
-                        .foregroundStyle(Theme.text)
-                        .lineLimit(1)
-                    HStack(spacing: 0) {
-                        AgentNodeMeter(info: info, waiting: waiting, hidden: hidden, background: node.background)
-                        CommandCue(count: commands)
-                    }
+                Text(info.name)
+                    .font(TextStyle.labelMedium)
+                    .foregroundStyle(Theme.text)
+                    .lineLimit(1)
+                Spacer(minLength: Space.md)
+                HStack(spacing: 0) {
+                    AgentNodeMeter(info: info, waiting: waiting, hidden: hidden, background: node.background)
+                    CommandCue(count: commands)
                 }
-                Spacer(minLength: 0)
+                .fixedSize()
+                .padding(.trailing, Space.md)
             }
             .padding(.leading, wires.centre(node.depth) - m.nodeRadius)
             .frame(height: m.row * Zoom.shared.scale)
@@ -585,22 +587,17 @@ private struct AgentGraphRow: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(node.background ? "\(info.name) · Background" : info.name)
+        .tip(node.background ? "\(info.name) · Background" : info.name)
         .storyID(StoryID.AgentMap.row(info.id), press: { select() })
     }
 
-    private var elbowColour: Color {
-        switch info.status {
-        case .running: Theme.agentWireLive
-        case .failed: Theme.agentWireFailed
-        default: Theme.agentWire
-        }
-    }
+    /// Lit while it runs; else the spine's, a failed one's too (its word is the one red).
+    private var elbowColour: Color { info.status == .running ? Theme.agentWireLive : Theme.agentWire }
 }
 
-/// "1:12 · 18.4k", ticking while the agent runs; "background · waiting · 8:15 · 64k"; once it
-/// has ended, how: "done · 2:44 · 15.4k", "failed · 0:27", "stopped · 0:15 · 3.2k", or just
-/// "stopped" with nothing known. Never empty.
+/// A row's right-hand word: "1:12", ticking while the agent runs; "bg · waiting · 8:15"; once it
+/// has ended, how: "done · 2:44", "stopped · 0:15", or just "stopped" with nothing known; a failed
+/// one "failed", in red, the map's one red. Tokens are the detail's. Never empty.
 struct AgentNodeMeter: View {
     let info: TranscriptStore.AgentInfo
     let waiting: Bool
@@ -622,7 +619,7 @@ struct AgentNodeMeter: View {
     }
 
     private func line(_ duration: TimeInterval?) -> some View {
-        // Under the name, a step back from it: the ring says it's running.
+        // A step back from the name: the ring says it's running.
         let colour = info.status == .failed ? Theme.danger : Theme.tertiary
         return Text(Self.text(info, duration: duration, waiting: waiting, hidden: hidden, background: background))
             .foregroundStyle(colour)
@@ -641,11 +638,11 @@ struct AgentNodeMeter: View {
     static func text(
         _ info: TranscriptStore.AgentInfo, duration: TimeInterval?, waiting: Bool, hidden: Int = 0, background: Bool
     ) -> String {
-        var parts: [String] = background ? ["background"] : []
+        if info.status == .failed { return hidden > 0 ? "failed · +\(hidden) folded" : "failed" }
+        var parts: [String] = background ? ["bg"] : []
         if let state = state(info.status) { parts.append(state) }
         if waiting { parts.append("waiting") }
         if let duration { parts.append(AgentMeter.clock(duration)) }
-        if let tokens = AgentMeter.tokens(of: info), info.status != .failed { parts.append(tokens) }
         if hidden > 0 { parts.append("+\(hidden) folded") }
         return parts.joined(separator: " · ")
     }
@@ -738,8 +735,8 @@ struct AgentDuration: View {
 
 // MARK: Detail
 
-/// The selected agent: who it is and its meter, Stop and Open in tab; a failed one's reason;
-/// then its prompt; then its own timeline, live.
+/// The selected agent: who it is and its meter, Stop and Open in tab; then its prompt; then its
+/// own timeline, live; a failed one's reason last, where the run stopped.
 struct AgentDetail: View {
     let chat: Chat
     let info: TranscriptStore.AgentInfo
@@ -756,10 +753,11 @@ struct AgentDetail: View {
                 Section {
                     if filled.value {
                         Color.clear.frame(height: Space.xl)
-                        AgentFailure(chat: chat, info: info)
                         CommandsSection(chat: chat, rows: chat.commands.rows(of: .sub(info.id)))
                         if let prompt = info.prompt, !prompt.isEmpty { AgentPrompt(prompt: prompt).padding(.bottom, Space.xl) }
-                        AgentTimelineRows(chat: chat, id: info.id, failureAbove: true)
+                        AgentTimelineRows(chat: chat, id: info.id, failureApart: true)
+                        // Where the run stopped: a failed one's reason, after its last row.
+                        AgentFailure(chat: chat, info: info)
                         Color.clear.frame(height: Layout.Transcript.bottom)
                     }
                 } header: {
@@ -811,7 +809,7 @@ struct AgentDetail: View {
                 }
                 .buttonStyle(SubtleButtonStyle())
                 .fixedSize()
-                .help("Stop agent")
+                .tip("Stop agent")
                 .storyID(StoryID.AgentMap.stop)
             }
             Button {
@@ -822,7 +820,7 @@ struct AgentDetail: View {
             }
             .buttonStyle(SubtleButtonStyle())
             .fixedSize()
-            .help("Open in tab (Return)")
+            .tip("Open in tab (Return)")
             .storyID(StoryID.AgentMap.open)
         }
     }
@@ -852,7 +850,8 @@ struct AgentMeta: View {
 
     private func line(_ duration: TimeInterval?) -> some View {
         var parts = [info.type, info.model].compactMap { $0 }
-        if let state = AgentNodeMeter.state(info.status) { parts.append(state) }
+        // A failed one's is the block at the detail's end (`AgentFailure`).
+        if info.status != .failed, let state = AgentNodeMeter.state(info.status) { parts.append(state) }
         if let duration { parts.append(AgentMeter.clock(duration)) }
         if let tokens = AgentMeter.tokens(of: info) { parts.append(tokens) }
         if info.tools > 0 { parts.append(info.tools == 1 ? "1 tool" : "\(info.tools) tools") }
@@ -885,22 +884,35 @@ struct AgentPrompt: View {
     }
 }
 
-/// A failed agent's reason, first under the map's header: "● The log is missing".
+/// A failed agent's end, after its last row: "Failed · the box didn't answer · 17:41", on a red
+/// rule (the detail's one red).
 struct AgentFailure: View {
     let chat: Chat
     let info: TranscriptStore.AgentInfo
 
     var body: some View {
-        if info.status == .failed, let reason = TranscriptStore.distinctResult(info, lane: chat.transcript.lane(info.id)) {
-            TimelineItem(dot: .failure, top: 0, bottom: Space.xl) {
-                Text(planMarkdown(reason))
-                    .font(TextStyle.body)
-                    .foregroundStyle(Theme.secondary)
-                    .lineSpacing(TextStyle.leading)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
+        if info.status == .failed {
+            let reason = TranscriptStore.distinctResult(info, lane: chat.transcript.lane(info.id))
+            let ended = info.duration.map { info.startedAt.addingTimeInterval($0) }
+            (Text("Failed").fontWeight(.medium).foregroundColor(Theme.text)
+                + Text(reason == nil ? "" : " · ") + (reason.map { Text(planMarkdown($0)) } ?? Text(""))
+                + Text(ended.map { " · " + Self.time($0) } ?? ""))
+                .font(TextStyle.body)
+                .foregroundStyle(Theme.secondary)
+                .lineSpacing(TextStyle.leading)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, Space.lg)
+                .padding(.vertical, Space.xxs)
+                .overlay(alignment: .leading) { Rectangle().fill(Theme.agentFailureRule).frame(width: Stroke.emphasis) }
+                .padding(.top, Space.xl)
+                .storyMark(StoryID.AgentMap.failure)
         }
+    }
+
+    /// "17:41".
+    static func time(_ date: Date) -> String {
+        date.formatted(Date.FormatStyle(date: .omitted, time: .shortened).locale(Locale(identifier: "en_GB")))
     }
 }
 
@@ -909,8 +921,8 @@ struct AgentFailure: View {
 struct AgentTimelineRows: View {
     let chat: Chat
     let id: String
-    /// A failed agent's reason is shown above (`AgentFailure`), not after its rows.
-    var failureAbove = false
+    /// A failed agent's reason is shown apart (`AgentFailure`), not as its last row.
+    var failureApart = false
 
     var body: some View {
         let _ = chat.transcript.agentsVersion
@@ -926,7 +938,7 @@ struct AgentTimelineRows: View {
         ForEach(items) { item in
             TimelineRow(item: item, actions: actions).equatable()
         }
-        if let info, let result, !(failed && failureAbove) {
+        if let info, let result, !(failed && failureApart) {
             TimelineItem(dot: info.status == .failed ? .failure : .plain, above: !items.isEmpty) {
                 Text(planMarkdown(result))
                     .font(TextStyle.body)

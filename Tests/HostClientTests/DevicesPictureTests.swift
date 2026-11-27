@@ -70,21 +70,25 @@ struct DevicesPictureTests {
         var box = Self.box()
         box.entry?.own = .signedIn("me@x.com")
         var row = Self.picture(status: status, boxes: [box]).devices[0]
-        #expect(DevicesWords.detail(row, now: Self.now) == nil && DevicesWords.help(row) == "Kore's tailnet: signed in as me@x.com")
+        #expect(DevicesWords.detail(row, now: Self.now) == "Tailscale" && DevicesWords.help(row) == "mybox · 100.64.0.9 · via Tailscale\nSSH (mybox) · not needed now; Tailscale carries mybox\nKore's tailnet: signed in as me@x.com")
         box.entry?.own = .signedOut(.loggedOut, page: "https://login.tailscale.com/a/1")
         row = Self.picture(status: status, boxes: [box]).devices[0]
         #expect(DevicesWords.detail(row, now: Self.now) == DevicesWords.ownOut && row.ownPage == "https://login.tailscale.com/a/1")
-        #expect(DevicesWords.help(row) == "Kore's tailnet: signed out")
-        // This Mac's row: "this Mac" while signed in (Tailscale overriding: "using Tailscale").
+        #expect(DevicesWords.help(row) == "mybox · 100.64.0.9 · via Tailscale\nSSH (mybox) · not needed now; Tailscale carries mybox\nKore's tailnet: signed out")
+        // The Devices pane shows the hint as its own line, not in the hover.
+        #expect(DevicesWords.help(row, hint: false) == "mybox · 100.64.0.9 · via Tailscale\nKore's tailnet: signed out")
+        // This Mac's row says "This Mac"; who's signed in is the "Kore's tailnet" setting's line.
         let signedIn = DevicesPicture.make(
             net: NetFacts(on: true, state: .installed, status: status, own: .signedIn("me@x.com")), macName: "MacBook", boxes: [], phones: [], addUntil: nil,
             refusals: [], signingIn: false, nudge: false, now: Self.now)
-        #expect(DevicesWords.macDetail(signedIn) == "this Mac" && signedIn.usingTailscale)
+        #expect(DevicesWords.macDetail(signedIn) == "This Mac" && signedIn.usingTailscale)
+        #expect(DevicesWords.tailnetSetting(signedIn) == OwnCue("signed in as me@x.com · Tailscale carries the links", nil))
         #expect(DevicesWords.macHelp(signedIn).contains("Kore's tailnet: signed in as me@x.com"))
         let expired = DevicesPicture.make(
             net: NetFacts(on: true, state: .installed, status: status, own: .signedOut(.expired)), macName: "MacBook", boxes: [], phones: [], addUntil: nil,
             refusals: [], signingIn: false, nudge: false, now: Self.now)
-        #expect(DevicesWords.macDetail(expired) == DevicesWords.ownOut)
+        #expect(DevicesWords.macDetail(expired) == "This Mac")
+        #expect(DevicesWords.tailnetSetting(expired) == OwnCue("signed out · key expired", .signIn))
     }
 
     /// The first page's line (owner, 0.3.8): this Mac's or a box's Kore's tailnet not signed in →
@@ -133,8 +137,8 @@ struct DevicesPictureTests {
         let status = Self.status(peers: [Self.peer("nodekey:box", name: "mybox")])
         let picture = Self.picture(status: status, boxes: [Self.box()], phones: [Self.phone])
         #expect(Self.look(picture) == NetIconLook(dimmed: false, dot: nil, line: "MacBook, mybox and Pixel 9 connected · using Tailscale"))
-        // Tailnet is the normal route: the box's row says nothing; the phone's says its presence.
-        #expect(picture.devices.map { DevicesWords.detail($0, now: Self.now) } == [nil, "in deploy fix"])
+        // The box's row says the route its link is on (2026-11-24); the phone's says its presence.
+        #expect(picture.devices.map { DevicesWords.detail($0, now: Self.now) } == ["Tailscale", "in deploy fix"])
         #expect(picture.tailnetName == "macbook")
         #expect(Self.look(Self.picture()) == NetIconLook(dimmed: false, dot: nil, line: "No other devices yet"))
     }
@@ -144,7 +148,7 @@ struct DevicesPictureTests {
         let status = Self.status(peers: [Self.peer("nodekey:box", name: "mybox", online: false, extra: #","LastSeen":"\#(Self.iso(seen))""#)])
         let picture = Self.picture(status: status, boxes: [Self.box(online: false, listed: .ready)])
         #expect(picture.devices[0].status == .offline)
-        #expect(DevicesWords.detail(picture.devices[0], now: Self.now) == "last seen 2 h ago")
+        #expect(DevicesWords.detail(picture.devices[0], now: Self.now) == "offline since " + DevicesWords.since(seen, now: Self.now))
         #expect(Self.look(picture) == NetIconLook(dimmed: false, dot: .dim, line: "mybox is offline · last seen 2 h ago"))
         var two = Self.box("box-1", online: false, listed: .unreachable("gone", nil))
         two.entry = nil
@@ -157,7 +161,7 @@ struct DevicesPictureTests {
         away.lastSeen = Self.now.addingTimeInterval(-90)
         let picture = Self.picture(phones: [away])
         #expect(Self.look(picture).dot == nil)
-        #expect(DevicesWords.detail(picture.devices[0], now: Self.now) == "last seen 1 min ago")
+        #expect(DevicesWords.detail(picture.devices[0], now: Self.now) == "asleep since " + DevicesWords.since(away.lastSeen!, now: Self.now))
     }
 
     @Test func pendingComesFirstThenTailscaleOffThenOffline() {
@@ -201,8 +205,8 @@ struct DevicesPictureTests {
         let ssh = Self.box("box-1", route: .ssh(alias: "box-1", grant: "mac"), nodeKey: nil)
         let relayed = Self.box("box-3", nodeKey: "nodekey:b3")
         let picture = Self.picture(status: status, boxes: [Self.box(), ssh, relayed])
-        #expect(picture.devices.map { DevicesWords.detail($0, now: Self.now) } == [nil, "via SSH", "relayed"])
-        #expect(DevicesWords.help(picture.devices[2]) == "UDP is blocked there, so syncs run slower")
+        #expect(picture.devices.map { DevicesWords.detail($0, now: Self.now) } == ["Tailscale", "SSH (box-1)", "Tailscale · relayed"])
+        #expect(DevicesWords.help(picture.devices[2]) == "box-3 · 100.64.0.9 · via Tailscale · relayed\nSSH (box-3) · not needed now; Tailscale carries box-3\nUDP is blocked there, so syncs run slower")
         // An SSH box that hasn't joined can.
         #expect(picture.devices.map(\.canJoin) == [false, true, false])
     }
@@ -256,7 +260,7 @@ struct DevicesPictureTests {
         phone.connected = false
         let picture = Self.picture(state: .stopped, boxes: [ssh], phones: [phone])
         #expect(picture.net == .stopped && !picture.net.adds)
-        #expect(picture.devices.map { DevicesWords.detail($0, now: Self.now) } == ["via SSH", "needs Tailscale on"])
+        #expect(picture.devices.map { DevicesWords.detail($0, now: Self.now) } == ["SSH (mybox)", "needs Tailscale on"])
         #expect(picture.devices[1].needsTailscale)
         #expect(!picture.devices[0].canJoin)
     }
@@ -448,12 +452,13 @@ struct DevicesStateTests {
         let device = UUID()
         let id = device.uuidString.lowercased()
         directory.upsert(.init(device: device, name: "box-1", ssh: "mybox", nodeKey: "n", identityKey: Data([1]), enrolled: true, rekeyed: true))
-        #expect(directory.name(forKey: id) == "mybox")
+        // Its own name (what it says on KoreNet), never the alias it was set up by.
+        #expect(directory.name(forKey: id) == "box-1")
         directory.rename(id, to: "  GPU box ")
         #expect(directory.name(forKey: id) == "GPU box" && directory.name(forKey: "mybox") == "GPU box")
         #expect(NodeDirectory(defaults: defaults).name(forKey: id) == "GPU box")
         directory.rename("mybox", to: "")
-        #expect(directory.name(forKey: id) == "mybox")
+        #expect(directory.name(forKey: id) == "box-1")
         directory.forget(id)
         #expect(directory.all.isEmpty)
     }

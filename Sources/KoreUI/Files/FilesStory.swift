@@ -30,6 +30,23 @@ extension Workspace {
         if tabs.indices.contains(index) { select(tabs[index]) }
     }
 
+    /// The active file tab has edits not yet saved.
+    package var storyActiveFileDirty: Bool { activeFile?.isDirty ?? false }
+
+    /// A drop of `paths` on `folder` in the tree (relative to the folder), as a drag lands it.
+    package func storyDrop(_ paths: [String], into folder: String, copy: Bool) {
+        guard let store = files else { return }
+        let root = self.folder.path
+        TreeActions.drop(paths.map { root + "/" + $0 }, into: folder.isEmpty ? root : root + "/" + folder, copy: copy,
+                         store: store, workspace: self, undo: nil)
+    }
+
+    /// The window's close button, as it's pressed (its questions ask first).
+    package func storyPressClose() { window?.performClose(nil) }
+
+    /// A terminal's close as its × asks it, with `working` commands running.
+    package func storyAskTerminalClose(working: Int) async -> Bool { await TerminalPanel.confirm(working: working, in: window) }
+
     /// The name of the tab at `index` (0-based) in the strip: `tabs.file[…]` for a file's.
     package func storyTabID(at index: Int) -> StoryID? {
         guard tabs.indices.contains(index) else { return nil }
@@ -39,6 +56,10 @@ extension Workspace {
 
     /// The tree's selected row, relative to the folder.
     package var storyTreeSelection: String? { files.flatMap { store in store.selection.map(store.relative) } }
+    /// The explorer's tree has the keys.
+    package var storyTreeHasKeys: Bool { files?.storyHasKeys ?? false }
+    /// The rows chosen (⌘-click), as a several-rows menu acts on them.
+    package var storyExplorerChosen: [String] { files.map { store in store.chosenTops.map(store.relative) } ?? [] }
 
     /// No paste, duplicate or drop is running in the tree (their undo is registered).
     package var storyTreeSettled: Bool { (files?.fileWorks ?? 0) == 0 }
@@ -86,6 +107,32 @@ extension Workspace {
 
     /// The active file's editor as a storyline checks it; nil when the active tab isn't a text
     /// file that has loaded.
+    /// The active file's editor scrolled: how far from the text's left edge and from its top.
+    package var storyEditorScroll: CGPoint? {
+        guard let file = activeFile, file.isText, file.loaded else { return nil }
+        let clip = file.editor.scrollView.contentView
+        return CGPoint(x: clip.bounds.origin.x - file.editor.gutter.textLeft, y: clip.bounds.origin.y)
+    }
+
+    /// The active file as its text, not a renderer's view of it (the editor's ⌘⇧V).
+    package func storyShowRaw() { activeFile?.showsRaw = true }
+
+    /// The active file's editor soft-wraps its lines.
+    package var storyEditorWraps: Bool? { activeFile.map(\.wrap) }
+
+    /// A trackpad gesture that ends as a pinch would over the editor, nothing magnified (a stray
+    /// pinch at the end of a two-finger scroll): began, then ended.
+    package func storyStrayPinchOverEditor() -> Bool {
+        guard let file = activeFile, file.isText, file.loaded, let window = file.editor.scrollView.window else { return false }
+        let clip = file.editor.scrollView.contentView
+        let point = clip.convert(CGPoint(x: clip.bounds.midX, y: clip.bounds.midY), to: nil)
+        return PinchZoom.storySample(in: window, amount: 0, phase: .began, at: point)
+            && PinchZoom.storySample(in: window, amount: 0, phase: .ended, at: point)
+    }
+
+    /// The active file saved, as its autosave saves it.
+    package func storySaveActive() { activeFile?.save() }
+
     package var storyEditor: StoryEditor? {
         guard let file = activeFile, file.isText, file.loaded else { return nil }
         let editor = file.editor
@@ -174,6 +221,19 @@ extension Workspace {
         return rendering.renderer?.id
     }
 
+    /// The status row's facts while the active file's renderer shows ("Row 2, Col 1", "$.users").
+    package var storyRendererFacts: [String] { activeFile?.rendering.facts ?? [] }
+
+    /// The first view of this type in the window: a renderer's AppKit view, for its accessors.
+    func storyView<V: NSView>(_ type: V.Type) -> V? {
+        func find(_ view: NSView) -> V? {
+            if let match = view as? V { return match }
+            for child in view.subviews { if let match = find(child) { return match } }
+            return nil
+        }
+        return window?.contentView.flatMap(find)
+    }
+
     /// The active Markdown preview's selection: whether it has the keyboard, and what's selected.
     package var storyPreviewSelection: (focused: Bool, markdown: String)? {
         guard let state = activeFile?.rendering.memory.current as? MarkdownState else { return nil }
@@ -235,6 +295,10 @@ extension Workspace {
 
     /// Quick open's file list is showing (⌘P).
     package var storyQuickOpenShown: Bool { quickOpen == .files }
+    /// Go to Line is up.
+    package var storyGoToLineShown: Bool { quickOpen == .line }
+    /// The active file's status bar: its indent, line endings and language, as shown.
+    package var storyEditorStatus: [String]? { activeFile.map { [$0.indent.label, $0.lineEnding.rawValue, $0.language.name] } }
 
     /// The sidebar shows Search.
     package var storySearchShown: Bool { explorerOpen && sidebar == .search }

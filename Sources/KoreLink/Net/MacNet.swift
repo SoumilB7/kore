@@ -235,6 +235,19 @@ package final class MacNet {
     }
     private var bookCache: DeviceBookCache?
 
+    /// Why a copy `phone` asked for may not touch `box`, by this Mac's records; nil when it may:
+    /// the phone is in the book, not paused, with ask, and its record is one the box took from
+    /// here. The box has the last word by its own (`ControlArgs.phone`).
+    func refusesCopy(_ phone: UUID?, box: UUID?, name: String) -> String? {
+        guard let me = device, let phone, let box, let record = allowedPhones().first(where: { $0.id == phone }), !record.isPaused,
+            record.abilities.effective.contains(.ask), record.issuedBy == me,
+            let entry = host.directory.all[box.uuidString.lowercased()], entry.enrolled, entry.pushed?.by == me
+        else { return Self.notAllowed(name) }
+        return nil
+    }
+
+    static func notAllowed(_ box: String) -> String { "This phone isn't allowed on \(box)" }
+
     /// The owner's other Macs paired with this one (kind mac, owner, in its own book; never itself).
     package func pairedMacs() -> [DeviceRecord] {
         if bookCache?.book.url != host.book.url { bookCache = DeviceBookCache(host.book) }

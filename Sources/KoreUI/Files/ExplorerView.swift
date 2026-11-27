@@ -36,7 +36,7 @@ struct ExplorerButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help("Explorer (⇧⌘E)")
+        .tip("Explorer (⇧⌘E)")
     }
 }
 
@@ -80,7 +80,7 @@ struct ExplorerSidebar: View {
                 .foregroundStyle(Theme.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .help(searching ? "Search in \(workspace.folder.lastPathComponent)" : workspace.folder.path)
+                .tip(searching ? "Search in \(workspace.folder.lastPathComponent)" : workspace.folder.path)
                 // The folder's name clears the selection: New File then goes in the folder itself.
                 .contentShape(Rectangle())
                 .onTapGesture { if !searching { store.pickOnly(nil) } }
@@ -169,6 +169,7 @@ struct ExplorerSidebar: View {
             .focusable(interactions: .edit)
             .focused($focused)
             .focusEffectDisabled()
+            .onChange(of: focused, initial: true) { _, now in if StoryHost.installed { store.storyHasKeys = now } }
             .onKeyPress(phases: .down) { press in key(press, rows: store.rows) }
             // The Edit menu's ⌘A ⌘C ⌘X ⌘V while the tree has the keys (VS Code's tree).
             .onCommand(#selector(NSResponder.selectAll(_:))) { if store.edit == nil { store.pickAll() } }
@@ -285,7 +286,7 @@ struct HeaderButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(help)
+        .tip(help)
         .accessibilityLabel(Text(help))
     }
 }
@@ -315,11 +316,22 @@ struct ExplorerState: View {
     var body: some View {
         VStack(spacing: Space.md) {
             Text(message).font(Chrome.label).foregroundStyle(color)
-            Button(button, action: action).buttonStyle(SubtleButtonStyle())
+            Button(button, action: action).buttonStyle(SubtleButtonStyle()).storyID(StoryID.Explorer.state)
         }
         .frame(maxWidth: .infinity)
         .padding(.top, Layout.Explorer.stateTop)
     }
+}
+
+extension StoryID.Explorer {
+    /// The empty, lost or unreadable folder's one button (New File, Locate…, Try Again).
+    package static let state = StoryID(.explorer, "state")
+    /// The empty part below the tree's rows.
+    package static let below = StoryID(.explorer, "below")
+    /// A transfer's action on the explorer's bottom bar, by its word (Cancel, Resume, Retry).
+    package static func transfer(_ title: String) -> StoryID { StoryID(.explorer, "transfer", key: title) }
+    /// A failed transfer's ✕.
+    package static let transferDismiss = StoryID(.explorer, "transfer.dismiss")
 }
 
 // MARK: - Sticky folders
@@ -454,6 +466,7 @@ private struct TreeList: View, Equatable {
         let dropSegment = target.flatMap { target in store.row(showing: target).flatMap { $0.id == target ? nil : target } }
         let drop = dropSegment == nil ? target : nil
         let carrying = !FileCarries.shared.pending.isEmpty
+        VStack(spacing: 0) {
         LazyVStack(spacing: 0) {
             ForEach(rows) { row in
                 let isSelected = store.isChosen(row)
@@ -522,8 +535,10 @@ private struct TreeList: View, Equatable {
         .buttonStyle(.plain)
         .focusable(false)
         .accessibilityHidden(true)
+        .storyID(StoryID.Explorer.below)
         // Dropped below the rows: into the folder itself.
         .onDrop(of: TreeDrop.types, delegate: TreeDrop(folder: store.root, store: store, workspace: workspace, undo: undo))
+        }
     }
 
     /// The selected row's parent folder, whose guide is brighter.
@@ -760,7 +775,7 @@ private struct TreeRow: View, Equatable {
                 }
                 ChangeCounts(added: touch.added, removed: touch.removed, font: Chrome.captionDigits)
             }
-            .help("Changed by \(touch.help)")
+            .tip("Changed by \(touch.help)")
         } else if row.isFolder, folderTouched || (state != nil && state != .ignored) {
             Circle()
                 .fill(state.map(Theme.Git.color) ?? Theme.Git.modified)
@@ -989,7 +1004,7 @@ private struct InlineNameField: View {
         // Several chosen: only what applies to all of them.
         if chosen.count > 1 {
             return [
-                OptionItem("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting(chosen.map { URL(fileURLWithPath: $0) }) },
+                OptionItem("Reveal in Finder") { StoryHost.reveal(chosen.map { URL(fileURLWithPath: $0) }) },
                 OptionItem("Compress \(chosen.count) Items") { Task { if let failure = await store.compress(chosen) { TreeActions.show(failure) } } }, .rule,
                 OptionItem("Cut") { TreeActions.copy(chosen, cut: true, store: store) },
                 OptionItem("Copy") { TreeActions.copy(chosen, cut: false, store: store) },
@@ -1006,10 +1021,10 @@ private struct InlineNameField: View {
         ]
         if !isFolder {
             items += [OptionItem("Open") { workspace.openFile(URL(fileURLWithPath: path)) },
-                      OptionItem("Open with Default App") { NSWorkspace.shared.open(URL(fileURLWithPath: path)) }]
+                      OptionItem("Open with Default App") { StoryHost.open(URL(fileURLWithPath: path)) }]
         }
         items += [
-            OptionItem("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: path)]) },
+            OptionItem("Reveal in Finder") { StoryHost.reveal([URL(fileURLWithPath: path)]) },
             OptionItem("Open in Terminal") { workspace.terminals.newShell(folder: URL(fileURLWithPath: folder)) },
         ]
         if isFolder { items.append(OptionItem("Find in Folder…") { TreeActions.find(in: path, store: store, workspace: workspace) }) }
@@ -1060,18 +1075,27 @@ enum TreeActions {
     /// One question for all of `paths`, then the Trash; one undo brings them all back.
     static func trash(_ paths: [String], store: FilesStore, undo: UndoManager?) {
         guard !paths.isEmpty else { return }
-        let alert = NSAlert()
-        alert.messageText = paths.count == 1
+        let window = NSApp.keyWindow
+        Task { @MainActor in
+            guard await KoreAsk.confirm(trashQuestion(paths), detail: trashDetail(paths, from: "the Trash"),
+                                        yes: "Move to Trash", danger: true, key: "trash", in: window) else { return }
+            let result = store.trash(paths)
+            if let failure = result.failure { show(failure) }
+            recordTrash(result.done, store: store, undo: undo)
+        }
+    }
+
+    /// "Are you sure you want to delete “a.txt”?" (one), or the count (several).
+    static func trashQuestion(_ paths: [String]) -> String {
+        paths.count == 1
             ? "Are you sure you want to delete “\((paths[0] as NSString).lastPathComponent)”?"
             : "Are you sure you want to delete the following \(paths.count) items?"
-        alert.informativeText = (paths.count == 1 ? "" : paths.prefix(10).map { ($0 as NSString).lastPathComponent }.joined(separator: "\n") + "\n\n")
-            + "You can restore \(paths.count == 1 ? "it" : "them") from the Trash."
-        alert.addButton(withTitle: "Move to Trash")
-        alert.addButton(withTitle: "Cancel")
-        guard StorylineSeams.confirm?("trash") ?? (alert.runModal() == .alertFirstButtonReturn) else { return }
-        let result = store.trash(paths)
-        if let failure = result.failure { show(failure) }
-        recordTrash(result.done, store: store, undo: undo)
+    }
+
+    /// Several: the first ten names, a line each; then where they can come back from.
+    static func trashDetail(_ paths: [String], from place: String) -> String {
+        (paths.count == 1 ? "" : paths.prefix(10).map { ($0 as NSString).lastPathComponent }.joined(separator: "\n") + "\n\n")
+            + "You can restore \(paths.count == 1 ? "it" : "them") from \(place)."
     }
 
     private static func recordTrash(_ done: [FilesStore.Trashed], store: FilesStore, undo: UndoManager?) {
@@ -1179,39 +1203,37 @@ enum TreeActions {
         let sources = sources.filter { store.canDrop($0, into: folder, copy: copy) }
         guard !sources.isEmpty else { return }
         let folderName = folder == store.root ? (folder as NSString).lastPathComponent : store.relative(folder)
-        if sources.count > 1, answer == nil {
-            let alert = NSAlert()
-            alert.messageText = "\(copy ? "Copy" : "Move") \(sources.count) items into “\(folderName)”?"
-            alert.addButton(withTitle: copy ? "Copy" : "Move")
-            alert.addButton(withTitle: "Cancel")
-            guard StorylineSeams.confirm?(copy ? "copy" : "move") ?? (alert.runModal() == .alertFirstButtonReturn) else { return }
+        let window = NSApp.keyWindow
+        Task { @MainActor in
+            if sources.count > 1, answer == nil {
+                guard await KoreAsk.confirm("\(copy ? "Copy" : "Move") \(sources.count) items into “\(folderName)”?",
+                                            yes: copy ? "Copy" : "Move", key: copy ? "copy" : "move", in: window) else { return }
+            }
+            await transfer(sources, into: folder, folderName: folderName, copy: copy, store: store, workspace: workspace, undo: undo,
+                           answer: answer, window: window)
         }
-        Task { await transfer(sources, into: folder, folderName: folderName, copy: copy, store: store, workspace: workspace, undo: undo, answer: answer) }
     }
 
     private static func transfer(
         _ sources: [String], into folder: String, folderName: String, copy: Bool, store: FilesStore, workspace: Workspace,
-        undo: UndoManager?, answer: FilesStore.Collision?
+        undo: UndoManager?, answer: FilesStore.Collision?, window: NSWindow?
     ) async {
         var always = answer
         let result = await store.transfer(sources, into: folder, copy: copy, collision: { name in
             if let always { return always }
-            let alert = NSAlert()
-            alert.messageText = "“\(name)” already exists in “\(folderName)”."
-            alert.informativeText = "Replacing it moves the one that's there to the Trash."
-            alert.addButton(withTitle: "Replace")
-            alert.addButton(withTitle: "Keep Both")
-            alert.addButton(withTitle: "Cancel")
-            if sources.count > 1 {
-                alert.showsSuppressionButton = true
-                alert.suppressionButton?.title = "Apply to all"
-            }
-            let choice: FilesStore.Collision = switch alert.runModal() {
-            case .alertFirstButtonReturn: .replace
-            case .alertSecondButtonReturn: .keepBoth
+            let asked = await KoreAsk.shared.ask(
+                AskQuestion(
+                    title: "“\(name)” already exists in “\(folderName)”.",
+                    detail: "Replacing it moves the one that's there to the Trash.",
+                    choices: [AskChoice("Cancel", .cancel), AskChoice("Keep Both"), AskChoice("Replace", .danger)],
+                    preferred: 2, tick: sources.count > 1 ? "Apply to all" : nil, key: "collision"),
+                in: window)
+            let choice: FilesStore.Collision = switch asked.choice {
+            case 2: .replace
+            case 1: .keepBoth
             default: .cancel
             }
-            if alert.suppressionButton?.state == .on { always = choice }
+            if asked.ticked { always = choice }
             return choice
         }, moved: workspace.renamed)
         if let failure = result.failure { show(failure) }
@@ -1236,9 +1258,8 @@ enum TreeActions {
     }
 
     static func show(_ failure: FilesStore.Failure) {
-        let alert = NSAlert()
-        alert.messageText = failure.message
-        alert.runModal()
+        let window = NSApp.keyWindow
+        Task { @MainActor in await KoreAsk.tell(failure.message, key: "files-failure", in: window) }
     }
 }
 

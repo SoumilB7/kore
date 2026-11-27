@@ -105,6 +105,7 @@ extension AgentChannelTests {
                 home = Workspace(folder: folder, restore: false)
                 caller = Chat(provider: try #require(Registry.provider(callerCLI)), folder: folder)
                 home.tabs[0].chat = caller
+                Self.clearCeilings(past)
                 self.past[folder.standardizedFileURL] = past
                 // History is the rig's alone: no CLI's own list is read.
                 StorylineSeams.sessions = { [weak self] provider, folder in
@@ -128,13 +129,22 @@ extension AgentChannelTests {
             func other(_ name: String, _ past: [SessionSummary]) throws -> Workspace {
                 let folder = root.appendingPathComponent(name)
                 try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+                Self.clearCeilings(past)
                 self.past[folder.standardizedFileURL] = past
                 let workspace = Workspace(folder: folder, restore: false)
                 show(workspace)
                 return workspace
             }
 
+            /// The past chats' ids are fixed, and an Arsenal open keeps a ceiling under each in the
+            /// test runner's defaults (`ModeCeilings`, never raised by a later open): each rig
+            /// starts and ends without one, so no earlier test or run decides a woken chat's mode.
+            static func clearCeilings(_ past: [SessionSummary]) {
+                for session in past { ModeCeilings.put(nil, for: session.id) }
+            }
+
             func finish() {
+                for sessions in past.values { Self.clearCeilings(sessions) }
                 AgentPasses.shared.ended(getppid())
                 AgentGrants.stopAll()
                 StorylineSeams.backend = nil
@@ -287,6 +297,33 @@ extension AgentChannelTests {
             let toOpen = try await rig.send("login button", "hello")
             #expect(toOpen.ok && toOpen.short == nil && toOpen.message == "Sent.", "\(toOpen)")
             #expect(rig.tabs.count == 2)
+        }
+
+        /// Two chats in Auto: one told Always allow is out of reach of one that wasn't, the refusal
+        /// says so (not a mode), and `chats.list` shows the flag.
+        @Test func alwaysAllowedIsSaidAndListed() async throws {
+            let rig = try Rig([])
+            defer { rig.finish() }
+            let tab = ChatTab()
+            let target = Chat(provider: try #require(Registry.provider("claude")), folder: rig.home.folder)
+            tab.chat = target
+            rig.home.tabs.append(tab)
+            target.status.name = "Remote rig"
+            for chat in [rig.caller, target] { chat.setMode("auto", remember: false) }
+            target.alwaysAllowed = true
+            let refused = try await rig.send("Remote rig", "hello")
+            #expect(!refused.ok && refused.code == "not_own" && refused.message == "That chat was told Always allow and this one wasn't: only you drive it.", "\(refused)")
+            let channel = try #require(AgentChannel.current)
+            let line = await channel.boxCall(chat: rig.caller.id.uuidString, "chats.list", [:])
+            let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] ?? [:]
+            let rows = ((object["data"] as? [String: Any])?["chats"] as? [[String: Any]]) ?? []
+            let row = rows.first { $0["id"] as? String == target.id.uuidString }
+            #expect(row?["alwaysAllowed"] as? Bool == true && row?["mode"] as? String == "auto", "\(rows)")
+            #expect(rows.first { $0["own"] as? Bool == true }?["alwaysAllowed"] == nil)
+            // A caller told Always allow too reaches it.
+            rig.caller.alwaysAllowed = true
+            let sent = try await rig.send("Remote rig", "hello")
+            #expect(sent.code != "not_own", "\(sent)")
         }
 
         /// Act unlimited only, as `chat.open` then `chat.send`; never above the caller's mode.

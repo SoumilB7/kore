@@ -28,7 +28,7 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
 
     package enum Area: String, Sendable, CaseIterable {
         case titlebar, tabs, newtab, composer, transcript, approval, agentmap, history, explorer, editor, quickopen,
-            search, changes, viewer, usage, welcome, terminal, board
+            search, changes, viewer, usage, welcome, terminal, board, ask
     }
 
     package enum Part: String, Sendable, CaseIterable {
@@ -38,6 +38,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case signIn = "signin", signOut = "signout"
         /// An Auto ask's "Always ask for these in my settings".
         case settings
+        /// The usage popup's and a limit notice's link to the CLI's own limit resets.
+        case limitReset = "limitreset"
         /// The install card's Install, Try again and Locate….
         case install, retry, locate
         case `continue`, background, submit, other
@@ -58,7 +60,8 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
         case card
         /// A tab's title: the room its name gets in the strip.
         case title
-        /// A tab picked with others (⇧ or ⌘-click): its quiet highlight.
+        /// A tab picked with others (⇧ or ⌘-click): its quiet highlight. A History row whose chat
+        /// is the one this tab shows: its raised fill.
         case selected
         /// A chat's logo in Arsenal's colour: it has Arsenal on.
         case arsenal
@@ -68,6 +71,20 @@ package struct StoryID: Hashable, Sendable, CustomStringConvertible {
 // MARK: - The names (plan §3's table)
 
 extension StoryID {
+    /// Kore's own question over a window (`KoreAsk`): the card, a choice by its words, its field
+    /// and its tick.
+    /// Kore's hover tip, while one shows (`KoreTip`).
+    package enum Tip {
+        package static let shown = StoryID(.ask, "tip")
+    }
+
+    package enum Ask {
+        package static let card = StoryID(.ask, "card")
+        package static func choice(_ title: String) -> StoryID { StoryID(.ask, "choice", key: title) }
+        package static let field = StoryID(.ask, "card").part(.field)
+        package static let tick = StoryID(.ask, "card").part(.toggle)
+    }
+
     package enum Titlebar {
         package static let explorer = StoryID(.titlebar, "explorer")
         package static let history = StoryID(.titlebar, "history")
@@ -101,6 +118,12 @@ extension StoryID {
         package static func place(_ key: String) -> StoryID { StoryID(.titlebar, "boxes.place", key: key) }
         package static let add = StoryID(.titlebar, "boxes.add")
         package static let field = StoryID(.titlebar, "boxes.field")
+        /// A box's one line on the Welcome (its action: `.part(.use)`, Copy, Check again).
+        package static let line = StoryID(.welcome, "boxes.line")
+        /// The box's route under its name on the Welcome: "Kore's tailnet", "SSH (mybox-cf)".
+        package static let route = StoryID(.welcome, "boxes.route")
+        /// The box card's first line: what the machine is · its route now.
+        package static let cardRoute = StoryID(.titlebar, "boxes.cardRoute")
         package static func folder(_ path: String) -> StoryID { StoryID(.titlebar, "boxes.folder", key: path) }
         package static func chat(_ id: String) -> StoryID { StoryID(.titlebar, "boxes.chat", key: id) }
         package static let browser = StoryID(.titlebar, "boxes.browser")
@@ -226,6 +249,8 @@ extension StoryID {
         /// An image or file chip on a sent message, by its name; right-click opens its menu.
         package static func attachment(_ name: String) -> StoryID { StoryID(.transcript, "attachment", key: name) }
         package static func answer(_ entry: UUID) -> StoryID { StoryID(.transcript, "answer", key: entry.uuidString) }
+        /// A compaction's summary row (its right-click copies it).
+        package static func summary(_ entry: UUID) -> StoryID { StoryID(.transcript, "summary", key: entry.uuidString) }
         package static func fold(_ turn: String) -> StoryID { StoryID(.transcript, "fold", key: turn) }
         package static func tool(_ id: String) -> StoryID { StoryID(.transcript, "tool", key: id) }
         /// A tool header's file name, by the name: a click opens the file.
@@ -255,6 +280,8 @@ extension StoryID {
         package static func signIn(_ turn: String) -> StoryID { StoryID(.transcript, "signin", key: turn) }
         /// A limit notice's "Continues at …", by its turn; `.part(.cancel)` is its ×.
         package static func continues(_ turn: String) -> StoryID { StoryID(.transcript, "continues", key: turn) }
+        /// A failed turn's notice, by its turn; `.part(.limitReset)` is a plan limit's Reset ↗.
+        package static func outcome(_ turn: String) -> StoryID { StoryID(.transcript, "outcome", key: turn) }
         /// A turn that failed while the Mac slept, by its turn; `.part(.continue)` is its Continue.
         package static func slept(_ turn: String) -> StoryID { StoryID(.transcript, "slept", key: turn) }
         package static func compacted(_ entry: UUID) -> StoryID { StoryID(.transcript, "compacted", key: entry.uuidString) }
@@ -293,6 +320,8 @@ extension StoryID {
         package static func ended(_ group: String) -> StoryID { StoryID(.agentmap, "ended", key: group) }
         /// The chat's own row, the root the running agents hang off.
         package static let chat = StoryID(.agentmap, "chat")
+        /// A narrow map's menu in place of the tree: the chat, the agents, the ended groups.
+        package static let menu = StoryID(.agentmap, "menu")
         /// A command's row in a BACKGROUND section: its click opens it; `.part(.stop)` asks to stop
         /// it, `.part(.allow)` is the red Stop, `.part(.cancel)` Cancel, `.part(.background)`
         /// Run in background.
@@ -307,6 +336,8 @@ extension StoryID {
         package static let open = StoryID(.agentmap, "open")
         package static let stop = StoryID(.agentmap, "stop")
         package static let close = StoryID(.agentmap, "close")
+        /// A failed agent's end in its detail: "Failed · its reason · 17:41".
+        package static let failure = StoryID(.agentmap, "failure")
     }
 
     package enum AgentTab {
@@ -329,6 +360,8 @@ extension StoryID {
         package static let search = StoryID(.history, "search")
         /// `.part(.archive)`.
         package static func row(_ session: String) -> StoryID { StoryID(.history, "row", key: session) }
+        /// A chat paste's line at the top of the window (its ask, "Stop and move").
+        package static let pasteLine = StoryID(.history, "paste")
     }
 
     package enum Explorer {
@@ -408,6 +441,8 @@ extension StoryID {
     package enum Changes {
         package static func file(_ relativePath: String) -> StoryID { StoryID(.changes, "file", key: relativePath) }
         package static let done = StoryID(.changes, "done")
+        /// A narrow view's file menu in place of the list.
+        package static let menu = StoryID(.changes, "menu")
     }
 
     package enum Viewer {

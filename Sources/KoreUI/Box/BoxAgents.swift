@@ -17,6 +17,7 @@ final class BoxCard {
     private var monitor: Any?
     private var observers: [NSObjectProtocol] = []
     private var origin = CGPoint.zero
+    private weak var anchor: NSView?
 
     /// The agents popup for `alias`, under `anchor`.
     func showAgents(_ alias: String, under anchor: NSView?) {
@@ -24,13 +25,13 @@ final class BoxCard {
         close()
         OptionsMenu.shared.close()
         owner = window
-        let below = anchor.convert(CGPoint(x: anchor.bounds.minX, y: anchor.isFlipped ? anchor.bounds.maxY : anchor.bounds.minY), to: nil)
-        origin = content.convert(below, from: nil)
+        self.anchor = anchor
+        origin = Self.origin(under: anchor, in: content)
         let host = NSHostingView(rootView: BoxAgentsView(alias: alias) { [weak self] size in self?.place(size) } close: { [weak self] in self?.close() })
         self.host = host
         content.addSubview(host)
         place(host.fittingSize)
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
+        monitor = WindowEvents.monitor([.leftMouseDown, .rightMouseDown, .keyDown]) { [weak self] event in
             guard let self, let host = self.host else { return event }
             if event.type == .keyDown {
                 if event.keyCode == 53 { self.close(); return nil }
@@ -39,11 +40,27 @@ final class BoxCard {
             if event.window !== self.owner || !host.bounds.contains(host.convert(event.locationInWindow, from: nil)) { self.close() }
             return event
         }
-        for name in [NSWindow.willCloseNotification, NSWindow.didResizeNotification, NSWindow.willMiniaturizeNotification] {
+        for name in [NSWindow.willCloseNotification, NSWindow.willMiniaturizeNotification] {
             observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.close() }
             })
         }
+        // The Welcome fits its content, so what the card does can resize it (a sign-in line comes):
+        // the card stays, under its anchor.
+        observers.append(NotificationCenter.default.addObserver(forName: NSWindow.didResizeNotification, object: window, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.follow() }
+        })
+    }
+
+    private static func origin(under anchor: NSView, in content: NSView) -> CGPoint {
+        let below = anchor.convert(CGPoint(x: anchor.bounds.minX, y: anchor.isFlipped ? anchor.bounds.maxY : anchor.bounds.minY), to: nil)
+        return content.convert(below, from: nil)
+    }
+
+    private func follow() {
+        guard let host, let anchor, anchor.window === owner, let content = owner?.contentView else { return close() }
+        origin = Self.origin(under: anchor, in: content)
+        place(host.frame.size)
     }
 
     private func place(_ size: CGSize) {
@@ -86,13 +103,19 @@ struct BoxAgentsView: View {
     @StateObject private var checking = Local(false)
 
     private var list: BoxList { .shared }
+    /// Check again's own failure, among `failed`.
+    private static let checkKey = "check"
 
     var body: some View {
         let box = list.box(alias)
         let machine = box?.machine
         VStack(alignment: .leading, spacing: Space.sm) {
-            // The one essential line: what the machine is.
-            Text(machine?.kind ?? NodeNames.name(alias)).font(Chrome.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+            // The one essential line: what the machine is, and the route its link is on now.
+            let route = Devices.shared.boxRoute(alias)
+            Text([machine?.kind ?? NodeNames.name(alias), route?.line].compactMap { $0 }.joined(separator: " · "))
+                .font(Chrome.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+                .tip(route?.help ?? "")
+                .storyID(StoryID.Boxes.cardRoute)
             ForEach(BoxAgent.allCases, id: \.self) { agent in agentLine(agent, machine: machine) }
             ownLine()
             let rest = differences(box?.parity?.differences)
@@ -103,7 +126,10 @@ struct BoxAgentsView: View {
                 // Said, not counted: what Fix doesn't change (a newer CLI there, setup listed only).
                 ForEach(notes) { note in differenceLine(note, quiet: true) }
             }
-            HStack {
+            HStack(spacing: Space.sm) {
+                if !checking.value, let why = failed.value[Self.checkKey] {
+                    Text(why.message).font(TextStyle.caption).foregroundStyle(Theme.danger).lineLimit(2)
+                }
                 Spacer(minLength: 0)
                 Button(checking.value ? "Checking…" : "Check again") { Task { await check() } }.smallButton().disabled(checking.value)
             }
@@ -137,7 +163,7 @@ struct BoxAgentsView: View {
                 Text("Kore's tailnet").font(TextStyle.labelMedium).foregroundStyle(Theme.text)
                 Text(own.signedIn ? own.login.map { "signed in as \($0)" } ?? "signed in" : own.why == .never ? "not signed in" : "signed out")
                     .font(TextStyle.caption).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.middle)
-                    .help(own.line)
+                    .tip(own.line)
                 Spacer(minLength: Space.sm)
                 if !own.signedIn {
                     Button("Sign in ↗") { signInOwn(own) }.smallButton()
@@ -263,7 +289,7 @@ struct BoxAgentsView: View {
     private func check() async {
         checking.value = true
         failed.value = [:]
-        await list.detect(alias)
+        if case .failure(let why) = await list.look(alias) { failed.value[Self.checkKey] = why }
         await readLogins(refresh: true)
         checking.value = false
     }
@@ -276,8 +302,8 @@ struct CopyButton: View {
 
     var body: some View {
         Button(copied.value ? "Copied" : "Copy") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(text, forType: .string)
+            StoryHost.pasteboard.clearContents()
+            StoryHost.pasteboard.setString(text, forType: .string)
             copied.value = true
             Task {
                 try? await Task.sleep(for: .seconds(1.5))
@@ -285,5 +311,11 @@ struct CopyButton: View {
             }
         }
         .smallButton()
+        .storyID(StoryID.Boxes.copyCommand(text))
     }
+}
+
+extension StoryID.Boxes {
+    /// The agents card's Copy for a command, by the command (storylines).
+    package static func copyCommand(_ command: String) -> StoryID { StoryID(.titlebar, "boxes.copy", key: command) }
 }

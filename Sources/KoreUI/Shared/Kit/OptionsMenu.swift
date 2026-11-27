@@ -15,12 +15,15 @@ struct OptionItem {
     var action: (() -> Void)?
     /// A symbol before the title, and the key that does the same, after it (learnt by being seen).
     var glyph: String?
+    /// KoreNet's own glyph before the title instead (the device list's box, phone…).
+    var netGlyph: NetGlyph.Kind?
     var key: String?
     var separator: Bool { title.isEmpty && action == nil && children.isEmpty }
 
     init(_ title: String, enabled: Bool = true, checked: Bool = false, destructive: Bool = false, tint: Color? = nil,
-         glyph: String? = nil, key: String? = nil, children: [OptionItem] = [], action: (() -> Void)? = nil) {
+         glyph: String? = nil, netGlyph: NetGlyph.Kind? = nil, key: String? = nil, children: [OptionItem] = [], action: (() -> Void)? = nil) {
         self.glyph = glyph
+        self.netGlyph = netGlyph
         self.key = key
         self.title = title
         self.enabled = enabled
@@ -50,6 +53,13 @@ extension Array where Element == OptionItem {
 @MainActor @Observable
 final class OptionsMenu {
     static let shared = OptionsMenu()
+    /// Storylines: what the popups did last (shown, closed, a secondary click's routing), for a
+    /// failed pick to say.
+    static var storyTrail: [String] = []
+    static func storyNote(_ line: String) {
+        guard StoryHost.installed else { return }
+        storyTrail = Array((storyTrail + [line]).suffix(8))
+    }
     private(set) var items: [OptionItem] = []
     /// Storylines: the items of the menu open now, by title (`StoryMenus`).
     static var storyOpen: [String] { shared.items.map(\.title) }
@@ -61,12 +71,17 @@ final class OptionsMenu {
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     @ObservationIgnored private var nativeMenu: NSMenu?
     @ObservationIgnored private var anchor = CGPoint.zero
+    @ObservationIgnored private var width: CGFloat?
     @ObservationIgnored private var source = ""
+    /// Who opened the menu up now (its `source`), observed: a control lit while its own menu shows.
+    private(set) var openSource: String?
     @ObservationIgnored private static var nativeMonitor: Any?
 
     static func install() {
         guard nativeMonitor == nil else { return }
         nativeMonitor = NSEvent.addLocalMonitorForEvents(matching: [.rightMouseDown, .leftMouseDown]) { event in
+            // Under a question (`KoreAsk`) the page takes no clicks, a menu's included.
+            guard !KoreAsk.shared.isOpen else { return event }
             guard event.type == .rightMouseDown || event.modifierFlags.contains(.control),
                   let window = event.window, let content = window.contentView,
                   shared.retargetContextClick(event) else { return event }
@@ -88,6 +103,7 @@ final class OptionsMenu {
                 return $0.window === window && !$0.isHiddenOrHasHiddenAncestor
                     && $0.bounds.contains(point) && $0.visibleRect.contains(point)
             }
+            Self.storyNote("secondary at \(event.locationInWindow): \(targets.map(\.source)); near \(ContextOptions.Target.all.allObjects.filter { $0.window === window && $0.bounds.contains($0.convert(event.locationInWindow, from: nil)) }.map { "\($0.source) visible \($0.visibleRect) hidden \($0.isHiddenOrHasHiddenAncestor)" })")
             // A modal's own menu, over whatever it covers.
             let shown = targets.contains(where: \.modal) ? targets.filter(\.modal) : targets
             if let target = shown.min(by: { $0.bounds.width * $0.bounds.height < $1.bounds.width * $1.bounds.height }) {
@@ -153,8 +169,10 @@ final class OptionsMenu {
         }
     }
 
-    func show(_ entries: [OptionItem], at point: CGPoint, in window: NSWindow, source: String) {
+    /// `width`: a short menu's own (the Devices +'s two rows); else every option popup's.
+    func show(_ entries: [OptionItem], at point: CGPoint, in window: NSWindow, source: String, width: CGFloat? = nil) {
         close()
+        Self.storyNote("show \(source): \(entries.count) entries")
         let entries = entries.ruled
         guard !entries.isEmpty, window.contentView != nil else { return }
         owner = window
@@ -162,7 +180,9 @@ final class OptionsMenu {
         parents = []
         selected = nil
         anchor = point
+        self.width = width
         self.source = source
+        openSource = source
         let host = NSHostingView(rootView: OptionsList(menu: self))
         host.setAccessibilityRole(.menu)
         self.host = host
@@ -191,7 +211,7 @@ final class OptionsMenu {
         let height = CGFloat(items.filter { !$0.separator }.count + (parents.isEmpty ? 0 : 1)) * Layout.Options.menuRow
             + CGFloat(items.filter(\.separator).count) * (Stroke.hairline + Space.xxs * 2) + Space.xs * 2
         let point = content.convert(anchor, from: nil)
-        host.frame = Self.fitting(point: point, size: CGSize(width: Layout.Options.width, height: height),
+        host.frame = Self.fitting(point: point, size: CGSize(width: width ?? Layout.Options.width, height: height),
                                   bounds: content.bounds, flipped: content.isFlipped)
     }
 
@@ -216,6 +236,7 @@ final class OptionsMenu {
     func choose(_ index: Int) {
         guard items.indices.contains(index), items[index].enabled, !items[index].separator else { return }
         let item = items[index]
+        StoryHost.touch("menu \(source)|\(item.title)")
         if !item.children.isEmpty {
             parents.append(items)
             items = item.children.ruled
@@ -235,9 +256,17 @@ final class OptionsMenu {
         place()
     }
 
+    /// The click lands on this popup (its rows), not on what it covers.
+    func covers(_ event: NSEvent) -> Bool {
+        guard let host, event.window === owner else { return false }
+        return host.bounds.contains(host.convert(event.locationInWindow, from: nil))
+    }
+
     func close() {
+        if host != nil { Self.storyNote("close \(openSource ?? "?")") }
         host?.removeFromSuperview()
         host = nil
+        if openSource != nil { openSource = nil }
         nativeMenu = nil
         owner = nil
         items = []
@@ -304,11 +333,11 @@ private struct OptionsList: View {
                             Button { menu.choose(index) } label: {
                                 label(item.title, symbol: item.checked ? "checkmark" : nil,
                                       tint: !item.enabled ? Theme.tertiary : item.destructive ? Theme.danger : item.tint ?? Theme.text,
-                                      branch: !item.children.isEmpty, glyph: item.glyph, key: item.key)
+                                      branch: !item.children.isEmpty, glyph: item.glyph, netGlyph: item.netGlyph, key: item.key)
                             }
                             .buttonStyle(.plain)
                             .disabled(!item.enabled)
-                            .help(item.title)
+                            .tip(item.title)
                             .accessibilityAddTraits(item.checked ? .isSelected : [])
                             .background(menu.selected == index ? Theme.Row.selected(.surface) : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
                             .onHover { if $0 { menu.hover(index) } }
@@ -327,10 +356,12 @@ private struct OptionsList: View {
         .storyMark(StoryID.Options.panel)
     }
 
-    private func label(_ text: String, symbol: String?, tint: SwiftUI.Color, branch: Bool = false, glyph: String? = nil, key: String? = nil) -> some View {
+    private func label(_ text: String, symbol: String?, tint: SwiftUI.Color, branch: Bool = false, glyph: String? = nil,
+                       netGlyph: NetGlyph.Kind? = nil, key: String? = nil) -> some View {
         HStack(spacing: Space.sm) {
             if gutter { Image(systemName: symbol ?? "checkmark").opacity(symbol == nil ? 0 : 1).font(Chrome.glyphCrumb) }
             if let glyph { Image(systemName: glyph).font(Chrome.caption).foregroundStyle(Theme.secondary) }
+            if let netGlyph { NetGlyph(kind: netGlyph).foregroundStyle(Theme.secondary) }
             Text(text).font(Chrome.caption).lineLimit(1).truncationMode(.middle)
             Spacer(minLength: 0)
             if let key { Text(key).font(Chrome.caption).foregroundStyle(Theme.tertiary).padding(.leading, Space.lg) }
@@ -389,13 +420,13 @@ extension View {
     }
 }
 
-/// Its own view, so only the tip, not the row, follows the popup opening and closing. A KoreNet
-/// popup covers it too, except for the popup's own views.
+/// Kore's tip (`KoreTip`), which stays away while a Kore popup is up; a KoreNet popup's own
+/// views keep theirs.
 private struct PopupAwareHelp: ViewModifier {
     let text: String
     @Environment(\.insideNetPopup) private var inside
     func body(content: Content) -> some View {
-        content.help(OptionsMenu.shared.items.isEmpty && (inside || NetPopupHost.shared.showing == nil) ? text : "")
+        content.tip(inside || NetPopupHost.shared.showing == nil ? text : "")
     }
 }
 
@@ -457,5 +488,7 @@ extension StoryID {
 /// Storylines: the options menu open now, by its items' titles.
 @MainActor
 package enum StoryMenus {
+    /// What the popups did last: shown, closed, a secondary click's routing.
+    package static var trail: [String] { OptionsMenu.storyTrail }
     package static var open: [String] { OptionsMenu.storyOpen }
 }

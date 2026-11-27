@@ -257,7 +257,7 @@ public enum CLIExecutable {
         checks.set([:])
         guard places.value == nil else { return }
         shellResult.set(nil)
-        loading.set(Task.detached(priority: .userInitiated) { readShell() })
+        loading.set(Task.detached(priority: .userInitiated) { await readShell() })
     }
 
     private static let log = KoreLog.named("cli")
@@ -364,11 +364,11 @@ public enum CLIExecutable {
     /// for it without holding a thread.
     public static func environment() async -> [String: String] { await loading.value.value }
 
-    private static let loading = Locked(Task.detached(priority: .userInitiated) { readShell() })
+    private static let loading = Locked(Task.detached(priority: .userInitiated) { await readShell() })
 
-    private static func readShell() -> [String: String] {
+    private static func readShell() async -> [String: String] {
         let env: [String: String]
-        if let path = loginShellPATH() {
+        if let path = await loginShellPATH() {
             env = cleaned(path: path)
             UserDefaults.standard.set(path, forKey: cacheKey)
         } else {
@@ -408,7 +408,9 @@ public enum CLIExecutable {
     private static let cachedEnvironment: [String: String]? = UserDefaults.standard.string(forKey: cacheKey)
         .map { cleaned(path: $0) }
 
-    private static func loginShellPATH() -> String? {
+    /// Awaited, never blocked on: the shell's answer and its exit come by their handlers, so no
+    /// Swift concurrency thread is held, nor made to spin a run loop (`waitUntilExit` does both).
+    private static func loginShellPATH() async -> String? {
         let marker = "__KORE_PATH__"
         let shell = ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
         let process = Process()
@@ -419,6 +421,8 @@ public enum CLIExecutable {
         process.standardOutput = out
         process.standardError = FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
+        let exited = ProcessExit()
+        process.terminationHandler = { _ in exited.finish() }
         do { try process.run() } catch { return nil }
 
         // A broken rc file shouldn't hang app launch. With last run's PATH to start CLIs with,
@@ -442,12 +446,12 @@ public enum CLIExecutable {
             let data = handle.availableData
             if data.isEmpty || answer.take(data) { answer.finish() }
         }
-        answer.wait()
+        await answer.wait()
         reading.readabilityHandler = nil
         killer.cancel()
         // Done with it: whatever it left running in its group goes now.
         kill(-pid, SIGKILL)
-        process.waitUntilExit()
+        await exited.wait()
         ChildReaper.shared.forget(pid)
         let parts = answer.output.components(separatedBy: marker)
         guard parts.count >= 3, !parts[1].isEmpty else { return nil }
@@ -455,14 +459,43 @@ public enum CLIExecutable {
     }
 }
 
+/// Something that happens once, on any thread, awaited by one caller: it may come before the
+/// wait or after it.
+class OnceSignal: @unchecked Sendable {
+    let lock = NSLock()
+    private var finished = false
+    private var waiter: CheckedContinuation<Void, Never>?
+
+    func finish() {
+        let waiter = lock.withLock { () -> CheckedContinuation<Void, Never>? in
+            guard !finished else { return nil }
+            finished = true
+            defer { self.waiter = nil }
+            return self.waiter
+        }
+        waiter?.resume()
+    }
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let now = lock.withLock { () -> Bool in
+                if finished { return true }
+                waiter = continuation
+                return false
+            }
+            if now { continuation.resume() }
+        }
+    }
+}
+
+/// A process's end, by its termination handler.
+final class ProcessExit: OnceSignal, @unchecked Sendable {}
+
 /// The login shell's output as it arrives, until it holds the PATH between two markers or the
 /// shell's stdout closes.
-private final class PathAnswer: @unchecked Sendable {
+private final class PathAnswer: OnceSignal, @unchecked Sendable {
     private let marker: String
-    private let lock = NSLock()
-    private let done = DispatchSemaphore(value: 0)
     private var data = Data()
-    private var finished = false
 
     init(marker: String) { self.marker = marker }
 
@@ -475,16 +508,6 @@ private final class PathAnswer: @unchecked Sendable {
             return String(decoding: data, as: UTF8.self).components(separatedBy: marker).count >= 3
         }
     }
-
-    func finish() {
-        let first = lock.withLock { () -> Bool in
-            defer { finished = true }
-            return !finished
-        }
-        if first { done.signal() }
-    }
-
-    func wait() { done.wait() }
 }
 
 /// A value read and written from any thread.

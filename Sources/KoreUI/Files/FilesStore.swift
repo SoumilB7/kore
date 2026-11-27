@@ -71,6 +71,8 @@ final class FilesStore {
     /// The rows chosen with ⌘ or ⇧ (VS Code's multi-select), the selection among them; empty
     /// while one row is chosen.
     private(set) var picked: Set<String> = []
+    /// Storylines: the tree has the keys (type to find, ⌘A).
+    @ObservationIgnored package var storyHasKeys = false
     /// Where a ⇧ range starts: the last row clicked without ⇧.
     @ObservationIgnored private(set) var anchor: String?
     /// The row a click chose: it's in view, so the list doesn't scroll to it (the keys' and a
@@ -781,7 +783,7 @@ final class FilesStore {
     /// item; `moved` is told each move so open tabs follow. The copying and moving run off the
     /// main thread (a big folder takes a while), one transfer after another.
     func transfer(
-        _ sources: [String], into folder: String, copy: Bool, collision: (String) -> Collision,
+        _ sources: [String], into folder: String, copy: Bool, collision: (String) async -> Collision,
         moved: (String, String) -> Void
     ) async -> (done: [Transfer], failure: Failure?) {
         // In turn: this one's end is what the next waits for.
@@ -804,7 +806,7 @@ final class FilesStore {
             if target == source {
                 target = Self.unusedName(for: name, in: folder)
             } else if manager.fileExists(atPath: target) {
-                switch collision(name) {
+                switch await collision(name) {
                 case .cancel:
                     break items
                 case .keepBoth:

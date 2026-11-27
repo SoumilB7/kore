@@ -103,6 +103,33 @@ struct RaiseRiskTests {
             #expect(!LinkAsk.allows(kind), "\(kind)")
             #expect(LinkAsk.check(kind, ControlArgs(), nil, arsenal: nil) == .deny(.deniedControl, "A phone can't do that; do it in Kore."))
         }
+        // A phone asks the Mac to copy (cap "copyVia", owner 2026-11-24); the moves and copies themselves,
+        // and a cut, stay full grants'.
+        #expect(LinkAsk.allows(.chatCopyVia))
+        for kind in [ControlKind.chatCopy, .chatAdoptCopy, .chatRelease, .chatAdopt, .chatMirror] { #expect(!LinkAsk.allows(kind), "\(kind)") }
+        // What the Mac takes of one: one chat or past session from a window, to a window, a CLI Kore
+        // runs, a one-line title; a box's end by its device id.
+        let box = UUID().uuidString
+        func ask(_ from: CopyAsk.End, _ to: CopyAsk.End = .init(windowId: "w_1"), provider: String = "claude", title: String = "Repos", id: String = "ask-1") -> LinkPolicy.Verdict {
+            var args = ControlArgs()
+            args.copy = CopyAsk(id: id, from: from, to: to, provider: provider, title: title)
+            return LinkAsk.check(.chatCopyVia, args, nil, arsenal: nil)
+        }
+        #expect(ask(.init(windowId: "w_1", chatId: "c1")) == .allow)
+        #expect(ask(.init(device: box, windowId: "w_box", sessionId: "s1"), .init(device: box, windowId: "w_box2"), provider: "codex") == .allow)
+        #expect(LinkAsk.check(.chatCopyVia, ControlArgs(), nil, arsenal: nil) == .deny(.invalid, "Name the chat and where it goes."))
+        #expect(ask(.init(windowId: "w_1", chatId: "c1"), id: "") == .deny(.invalid, "Name the ask."))
+        #expect(ask(.init(windowId: "w_1")) == .deny(.invalid, "Name one chat to copy."))
+        #expect(ask(.init(windowId: "w_1", chatId: "c1", sessionId: "s1")) == .deny(.invalid, "Name one chat to copy."))
+        #expect(ask(.init(windowId: "w_1", chatId: "c1"), .init(windowId: "w_2", chatId: "c2")) == .deny(.invalid, "A copy goes to a window."))
+        #expect(ask(.init(device: "mybox", windowId: "w_1", chatId: "c1")) == .deny(.invalid, "Name the windows and devices."))
+        #expect(ask(.init(windowId: "../w", chatId: "c1")) == .deny(.invalid, "Name the windows and devices."))
+        #expect(ask(.init(windowId: "w_1", chatId: "c1"), provider: "bash") == .deny(.invalid, "That isn't a CLI Kore runs."))
+        #expect(ask(.init(windowId: "w_1", chatId: "c1"), title: "a\nb") == .deny(.invalid, "A title is one line, up to 200 characters."))
+        // A box doesn't take it: the Mac runs copies.
+        var boxArgs = ControlArgs()
+        boxArgs.copy = CopyAsk(id: "ask-1", from: .init(windowId: "w_1", chatId: "c1"), to: .init(windowId: "w_2"), provider: "claude", title: "Repos")
+        #expect(LinkPolicy.checkBox(.chatCopyVia, boxArgs, nil, control: .full) == .deny(.invalid, LinkPolicy.notTaken))
         #expect(LinkAsk.arsenalRaises(from: nil, to: "watch") && LinkAsk.arsenalRaises(from: "watch", to: "drive"))
         #expect(!LinkAsk.arsenalRaises(from: "drive", to: "own") && !LinkAsk.arsenalRaises(from: "own", to: "off"))
         let facts = LinkPolicy.ChatFacts(level: .manual, modes: [:])

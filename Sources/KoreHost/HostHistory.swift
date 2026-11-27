@@ -88,7 +88,10 @@ extension HostDaemon {
         let hc = boxChat(session)
         switch kind {
         case .historyOpen:
+            // A ceiling with it (Arsenal's open): only ever lowers one, and only that is taken.
+            let ceiling = args.settings?.modeCeiling.map { min(ModeCeilings.at(session) ?? .max, $0) }
             if let hc {
+                if let ceiling { hc.carry(ChatSettings(modeCeiling: min(hc.modeCeiling ?? .max, ceiling)), draft: false) }
                 // Opened, it's no longer archived.
                 hc.setArchived(false)
                 let open = chats.contains { $0 === hc } ? hc : reopen(hc.id)
@@ -102,10 +105,11 @@ extension HostDaemon {
                     return reply(fail(.goneSession, "That chat isn't in this folder's history."))
                 }
                 let title = args.title ?? kept.titles[session] ?? (listed.title.isEmpty ? nil : listed.title)
-                guard let made = newChat(folder: folder, provider: provider, modelId: nil, title: title, session: session) else {
+                guard let made = newChat(folder: folder, provider: provider, modelId: nil, title: title, session: session, settings: ceiling.map { ChatSettings(modeCeiling: $0) }) else {
                     return reply(fail(.goneFolder, "That folder isn't on this box."))
                 }
                 kept.titles[session] = nil
+                readInPast(made)
                 reply(.init(id: id, ok: true, chatId: made.id, windowId: Self.windowID(folder)))
             }
             return nil
@@ -133,6 +137,33 @@ extension HostDaemon {
             return .init(id: id, ok: true)
         default:
             return fail(.invalid, LinkPolicy.notTaken)
+        }
+    }
+
+    /// A chat resuming a session the box never logged: its newest page read in without a CLI
+    /// (`HostChat.readIn`), so it opens with its history rather than empty until a send. Once
+    /// per chat at a time; a chat with a log, a fork, or one moved away is left as it is. One that
+    /// gave nothing waits `pastRetry`. Codex's reader starts a process, so a watch-only client
+    /// (`watch`) never starts it; Claude's only reads a file.
+    func readInPast(_ hc: HostChat, watch: Bool = false) {
+        guard let session = hc.record.session, hc.ownedHere, hc.neverLogged, !watch || hc.record.provider == "claude" else { return }
+        if let failed = pastFailed[hc.id], now().timeIntervalSince(failed) < pastRetry { return }
+        guard readingPast.insert(hc.id).inserted else { return }
+        let read = pastPage
+        let provider = hc.provider
+        let folder = hc.folderURL
+        Task {
+            let page = await read(provider, session, folder)
+            readingPast.remove(hc.id)
+            let kept = Set(chats.map(\.id))
+            pastFailed = pastFailed.filter { kept.contains($0.key) }
+            guard chats.contains(where: { $0 === hc }) else { return }
+            guard let page, hc.readIn(page) else {
+                pastFailed[hc.id] = now()
+                return
+            }
+            pastFailed[hc.id] = nil
+            HostJournal.note("history read in", ["chat": hc.id, "events": "\(page.events.count)", "earlier": "\(page.more)"])
         }
     }
 

@@ -148,9 +148,10 @@ struct BoxFolderBrowser: View {
             list
             // One plain line, its room always kept: nothing below moves when it comes.
             Text(model.problem ?? " ").font(Chrome.caption).foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.tail)
-                .help(model.problem ?? "")
+                .tip(model.problem ?? "")
             TextField("", text: $typed.value, prompt: Text(model.path ?? "Path on \(NodeNames.name(model.alias))").foregroundStyle(Theme.tertiary))
                 .textFieldStyle(.plain)
+                .storyID(StoryID.Boxes.browserPath)
                 .font(Chrome.label)
                 .focused($field)
                 .fieldWell(focused: field)
@@ -162,6 +163,7 @@ struct BoxFolderBrowser: View {
                 if let name = naming.value {
                     TextField("", text: Binding(get: { name }, set: { naming.value = $0 }), prompt: Text("New folder").foregroundStyle(Theme.tertiary))
                         .textFieldStyle(.plain)
+                        .storyID(StoryID.Boxes.browserName)
                         .font(Chrome.label)
                         .focused($nameField)
                         .fieldWell(focused: nameField)
@@ -169,13 +171,17 @@ struct BoxFolderBrowser: View {
                         .onExitCommand { naming.value = nil }
                         .onAppear { nameField = true }
                     Button("Make") { makeFolder() }.smallButton()
+                        .storyID(StoryID.Boxes.browserMake)
                 } else {
                     Button("New Folder") { naming.value = "" }.smallButton().disabled(model.path == nil)
+                        .storyID(StoryID.Boxes.browserNewFolder)
                 }
                 Spacer(minLength: Space.sm)
                 Button("Cancel", action: close).smallButton()
+                    .storyID(StoryID.Boxes.browserCancel)
                 Button("Open") { choose() }.smallButton(prominent: true)
                     .disabled(opening.value || model.target(typed: typed.value) == nil)
+                    .storyID(StoryID.Boxes.browserOpen)
             }
         }
         .padding(Space.md)
@@ -193,6 +199,7 @@ struct BoxFolderBrowser: View {
         HStack(spacing: Space.xxs) {
             Image(systemName: "server.rack").font(Chrome.caption).foregroundStyle(Theme.tertiary)
             Button(NodeNames.name(model.alias)) { Task { await model.go("/") } }.buttonStyle(.plain).font(Chrome.label).foregroundStyle(Theme.secondary)
+                .storyID(StoryID.Boxes.browserCrumb("/"))
             ForEach(Array(model.crumbs.enumerated()), id: \.offset) { index, crumb in
                 Image(systemName: "chevron.right").font(Chrome.glyphCrumb).foregroundStyle(Theme.tertiary)
                 Button(crumb.name) { Task { await model.go(crumb.path) } }
@@ -200,6 +207,7 @@ struct BoxFolderBrowser: View {
                     .font(Chrome.label)
                     .foregroundStyle(index == model.crumbs.count - 1 ? Theme.text : Theme.secondary)
                     .lineLimit(1)
+                    .storyID(StoryID.Boxes.browserCrumb(crumb.path))
             }
             Spacer(minLength: 0)
             if model.loading { SpinningArc().frame(width: Size.spinner, height: Size.spinner) }
@@ -289,4 +297,18 @@ struct BoxFolderBrowser: View {
         }
         return true
     }
+}
+
+extension StoryID.Boxes {
+    /// The folder browser's path field, New Folder, its name field and Make, Cancel and Open, and
+    /// a crumb by its folder ("/" for the box's own name) (storylines).
+    package static let browserPath = browser.part(.field)
+    package static let browserNewFolder = browser.part(.add)
+    package static let browserName = StoryID(.titlebar, "boxes.browser.name")
+    package static let browserMake = browser.part(.done)
+    package static let browserCancel = browser.part(.cancel)
+    package static let browserOpen = browser.part(.open)
+    package static func browserCrumb(_ path: String) -> StoryID { StoryID(.titlebar, "boxes.browser.crumb", key: path) }
+    /// The Welcome's Open Folder… (storylines).
+    package static let welcomeOpen = StoryID(.welcome, "openfolder")
 }

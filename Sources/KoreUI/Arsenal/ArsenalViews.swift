@@ -44,7 +44,7 @@ struct ArsenalTitlebarButton: View {
                     .contentShape(RoundedRectangle(cornerRadius: Radius.control))
             }
             .onHover { hovered.value = $0 }
-            .help("Arsenal · \(tier.title)")
+            .tip("Arsenal · \(tier.title)")
             .accessibilityLabel("Arsenal")
             .accessibilityValue(tier.title)
             .storyID(StoryID.Titlebar.arsenal)
@@ -71,6 +71,6 @@ struct RefusalSettings: View {
                 .accessibilityLabel("Switch models when flagged")
                 .storyID(StoryID.Composer.refusalSwitch, press: { fallback.on.toggle() })
         }
-        .help("A turn the model's safeguards refuse goes on with an earlier model, as the CLI picks")
+        .tip("A turn the model's safeguards refuse goes on with an earlier model, as the CLI picks")
     }
 }

@@ -547,6 +547,9 @@ package struct ChatMeta: Codable, Sendable, Equatable {
     package var last: String?
     /// 1.13: live sub-agents and running background commands; omitted when both are 0.
     package var background: ChatBackground?
+    /// The chat's CLI session, once it has one (the id its History row has): a phone pins a chat
+    /// by it, since a Mac's chat ids are new each launch. Omitted before the first turn.
+    package var sessionId: String?
 
     /// `last`'s longest, in characters.
     package static let lastCap = 120

@@ -321,15 +321,44 @@ object Markdown {
     }
 
     /**
-     * A line that ends a paragraph: any other block's first line. An ordered list interrupts only
-     * from 1, and an empty item not at all (so "2024. was a year" stays text).
+     * A line that ends a paragraph: any other block's first line. An empty item never does. An
+     * ordered list from 1 does (CommonMark); from any other number, as writers number a list on
+     * from an earlier one ("**B. The checker**" then "5."), only where it plainly is one: under a
+     * lead (a line all in bold, or ending in a colon), or when the next line goes on counting
+     * ("5." then "6."). A year or version that wraps to a line's start stays text. The Mac's
+     * transcript reads it the same (`MarkdownParser.startsBlock`).
      */
     private fun startsBlock(lines: List<Line>, i: Int): Boolean {
         val s = lines[i].text
         if (fence(s) != null || heading(s) != null || isRule(s) || isQuote(s) || isTableStart(lines, i)) return true
         val marker = listMarker(s) ?: return false
-        return marker.content.isNotEmpty() && (!marker.ordered || marker.number == 1)
+        if (marker.content.isEmpty()) return false
+        if (!marker.ordered || marker.number == 1) return true
+        return leadsList(lines, i) || countsOn(lines, i, marker)
     }
+
+    /** The line above [i] reads as a list's lead: wholly bold ("**B. The checker**"), or ending in a colon. */
+    private fun leadsList(lines: List<Line>, i: Int): Boolean {
+        if (i - 1 < 0) return false
+        val above = lines[i - 1].text.trim(' ', '\t')
+        if (above.endsWith(":")) return true
+        for (mark in listOf("**", "__")) {
+            if (above.length > mark.length * 2 && above.startsWith(mark) && above.endsWith(mark) &&
+                !above.substring(mark.length, above.length - mark.length).contains(mark)
+            ) return true
+        }
+        return false
+    }
+
+    /** The line after [i] is the next item of the same list: its number one more, its delimiter the same. */
+    private fun countsOn(lines: List<Line>, i: Int, marker: Marker): Boolean {
+        if (i + 1 >= lines.size) return false
+        val next = listMarker(lines[i + 1].text) ?: return false
+        if (!next.ordered || next.content.isEmpty() || next.number != marker.number + 1) return false
+        return delimiter(lines[i].text) == delimiter(lines[i + 1].text)
+    }
+
+    private fun delimiter(s: String): Char? = trimLeading(s).dropWhile { it in '0'..'9' }.firstOrNull()
 
     private fun isTableStart(lines: List<Line>, i: Int): Boolean {
         if (i + 1 >= lines.size || !lines[i].text.contains('|')) return false

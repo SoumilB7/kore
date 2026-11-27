@@ -22,6 +22,12 @@ package enum StorylineHost {
         // Before anything reads them: the run's own Application Support, Logs and Caches, never
         // the owner's (the app's launch work prunes, migrates and forgets in them).
         KoreFolders.place(options.folders)
+        // Kore's NSApp, as the app has it; any Objective-C exception AppKit catches and goes on
+        // from fails the step it came in, with where it was thrown. Not by AppKit's
+        // NSApplicationCrashOnExceptions: with that on, windows scroll otherwise than in the app
+        // (OpenedChatLandsAtEndResized, 2026-11-24).
+        KoreApplication.install()
+        KoreApplication.reported = { Runner.exceptionReported($0) }
         AgentGrants.install()
         if options.list {
             for story in Runner.discover() {
@@ -35,10 +41,13 @@ package enum StorylineHost {
         // file to open: a flag without a value (`--real-input --cassettes <dir>`) pairs with
         // the next flag and leaves that one's value over. Launched to open a file, the app
         // shows no window, so the welcome window never hands over the means to open a folder's.
-        UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": false])
+        // A string: AppKit compares it as one, and a Bool here threw in `finishLaunching`.
+        UserDefaults.standard.register(defaults: ["NSTreatUnknownArgumentsAsOpen": "NO"])
         // The app's own story registry runs only under a host.
         StoryHost.installed = true
         StorylineSeams.events = { chat, event in Runner.current?.record(chat, event) }
+        // Before anything can copy: the owner's clipboard is never written.
+        GeneralPasteboardGuard.install()
         // A run happens out of sight unless it drives the real pointer.
         if !options.flags.realInput { OffscreenWindows.install() }
         let runner = Runner(selection: options.selection, flags: options.flags, out: options.out)
@@ -75,6 +84,10 @@ package enum StorylineHost {
                 case "--tag": selection.tags = Set((args.next() ?? "").split(separator: ",").map { Tag(String($0)) })
                 case "--name": selection.names = Set((args.next() ?? "").split(separator: ",").map(String.init))
                 case "--provider": selection.provider = args.next()
+                case "--drop": flags.drop = true
+                case "--help", "-h":
+                    print("kore-storylines --tag T | --name A,B | --list [--provider claude|codex] [--size WxH] [--out DIR] [--drop]")
+                    exit(2)
                 case "--list": list = true
                 case "--out": out = URL(fileURLWithPath: args.next() ?? out.path, isDirectory: true)
                 case "--cli": flags.cli = args.next() == "process" ? .process : .scripted
@@ -115,7 +128,8 @@ package enum StorylineHost {
 @MainActor
 enum OffscreenWindows {
     /// Below and left of any arrangement of displays.
-    static let origin = NSPoint(x: -30_000, y: -30_000)
+    /// Its own stretch per process: parallel runs' windows never cover each other.
+    static let origin = NSPoint(x: -30_000 - CGFloat(ProcessInfo.processInfo.processIdentifier % 64) * 3_000, y: -30_000)
     /// Windows let onto a screen (the energy bench's transparent "front" window).
     static var allowed: Set<ObjectIdentifier> = []
 

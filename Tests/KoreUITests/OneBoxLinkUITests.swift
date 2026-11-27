@@ -75,7 +75,7 @@ struct OneBoxLinkUITests {
         defer { second.windowClosed() }
 
         // A paired Mac folder: its cue and its History, on the same link.
-        PairedBox.pairFor = { _ in SyncPair(mac: "/tmp/kore-onelink-mac", alias: alias, box: PairedBoxTests.boxFolder) }
+        PairedBox.pairFor = { $0.standardizedFileURL.path == "/tmp/kore-onelink-mac" ? SyncPair(mac: "/tmp/kore-onelink-mac", alias: alias, box: PairedBoxTests.boxFolder) : nil }
         defer { PairedBox.pairFor = { SyncPairs.pair(mac: $0.standardizedFileURL.path) } }
         let folderWindow = Workspace(folder: URL(fileURLWithPath: "/tmp/kore-onelink-mac"), restore: false)
         let paired = try #require(folderWindow.paired)

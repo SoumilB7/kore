@@ -60,6 +60,7 @@ final class WelcomeOwnCueBox: ChatStoryline {
             OwnCueStory.Box(),
             ShowWelcome(),
             OwnCueStory.Gone(box: nil),
+            DriveNetBoard.inWelcome(StoryID.Boxes.place(OwnCueStory.box)),
             Do("Stand the Welcome on the box") { _ in
                 guard let welcome = DevicesFromWelcome.welcome, let press = StoryRegistry.entry(StoryID.Boxes.place(OwnCueStory.box).raw, in: welcome)?.press else {
                     throw StoryFailure.elementNotFound(StoryID.Boxes.place(OwnCueStory.box).raw, nearby: StoryRegistry.nearest(to: "boxes"))

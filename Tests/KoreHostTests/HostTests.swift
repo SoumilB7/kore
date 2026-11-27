@@ -24,7 +24,7 @@ final class HostRig {
             "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
         ])
         try HostConfig(folders: [folder.path]).save(paths.config)
-        host = HostDaemon(paths: paths)
+        host = HostDaemon.forTest(paths: paths)
         stubSessions()
     }
 
@@ -37,7 +37,7 @@ final class HostRig {
 
     func restart() {
         host.stop()
-        host = HostDaemon(paths: paths)
+        host = HostDaemon.forTest(paths: paths)
         stubSessions()
     }
 
@@ -218,7 +218,7 @@ struct HostTests {
         defer { rig.finish() }
         try rig.host.start()
         #expect(HostLock.held(rig.paths.lock))
-        let second = HostDaemon(paths: rig.paths)
+        let second = HostDaemon.forTest(paths: rig.paths)
         #expect(throws: HostLockError.self) { try second.start() }
         second.stop()
         // The first still listens, on the same socket, with its pid file.
@@ -232,7 +232,7 @@ struct HostTests {
         // Once it stops, the lock is free again.
         rig.host.stop()
         #expect(!HostLock.held(rig.paths.lock))
-        let third = HostDaemon(paths: rig.paths)
+        let third = HostDaemon.forTest(paths: rig.paths)
         try third.start()
         third.stop()
     }
@@ -403,6 +403,25 @@ struct HostTests {
         let back = try #require(rig.host.chat(hc.id))
         #expect(HostMeta.meta(back, raise: true).controls?.contextUsed == 30_000)
         #expect(HostMeta.meta(back, raise: true).controls?.effort == "high")
+    }
+
+    /// Two boxes in one process (only ever so in tests): neither's list reaches the other's chats.
+    @Test func aBoxsModelListIsItsOwn() async throws {
+        let (mine, theirs) = (try HostRig(), try HostRig())
+        defer { mine.finish(); theirs.finish() }
+        let backend = StandIn()
+        mine.host.services.backend = { _, _ in backend }
+        theirs.host.services.backend = { StateCLI($1) }
+        let hc = try #require(mine.host.newChat(folder: mine.folder.path, provider: "claude", modelId: "haiku"))
+        _ = mine.host.apply(.send(chatId: hc.id, text: "hi"), id: "1", control: .act) { _ in }
+        try await until { hc.entries.contains { $0.kind == .answer } }
+        let models = [ModelOption(id: "haiku", name: "Haiku", resolved: "haiku", efforts: ["low"]), ModelOption(id: "other", name: "Other", resolved: "other", efforts: ["low"])]
+        backend.sink.yield(.controlsLoaded(src.ChatControls(models: models, model: "haiku", effort: "low", commands: [])))
+        try await until { mine.host.clis.first?.models.count == 2 }
+        let other = try #require(theirs.host.newChat(folder: theirs.folder.path, provider: "claude", modelId: nil))
+        _ = theirs.host.apply(.send(chatId: other.id, text: "hi"), id: "2", control: .act) { _ in }
+        try await until { theirs.host.clis.first?.models.map(\.id) == ["big", "tiny"] }
+        #expect(mine.host.clis.first?.models.map(\.id) == ["haiku", "other"])
     }
 
     @Test func watchGrantsCantAct() throws {

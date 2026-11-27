@@ -73,13 +73,13 @@ let package = Package(
         // kore-host's calls Swift can't make (variadic ones): huge pages off on Linux,
         // and its pseudo-terminals (`forkpty`, `TIOCSWINSZ`, `pidfd_open`).
         .target(name: "KoreHostSys", linkerSettings: [.linkedLibrary("util", .when(platforms: [.linux]))]),
-        .executableTarget(name: "kore-host", dependencies: ["KoreHost", "LinkProtocol"], swiftSettings: releaseForSize),
+        .executableTarget(name: "kore-host", dependencies: ["KoreHost", "LinkProtocol", "KoreNet"], swiftSettings: releaseForSize),
         .executableTarget(name: "Kore", dependencies: ["KoreUI", "KoreCore", "KoreLink"], swiftSettings: releaseForSize),
         .executableTarget(name: "kore-cli", dependencies: ["KoreCore"], swiftSettings: releaseForSize),
         // The `kore` command in Kore.app (Contents/Helpers/kore): the reads over Kore's agent
         // channel (`z-docs/agent-protocol.md`) and `kore mcp`; opening and `kore setup` stay the
         // zsh script's. Foundation only, so it stays small and starts fast.
-        .executableTarget(name: "kore-command", dependencies: ["AgentTools"], swiftSettings: releaseForSize),
+        .executableTarget(name: "kore-command", dependencies: ["AgentTools", "KoreNet"], swiftSettings: releaseForSize),
         // The `kore_app` tools as an MCP server lists them, and the stdio server: one list for
         // `kore mcp` on the Mac and `kore-host mcp` on a box. Foundation only.
         .target(name: "AgentTools", swiftSettings: releaseForSize),
@@ -107,7 +107,7 @@ let package = Package(
                 "KoreHostSys",
             ]),
         .testTarget(name: "KoreHostTests", dependencies: ["KoreHost", "AgentTools", "HostClient", "LinkProtocol", "src", "KoreCore", "kore-host", "KoreTrust", "Tailnet", "KoreNet"]),
-        .testTarget(name: "HostClientTests", dependencies: ["HostClient", "KoreHost", "LinkProtocol", "src", "KoreCore", "KoreTrust", "Tailnet", "KoreNet", "AgentTools"]),
+        .testTarget(name: "HostClientTests", dependencies: ["HostClient", "KoreHost", "LinkProtocol", "src", "KoreCore", "KoreTrust", "Tailnet", "KoreNet", "AgentTools", "kore-command"]),
         // KoreNet end to end in one process: the real Mac stack, real kore-host daemons and an
         // emulated phone over a shared in-memory tailnet, played through many event orders.
         .testTarget(

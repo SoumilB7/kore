@@ -37,7 +37,7 @@ struct ResetSendButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(since == nil ? "Send at \(time), when the limit resets\nKeeps the Mac awake until then" : "Sends at \(time) · click to take it back")
+        .tip(since == nil ? "Send at \(time), when the limit resets\nKeeps the Mac awake until then" : "Sends at \(time) · click to take it back")
         .accessibilityLabel(Text(since == nil ? "Send when the limit resets" : "Waiting to send"))
         .accessibilityValue(Text(time))
         .storyID(StoryID.Composer.sendAtReset, press: press)

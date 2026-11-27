@@ -722,6 +722,8 @@ package final class HostNet {
         if case .appended(let dropped)? = session.nodeKeyAppend {
             HostJournal.audit("node-key", ["device": id, "dropped": dropped == nil ? nil : "1"])
         }
+        // A pipe's own session: its ticket, then rsync's bytes, off the main thread (`HostPipes`).
+        if peer.service == "pipe" { return host.pipes.serve(session, device: peer.record.id) }
         let wire = NetLinkWire(session)
         host.accepted(wire, device: peer.record, peer: verified, route: shake.route)
     }

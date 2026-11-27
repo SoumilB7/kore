@@ -168,7 +168,7 @@ final class OpenedMessageView: NSScrollView {
         }
         guard monitor == nil else { return }
         // A press anywhere outside its box closes it, once the press has gone where it was going.
-        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+        monitor = WindowEvents.monitor([.leftMouseDown, .rightMouseDown]) { [weak self] event in
             guard let self, let window = self.window, event.window === window, let content = window.contentView else { return event }
             let point = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
             if !self.box.value.contains(point) { self.closeSoon() }

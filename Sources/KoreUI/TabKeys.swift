@@ -3,9 +3,10 @@ import SwiftUI
 
 /// A key the folder window's tabs take, as a Mac app's tabs do (Safari, Terminal): ⌘W closes
 /// the tab, ⌃⇥ and ⌃⇧⇥ show the next and previous, ⌘1–8 that tab and ⌘9 the last; and ⌘,
-/// opens the chat's Account popup, Kore's settings being in the / menu; ⌥⌘K the chat's Arsenal.
+/// opens the chat's Account popup, Kore's settings being in the / menu; ⌥⌘K the chat's Arsenal;
+/// ⌘V outside a text field, a copied chat as a tab here.
 enum TabKey: Equatable {
-    case close, reopen, next, previous, number(Int), account, arsenal
+    case close, reopen, next, previous, number(Int), account, arsenal, paste
     /// Esc, with no keys held: lets go of the picked tabs, when there are.
     case escape
 
@@ -27,6 +28,7 @@ enum TabKey: Equatable {
         guard flags == .command, let key = characters?.lowercased() else { return nil }
         if key == "w" { return .close }
         if key == "," { return .account }
+        if key == "v" { return .paste }
         if let n = Int(key), (1...9).contains(n) { return .number(n) }
         return nil
     }
@@ -44,7 +46,7 @@ struct TabKeys: ViewModifier {
             .onAppear {
                 guard monitor.value == nil else { return }
                 let workspace = workspace
-                monitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                monitor.value = WindowEvents.monitor(.keyDown) { event in
                     guard let window = workspace.window, event.window === window,
                         let key = TabKey.of(event.charactersIgnoringModifiers, keyCode: event.keyCode, modifiers: event.modifierFlags)
                     else { return event }
@@ -59,6 +61,11 @@ struct TabKeys: ViewModifier {
                     case .number(let n): workspace.selectNumber(n)
                     case .account: workspace.openAccount()
                     case .arsenal: if !event.isARepeat { workspace.toggleArsenal() }
+                    case .paste:
+                        // Only outside text, with no popup or question over the window.
+                        guard ChatPasting.pastesOnKey(window.firstResponder, in: window), OptionsMenu.shared.items.isEmpty, !workspace.hasOverlay
+                        else { return event }
+                        if !event.isARepeat { ChatPasting.paste(into: workspace) }
                     case .escape:
                         // Only picked tabs, and no popup over them (its Esc closes it first).
                         guard !workspace.selection.isEmpty, OptionsMenu.shared.items.isEmpty, workspace.groupEdit == nil, !workspace.hasOverlay else { return event }

@@ -54,7 +54,7 @@ struct ComposerPopup<Content: View>: View {
             .onChange(of: chat.draft) { close() }
             .onChange(of: chat.attachments.count) { close() }
             .onAppear {
-                monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { handle($0) }
+                monitor.value = WindowEvents.monitor([.leftMouseDown, .rightMouseDown, .keyDown]) { handle($0) }
             }
             .onDisappear {
                 if let m = monitor.value { NSEvent.removeMonitor(m) }

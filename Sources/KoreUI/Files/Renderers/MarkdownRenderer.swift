@@ -171,7 +171,7 @@ private struct MarkdownFileView: View {
         } else if StoryHost.installed {
             TranscriptSelection.opened.append(url)
         } else {
-            NSWorkspace.shared.open(url)
+            StoryHost.open(url)
         }
     }
 
@@ -330,7 +330,7 @@ private struct MarkdownImage: View {
                     .interpolation(.high)
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: image.size.width, alignment: .leading)
-                    .help(alt)
+                    .tip(alt)
             } else if tried.value, !alt.isEmpty {
                 Text(alt).font(TextStyle.label).foregroundStyle(Theme.tertiary)
             } else {

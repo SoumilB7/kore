@@ -23,7 +23,14 @@ class CardPicks {
         if (!multiple) chosen[qid]?.clear()
     }
 
+    /** A multi-select's typed answer unticked: its words stay in the field but aren't sent. */
+    fun unpickOther(qid: String) { other.remove(qid) }
+
     fun on(qid: String, label: String) = chosen[qid]?.contains(label) == true
+
+    /** A question has its answer, as the Mac's: something picked or typed, and no typed answer left empty. */
+    fun answered(qid: String, typed: String?) =
+        if (qid in other) !typed.isNullOrBlank() else chosen[qid]?.isNotEmpty() == true
 
     /** Each question's picks, then its words while Other is picked. */
     fun answers(typed: Map<String, String>): Map<String, List<String>> = LinkedHashMap<String, List<String>>().apply {

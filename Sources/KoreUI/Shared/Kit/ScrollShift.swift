@@ -32,9 +32,137 @@ final class ScrollShift: ObservableObject {
         // A live scroll is the reader's: the trackpad, the wheel's momentum, the scroller dragged.
         liveObservers = [NSScrollView.willStartLiveScrollNotification, NSScrollView.didLiveScrollNotification].map { name in
             NotificationCenter.default.addObserver(forName: name, object: scroll, queue: nil) { [weak self] _ in
-                MainActor.assumeIsolated { self?.readerInput() }
+                MainActor.assumeIsolated {
+                    self?.readerInput()
+                    self?.claim()
+                }
             }
         }
+        seenY = scroll.contentView.bounds.minY
+        scroll.contentView.postsBoundsChangedNotifications = true
+        liveObservers.append(
+            NotificationCenter.default.addObserver(forName: NSView.boundsDidChangeNotification, object: scroll.contentView, queue: nil) { [weak self] _ in
+                MainActor.assumeIsolated { self?.clipMoved() }
+            })
+        if ScrollLog.on { watchClip(scroll) }
+    }
+
+    // MARK: SwiftUI's target, aimed at once more
+
+    /// SwiftUI keeps a `scrollTo`'s target past its landing, and aims at it once more as it takes
+    /// up the first move after it: the reader's, undone (a wheel's notch, a page, a whole drag of
+    /// the scroll bar lost). From a scroll of Kore's (`aim`) till the reader's first moves are
+    /// taken up, their move is put back on the place aimed at, in the same pass.
+    private var aimed = false
+    /// The reader's moves since: from where, to where, and when the first was made.
+    private var reader: (from: CGFloat, to: CGFloat, at: Date)?
+    /// The clip's last move, till the reader's input claims it (AppKit says so after the move).
+    private var change: (from: CGFloat, to: CGFloat)?
+    /// The reader's input said before its move (a wheel without phases, a key): it claims the
+    /// next move until then.
+    private var due = Date.distantPast
+    /// Where SwiftUI has the view (its geometry) against the reader's move, before AppKit's clip
+    /// is taken there.
+    private var aiming: CGFloat?
+    private var seenY: CGFloat?
+    private var ours = false
+    /// Whether the reader's move by this much stays: not one within a followed end's slack.
+    var readerKeeps: ((CGFloat) -> Bool)?
+    /// The reader moved the view by this much.
+    var onReaderMoved: ((CGFloat) -> Void)?
+    private static let takenUp: TimeInterval = 0.5
+
+    /// A scroll of Kore's goes through SwiftUI now.
+    func aim() {
+        aimed = true
+        (reader, change, aiming) = (nil, nil, nil)
+    }
+
+    private func claim() {
+        guard let change else { return }
+        self.change = nil
+        claim(change)
+    }
+
+    private func claim(_ move: (from: CGFloat, to: CGFloat)) {
+        onReaderMoved?(move.to - move.from)
+        guard aimed else { return }
+        if let reader, abs(reader.to - move.from) < 1.5 {
+            self.reader?.to = move.to
+        } else {
+            reader = (move.from, move.to, Date())
+        }
+    }
+
+    private func clipMoved() {
+        guard let clip = scrollView?.contentView else { return }
+        let y = clip.bounds.minY
+        let was = seenY ?? y
+        seenY = y
+        guard abs(y - was) > 0.5, !ours, !holding, !zoomAdjusting else { return }
+        if Date() < due {
+            due = .distantPast
+            return claim((was, y))
+        }
+        guard aimed, let reader else {
+            change = (was, y)
+            return
+        }
+        guard Date() < reader.at + Self.takenUp else {
+            aimed = false
+            return
+        }
+        let by = reader.to - reader.from
+        guard abs(y - reader.from) < 1.5 || aiming.map({ abs(y - $0) < 1.5 }) ?? false, abs(by) > 1, readerKeeps?(by) ?? false else {
+            change = (was, y)
+            return
+        }
+        aimed = false
+        ScrollLog.write("reader-kept", "by=\(ScrollLog.d(by)) from=\(ScrollLog.n(y))")
+        _ = self(by)
+    }
+
+    /// SwiftUI's geometry has the view at `offset`: against the reader's move and not where
+    /// AppKit's clip is, it's aiming at the target again.
+    func laidOut(at offset: CGFloat) {
+        guard aimed, let reader, let clip = scrollView?.contentView.bounds.minY, abs(offset - clip) > 1.5 else { return }
+        let by = reader.to - reader.from
+        guard (offset - reader.to) * by < 0, abs(offset - reader.to) >= abs(by) / 2 else { return }
+        aiming = offset
+    }
+
+    // MARK: The scroll log (`ScrollLog`)
+
+    private var clipSeen: (y: CGFloat, doc: CGFloat)?
+
+    /// Every move of the clip and every new document height, whoever made it.
+    private func watchClip(_ scroll: NSScrollView) {
+        let clip = scroll.contentView
+        clip.postsBoundsChangedNotifications = true
+        scroll.documentView?.postsFrameChangedNotifications = true
+        ScrollLog.write("attach", "doc=\(ScrollLog.n(scroll.documentView?.frame.height ?? 0)) y=\(ScrollLog.n(clip.bounds.minY))")
+        clipSeen = nil
+        let names: [(NSView?, Notification.Name)] = [(clip, NSView.boundsDidChangeNotification), (scroll.documentView, NSView.frameDidChangeNotification)]
+        for (view, name) in names {
+            guard let view else { continue }
+            liveObservers.append(
+                NotificationCenter.default.addObserver(forName: name, object: view, queue: nil) { [weak self] _ in
+                    MainActor.assumeIsolated { self?.logClip() }
+                })
+        }
+    }
+
+    private func logClip() {
+        guard let scroll = scrollView, let document = scroll.documentView else { return }
+        let y = scroll.contentView.bounds.minY
+        let doc = document.frame.height
+        let was = clipSeen
+        clipSeen = (y, doc)
+        guard abs(y - (was?.y ?? .nan)) > 0.5 || abs(doc - (was?.doc ?? .nan)) > 0.5 else { return }
+        ScrollLog.write(
+            "clip",
+            "y=\(ScrollLog.n(y)) dy=\(ScrollLog.d(y - (was?.y ?? y))) doc=\(ScrollLog.n(doc)) ddoc=\(ScrollLog.d(doc - (was?.doc ?? doc))) in=\(readerInputs)"
+                + (holding ? " by=hold" : ""))
     }
 
     // MARK: The reader's own input
@@ -52,7 +180,13 @@ final class ScrollShift: ObservableObject {
     isolated deinit { liveObservers.forEach(NotificationCenter.default.removeObserver) }
 
     /// A move of `scroll` made for the reader (the navigation bench's, standing in for the scroll bar).
-    static func readerMoved(_ scroll: NSScrollView) { known.object(forKey: scroll)?.readerInput() }
+    static func readerMoved(_ scroll: NSScrollView) { known.object(forKey: scroll)?.inputDue() }
+
+    /// The reader's input, its move still to come.
+    private func inputDue() {
+        readerInput()
+        due = Date() + 0.1
+    }
 
     private static var inputMonitor: Any?
     /// Home, Page Up, End, Page Down, ↓, ↑, space: keys a scroll view takes to move.
@@ -94,7 +228,7 @@ final class ScrollShift: ObservableObject {
         }
         var scroll = view as? NSScrollView ?? view?.enclosingScrollView
         while let current = scroll {
-            if let shift = known.object(forKey: current) { return shift.readerInput() }
+            if let shift = known.object(forKey: current) { return shift.inputDue() }
             scroll = current.enclosingScrollView
         }
     }
@@ -172,6 +306,9 @@ final class ScrollShift: ObservableObject {
         let clip = scroll.contentView
         var origin = clip.bounds.origin
         origin.y += document.isFlipped ? dy : -dy
+        ScrollLog.write("shift", "dy=\(ScrollLog.d(dy))")
+        ours = true
+        defer { ours = false }
         clip.scroll(to: origin)
         scroll.reflectScrolledClipView(clip)
         return true
@@ -254,6 +391,7 @@ final class ScrollShift: ObservableObject {
         }
         let origin = clip.constrainBoundsRect(place).origin
         if abs(origin.y - clip.bounds.minY) > 0.5 {
+            ScrollLog.write("hold-keep", "place=\(held.place) from=\(ScrollLog.n(clip.bounds.minY)) to=\(ScrollLog.n(origin.y))")
             holding = true
             defer { holding = false }
             clip.scroll(to: origin)
@@ -273,6 +411,9 @@ final class ScrollShift: ObservableObject {
         place.origin.y = end - place.height
         let origin = clip.constrainBoundsRect(place).origin
         guard abs(origin.y - clip.bounds.minY) > 0.5 else { return false }
+        ScrollLog.write("pin-end-native", "end=\(ScrollLog.n(end)) from=\(ScrollLog.n(clip.bounds.minY)) to=\(ScrollLog.n(origin.y))")
+        ours = true
+        defer { ours = false }
         clip.scroll(to: origin)
         scroll.reflectScrolledClipView(clip)
         return true

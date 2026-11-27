@@ -11,15 +11,28 @@ enum TerminalHistory {
     private static let faint = "\u{1B}[2m", bold = "\u{1B}[1m", plain = "\u{1B}[0m"
 
     static func text(_ command: ActiveCommand, tail: OutputTail?) -> String {
-        var out = faint + "$" + plain + " " + pretty(command) + plain + "\r\n"
+        var out = head(command)
         if let tail {
-            if tail.truncated { out += faint + "…" + plain + "\r\n" }
+            if tail.truncated { out += cut }
             for line in tail.lines { out += line + "\r\n" }
         } else {
             out += faint + "Output is no longer available" + plain + "\r\n"
         }
         if let status = status(command) { out += faint + status + plain + "\r\n" }
         return out
+    }
+
+    /// Its prompt line: `$` and the command, coloured.
+    static func head(_ command: ActiveCommand) -> String {
+        faint + "$" + plain + " " + pretty(command) + plain + "\r\n"
+    }
+
+    /// Above output kept from its end only.
+    static let cut = faint + "Earlier output cut" + plain + "\r\n"
+
+    /// Its exit line, faint, once it has ended.
+    static func statusLine(_ command: ActiveCommand) -> String? {
+        status(command).map { faint + $0 + plain + "\r\n" }
     }
 
     /// The command as typed, without control bytes; continuation lines indented as zsh shows them.

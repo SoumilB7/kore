@@ -140,7 +140,7 @@ extension Workspace {
         if wanted == nil, !cap(chat.controls.mode) {
             wanted = capped.max { Chat.modeLevel($0.id) < Chat.modeLevel($1.id) }
         }
-        if let wanted, wanted.id != chat.controls.mode { chat.setMode(wanted.id, remember: false) }
+        if let wanted, wanted.id != chat.controls.mode { chat.setMode(wanted.id, remember: false, raises: false) }
         if plan { chat.setPlanMode(true) }
         return .success(chat)
     }
@@ -208,15 +208,19 @@ extension Workspace {
         guard !capped.isEmpty else {
             return .failure(.init("Only you can open a \(provider.name) chat from this one: its lowest mode does more on its own than \(caller.controls.activeMode.label)."))
         }
+        // No freer than the caller from its first start: its history may end higher, and its
+        // replay never takes it there (`ModeCeilings`, here or on the box); the user's pick still can.
+        let ceiling = capped.map(\.level).max().map { max($0, 1) }
         let chat: Chat
         if let box {
             // On the box, as its History opens it (a closed chat back on the box, or a session its CLI keeps).
-            guard let shown = await openBoxSession(summary, quiet: quiet) else {
+            guard let shown = await openBoxSession(summary, quiet: quiet, ceiling: ceiling) else {
                 return .failure(.init("\(NodeNames.name(box.alias)) didn't open that chat."))
             }
             if !shown.opened { return .success((shown.chat, false)) }
             chat = shown.chat
         } else {
+            if let ceiling { ModeCeilings.put(min(ModeCeilings.at(summary.id) ?? .max, ceiling), for: summary.id) }
             if quiet { openQuietly(summary) } else { open(summary) }
             guard let opened = tabs.first(where: { $0.chat?.sessionId == summary.id && $0.agent == nil })?.chat else {
                 return .failure(.init("Kore couldn't open that chat."))
@@ -226,7 +230,7 @@ extension Workspace {
         chat.arsenalByAgent = true
         let opened = chat.arsenalRank
         if !Chat.noFreer(opened.id, unreviewed: opened.unreviewed, than: rank.id, unreviewed: rank.unreviewed), let mode = capped.max(by: { Chat.modeLevel($0.id) < Chat.modeLevel($1.id) }) {
-            chat.setMode(mode.id, remember: false)
+            chat.setMode(mode.id, remember: false, raises: false)
         }
         return .success((chat, true))
     }

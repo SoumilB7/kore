@@ -181,8 +181,19 @@ extension Workspace {
     /// it had. A model this Mac doesn't have, a login it doesn't have, or an Arsenal tier the chat
     /// can't have here gives way to this Mac's own, said once.
     @discardableResult
-    func land(_ landing: ChatLanding) -> Chat? {
-        open(landing.session)
+    func land(_ landing: ChatLanding, after anchor: ChatTab? = nil) -> Chat? {
+        // Its ceiling before its chat is made: the CLI's first launch is under it. One from a box
+        // is no higher than the mode it comes in (Auto at most), whatever its history ends in.
+        var ceiling = landing.settings.modeCeiling
+        if !landing.alias.isEmpty {
+            let cli = Registry.provider(for: landing.session.agent)
+            let known = landing.settings.mode.flatMap { mode in cli.modes.first { $0.id == mode } }
+            let comes = known.map { LinkPolicy.cappedMode($0.id, provider: cli.id) } ?? cli.modes[0].id
+            let level = max(cli.modes.first { $0.id == comes }?.level ?? 1, 1)
+            ceiling = min(ceiling ?? .max, level)
+        }
+        if let ceiling { ModeCeilings.put(ceiling, for: landing.session.id) }
+        open(landing.session, after: anchor)
         guard let chat = tabs.first(where: { $0.agent == nil && $0.chat?.status.sessionId == landing.session.id })?.chat else { return nil }
         let settings = landing.settings
         if let model = settings.modelId {
@@ -197,7 +208,7 @@ extension Workspace {
         // one last picked on this Mac: a chat brought here isn't raised by coming.
         let known = settings.mode.flatMap { mode in chat.provider.modes.contains { $0.id == mode } ? mode : nil }
         let mode = known.map { landing.alias.isEmpty ? $0 : LinkPolicy.cappedMode($0, provider: chat.provider.id) } ?? chat.provider.modes[0].id
-        if mode != chat.controls.mode { chat.setMode(mode, remember: false) }
+        if mode != chat.controls.mode { chat.setMode(mode, remember: false, raises: false) }
         if let fast = settings.fast { chat.launchFastMode = fast }
         if chat.provider.planToggle != nil, let plan = settings.plan, plan != chat.controls.planMode { chat.setPlanMode(plan) }
         if let allow = settings.planAllow, allow != chat.controls.planAllow { chat.setPlanAllow(allow) }

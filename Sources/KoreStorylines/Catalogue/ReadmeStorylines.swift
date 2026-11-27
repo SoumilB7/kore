@@ -31,6 +31,7 @@ final class ReadmeAccounts: Storyline {
                     CLIProfiles.adopt("claude", try CLIProfiles.prepare("claude"), email: email, workspace: org)
                 }
                 CLIProfiles.activate("claude", nil)
+                story.atFinish { StorylineSeams.loginUsage = nil }
                 StorylineSeams.loginUsage = { cli, id in
                     let login = CLIProfiles.added(cli).first { $0.id == id }
                     let used: (Double, Double) = id == nil ? (64, 31) : (12, 47)

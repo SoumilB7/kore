@@ -4,10 +4,13 @@ import HostClient
 import KoreCore
 import LinkProtocol
 import Observation
+import PDFKit
+import WebKit
 import src
 
-// A chat copied or cut from one window's History and pasted in another's: any folder on this Mac
-// or on a box (link 1.11). The engine is HostClient's `ChatCopies` (a copy under a new session id)
+// A chat copied or cut from one window's History or a tab's right-click, and pasted in another
+// window (its History, a tab's or the strip's right-click, or ⌘V outside a text field): any
+// folder on this Mac or on a box (link 1.11). The engine is HostClient's `ChatCopies` (a copy under a new session id)
 // and, for a cut between this Mac and a box, `ChatMoves` (1.10's release and adopt, owner and gen).
 // The clipboard is app-wide and holds one chat, as ⌘C and ⌘V do: a cut is taken by its paste, a
 // copy stays for the next.
@@ -54,13 +57,16 @@ final class ChatClipboard {
         var cut: Bool
         /// Its transcript on this Mac, when the listing said.
         var known: String?
+
+        /// The chat it is, wherever it's pasted.
+        var key: String { "\(spot)/\(provider)/\(id)" }
     }
 
     private(set) var clip: Clip?
     /// The text pasteboard's count when the chat was copied: text copied after it wins ⌘V in a field.
     @ObservationIgnored private var pasteboardCount = 0
-    /// The system pasteboard's change count (tests count their own).
-    @ObservationIgnored var changeCount: () -> Int = { NSPasteboard.general.changeCount }
+    /// The system pasteboard's change count (tests count their own; a storyline host its own board).
+    @ObservationIgnored var changeCount: () -> Int = { StoryHost.pasteboard.changeCount }
 
     func put(_ clip: Clip) {
         self.clip = clip
@@ -164,6 +170,9 @@ enum ChatPasting {
     /// A box's link by its alias (tests give a stand-in box's).
     static var connection: (String) -> HostConnection = { BoxBinding.connection($0) }
 
+    /// Cuts on their way: their chats.
+    private static var moving: Set<String> = []
+
     // MARK: Clips
 
     /// Copy or Cut on a History row of `workspace`.
@@ -173,18 +182,68 @@ enum ChatPasting {
             ChatClipboard.Clip(spot: spot, id: row.id, provider: Registry.provider(for: row.agent).id, title: row.title, cut: cut, known: row.file?.path))
     }
 
-    /// "Paste Chat" for a window's menus (the + menu, a tab's, a History row's); none while nothing is held.
-    static func menuItems(_ workspace: Workspace) -> [OptionItem] {
+    /// A tab's chat as History lists it: a box chat by its id there, this Mac's by its session.
+    /// Nil for a tab with no chat of its own yet (nothing sent), a sub-agent's, a board, a file.
+    static func clip(of tab: ChatTab, in workspace: Workspace, cut: Bool) -> ChatClipboard.Clip? {
+        guard tab.agent == nil, let chat = tab.chat else { return nil }
+        if let box = chat.services as? BoxChatServices {
+            guard let id = box.chatId else { return nil }
+            return ChatClipboard.Clip(spot: .box(alias: box.connection.alias, folder: box.folder), id: id, provider: chat.provider.id, title: chat.title, cut: cut)
+        }
+        guard let session = chat.status.sessionId else { return nil }
+        // This window's folder, as its History rows say it (a paste back here is a duplicate).
+        return ChatClipboard.Clip(spot: .mac(workspace.folder.path), id: session, provider: chat.provider.id, title: chat.title, cut: cut, known: chat.resumedFile)
+    }
+
+    /// "Copy Chat" and "Cut Chat" for a tab's right-click, as History's Copy and Cut; none for a
+    /// tab that isn't a chat. Off until the chat has something to copy.
+    static func tabItems(_ tab: ChatTab, in workspace: Workspace) -> [OptionItem] {
+        guard tab.agent == nil, tab.chat != nil else { return [] }
+        let can = clip(of: tab, in: workspace, cut: false) != nil
+        return [
+            OptionItem("Copy Chat", enabled: can) { if let clip = clip(of: tab, in: workspace, cut: false) { ChatClipboard.shared.put(clip) } },
+            OptionItem("Cut Chat", enabled: can) { if let clip = clip(of: tab, in: workspace, cut: true) { ChatClipboard.shared.put(clip) } },
+        ]
+    }
+
+    /// "Paste Chat" for a window's menus (the + menu, the strip's, a tab's, a History row's); none
+    /// while nothing is held. `after`: the tab it lands beside (past its group).
+    static func menuItems(_ workspace: Workspace, after: ChatTab? = nil) -> [OptionItem] {
         guard ChatClipboard.shared.clip != nil else { return [] }
-        return [OptionItem("Paste Chat", enabled: workspace.chatPaste == nil, key: "⌘V") { paste(into: workspace) }]
+        return [OptionItem("Paste Chat", enabled: workspace.chatPaste == nil, key: "⌘V") { paste(into: workspace, after: after) }]
+    }
+
+    /// ⌘V in a window with no text field in front (a tab, the transcript, nothing focused) and the
+    /// chat the last thing copied: it's pasted. In a text field, the composer, the editor, a
+    /// terminal or a page, ⌘V stays theirs; text copied since the chat wins there too.
+    static func pastesOnKey(_ responder: NSResponder?, in window: NSWindow) -> Bool {
+        guard ChatClipboard.shared.pastesChat else { return false }
+        return outsideText(responder, in: window)
+    }
+
+    /// No text field has the keys: nothing, the window, the transcript, or SwiftUI's own views.
+    static func outsideText(_ responder: NSResponder?, in window: NSWindow) -> Bool {
+        guard let responder, responder !== window else { return true }
+        if responder is SelectionResponderView { return true }
+        if responder is NSText || responder is NSTextInputClient { return false }
+        guard let view = responder as? NSView else { return false }
+        // A page of its own (HTML, PDF) keeps its keys.
+        var up: NSView? = view
+        while let current = up {
+            if current is WKWebView || current is PDFView { return false }
+            up = current.superview
+        }
+        return true
     }
 
     // MARK: Paste
 
     /// The held chat into `workspace`'s folder, opening there as a new tab. `stop`: a cut of a
     /// working chat stops it first (asked once).
-    static func paste(into workspace: Workspace, stop: Bool = false) {
+    static func paste(into workspace: Workspace, after: ChatTab? = nil, stop: Bool = false) {
         guard let clip = ChatClipboard.shared.clip, workspace.chatPaste == nil else { return }
+        // A cut is one move: a second ⌘V while it's on its way would copy the chat again.
+        guard !clip.cut || !moving.contains(clip.key) else { return }
         let target = workspace.spot
         let held: MovedChat? = if case .mac = clip.spot { ChatPlaces.shared.store.session(clip.id) } else { nil }
         let open: Bool = if case .box(let alias, _) = clip.spot { connection(alias).chats[clip.id] != nil } else { false }
@@ -194,17 +253,17 @@ enum ChatPasting {
             return fail(line, in: workspace)
         case .open:
             ChatClipboard.shared.taken()
-            return land(clip.id, provider: clip.provider, title: clip.title, at: target, in: workspace)
+            return land(clip.id, provider: clip.provider, title: clip.title, at: target, in: workspace, after: after)
         default:
             break
         }
         if clip.cut, !stop, working(clip) {
             let line = ChatPasteLine("“\(clip.title)” is working")
             line.ask = "Stop and move"
-            line.go = { [weak workspace] in
+            line.go = { [weak workspace, weak after] in
                 guard let workspace else { return }
                 workspace.chatPaste = nil
-                paste(into: workspace, stop: true)
+                paste(into: workspace, after: after, stop: true)
             }
             workspace.chatPaste = line
             return
@@ -216,12 +275,16 @@ enum ChatPasting {
             "\(verb) chat to \(target.destination)", done: "\(clip.cut ? "Moved" : "Copied") chat to \(target.destination)", window: workspace.transferKey,
             peer: Self.measuredPeer(from: clip.spot, to: target),
             cancel: { stopper.stop() },
-            retry: { [weak workspace] in
+            retry: { [weak workspace, weak after] in
                 guard let workspace else { return }
                 ChatClipboard.shared.put(clip)
-                paste(into: workspace)
+                paste(into: workspace, after: after)
             })
-        Task { await run(plan, clip, to: target, in: workspace, transfer: transfer, stopper: stopper) }
+        if clip.cut { moving.insert(clip.key) }
+        Task { [weak after] in
+            defer { if clip.cut { moving.remove(clip.key) } }
+            await run(plan, clip, to: target, in: workspace, after: after, transfer: transfer, stopper: stopper)
+        }
     }
 
     /// The box a paste waits on when its bytes are measured as they land: a box's chat pulled to
@@ -253,34 +316,20 @@ enum ChatPasting {
         var kept = ChatSettings()
         if let point = AutoCompactMemory.shared.point(chat: session) { kept.autoCompact = point ?? 0 }
         kept.planAllow = ModeMemory.shared.planAllow(chat: session)
+        kept.modeCeiling = ModeCeilings.at(session)
         kept.arsenal = ArsenalMemory.tier(key: ArsenalMemory.key(cli: provider, session: session))?.rawValue
         kept.draft = Workspace.local(URL(fileURLWithPath: folder))?.keptDraft(cli: provider, session: session) ?? ""
         return kept
     }
 
-    private static func run(_ plan: ChatPastePlan, _ clip: ChatClipboard.Clip, to target: ChatSpot, in workspace: Workspace, transfer: UUID, stopper: Spawn) async {
+    private static func run(_ plan: ChatPastePlan, _ clip: ChatClipboard.Clip, to target: ChatSpot, in workspace: Workspace, after: ChatTab?, transfer: UUID, stopper: Spawn) async {
         // Read before the source's tab closes (a cut stops it first).
         let carried = settings(of: clip)
         // The boxes on each end, linked for the paste.
-        var held: [HostConnection] = []
-        defer { held.forEach { $0.release() } }
-        func end(_ spot: ChatSpot) async -> Result<CopyEnd, MoveFailure> {
-            switch spot {
-            case .mac(let folder): return .success(.mac(folder))
-            case .box(let alias, let folder):
-                let link = connection(alias)
-                link.retain()
-                held.append(link)
-                guard await ChatMoving.online(link) else { return .failure(MoveFailure("Can't reach \(NodeNames.name(alias)) · nothing changed")) }
-                guard var moves = ChatMoving.engine(link) else { return .failure(MoveFailure("\(NodeNames.name(alias)) isn't an SSH alias Kore can use")) }
-                // 1.10's moves (bring, send back, adopt) on the same bar.
-                moves.stopper = stopper
-                moves.progress = { bytes, total in TransferProgress.shared.update(transfer, bytes: bytes, total: total) }
-                return .success(.box(moves, folder: folder))
-            }
-        }
+        let held = Held()
+        defer { held.release() }
         let from: CopyEnd, to: CopyEnd
-        switch (await end(clip.spot), await end(target)) {
+        switch (await end(clip.spot, held: held, transfer: transfer, stopper: stopper), await end(target, held: held, transfer: transfer, stopper: stopper)) {
         case (.success(let a), .success(let b)): (from, to) = (a, b)
         case (.failure(let failure), _), (_, .failure(let failure)): return fail(failure.line, in: workspace, transfer: transfer)
         }
@@ -298,7 +347,7 @@ enum ChatPasting {
             case .success(let made):
                 done(transfer)
                 if made.chatId == nil { ChatCopyMarks.shared.set(made.provider, made.session, mark) }
-                land(made, title: title, rename: plan == .duplicate || made.provider == ProviderDescriptor.codex.id, at: target, in: workspace)
+                land(made, title: title, rename: plan == .duplicate || made.provider == ProviderDescriptor.codex.id, at: target, in: workspace, after: after)
             }
         case .copyThenRemove:
             // The original stops first (its tab here closes), and goes only once the copy is whole.
@@ -312,7 +361,7 @@ enum ChatPasting {
             case .success(let made):
                 ChatClipboard.shared.taken()
                 sourceChanged(clip)
-                land(made, title: clip.title, rename: made.provider == ProviderDescriptor.codex.id, at: target, in: workspace)
+                land(made, title: clip.title, rename: made.provider == ProviderDescriptor.codex.id, at: target, in: workspace, after: after)
                 if let kept { return fail(kept.line, in: workspace, transfer: transfer) }
                 done(transfer)
             }
@@ -362,12 +411,41 @@ enum ChatPasting {
                 sourceChanged(clip)
                 // Kept for its tab before the box window shows it.
                 ChatPlaces.shared.carried(alias: moves.connection.alias, chatId: back.chatId, tier: back.settings.arsenal, whole: true, notes: back.notes)
-                ChatMoving.returned(alias: moves.connection.alias, boxFolder: boxFolder, chatId: back.chatId)
+                ChatMoving.returned(alias: moves.connection.alias, boxFolder: boxFolder, chatId: back.chatId, after: after)
                 if case .failure(let failure) = removed { return fail(failure.line, in: workspace, transfer: transfer) }
                 done(transfer)
             }
         case .open, .refuse:
             break
+        }
+    }
+
+    /// The boxes a paste linked, let go when it ends.
+    @MainActor final class Held {
+        private var links: [HostConnection] = []
+        func hold(_ link: HostConnection) {
+            link.retain()
+            links.append(link)
+        }
+        func release() {
+            links.forEach { $0.release() }
+            links = []
+        }
+    }
+
+    /// One end of a paste: a folder here, or a box's, linked and online.
+    static func end(_ spot: ChatSpot, held: Held, transfer: UUID?, stopper: Spawn) async -> Result<CopyEnd, MoveFailure> {
+        switch spot {
+        case .mac(let folder): return .success(.mac(folder))
+        case .box(let alias, let folder):
+            let link = connection(alias)
+            held.hold(link)
+            guard await ChatMoving.online(link) else { return .failure(MoveFailure("Can't reach \(NodeNames.name(alias)) · nothing changed")) }
+            guard var moves = ChatMoving.engine(link) else { return .failure(MoveFailure("\(NodeNames.name(alias)) isn't an SSH alias Kore can use")) }
+            // 1.10's moves (bring, send back, adopt) on the same bar.
+            moves.stopper = stopper
+            if let transfer { moves.progress = { bytes, total in TransferProgress.shared.update(transfer, bytes: bytes, total: total) } }
+            return .success(.box(moves, folder: folder))
         }
     }
 
@@ -395,26 +473,27 @@ enum ChatPasting {
         if let window { Task { await window.refresh() } }
     }
 
-    /// The pasted chat in a tab of `workspace`, in front.
-    private static func land(_ made: ChatCopy, title: String, rename: Bool, at target: ChatSpot, in workspace: Workspace) {
+    /// The pasted chat in a tab of `workspace`, in front: right after `after` (past its group),
+    /// else where a new tab goes.
+    private static func land(_ made: ChatCopy, title: String, rename: Bool, at target: ChatSpot, in workspace: Workspace, after: ChatTab?) {
         if case .box(let alias, let folder) = target, let chatId = made.chatId {
             // Kept for its tab before the box window shows it.
             ChatPlaces.shared.carried(alias: alias, chatId: chatId, tier: made.settings.arsenal, whole: made.whole, notes: made.notes)
-            return ChatMoving.returned(alias: alias, boxFolder: folder, chatId: chatId)
+            return ChatMoving.returned(alias: alias, boxFolder: folder, chatId: chatId, after: after)
         }
         guard let provider = Registry.provider(made.provider) else { return }
         let session = SessionSummary(id: made.session, agent: provider.historyAgent, title: title, updated: .now)
-        let chat = workspace.land(ChatLanding(session: session, alias: "", settings: made.settings, whole: made.whole, notes: made.notes))
+        let chat = workspace.land(ChatLanding(session: session, alias: "", settings: made.settings, whole: made.whole, notes: made.notes), after: after)
         Task { await workspace.refresh() }
         // Codex keeps a thread's name apart from its rollout, and a duplicate takes "(copy)".
         if rename, let chat { Task { await chat.applyRename(title) } }
     }
 
     /// A cut pasted where it is: it opens.
-    private static func land(_ id: String, provider: String, title: String, at target: ChatSpot, in workspace: Workspace) {
+    private static func land(_ id: String, provider: String, title: String, at target: ChatSpot, in workspace: Workspace, after: ChatTab?) {
         guard let provider = Registry.provider(provider) else { return }
         if case .box(let alias, let folder) = target { return ChatMoving.openBox(BoxPlace(alias: alias, folder: folder), id) }
-        workspace.open(SessionSummary(id: id, agent: provider.historyAgent, title: title, updated: .now))
+        workspace.open(SessionSummary(id: id, agent: provider.historyAgent, title: title, updated: .now), after: after)
     }
 
     private static func done(_ transfer: UUID) { TransferProgress.shared.finish(transfer) }

@@ -76,8 +76,10 @@ struct BoxGlueTests {
         pty.open()
         #expect(await until { pty.ptyId != nil })
         #expect(!pty.busy)
-        pty.input(Data("sleep 1\r".utf8))
+        // Held until it's seen (a fixed-length job could end inside a busy Mac's stall and never be).
+        pty.input(Data("cat\r".utf8))
         #expect(await until { pty.busy })
+        pty.input(Data([4]))
         #expect(await until { !pty.busy })
 
         // A goodbye (Kore quitting, the last window closing) ends the box's shells.

@@ -160,13 +160,34 @@ struct PinchZoomTests {
         #expect(!PinchZoom.isAdjusting(scroll) && scroll.magnification == 1 && writes == 1)
     }
 
+    /// A pinch ended early (a key, a click) leaves its gesture going: the rest of its samples
+    /// are still the pinch's, swallowed, and none reaches AppKit's own magnification. The next
+    /// pinch is a pinch again.
+    @Test func aGestureEndedEarlyKeepsItsLastSamples() {
+        let (window, scroll, _, point) = editor()
+        let pinch = PinchZoom()
+        pinch.attach(window)
+        defer { pinch.detach(); window.contentView = nil }
+        #expect(pinch.receive(0.2, phase: .began, at: point))
+        pinch.cancel(resumeFollowing: false)
+        #expect(scroll.magnification == 1)
+        #expect(pinch.receive(0.1, phase: .changed, at: point))
+        #expect(pinch.receive(0, phase: .ended, at: point))
+        #expect(scroll.magnification == 1)
+        // That gesture is over: an unphased sample after it isn't Kore's.
+        #expect(!pinch.receive(0.1, phase: [], at: point))
+        #expect(pinch.receive(0.2, phase: .began, at: point))
+        #expect(scroll.magnification > 1)
+        #expect(pinch.receive(0, phase: .ended, at: point))
+    }
+
     @Test(arguments: [true, false])
     func unsolicitedNativeScrollsAreHeldOnlyDuringTheGesture(posted: Bool) {
         let (window, scroll, _, point) = editor()
         let clip = scroll.contentView
-        clip.postsBoundsChangedNotifications = posted
         let shift = ScrollShift()
         shift.attach(scroll)
+        clip.postsBoundsChangedNotifications = posted
         var freezes = 0
         shift.onZoomBegin = { _ in freezes += 1 }
         let pinch = PinchZoom()
@@ -269,6 +290,71 @@ struct PinchZoomTests {
         pinch.setActiveTab(first, openTabs: [first, second])
         pinch.completeLayout()
         #expect(scroll.magnification == 1 && abs(scroll.contentView.bounds.minY - 1200) < 0.001)
+    }
+
+    /// A page wider than its view keeps the sideways place its own scroll gave it when a pinch
+    /// ends with nothing magnified (owner, 0.3.10: "I cannot scroll to the right and keep it
+    /// there"), and text starting left of 0 under a gutter keeps its left edge.
+    @Test(arguments: [(inset: CGFloat(0), x: CGFloat(200)), (inset: 50, x: 200), (inset: 50, x: -50)])
+    func aWidePagesOwnSidewaysScrollStays(inset: CGFloat, x: CGFloat) {
+        let (window, scroll, text, point) = editor()
+        // Unwrapped, as the editor is with wrap off: as wide as its longest line.
+        text.isHorizontallyResizable = true
+        text.textContainer?.widthTracksTextView = false
+        text.textContainer?.size = CGSize(width: CGFloat.greatestFiniteMagnitude, height: .greatestFiniteMagnitude)
+        text.maxSize = CGSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
+        text.string = (0..<100).map { "Line \($0), " + String(repeating: "a long line run off the right edge, ", count: 6) }.joined(separator: "\n")
+        if let container = text.textContainer { text.layoutManager?.ensureLayout(for: container) }
+        text.sizeToFit()
+        if inset > 0 {
+            // The editor's line-number gutter: a ruler the text runs under.
+            let ruler = NSRulerView(scrollView: scroll, orientation: .verticalRuler)
+            ruler.ruleThickness = inset
+            scroll.verticalRulerView = ruler
+            scroll.hasVerticalRuler = true
+            scroll.rulersVisible = true
+            window.contentView?.layoutSubtreeIfNeeded()
+        }
+        scroll.contentView.scroll(to: CGPoint(x: x, y: 300))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        #expect(abs(scroll.contentView.bounds.minX - x) < 0.001, "insets \(scroll.contentView.contentInsets.left), x \(scroll.contentView.bounds.minX)")
+        let pinch = PinchZoom(zoom: Zoom(saved: 1, persist: { _ in }))
+        pinch.attach(window)
+        defer { pinch.detach(); window.contentView = nil }
+        #expect(pinch.receive(0, phase: .began, at: point))
+        #expect(pinch.receive(0, phase: .ended, at: point))
+        pinch.completeLayout()
+        #expect(scroll.magnification == 1 && abs(scroll.contentView.bounds.minX - x) < 0.001, "x \(scroll.contentView.bounds.minX), page \(text.frame.width)")
+        // Pinched in and back out: the page's own scroll still holds it, within its bounds.
+        #expect(pinch.receive(0.5, phase: .began, at: point))
+        #expect(pinch.receive(0, phase: .ended, at: point))
+        #expect(pinch.receive(-1, phase: .began, at: point))
+        #expect(pinch.receive(0, phase: .ended, at: point))
+        pinch.completeLayout()
+        let clip = scroll.contentView
+        #expect(scroll.magnification == 1 && clip.constrainBoundsRect(clip.bounds).minX == clip.bounds.minX, "x \(clip.bounds.minX)")
+    }
+
+    /// A page as wide as its view (wrapped text) comes back to its text's left edge after a pinch:
+    /// under the editor's gutter that's left of 0, so no text sits under the gutter.
+    @Test func aWrappedPageUnderAGutterComesBackToItsTextsLeftEdge() {
+        let (window, scroll, _, point) = editor()
+        let ruler = NSRulerView(scrollView: scroll, orientation: .verticalRuler)
+        ruler.ruleThickness = 50
+        scroll.verticalRulerView = ruler
+        scroll.hasVerticalRuler = true
+        scroll.rulersVisible = true
+        window.contentView?.layoutSubtreeIfNeeded()
+        let left = -scroll.contentView.contentInsets.left
+        let pinch = PinchZoom(zoom: Zoom(saved: 1, persist: { _ in }))
+        pinch.attach(window)
+        defer { pinch.detach(); window.contentView = nil }
+        #expect(pinch.receive(0.5, phase: .began, at: point))
+        #expect(pinch.receive(0, phase: .ended, at: point))
+        #expect(pinch.receive(-1, phase: .began, at: point))
+        #expect(pinch.receive(0, phase: .ended, at: point))
+        pinch.completeLayout()
+        #expect(left == -50 && scroll.magnification == 1 && abs(scroll.contentView.bounds.minX - left) < 0.001, "x \(scroll.contentView.bounds.minX)")
     }
 
     /// Left magnified, a page comes back so, where it was; at the natural size meanwhile it's drawn

@@ -43,6 +43,14 @@ struct FileCarryTests {
         #expect(FileCarry.refusal(CarryItem(source: mac, name: "../x"), into: boxFolder) != nil)
     }
 
+    /// Box to box, anything but rsync's 0 goes on over the staged route: A not reaching B is
+    /// rsync's 255 or 12 (outside review, 2026-11-25), A not knowing B a refusal.
+    @Test func onlyACompleteDirectCopySkipsTheStagedRoute() {
+        #expect(FileCarry.landedDirect(.success(0)))
+        for status in [255, 12, 23, 30] { #expect(!FileCarry.landedDirect(.success(status)), "\(status)") }
+        #expect(!FileCarry.landedDirect(.failure(HostRefusal(message: "This box doesn't know that one."))))
+    }
+
     @Test func clashesAreNamedAsFinderNamesThem() {
         let taken: Set<String> = ["a.txt", "a 2.txt", "notes", "a copy.txt", ".env"]
         func free(_ name: String, _ duplicate: Bool) -> String { CopyNames.free(name, duplicate: duplicate) { taken.contains($0) } }

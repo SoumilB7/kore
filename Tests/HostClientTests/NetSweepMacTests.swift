@@ -100,7 +100,7 @@ struct NetSweepMacTests {
             $0.whois["127.0.0.1"] = try! JSONDecoder().decode(
                 TailnetWhoIs.self, from: Data(#"{"Node":{"Key":"nodekey:mac","Name":"mac.tail.ts.net."},"UserProfile":{"ID":7,"LoginName":"me@example.com"}}"#.utf8))
         }
-        let host = HostDaemon(paths: paths)
+        let host = HostDaemon.forTest(paths: paths)
         host.makeTailnet = { boxNet }
         host.netPort = 0
         try host.start()

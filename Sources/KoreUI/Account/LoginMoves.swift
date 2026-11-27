@@ -121,7 +121,7 @@ package final class LoginMoves {
     }
 
     /// Opens a sign-in's page on this Mac (storylines and tests: their own).
-    @ObservationIgnored package var openPage: @MainActor (URL) -> Void = { _ = NSWorkspace.shared.open($0) }
+    @ObservationIgnored package var openPage: @MainActor (URL) -> Void = { StoryHost.open($0) }
     /// Claude's own sign-in on this Mac for one login (nil: main), Claude keeping what it gets.
     @ObservationIgnored package var signInHere: @MainActor (_ cli: String, _ id: String?) -> Void = { cli, id in
         let aim: AccountStore.Aim = CLIProfiles.active(cli) == id ? .active : .login(id)

@@ -22,7 +22,7 @@ enum NetLiveness {
             environment: { NetEnvironment.standard() })
         KoreNetSwitch.shared = net
         // SSH boxes move to KoreNet by themselves (phase 18 §2g); a box's sign-in page opens here.
-        BoxUpgrades.shared.openURL = { NSWorkspace.shared.open($0) }
+        BoxUpgrades.shared.openURL = { StoryHost.open($0) }
         net.upgrades = BoxUpgrades.shared
         // An enrolled box's SSH route carries this Mac's identity, KoreNet on or off.
         HostConnection.sshNet = net
@@ -46,7 +46,11 @@ enum NetLiveness {
         // Woken: links probed, the phones' listener looks again, a failed upgrade tries again.
         wake = LinkWake(center: NSWorkspace.shared.notificationCenter, name: NSWorkspace.didWakeNotification)
         observers.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { _ in
-            MainActor.assumeIsolated { HostConnection.probeAll("activate") }
+            MainActor.assumeIsolated {
+                HostConnection.probeAll("activate")
+                // Back from Terminal (a host key, a key copied there): the boxes waiting on it look again.
+                BoxList.shared.lookAgainOnReturn()
+            }
         })
         observers.append(NotificationCenter.default.addObserver(forName: .koreNodeWillRekey, object: nil, queue: .main) { note in
             guard let old = note.userInfo?["old"] as? String else { return }

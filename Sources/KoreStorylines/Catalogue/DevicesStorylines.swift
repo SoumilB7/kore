@@ -3,6 +3,7 @@ import Foundation
 import HostClient
 import KoreTrust
 import KoreUI
+import Tailnet
 
 // KoreNet's devices on the Mac (phase 18 step 7, korenet-first-connect.html): the network icon,
 // the Devices popup, the Add device window, the Allow card, taking a device offline, and an SSH
@@ -24,13 +25,19 @@ final class DevicesAddPhone: ChatStoryline {
             Self.icon("KoreNet is off", dimmed: true),
             Press(icon),
             WaitForElement(.id(StoryID.Net.panel)),
-            ExpectElement(.id(StoryID.Net.add), .absent),
             Expect("the popup says KoreNet is off") { _ in Devices.shared.picture().net == .off },
-            Press(.id(StoryID.Net.toggle)),
-            Expect("KoreNet on, on a tailnet") { _ in Devices.shared.picture().net == .running },
-            Self.icon("No other devices yet", dimmed: false),
-            WaitForElement(.id(StoryID.Net.add)),
+            // Option B: the switch is the foot's "Kore's tailnet" setting, never the header's.
+            ExpectElement(.id(StoryID.Net.tailnet)),
+            Expect("Kore's tailnet: off") { _ in DevicesWords.tailnetSetting(Devices.shared.picture()) == OwnCue("off", nil) },
+            // The + is there with KoreNet off; Add a phone turns KoreNet on, then opens the window.
             Press(.id(StoryID.Net.add)),
+            WaitForElement(.id(StoryID.Options.panel)),
+            Expect("the +'s two rows, both open with KoreNet off") { _ in
+                StoryID.Options.rows.map(\.title) == ["Add a box", "Add a phone"] && StoryID.Options.rows.allSatisfy(\.enabled)
+            },
+            WaitIdle(), Snapshot("devices-plus-menu"),
+            Press(.id(StoryID.Options.item(1))),
+            Expect("Add a phone turned KoreNet on") { _ in Devices.shared.picture().net == .running },
             WaitForElement(.id(StoryID.Net.countdown)),
             Expect("the Add device window open, the icon's dot accent") { _ in
                 Devices.shared.picture().addOpen(at: Date()) && Devices.shared.look().dot == .accent
@@ -111,11 +118,12 @@ final class DevicesTakeOffline: ChatStoryline {
             Press(.id(StoryID.Net.icon)),
             WaitForElement(.id(StoryID.Net.panel)),
             WaitForElement(phone),
+            // Option B: two-line rows, the green dot on the box only, the settings at the foot.
+            ExpectElement(.id(StoryID.Net.tailnet)),
+            ExpectElement(.id(StoryID.Net.keepBoxes)),
+            WaitIdle(), Snapshot("devices-pane"),
             // The phone, through ⋯'s menu.
-            Press(Locator("Pixel 9's ⋯") { _ in
-                guard let row = Devices.shared.picture().devices.first(where: { $0.name == "Pixel 9" }) else { return .failure(LocatorMiss("no phone", pending: true)) }
-                return .success(StoryID.Net.more(row.id))
-            }),
+            Press(Self.more("Pixel 9")),
             WaitForElement(.id(StoryID.Options.panel)),
             // Rename, Take offline, —, Remove.
             Press(.id(StoryID.Options.item(1))),
@@ -123,14 +131,29 @@ final class DevicesTakeOffline: ChatStoryline {
             Snapshot("devices-taken-offline"),
             Press(Self.part("Pixel 9", .reload)),
             Expect("Pixel 9 back") { _ in Self.detail("Pixel 9") == nil && DevicesStory.phones?.log.last == "online" },
+            // The same through its ⋯: Take offline, then Bring online; and a linked phone's logs.
+            Press(Self.more("Pixel 9")), DriveMenuPick("Take offline"),
+            Expect("⋯ Take offline: Pixel 9 offline") { _ in Self.detail("Pixel 9") == "taken offline" && DevicesStory.phones?.log.last == "offline" },
+            Press(Self.more("Pixel 9")), DriveMenuPick("Bring online"),
+            Expect("⋯ Bring online: Pixel 9 back") { _ in Self.detail("Pixel 9") == nil && DevicesStory.phones?.log.last == "online" },
+            Press(Self.more("Pixel 9")), DriveMenuPick("Get logs"),
+            Expect("⋯ Get logs: its log asked for", found: { _ in DevicesStory.phones?.log.last }) { _ in DevicesStory.phones?.log.last == "logs" },
             // The box: kept offline by every key it goes by, and its link not dialled.
             Press(Self.part("mybox", .stop)),
             Expect("mybox taken offline") { _ in NetPauses.shared.contains("mybox") && Self.detail("mybox") == "taken offline" },
             Expect("never dialled while it is") { _ in HostConnection.isPaused("mybox") },
             Expect("the icon stays quiet for it") { _ in Devices.shared.look().dot == nil },
             Press(Self.part("mybox", .reload)),
-            Expect("mybox back") { _ in !NetPauses.shared.contains("mybox") && Self.detail("mybox") == nil },
+            Expect("mybox back") { _ in !NetPauses.shared.contains("mybox") && Self.detail("mybox") == "Tailscale" },
         ]
+    }
+
+    /// A device row's ⋯, by its name.
+    static func more(_ name: String) -> Locator {
+        Locator("\(name)'s ⋯") { _ in
+            guard let row = Devices.shared.picture().devices.first(where: { $0.name == name }) else { return .failure(LocatorMiss("no \(name)", pending: true)) }
+            return .success(StoryID.Net.more(row.id))
+        }
     }
 
     static func detail(_ name: String) -> String? {
@@ -158,7 +181,7 @@ final class DevicesJoinKoreNet: ChatStoryline {
             Press(.id(StoryID.Net.icon)),
             WaitForElement(.id(StoryID.Net.panel)),
             Expect("mybox runs via SSH and can join") { _ in
-                Devices.shared.picture().devices.first { $0.id == "mybox" }.map { $0.canJoin && DevicesWords.detail($0, now: Date()) == "via SSH" } == true
+                Devices.shared.picture().devices.first { $0.id == "mybox" }.map { $0.canJoin && DevicesWords.detail($0, now: Date()) == "SSH (mybox)" } == true
             },
             Press(DevicesTakeOffline.part("mybox", .use)),
             WaitForElement(sheet),
@@ -271,16 +294,22 @@ final class DevicesAddBox: ChatStoryline {
             Press(.id(StoryID.Net.icon)),
             WaitForElement(.id(StoryID.Net.panel)),
             Expect("KoreNet off, no rows yet") { _ in Devices.shared.picture().net == .off && Devices.shared.picture().devices.isEmpty },
-            ExpectElement(.id(StoryID.Net.addBox)),
+            ExpectElement(.id(StoryID.Net.add)),
             ExpectElement(.id(StoryID.Net.useSSH), .absent),
             Snapshot("devices-add-box-1-row"),
-            Press(.id(StoryID.Net.addBox)),
+            DevicesPlus("Add a box"),
             WaitForElement(.id(StoryID.Net.useSSH)),
             WaitForElement(.id(StoryID.Net.newBox)),
             Expect("asked the release once, no tailnet boxes") { _ in
                 DevicesStory.releaseAsks == 1 && !StoryRegistry.ids.contains { $0.contains("net.add.peer") }
             },
             Snapshot("devices-add-box-2-choices"),
+            // One add at a time: the lit + closes the choices, and opens its rows again after.
+            Press(.id(StoryID.Net.add)),
+            ExpectElement(.id(StoryID.Net.useSSH), .absent),
+            ExpectElement(.id(StoryID.Options.panel), .absent),
+            DevicesPlus("Add a box"),
+            WaitForElement(.id(StoryID.Net.useSSH)),
             Press(.id(StoryID.Net.useSSH)),
             WaitForElement(.id(StoryID.Net.boxField)),
             ExpectElement(.id(StoryID.Net.boxHost("gpu-box"))),
@@ -335,7 +364,7 @@ final class DevicesAddBoxOnTailnet: ChatStoryline {
             DevicesSetUp(on: true, scriptedBoxes: true, release: false, peers: ["box-2"]),
             Press(.id(StoryID.Net.icon)),
             WaitForElement(.id(StoryID.Net.panel)),
-            Press(.id(StoryID.Net.addBox)),
+            DevicesPlus("Add a box"),
             WaitForElement(.id(StoryID.Net.welcomePeer("box-2"))),
             ExpectElement(.id(StoryID.Net.useSSH)),
             ExpectElement(.id(StoryID.Net.newBox), .absent),
@@ -571,5 +600,51 @@ private final class DevicesReset: StoryFinishing {
         BoxNetJoin.unreachable = []
         DevicesStory.phones = nil
         DevicesStory.net = nil
+    }
+}
+
+/// The Devices header's + and one of its two rows ("Add a box", "Add a phone"): the one add
+/// (devices-plus.html).
+struct DevicesPlus: Step {
+    let row: String
+    var label: String { "+ ▸ \(row)" }
+    init(_ row: String) { self.row = row }
+
+    func run(_ story: StoryContext) async throws {
+        try await Press(.id(StoryID.Net.add)).run(story)
+        try await WaitForElement(.id(StoryID.Options.panel)).run(story)
+        guard let index = StoryMenus.open.firstIndex(of: row) else {
+            throw StoryFailure.expectation("“\(row)” under the + (it has \(StoryMenus.open))")
+        }
+        try await Press(.id(StoryID.Options.item(index))).run(story)
+    }
+}
+
+/// + ▸ Add a phone with KoreNet off and Kore's tailnet not signed in: KoreNet turns on and the
+/// pane says what it needs, as after its switch; the Add device window opens once it runs.
+final class DevicesAddPhoneSignsInFirst: ChatStoryline {
+    override class var tags: Set<Tag> { [.chat] }
+
+    override func steps() -> [any Step] {
+        super.steps() + [
+            DevicesSetUp(),
+            Do("Turned on, Kore's own tailnet isn't signed in yet") { _ in
+                DevicesStory.net?.onAs = (.sidecar, TailnetStatus(backendState: .needsLogin, selfNode: nil))
+            },
+            Press(.id(StoryID.Net.icon)),
+            WaitForElement(.id(StoryID.Net.panel)),
+            DevicesPlus("Add a phone"),
+            Expect("KoreNet on and waiting for its sign-in, as after its switch: no window yet") { _ in
+                let picture = Devices.shared.picture()
+                return DevicesStory.net?.facts.on == true && picture.net == .notJoined && !picture.addOpen(at: Date())
+            },
+            ExpectElement(.id(StoryID.Net.countdown), .absent),
+            WaitIdle(), Snapshot("devices-plus-phone-needs-sign-in"),
+            Do("Signed in: Kore's tailnet runs") { _ in DevicesStory.net?.set(state: .sidecar, status: ScriptedNet.running) },
+            WaitForElement(.id(StoryID.Net.countdown)),
+            Expect("the Add device window opened by itself") { _ in Devices.shared.picture().addOpen(at: Date()) },
+            Press(.id(StoryID.Net.closeAdd)),
+            ExpectElement(.id(StoryID.Net.countdown), .absent),
+        ]
     }
 }

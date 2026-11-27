@@ -11,11 +11,12 @@ import SwiftUI
 /// its page opens in this Mac's browser, and the token stays on the box. Codex keeps one login
 /// on a box. Claude may have several (`account.list`: the default and each folder of the box's
 /// `~/.config/claude-accounts`); each box chat runs on one, picked in the list like this Mac's
-/// logins, and a switch moves that chat alone (and its folder's new chats). Nothing of this Mac's
+/// logins, and a switch moves that chat alone (and its folder's new chats). Add account makes
+/// another there, signed in by Claude's own sign-in on the box. Nothing of this Mac's
 /// logins is read or written for it, but a box's signed-in emails mark this Mac's logins with
 /// them as on that box. Kore never signs anyone out on a box.
 @MainActor
-enum BoxAccountStores {
+package enum BoxAccountStores {
     private static var stores: [String: AccountStore] = [:]
 
     static func store(_ connection: HostConnection) -> AccountStore {
@@ -37,11 +38,11 @@ enum BoxAccountStores {
                 return rows(accounts.claude, active: accounts.viewedLogin)
             },
             switchTo: { _, login in await accounts.switchClaude(to: login ?? LinkAccount.main) },
-            usage: { _, login in try await accounts.claudeUsage(login ?? LinkAccount.main) },
-            viewedIsMain: { accounts.viewedLogin == LinkAccount.main })
+            usage: { provider, login in try await accounts.usage(provider, login ?? LinkAccount.main) },
+            viewedIsMain: { accounts.viewedLogin == LinkAccount.main }, viewed: { accounts.viewedLogin })
     }
 
-    nonisolated static func rows(_ accounts: [LinkAccount], active: String) -> [AccountStore.Login] {
+    package nonisolated static func rows(_ accounts: [LinkAccount], active: String) -> [AccountStore.Login] {
         accounts.map {
             AccountStore.Login(
                 id: $0.id == LinkAccount.main ? nil : $0.id, email: $0.email, active: $0.id == active,
@@ -58,7 +59,7 @@ enum BoxAccountStores {
     }
 
     /// A status as the box said it, in the form `reading` parses.
-    nonisolated static func status(_ result: LinkMessage.Result) -> JSONValue {
+    package nonisolated static func status(_ result: LinkMessage.Result) -> JSONValue {
         var fields: [String: JSONValue] = [:]
         if let signedIn = result.signedIn { fields["signedIn"] = .bool(signedIn) }
         if let account = result.account, let data = try? JSONEncoder().encode(account),
@@ -73,7 +74,7 @@ enum BoxAccountStores {
         return .object(fields)
     }
 
-    nonisolated static func reading(_ status: JSONValue) -> AccountReading {
+    package nonisolated static func reading(_ status: JSONValue) -> AccountReading {
         guard status["signedIn"] == .bool(true) else { return .signedOut }
         guard let account = status["account"], let data = try? JSONEncoder().encode(account),
             let identity = try? JSONDecoder().decode(LinkIdentity.self, from: data)
@@ -92,9 +93,11 @@ enum BoxAccountStores {
             guard result.ok else { throw HostRefusal(message: result.message ?? "Couldn't read the login on \(NodeNames.name(alias))") }
             return Self.status(result)
         }
-        let signIn: @MainActor @Sendable (SignInMethod.Mechanism, SignInContext) async throws -> SignInHandle = { _, _ in
-            // The box picks its own way in (`HostDaemon.boxMethod`).
-            let result = await connection.command { HostWire.signIn(id: $0, provider: provider) }
+        let signIn: @MainActor @Sendable (SignInMethod.Mechanism, SignInContext) async throws -> SignInHandle = { _, context in
+            // The box picks its own way in (`HostDaemon.boxMethod`); a Claude account other than
+            // its default is named, and made there when it's new.
+            let login = provider == "claude" ? context.login.flatMap { $0 == LinkAccount.main ? nil : $0 } : nil
+            let result = await connection.command { HostWire.signIn(id: $0, provider: provider, login: login) }
             guard result.ok else { throw HostRefusal(message: result.message ?? "Couldn't sign in on \(NodeNames.name(alias))") }
             return handle(HostWire.page(result.message), done: result.id + HostWire.doneSuffix, provider: provider, connection)
         }
@@ -154,18 +157,23 @@ struct BoxAccountLine: View {
                 // Signed in already: nothing to press.
                 case .idle where line.signedIn == true: EmptyView()
                 case .idle, .failed: Button("Sign in", action: signIn).smallButton()
+                    .storyID(StoryID.Boxes.account(key).part(.signIn))
                 case .starting: ProgressView().controlSize(.small)
                 case .waiting, .submitting: Button("Cancel") { accounts.cancel(key) }.smallButton()
+                    .storyID(StoryID.Boxes.account(key).part(.cancel))
                 }
             }
             if let page = page(line.step) {
                 HStack(spacing: Space.sm) {
-                    if let url = page.url { Button("Open page") { NSWorkspace.shared.open(url) }.smallButton(prominent: true) }
+                    if let url = page.url {
+                        Button("Open page") { StoryHost.open(url) }.smallButton(prominent: true)
+                            .storyID(StoryID.Boxes.account(key).part(.open))
+                    }
                     if let device = page.code {
                         Text(device).font(TextStyle.code).foregroundStyle(Theme.text).textSelection(.enabled)
                         Button(copied.value ? "Copied" : "Copy") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(device, forType: .string)
+                            StoryHost.pasteboard.clearContents()
+                            StoryHost.pasteboard.setString(device, forType: .string)
                             copied.value = true
                             Task {
                                 try? await Task.sleep(for: .seconds(1.5))
@@ -173,15 +181,18 @@ struct BoxAccountLine: View {
                             }
                         }
                         .smallButton()
+                        .storyID(StoryID.Boxes.account(key).part(.copy))
                     }
                     if takesPaste {
                         TextField("", text: $code.value, prompt: Text("Code from the page").foregroundStyle(Theme.tertiary))
                             .textFieldStyle(.plain)
+                            .storyID(StoryID.Boxes.account(key).part(.field))
                             .focused($typing)
                             .fieldWell(focused: typing)
                             .onSubmit(submit)
                             .onAppear { typing = true }
                         Button("Sign in", action: submit).smallButton(prominent: true).disabled(code.value.isEmpty)
+                            .storyID(StoryID.Boxes.account(key).part(.submit))
                     }
                 }
             }
@@ -204,4 +215,10 @@ struct BoxAccountLine: View {
         if case .failed(let why) = line.step { return why }
         return line.said ?? ""
     }
+}
+
+extension StoryID.Boxes {
+    /// A login's line on the box by its key ("claude", "gh"): `.signIn`, `.cancel`, and Claude's
+    /// pasted code `.field` and its Sign in `.submit` (storylines).
+    package static func account(_ key: String) -> StoryID { StoryID(.titlebar, "boxes.account", key: key) }
 }

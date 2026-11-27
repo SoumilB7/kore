@@ -10,7 +10,7 @@ import Testing
 /// A box window's tabs follow the box's deltas, and a chat made in the window gets one tab even
 /// when the box lists it before answering `chat.new` (kore-host broadcasts first). The box is a
 /// script over a pipe pair; nothing dials.
-@Suite("box window tabs from deltas") @MainActor
+@Suite("box window tabs from deltas", .ownCeilings) @MainActor
 struct BoxTabsUITests {
     /// The box's end of the pipes: what the Mac sent, and frames sent to it.
     @MainActor final class Script {
@@ -227,6 +227,8 @@ struct BoxTabsUITests {
         try await answerHistory(script, [row])
         let ask = try #require(await script.command("history.open"))
         #expect((ask["cmd"] as? [String: Any])?["sessionId"] as? String == "5e55f00d-past")
+        // No freer than the caller (Manual) on the box from its first start.
+        #expect(((ask["cmd"] as? [String: Any])?["settings"] as? [String: Any])?["modeCeiling"] as? Int == 1)
         script.send(.result(.init(id: try #require(ask["id"] as? String), ok: true, chatId: "c2", windowId: Self.window)))
         guard case .success(let (opened, new)) = await opening.value else { Issue.record("not opened"); return }
         #expect(new && opened.arsenal == nil && opened.arsenalByAgent)

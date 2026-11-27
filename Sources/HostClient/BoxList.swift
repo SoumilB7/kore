@@ -1,4 +1,5 @@
 import Foundation
+import KoreCore
 import LinkProtocol
 import Observation
 
@@ -40,6 +41,16 @@ package final class BoxList {
         package init(line: String, action: Action? = nil) {
             self.line = line
             self.action = action
+        }
+
+        /// What else the line offers after its action: beside Trust, Copy (for Terminal) and Check
+        /// again; after a step the user does outside Kore (a Copy), Check again right there.
+        package var more: [Action] {
+            switch action {
+            case .trust(let offer)?: return [.copy(offer.command), .checkAgain]
+            case .copy?: return [.checkAgain]
+            default: return []
+            }
         }
     }
 
@@ -153,6 +164,37 @@ package final class BoxList {
     @ObservationIgnored private var kitConsent = false
     /// How long a probe waits for kore-host's state.
     @ObservationIgnored package var patience: Duration = .seconds(20)
+
+    /// The box's link on KoreNet, for Check again (a test's own: now and after its probe alike).
+    @ObservationIgnored package var onNet: (@MainActor (String) -> Bool)?
+
+    /// The box's link on KoreNet: up there now, or asleep and last up there (`before`: the up it
+    /// was last). Nil when it isn't.
+    private struct NetLink { let before: Int? }
+    private func netLink(_ alias: String) -> NetLink? {
+        if let onNet { return onNet(alias) ? NetLink(before: nil) : nil }
+        let link = connection(alias)
+        let up = link.isOnline && link.route?.isNet == true
+        guard up || (!link.isOnline && link.netUpAt != nil) else { return nil }
+        return NetLink(before: link.netUpAt)
+    }
+
+    /// After a probe: the link was up on KoreNet (still, or again since `net`).
+    private func upOnNet(_ alias: String, since net: NetLink) -> Bool {
+        if let onNet { return onNet(alias) }
+        let link = connection(alias)
+        return (link.isOnline && link.route?.isNet == true) || link.netUpAt != net.before
+    }
+
+    /// A line only SSH can answer again: a host key's, a Trust's, Set up's, a command copied for
+    /// Terminal (its key, a reset), or steps under way (Trust's own look after).
+    static func sshLine(_ status: Status?) -> Bool {
+        switch status {
+        case .failed?, .working?, .unreachable(_, .copy?)?: true
+        default: false
+        }
+    }
+
     /// Between tries to reach a box its setup just started.
     @ObservationIgnored package var settle: Duration = .seconds(1)
 
@@ -190,8 +232,9 @@ package final class BoxList {
         var seen = Set<String>()
         let directory = directory()
         return (defaults?.stringArray(forKey: Self.listedKey) ?? []).filter { key in
-            // A KoreNet id is one when its box's alias is (in this list's directory).
-            let valid = NodeDirectory.isNodeKey(key) ? directory.all[key.lowercased()]?.ssh.map(BoxAddress.valid) == true : BoxAddress.valid(key)
+            // A KoreNet id is one when its box is in this list's directory and its alias, if it
+            // still has one (its SSH route forgotten, KoreNet carries it), is.
+            let valid = NodeDirectory.isNodeKey(key) ? directory.all[key.lowercased()].map { $0.ssh.map(BoxAddress.valid) ?? $0.rekeyed } == true : BoxAddress.valid(key)
             return valid && seen.insert(key).inserted
         }
     }
@@ -336,7 +379,7 @@ package final class BoxList {
             $0.fresh = false
         }
         // The machine, once per box (kept after): found beside the link, over its own session.
-        let finding = box(alias)?.machine == nil ? Task { await detect(alias) } : nil
+        let finding = box(alias)?.machine == nil ? Task { await detect(alias, beside: true) } : nil
         let found: (folders: [BoxFolder], older: Bool)? = await linked(alias) { (await $0.listFolders(), $0.hostOlder) }
         if let found {
             update(alias) {
@@ -353,21 +396,29 @@ package final class BoxList {
     // MARK: The machine
 
     /// Finds what the box is (one ssh session, reading only) and keeps it; compares it with this
-    /// Mac again. Nil, with the line set, when ssh failed.
+    /// Mac again. Nil, with the line set, when ssh failed; `beside` a probe's link, whose own
+    /// answer is the line, it never sets it.
     @discardableResult
-    package func detect(_ alias: String, deep: Bool = true) async -> BoxMachine? {
+    package func detect(_ alias: String, deep: Bool = true, beside: Bool = false) async -> BoxMachine? {
+        try? await look(alias, deep: deep, beside: beside).get()
+    }
+
+    /// `detect`, with why it failed (Check again says it).
+    package func look(_ alias: String, deep: Bool = true, beside: Bool = false) async -> Result<BoxMachine, BoxSetup.Failure> {
         do {
             let machine = try await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).detect(deep: deep)
             machine.keep(alias, root: cacheRoot)
+            if !NodeDirectory.isNodeKey(alias) { directory().noteFound(machine.hostname, alias: alias) }
+            noteKeys(alias)
             update(alias) { $0.machine = machine }
             await compare(alias)
-            return machine
+            return .success(machine)
         } catch {
             // Only when nothing better is known: the link's own answer says more.
-            if case .probing = box(alias)?.status {} else if box(alias)?.status != .ready {
+            if beside {} else if case .probing = box(alias)?.status {} else if box(alias)?.status != .ready {
                 update(alias) { $0.status = .unreachable(error.message, error.fix) }
             }
-            return nil
+            return .failure(error)
         }
     }
 
@@ -402,11 +453,12 @@ package final class BoxList {
         switch agent.install(on: machine, name: alias) {
         case .failure(let why): return why
         case .success(let script):
-            let ran = await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell.script(alias, script, limit: installLimit)
+            let ran = await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell.run(install: script, on: alias, limit: installLimit)
+            // SSH dead: said now (a look would only wait for it again).
+            if ran.status == AttachExit.sshFailed { return BoxSetup.dead(alias, ran) }
             // Every install ends with a fresh look, failed or not: the card shows what's there now.
             let found = await detect(alias)
             guard ran.ok else {
-                if ran.status == AttachExit.sshFailed { return BoxSetup.sshFailure(alias, ran.output) }
                 return BoxSetup.Failure(message: "\(agent.rawValue) didn't install" + (ran.lastLine.isEmpty ? "" : ": " + ran.lastLine), fix: nil)
             }
             guard let found else { return BoxSetup.Failure(message: "\(agent.rawValue) installed, but \(name) didn't answer after", fix: .tryAgain) }
@@ -427,14 +479,17 @@ package final class BoxList {
     /// A tool that installs without a password there (Homebrew), then the machine again.
     package func installTool(_ tool: String, on alias: String) async -> BoxSetup.Failure? {
         guard let machine = box(alias)?.machine, machine.installsWithoutPassword(tool), let command = machine.installCommand(tool) else { return nil }
-        let ran = await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell.script(alias, "PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\n" + command + "\n")
+        let ran = await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell.run(install: "PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\n" + command + "\n", on: alias, limit: installLimit)
+        if ran.status == AttachExit.sshFailed { return BoxSetup.dead(alias, ran) }
         await detect(alias)
         return ran.ok ? nil : BoxSetup.Failure(message: "\(tool) didn't install: \(ran.lastLine)")
     }
 
     /// This Mac's git name and email, set there.
     package func setGitIdentity(name: String?, email: String?, on alias: String) async -> BoxSetup.Failure? {
-        let ran = await makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell.script(alias, BoxParity.gitScript(name: name, email: email))
+        let shell = makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell
+        let ran = await shell.script(alias, BoxParity.gitScript(name: name, email: email), limit: shell.quick)
+        if let why = BoxSetup.dead(alias, ran) { return why }
         await detect(alias, deep: false)
         return ran.ok ? nil : BoxSetup.Failure(message: "git on \(NodeNames.name(alias)) didn't take it: \(ran.lastLine)")
     }
@@ -460,8 +515,19 @@ package final class BoxList {
         case .setUpAnyway: await setUp(alias)
         case .start: await perform(alias, grant: nil, retry: .start) { setup, _ in try await setup.start(); return nil }
         case .updateAnyway: await perform(alias, grant: nil, retry: .update) { setup, step in try await setup.run(allow: false, step: step) }
-        case .tryAgain:
+        case .trust(let offer): await trust(offer, on: alias)
+        case .tryAgain, .checkAgain:
+            let said = box(alias)?.status
             update(alias) { $0.status = .working("Checking \(NodeNames.name(alias))…") }
+            // Its link on KoreNet and no line only SSH answers: the link first, and answered over
+            // KoreNet that's the answer. Its SSH alias may name an address nothing answers (an old
+            // LAN one): never waited on then.
+            if !Self.sshLine(said), let net = netLink(alias) {
+                update(alias) { $0.status = .unknown }
+                await probe(alias)
+                if box(alias)?.status == .ready, upOnNet(alias, since: net) { return }
+                update(alias) { $0.status = .working("Checking \(NodeNames.name(alias))…") }
+            }
             guard await detect(alias) != nil else { return }
             update(alias) { $0.status = .unknown }
             await probe(alias)
@@ -518,6 +584,7 @@ package final class BoxList {
             }
             if let done {
                 done.machine.keep(alias, root: cacheRoot)
+                if !NodeDirectory.isNodeKey(alias) { directory().noteFound(done.machine.hostname, alias: alias) }
                 update(alias) {
                     $0.warning = done.warning
                     $0.machine = done.machine
@@ -527,10 +594,13 @@ package final class BoxList {
         } catch {
             let why = (error as? BoxSetup.Failure) ?? BoxSetup.Failure(message: "Couldn't reach \(NodeNames.name(alias))", fix: .tryAgain)
             HostLog.note(alias, "setup failed", why.message)
+            // A new host key stopped Set up: its Trust goes on with it.
+            if retry == .setUp, BoxSetup.isNewKey(why.message) { setUpStopped.insert(alias) }
             update(alias) { $0.status = .failed(why.message, why.fix ?? retry) }
             return
         }
         if let grant { BoxSetup.setGrant(grant, for: alias, defaults: defaults) }
+        noteKeys(alias)
         // The box's part is done: probes may say how it is from here.
         working[alias] = nil
         update(alias) { $0.status = .working("Connecting…") }
@@ -606,5 +676,122 @@ package final class BoxList {
     private func update(_ key: String, _ change: (inout Box) -> Void) {
         guard let alias = listedAlias(key), let i = boxes.firstIndex(where: { $0.alias == alias }) else { return }
         change(&boxes[i])
+        if let line = Self.newKeyLine(boxes[i].status) { lookForKey(alias, line: line) }
+    }
+
+    /// Puts a status on a box's line as a step would (tests).
+    package func injectStatus(_ key: String, _ status: Status) { update(key) { $0.status = status } }
+
+    // MARK: A new host key
+
+    /// Set up was stopped by a new host key: its Trust goes on with Set up.
+    @ObservationIgnored private var setUpStopped: Set<String> = []
+    @ObservationIgnored private var scanning: Set<String> = []
+    /// ssh-keygen (tests: a stand-in).
+    @ObservationIgnored package var keygen = BoxHostKey.keygen
+    /// Looks for a new host key's fingerprint (`BoxHostKey.scan`); tests set their own, and a test
+    /// process without one never runs ssh for it.
+    @ObservationIgnored package var scanKey: (@Sendable (String, BoxShell, String) async -> (fingerprints: [String], lines: [String])?)? =
+        KoreLog.isTestProcess ? nil : { @Sendable alias, shell, keygen in await BoxHostKey.scan(alias, shell: shell, keygen: keygen) }
+    /// Where Trust writes (tests: theirs); nil: the file ssh's config names.
+    @ObservationIgnored package var knownHosts: String?
+
+    /// The keys ssh trusts a box with (`BoxHostKey.known`); tests set their own, as `scanKey`.
+    @ObservationIgnored package var knownKeys: (@Sendable (String, BoxShell, String) async -> Set<String>)? =
+        KoreLog.isTestProcess ? nil : { @Sendable alias, shell, keygen in await BoxHostKey.known(alias, shell: shell, keygen: keygen) }
+    static let keysKey = "boxHostKeys."
+
+    /// The SSH keys a box last had over `ssh`: what a new one is compared with. None for a box
+    /// Kore hasn't reached over it since it keeps them, or one forgotten.
+    package func keysSeen(_ ssh: String) -> Set<String> { Set(defaults?.stringArray(forKey: Self.keysKey + ssh) ?? []) }
+
+    /// ssh just reached the box, so its key is one known_hosts holds: kept, for when its address changes.
+    private func noteKeys(_ alias: String) {
+        let ssh = directory().sshAlias(forKey: alias) ?? alias
+        guard let knownKeys, let defaults, !NodeDirectory.isNodeKey(ssh) else { return }
+        let shell = makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell
+        let keygen = keygen
+        Task { @MainActor in
+            let keys = await knownKeys(ssh, shell, keygen)
+            guard !keys.isEmpty, box(alias) != nil else { return }
+            defaults.set(keys.sorted(), forKey: Self.keysKey + ssh)
+        }
+    }
+
+    /// A status that's ssh's "host key is new" (before its fingerprint is known).
+    private static func newKeyLine(_ status: Status) -> String? {
+        switch status {
+        case .failed(let line, .copy?), .unreachable(let line, .copy?): return BoxSetup.isNewKey(line) ? line : nil
+        default: return nil
+        }
+    }
+
+    /// The key the box shows, captured by ssh: the line then shows its fingerprint and Trust.
+    /// While ssh can't get it, the line stays as it was (Copy, Check again).
+    private func lookForKey(_ alias: String, line: String) {
+        guard let scanKey, scanning.insert(alias).inserted else { return }
+        let ssh = directory().sshAlias(forKey: alias) ?? alias
+        let shell = makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell
+        let keygen = keygen
+        Task { @MainActor in
+            let found = await scanKey(ssh, shell, keygen)
+            scanning.remove(alias)
+            guard let found, let box = box(alias), Self.newKeyLine(box.status) == line else { return }
+            let against = BoxHostKey.against(keysSeen(ssh), found.lines)
+            if against == .different {
+                HostLog.note(alias, "host key", "different: " + found.fingerprints.joined(separator: ", "))
+                update(alias) { $0.status = .failed(BoxHostKey.differentLine(ssh, found.fingerprints), .copy(BoxAddress(ssh)?.command() ?? "ssh " + ssh)) }
+                return
+            }
+            let offer = BoxHostKey.Offer(
+                ssh: ssh, fingerprints: found.fingerprints, lines: found.lines, command: BoxAddress(ssh)?.command() ?? "ssh " + ssh, moved: against == .same,
+                setUp: setUpStopped.contains(alias))
+            HostLog.note(alias, "host key", "new: " + found.fingerprints.joined(separator: ", "))
+            update(alias) { $0.status = .failed(offer.line, .trust(offer)) }
+        }
+    }
+
+    /// Trust: the key added as ssh's `accept-new` adds it (only while the box still shows it),
+    /// then Set up goes on, or the box is looked at again.
+    private func trust(_ offer: BoxHostKey.Offer, on alias: String) async {
+        update(alias) { $0.status = .working("Trusting \(offer.ssh)'s key…") }
+        let shell = makeSetup(alias, BoxSetup.grant(for: alias, defaults: defaults)).shell
+        let file: String
+        if let knownHosts { file = knownHosts } else { file = await BoxHostKey.knownHostsFile(offer.ssh, shell: shell) }
+        switch await BoxHostKey.trust(offer, shell: shell, file: file, keygen: keygen) {
+        case nil:
+            HostLog.note(alias, "host key", "trusted: " + offer.fingerprints.joined(separator: ", "))
+            defaults?.set(Array(keysSeen(offer.ssh).union(BoxHostKey.keys(offer.lines))), forKey: Self.keysKey + offer.ssh)
+            setUpStopped.remove(alias)
+            await act(offer.setUp ? .setUp : .checkAgain, on: alias)
+        case .changed?:
+            update(alias) { $0.status = .failed("\(offer.ssh) showed another key just now · not trusted", .checkAgain) }
+        case .unreachable?:
+            update(alias) { $0.status = .failed("Can't reach \(offer.ssh) to check its key again", .checkAgain) }
+        case .unwritable(let path)?:
+            update(alias) { $0.status = .failed("Couldn't add the key to \(path)", .copy(offer.command)) }
+        }
+    }
+
+    // MARK: Back from outside Kore
+
+    @ObservationIgnored private var lookedOnReturn: [String: ContinuousClock.Instant] = [:]
+
+    /// Kore came to the front again: a box whose line waits on something done outside Kore (a
+    /// command copied for Terminal, a host key) is looked at again, at most every 10 s each.
+    package func lookAgainOnReturn() {
+        let now = ContinuousClock.now
+        for box in boxes {
+            let waits: Bool
+            switch box.status {
+            case .failed(_, .copy?), .unreachable(_, .copy?), .failed(_, .trust?): waits = true
+            default: waits = false
+            }
+            guard waits, !busy.contains(box.alias), scanning.isEmpty || !scanning.contains(box.alias) else { continue }
+            if let last = lookedOnReturn[box.alias], now - last < .seconds(10) { continue }
+            lookedOnReturn[box.alias] = now
+            let alias = box.alias
+            Task { await act(.checkAgain, on: alias) }
+        }
     }
 }

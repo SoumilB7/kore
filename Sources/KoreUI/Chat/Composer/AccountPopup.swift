@@ -170,7 +170,7 @@ final class AccountState {
         let aim: AccountStore.Aim =
             switch palette {
             case .add: .new
-            case .login(let id): CLIProfiles.active(provider) == id ? .active : .login(id)
+            case .login(let id): store.isActive(provider, id) ? .active : .login(id)
             case .methods, nil: .active
             }
         start(method, aim: aim)
@@ -195,8 +195,8 @@ final class AccountState {
 
     /// Signed in, with logins Kore can keep side by side: the row's sign-in adds one.
     var addsLogins: Bool {
-        // A box's accounts are added on the box itself.
-        guard !store.onBox, case .signedIn = store.status(provider) else { return false }
+        // A box adds Claude accounts there; its Codex keeps one login.
+        guard !store.onBox || store.addsOnBox(provider), case .signedIn = store.status(provider) else { return false }
         return !store.logins(provider).isEmpty
     }
 
@@ -516,7 +516,8 @@ struct AccountPopup: View {
     @ViewBuilder private var content: some View {
         let provider = chat.provider.id
         switch store.status(provider) {
-        case .signedIn(let identity) where store.logins(provider).count > 1:
+        // One login is a list of one too: its usage shows as each login's does.
+        case .signedIn(let identity) where !store.logins(provider).isEmpty:
             loginList(identity)
         case .unknown where store.logins(provider).count > 1:
             // Just switched: the list stays, the new login's caption to come.
@@ -536,7 +537,7 @@ struct AccountPopup: View {
                     .foregroundStyle(Theme.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .help(caption)
+                    .tip(caption)
                 if identity.changeable || store.flow(provider) != nil || state.editor != nil {
                     row(signedIn: true).padding(.top, Space.sm)
                 } else {
@@ -545,7 +546,7 @@ struct AccountPopup: View {
                         .foregroundStyle(Theme.tertiary)
                         .lineLimit(1)
                         .truncationMode(.tail)
-                        .help(AccountText.cantChange)
+                        .tip(AccountText.cantChange)
                         .padding(.top, Space.sm)
                 }
             }
@@ -593,7 +594,7 @@ struct AccountPopup: View {
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .help(shown)
+                .tip(shown)
             if email { PrivacyButton() }
             Spacer(minLength: 0)
             if store.status(chat.provider.id) == .unknown, store.isReading(chat.provider.id) {
@@ -616,7 +617,7 @@ struct AccountPopup: View {
                     .foregroundStyle(caption.danger ? Theme.danger : Theme.tertiary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .help(caption.words)
+                    .tip(caption.words)
                     .transition(.opacity.animation(Motion.fade))
             }
         }
@@ -775,7 +776,7 @@ private struct AccountRow: View {
                 Text(code).font(TextStyle.code).foregroundStyle(Theme.text).textSelection(.enabled)
             }
             .lineLimit(1)
-            .help(AccountText.deviceHelp)
+            .tip(AccountText.deviceHelp)
             Spacer(minLength: 0)
             Button(state.copied ? "Copied" : "Copy code") { state.copy(code) }
                 .smallButton()
@@ -790,16 +791,16 @@ private struct AccountRow: View {
                 Image(systemName: "checkmark").font(Glyph.chevron)
                 Text(words).lineLimit(1).truncationMode(.tail)
             }
-            .help(step == .same ? AccountText.sameHelp : words)
+            .tip(step == .same ? AccountText.sameHelp : words)
             Spacer(minLength: 0)
         case .failed, .keyFailed, .refreshFailed:
             let words = Self.words(step)
-            Text(words).foregroundStyle(Theme.danger).lineLimit(1).truncationMode(.tail).help(words)
+            Text(words).foregroundStyle(Theme.danger).lineLimit(1).truncationMode(.tail).tip(words)
             Spacer(minLength: 0)
             signInControl("Try again", id: id) { state.tryAgain() }
         case .signOutFailed:
             let words = Self.words(step)
-            Text(words).foregroundStyle(Theme.danger).lineLimit(1).truncationMode(.tail).help(words)
+            Text(words).foregroundStyle(Theme.danger).lineLimit(1).truncationMode(.tail).tip(words)
             Spacer(minLength: 0)
         case .timedOut:
             Text(AccountText.timedOut).lineLimit(1)
@@ -918,7 +919,7 @@ private struct MethodList: View {
                 let press: @MainActor @Sendable () -> Void = { if row.enabled { row.action() } }
                 MethodRow(title: row.title, hint: row.hint, action: press)
                     .opacity(row.enabled ? 1 : 0.45)
-                    .help(row.hint ?? "")
+                    .tip(row.hint ?? "")
                     .storyID(StoryID.Composer.accountMethod(row.title))
                     .tabStop(StoryID.Composer.accountMethod(row.title), action: press)
             }
@@ -1114,7 +1115,7 @@ struct LoginRow: View {
                         .font(login.active ? TextStyle.title : TextStyle.body)
                         .foregroundStyle(login.active ? Theme.text : Theme.secondary)
                         .lineLimit(1).truncationMode(.middle)
-                        .help(title)
+                        .tip(title)
                     Spacer(minLength: Space.md)
                     if let pill = LoginRow.pill(usage, plan: plan) { PlanPill(text: pill) }
                     // One trailing slot in every row, ✓ or (on hover) ⋯: the pills line up beside it.
@@ -1137,16 +1138,7 @@ struct LoginRow: View {
                     }
                 }
                 // Moving the only login here: the row asks once.
-                if state.askingMove?.login == login.id, state.askingMove != nil {
-                    HStack(spacing: Space.sm) {
-                        Text("It's the only login here: chats here sign in again.").font(TextStyle.caption).foregroundStyle(Theme.secondary)
-                            .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                        Spacer(minLength: Space.sm)
-                        Button("No") { state.cancelMove() }.buttonStyle(.plain).font(TextStyle.caption).foregroundStyle(Theme.secondary)
-                        Button("Move") { state.confirmMove() }.buttonStyle(.plain).font(TextStyle.caption).foregroundStyle(Theme.accent)
-                    }
-                    .padding(.top, Space.xs)
-                }
+                if state.askingMove?.login == login.id, state.askingMove != nil { MoveQuestion(state: state, id: id) }
                 // Under the slot too: the bars run to the card's edge.
                 LoginMeters(state: usage, signedOut: login.signedOut, now: now, labelWidth: labelWidth, onBox: login.onBox != nil)
                     .padding(.top, Space.xs)
@@ -1221,7 +1213,7 @@ struct PrivacyButton: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(privacy.on ? "Show emails" : "Hide emails")
+        .tip(privacy.on ? "Show emails" : "Hide emails")
         .storyID(id)
         .tabStop(id, action: flip)
         .accessibilityLabel(Text("Private emails"))
@@ -1296,5 +1288,24 @@ private struct LoginFallback: View {
                 self.reason.value = "Couldn't finish signing in. Try again or start a new sign-in."
             }
         }
+    }
+}
+
+/// "It's the only login here": asked once in its row before it moves to a box.
+private struct MoveQuestion: View {
+    let state: AccountState
+    let id: StoryID
+
+    var body: some View {
+        HStack(spacing: Space.sm) {
+            Text("It's the only login here: chats here sign in again.").font(TextStyle.caption).foregroundStyle(Theme.secondary)
+                .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: Space.sm)
+            Button("No") { state.cancelMove() }.buttonStyle(.plain).font(TextStyle.caption).foregroundStyle(Theme.secondary)
+                .storyID(id.part(.deny), press: { state.cancelMove() })
+            Button("Move") { state.confirmMove() }.buttonStyle(.plain).font(TextStyle.caption).foregroundStyle(Theme.accent)
+                .storyID(id.part(.allow), press: { state.confirmMove() })
+        }
+        .padding(.top, Space.xs)
     }
 }

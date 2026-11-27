@@ -43,15 +43,56 @@ package final class AccountStore {
         package var switchTo: @MainActor (_ provider: String, _ login: String?) async -> String?
         package var usage: @MainActor (_ provider: String, _ login: String?) async throws -> PlanReading
         package var viewedIsMain: @MainActor () -> Bool
+        /// The account the shown chat runs on ("main": the default).
+        package var viewed: @MainActor () -> String = { AccountStore.boxDefault }
         /// The shown chat moved: its usage is read again.
         package var switched: @MainActor () -> Void = {}
 
         package init(
             list: @escaping @MainActor (String) async -> [Login]?, switchTo: @escaping @MainActor (String, String?) async -> String?,
-            usage: @escaping @MainActor (String, String?) async throws -> PlanReading, viewedIsMain: @escaping @MainActor () -> Bool
+            usage: @escaping @MainActor (String, String?) async throws -> PlanReading, viewedIsMain: @escaping @MainActor () -> Bool,
+            viewed: (@MainActor () -> String)? = nil
         ) {
             (self.list, self.switchTo, self.usage, self.viewedIsMain) = (list, switchTo, usage, viewedIsMain)
+            if let viewed { self.viewed = viewed }
         }
+    }
+
+    /// A box's default account (`LinkAccount.main` on the link).
+    static let boxDefault = "main"
+
+    /// A box adds Claude accounts (`account.list`): Codex keeps its one login there.
+    func addsOnBox(_ provider: String) -> Bool { onBox && box != nil && provider == "claude" }
+
+    /// The box account a sign-in under way is for, other than the shown chat's: a new one (Add
+    /// account), or another listed one (its ⋯).
+    @ObservationIgnored private var boxAim: [String: (login: String, new: Bool)] = [:]
+
+    /// The account the box signs in for `aim`: the shown chat's, a new one, or another listed.
+    private func boxLogin(_ provider: String, _ aim: Aim) -> String? {
+        if let aimed = boxAim[provider] { return aimed.login }
+        guard let box else { return nil }
+        if case .login(let id) = aim { return id ?? Self.boxDefault }
+        return box.viewed()
+    }
+
+    /// A box sign-in for an account not the chat's ended: the list read again; a new account that
+    /// isn't one listed already becomes the chat's (a Mac's Add account does the same here).
+    private func endBoxAim(_ provider: String, _ aimed: (login: String, new: Bool), _ reading: AccountReading) async -> Step {
+        guard case .signedIn(let now) = reading else { return .failed(nil) }
+        let before = boxLogins[provider] ?? []
+        if let box, let rows = await box.list(provider) {
+            boxLogins[provider] = rows
+            loginsVersion += 1
+        }
+        guard aimed.new else { return .signedIn }
+        let same = before.contains { !$0.signedOut && $0.email?.lowercased() == now.email?.lowercased() && now.email != nil }
+        if same { return .same }
+        // Moved there as a row's click moves it; the outcome stays on the card.
+        flows[provider]?.step = .signedIn
+        switchBox(provider, to: aimed.login)
+        flows[provider] = Flow(method: nil, step: .switched, switching: false)
+        return .switched
     }
 
     @ObservationIgnored package var box: BoxLogins?
@@ -259,8 +300,8 @@ package final class AccountStore {
     /// A login's ⋯: the active one's every method; another's, those that sign its own folder in
     /// (a key or a platform is in the settings every login shares, so it's only the active one's).
     func loginMenu(_ provider: String, _ id: String?) -> [MethodMenuItem] {
-        // A box signs in its default account only: an added one is signed in on the box itself.
-        if onBox { return id == nil ? menu(provider) : [] }
+        // A box signs any of its accounts in, each in its own folder there.
+        if onBox { return menu(provider) }
         return CLIProfiles.active(provider) == id ? menu(provider) : addMenu(provider)
     }
 
@@ -390,6 +431,8 @@ package final class AccountStore {
             !method.opensEditor
         else { return }
         if !onBox, case .login(let id) = aim, CLIProfiles.active(provider) != id { aimed[provider] = CLIProfiles.Pin(cli: provider, id: id) }
+        // On a box, another listed account signs in its own folder there and switches nothing.
+        if onBox, boxAim[provider] == nil, case .login(let id) = aim, !isActive(provider, id) { boxAim[provider] = (id ?? Self.boxDefault, false) }
         let serial = (serials[provider] ?? 0) + 1
         serials[provider] = serial
         if quiet { linkStarted[provider] = serial } else { linkStarted[provider] = nil }
@@ -404,7 +447,9 @@ package final class AccountStore {
         let pin = adding[provider].map { CLIProfiles.Pin(cli: provider, id: $0) } ?? aimed[provider]
         Task { await CLIProfiles.$pinned.withValue(pin) {
             do {
-                let handle = try await ops.calls.signIn(method.mechanism, SignInContext(folder: folder, open: { _ = NSWorkspace.shared.open($0) }))
+                let context = SignInContext(
+                    folder: folder, open: { StoryHost.open($0) }, login: onBox ? boxLogin(provider, aim) : nil)
+                let handle = try await ops.calls.signIn(method.mechanism, context)
                 guard serials[provider] == serial else { return await handle.cancel() }
                 handles[provider] = handle
                 if let url = handle.url {
@@ -430,6 +475,13 @@ package final class AccountStore {
                 let reading: AccountReading
                 if let reply { reading = ops.parse(reply) } else { reading = ops.parse(try await ops.calls.status()) }
                 guard serials[provider] == serial else { return }
+                if onBox, let aimed = boxAim.removeValue(forKey: provider) {
+                    // Awaited first: it changes the flow itself, which an access held over the
+                    // await would overlap.
+                    let step = await endBoxAim(provider, aimed, reading)
+                    flows[provider]?.step = step
+                    return
+                }
                 if let pin, aimed[provider] != nil {
                     aimed[provider] = nil
                     noteLogin(provider, pin.id, reading)
@@ -674,9 +726,15 @@ package final class AccountStore {
         return CLIProfiles.movedTo(provider, email: email)
     }
 
-    /// Whether the row offers a sign-in (or Switch account) for the login shown: on a box, only
-    /// for the default account, the one a box signs in.
-    func signInOffered(_ provider: String) -> Bool { !onBox || box?.viewedIsMain() ?? true }
+    /// Whether the row offers a sign-in (or Switch account) for the login shown: here, and on a
+    /// box for whichever of its accounts the chat runs on.
+    func signInOffered(_ provider: String) -> Bool { true }
+
+    /// The login in use: this Mac's active one, or the shown box chat's.
+    func isActive(_ provider: String, _ id: String?) -> Bool {
+        guard onBox else { return CLIProfiles.active(provider) == id }
+        return logins(provider).first { $0.id == id }?.active ?? (id == nil)
+    }
 
     // MARK: Logins
 
@@ -717,7 +775,12 @@ package final class AccountStore {
     /// Main and the added logins, once there's more than main; a box's accounts on a box.
     func logins(_ provider: String) -> [Login] {
         _ = loginsVersion
-        if onBox { return boxLogins[provider] ?? [] }
+        if onBox {
+            if let rows = boxLogins[provider] { return rows }
+            // Codex's one login on a box (none listed): a row of its own, for its usage.
+            guard box != nil, !addsOnBox(provider), case .signedIn(let identity) = status(provider) else { return [] }
+            return [Login(id: nil, email: identity.email, active: true, workspace: identity.workspace)]
+        }
         // Under a storyline host, only where it gave the logins a folder of their own.
         guard !onBox, CLIProfiles.supports(provider), !StoryHost.installed || CLIProfiles.root.value != nil else { return [] }
         let active = CLIProfiles.active(provider)
@@ -758,8 +821,15 @@ package final class AccountStore {
     /// Adds a login: a sign-in in a folder of its own, kept and switched to if it lands on an
     /// account not listed yet.
     func addLogin(_ provider: String, method: SignInMethod? = nil, in folder: URL, quiet: Bool = false) {
-        // A box keeps one login per CLI: adding one is its sign-in.
-        if onBox { return signIn(provider, method: method, in: folder) }
+        // A box's Claude adds an account of its own there; its Codex keeps one login, so adding
+        // one is its sign-in.
+        if onBox {
+            guard addsOnBox(provider), flows[provider]?.step.live != true else { return signIn(provider, method: method, in: folder) }
+            boxAim[provider] = ("k" + UUID().uuidString.lowercased().prefix(7), true)
+            signIn(provider, method: method, in: folder, aim: .new)
+            if flows[provider]?.step.live != true { boxAim[provider] = nil }
+            return
+        }
         guard flows[provider]?.step.live != true, let id = try? CLIProfiles.prepare(provider) else { return }
         adding[provider] = id
         signIn(provider, method: method, in: folder, quiet: quiet)
@@ -841,6 +911,7 @@ package final class AccountStore {
     /// first), so nothing writes into it after. Another login's stays as it was.
     private func dropAdding(_ provider: String, after handle: SignInHandle? = nil) {
         aimed[provider] = nil
+        boxAim[provider] = nil
         let id = adding.removeValue(forKey: provider)
         Task {
             await handle?.cancel()
@@ -935,7 +1006,7 @@ package final class AccountStore {
         if let opened = StorylineSeams.opened {
             opened(url)
         } else if !StoryHost.installed {
-            NSWorkspace.shared.open(url)
+            StoryHost.open(url)
         }
     }
 

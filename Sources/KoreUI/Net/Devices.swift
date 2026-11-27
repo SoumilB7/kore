@@ -92,7 +92,7 @@ package final class Devices {
     /// "Get logs" didn't get an answer: one line in the popup for a few seconds.
     package private(set) var logsNote: String?
     /// Opens a page in the browser, or an app (storylines: recorded, nothing opens).
-    @ObservationIgnored package var openURL: @MainActor (URL) -> Void = { NSWorkspace.shared.open($0) }
+    @ObservationIgnored package var openURL: @MainActor (URL) -> Void = { StoryHost.open($0) }
     @ObservationIgnored package var openTailscaleApp: @MainActor () -> Void = { Devices.launchTailscale() }
     /// The join sheets' runner for a box (Kore: its upgrade over SSH, with or without a window).
     @ObservationIgnored package var joinRunner: @MainActor (String) -> (any BoxNetJoinRunner)? = { BoxUpgrades.shared.runner(for: $0) }
@@ -242,6 +242,8 @@ package final class Devices {
     package func setOn(_ on: Bool) {
         net?.set(on)
         if !on {
+            phoneWaiting?.cancel()
+            phoneWaiting = nil
             signingIn = false
             phones?.closeAddWindow()
         }
@@ -251,6 +253,29 @@ package final class Devices {
     package func openAddWindow() {
         phones?.openAddWindow()
         changed()
+    }
+
+    /// + ▸ Add a phone waiting for KoreNet to run.
+    @ObservationIgnored private var phoneWaiting: Task<Void, Never>?
+
+    /// + ▸ Add a phone (devices-plus.html): the Add device window. With KoreNet off it turns on
+    /// first, as its switch does, and the window opens once KoreNet runs. Stopped on the way (a
+    /// sign-in, Tailscale off, couldn't start) it waits there, the pane's line saying why as after
+    /// the switch; it opens when KoreNet then runs, unless KoreNet is turned off meanwhile.
+    package func addPhone() {
+        phoneWaiting?.cancel()
+        phoneWaiting = nil
+        if picture().net.adds { return openAddWindow() }
+        if net?.facts.on != true { setOn(true) }
+        phoneWaiting = Task { @MainActor [weak self] in
+            await Observed.until { [weak self] in
+                guard let self, !Task.isCancelled else { return true }
+                return self.picture().net.adds || self.net?.facts.on != true
+            }
+            guard let self, !Task.isCancelled else { return }
+            self.phoneWaiting = nil
+            if self.picture().net.adds { self.openAddWindow() }
+        }
     }
 
     package func closeAddWindow() {
@@ -290,7 +315,7 @@ package final class Devices {
         return DevicesWords.boxCue(row)
     }
 
-    private func boxRow(_ key: String) -> DeviceRow? {
+    func boxRow(_ key: String) -> DeviceRow? {
         var keys: Set<String> = [key, HostConnection.current(key)]
         if let entry = NodeDirectory.shared.entry(forKey: key) {
             keys.insert(entry.id.raw)
@@ -447,6 +472,33 @@ package final class Devices {
     @ObservationIgnored package var reloginBox: @MainActor (String) -> Void = { BoxUpgrades.shared.relogin($0) }
     package func relogin(_ row: DeviceRow) { reloginBox(row.id) }
 
+    /// ⋯ Forget this SSH route: only while the tailnet carries the box and its stores are keyed by
+    /// its id; never by itself. The SSH config is left as it is.
+    package func canForgetSSH(_ row: DeviceRow) -> Bool {
+        guard row.kind == .box, row.ssh != nil, DevicesWords.sshNotNeeded(row) != nil else { return false }
+        return forgetsSSH?(row.id) ?? (NodeDirectory.shared.entry(forKey: row.id)?.rekeyed == true)
+    }
+
+    package func forgetSSH(_ row: DeviceRow) {
+        if let forget = forgetSSHRoute { forget(row.id) } else if let route = NodeDirectory.shared.forgetSSH(row.id) {
+            HostLog.note(row.id, "ssh route", "forgotten: " + route)
+            BoxList.shared.reload()
+        }
+        changed()
+    }
+
+    /// Storylines: whether a box's SSH route may be forgotten, and forgetting it.
+    @ObservationIgnored package var forgetsSSH: (@MainActor (String) -> Bool)?
+    @ObservationIgnored package var forgetSSHRoute: (@MainActor (String) -> Void)?
+
+    /// A box's route on the first page: "Kore's tailnet", "SSH (mybox-cf)", with its hover (the
+    /// node; the SSH route not needed now). Nil while it isn't connected.
+    package func boxRoute(_ key: String) -> (line: String, help: String?)? {
+        _ = revision
+        guard let row = boxRow(key), row.status == .connected, !row.paused, let line = DevicesWords.route(row) else { return nil }
+        return (line, DevicesWords.help(row))
+    }
+
     package func setPaused(_ row: DeviceRow, _ paused: Bool) {
         switch row.kind {
         case .phone: if let id = UUID(uuidString: row.id) { phones?.setPaused(id, paused) }
@@ -467,7 +519,7 @@ package final class Devices {
         guard row.kind == .phone, let id = UUID(uuidString: row.id), let phones else { return }
         Task { @MainActor in
             if let file = await phones.fetchLogs(id, name: row.name) {
-                NSWorkspace.shared.activateFileViewerSelecting([file])
+                StoryHost.reveal([file])
             } else {
                 let line = "\(row.name) didn't send its logs. Open Kore on it, then try again."
                 logsNote = line
@@ -556,12 +608,16 @@ extension StoryID {
         /// The title row's network icon; a click opens Devices.
         package static let icon = StoryID(.titlebar, "net")
         package static let popup = StoryID(.titlebar, "net.popup")
-        /// The popup's KoreNet switch, its "+" (Add device) and × (the window's end).
+        /// The "Kore's tailnet" setting row at the foot, and its switch (KoreNet's); the header's
+        /// "+" (a box or a phone) and × (the Add window's end).
+        package static let tailnet = StoryID(.titlebar, "net.tailnet")
         package static let toggle = popup.part(.toggle)
         package static let add = popup.part(.add)
         package static let closeAdd = popup.part(.close)
-        /// "Keep boxes updated", under the rows while there are boxes.
+        /// "Update boxes automatically"'s switch, at the foot while there are boxes.
         package static let keepBoxes = StoryID(.titlebar, "net.keepboxes")
+        /// A box's SSH route's hint, the foot's last line, by the box's key.
+        package static func sshHint(_ id: String) -> StoryID { StoryID(.titlebar, "net.sshhint", key: id) }
         /// The Add window's countdown, and "Get the phone app".
         package static let countdown = StoryID(.titlebar, "net.countdown")
         package static let phoneApp = StoryID(.titlebar, "net.phoneapp")
@@ -591,14 +647,17 @@ extension StoryID {
         package static let useSSH = StoryID(.welcome, "net.add.ssh")
         package static let newBoxPopup = StoryID(.welcome, "net.newbox")
         package static let copyInstall = newBoxPopup.part(.copy)
-        /// Devices' "Add a box", its alias field, an SSH host under it, and the added box's line
-        /// and that line's action.
-        package static let addBox = StoryID(.titlebar, "net.addbox")
+        /// Devices' Add a box (from the header +): its alias field, an SSH host under it, and the
+        /// added box's line and that line's action.
         package static let boxField = StoryID(.titlebar, "net.addbox.field")
         package static func boxHost(_ host: String) -> StoryID { StoryID(.titlebar, "net.addbox.host", key: host) }
         package static let boxLine = StoryID(.titlebar, "net.addbox.line")
         package static let boxLineAction = boxLine.part(.use)
         /// A box's Welcome line "Runs over SSH · Join KoreNet".
         package static let joinLine = StoryID(.welcome, "net.joinline")
+        /// New box…'s "KoreNet is off · Turn on".
+        package static let newBoxTurnOn = StoryID(.welcome, "net.newbox.turnon")
+        /// The join sheet's auth key field.
+        package static let authKeyField = StoryID(.welcome, "net.join.authkey")
     }
 }

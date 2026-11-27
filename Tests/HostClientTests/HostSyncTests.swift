@@ -454,6 +454,7 @@ struct HostSyncTests {
         init(_ bin: String) async throws {
             root = URL(fileURLWithPath: "/tmp/kbs-\(UUID().uuidString.prefix(6))")
             var env = ProcessInfo.processInfo.environment
+            env["PATH"] = FakeGh.path(env["PATH"])
             env["XDG_STATE_HOME"] = root.appendingPathComponent("state").path
             env["XDG_RUNTIME_DIR"] = root.appendingPathComponent("run").path
             env["XDG_CONFIG_HOME"] = root.appendingPathComponent("config").path

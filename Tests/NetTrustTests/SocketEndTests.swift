@@ -48,6 +48,37 @@ struct SocketEndTests {
         Sockets.closeFD(theirs)
     }
 
+    /// kore-host stopping: it waits for its links' byes to go before the tailnet under them does,
+    /// as long as the peers take them, and never past the bound.
+    @Test func settleWaitsForTheEndsThenReturnsAndIsBounded() async throws {
+        // (Ends are counted process-wide and other suites run alongside: only lower bounds on
+        // this end and the settle's own upper bound are this test's to check.)
+        let (mine, theirs) = try Sockets.pair()
+        Self.peer(theirs)
+        SocketEnd.start(mine, owed: Data("bye restart".utf8), wait: .seconds(30))
+        // The peer reads its bye and hangs up a little later.
+        let read: Task<Data, Never> = Task.detached {
+            var buffer = [UInt8](repeating: 0, count: 64)
+            let n = Darwin.read(theirs, &buffer, buffer.count)
+            usleep(150_000)
+            Sockets.closeFD(theirs)
+            return n > 0 ? Data(buffer[0..<n]) : Data()
+        }
+        let waited = ContinuousClock.now
+        SocketEnd.settle(within: .seconds(5))
+        let took = ContinuousClock.now - waited
+        #expect(took >= .milliseconds(100), "settled before the peer took its bye: \(took)")
+        #expect(took < .seconds(6), "\(took)")
+        #expect(await read.value == Data("bye restart".utf8))
+        // A peer that never hangs up: settle gives up at its own bound.
+        let (a, b) = try Sockets.pair()
+        SocketEnd.start(a, owed: Data(), wait: .seconds(30))
+        let bounded = ContinuousClock.now
+        SocketEnd.settle(within: .milliseconds(200))
+        #expect(ContinuousClock.now - bounded < .seconds(2))
+        Sockets.closeFD(b)
+    }
+
     @Test func aPeerThatNeverHangsUpIsLetGoAtTheBound() async throws {
         let (mine, theirs) = try Sockets.pair()
         Self.peer(theirs)

@@ -417,7 +417,7 @@ struct OpsTests {
         #expect(said.contains("connect grant=laptop control=full"))
         #expect(said.contains("refused grant=laptop reason=auth"))
         #expect(said.contains("disconnect grant=laptop"))
-        #expect(said.contains("stop"))
+        #expect(said.contains { $0.hasPrefix("stop restart=no told=") })
         #expect(!said.joined().contains(grant.secret))
     }
 

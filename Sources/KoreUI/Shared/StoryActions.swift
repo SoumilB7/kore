@@ -23,6 +23,9 @@ package struct StoryRow: Sendable, Equatable {
 }
 
 extension Chat {
+    /// The last compaction summary's entry, for its row's story id.
+    package var storySummaryEntry: UUID? { transcript.entries.last { $0.kind == .summary }?.id }
+
     package var rows: [StoryRow] {
         transcript.entries.map { e in
             StoryRow(
@@ -54,6 +57,8 @@ extension Chat {
     package func storyAttach(_ urls: [URL]) { attach(urls) }
     /// Every chip's ×.
     package func storyDetachAll() { for a in attachments { removeAttachment(a.id) } }
+    /// The composer's chips, by file name.
+    package var storyAttachmentNames: [String] { attachments.map(\.name) }
     /// Typed into the composer.
     package func storyType(_ text: String) { draft = text }
     /// How far the composer has grown past its smallest (the message rail sits lower by half).
@@ -156,17 +161,22 @@ extension Chat {
 
     /// Whether the agent map shows over the chat (the Agents button, ⇧⌘A).
     package var isAgentMapOpen: Bool { agentMap.isOpen }
-    /// The Agents button's words and the map header's counts, as they read ("4 agents",
-    /// "4 · 2 failed").
+    /// The Agents button's words and the map header's count, as they read ("4 agents", "4").
     package var storyAgentCounts: (button: String, header: String) {
         let summary = transcript.agentSummary
-        let header = MapHeader.counts(summary)
-        return (AgentsButton.label(summary), header.counts + header.failed)
+        return (AgentsButton.label(summary), MapHeader.counts(summary))
+    }
+
+    /// An agent's row's right-hand word, as it reads ("failed", "done · 2:44").
+    package func storyAgentWord(_ id: String) -> String? {
+        transcript.agent(id).map { AgentNodeMeter.text($0, duration: $0.duration, waiting: $0.waiting > 0, background: $0.background) }
     }
 
     /// The agent map's selected agent, and its closed groups' rows as they read ("Done 2 · 1
     /// foreground · 1 background").
     package var storyAgentMapSelected: String? { agentMap.selected }
+    /// The pane the map shows in place of an agent: "chat" or "outlived".
+    package var storyAgentMapPane: String? { agentMap.pane.map { "\($0)" } }
     package var storyAgentMapGroups: [String] {
         let rows = AgentMapRows(transcript.agentTree(), folded: [], open: [])
         return AgentMapState.Fold.allCases.compactMap { fold in
@@ -223,18 +233,18 @@ extension Chat {
     /// The Account popup's logins as listed, "✓ " before the active one's email, and its cue
     /// after it (" · Duplicate", " · Signed out").
     package var storyLogins: [String] {
-        AccountStore.shared.logins(provider.id).map { login in
+        accountStore.logins(provider.id).map { login in
             let cue = login.duplicate ? AccountText.duplicate : login.signedOut ? AccountText.loginSignedOut : nil
             return (login.active ? "✓ " : "") + (login.email ?? "?") + (cue.map { " · " + $0 } ?? "")
         }
     }
     /// The account-list's displayed totals (not Kore shares), by login id.
     package var storyLoginUsage: [String: [String]] {
-        let store = AccountStore.shared
+        let store = accountStore
         return Dictionary(uniqueKeysWithValues: store.logins(provider.id).map { login in
             let key = LoginUsage.Key(provider.id, login, generation: store.generation(provider.id))
             let lines: [String]
-            switch LoginUsage.shared.state(key) {
+            switch store.loginUsage.state(key) {
             case .idle: lines = ["Not read"]
             case .loading: lines = ["Reading usage…"]
             case .unavailable: lines = ["Usage unavailable"]
@@ -245,11 +255,11 @@ extension Chat {
     }
     /// Each login's limits that show a reset, with the reset at the row's end ("Session ↻ 2h").
     package var storyLoginResets: [String: [String]] {
-        let store = AccountStore.shared
+        let store = accountStore
         return Dictionary(uniqueKeysWithValues: store.logins(provider.id).map { login in
             let key = LoginUsage.Key(provider.id, login, generation: store.generation(provider.id))
             let lines: [String]
-            if case .ready(let reading, _) = LoginUsage.shared.state(key) {
+            if case .ready(let reading, _) = store.loginUsage.state(key) {
                 let now = Date()
                 lines = LoginUsage.bars(reading).filter { !UsageText.resetsShort($0.resetsAt, now: now).isEmpty }.map { UsageText.label($0.title) + " " + LoginMeters.reset($0, now: now) }
             } else { lines = [] }
@@ -258,14 +268,14 @@ extension Chat {
     }
     /// The logins' emails as the card shows them (masked in privacy mode), in its order.
     package var storyLoginTitles: [String] {
-        AccountStore.shared.logins(provider.id).map { $0.email.map(AccountPrivacy.shared.shown) ?? "?" }
+        accountStore.logins(provider.id).map { $0.email.map(AccountPrivacy.shared.shown) ?? "?" }
     }
     /// Each login's plan pill, by login id; logins without one are left out.
     package var storyLoginPlans: [String: String] {
-        let store = AccountStore.shared
+        let store = accountStore
         let identity: AccountIdentity? = if case .signedIn(let identity) = store.status(provider.id) { identity } else { nil }
         return Dictionary(uniqueKeysWithValues: store.logins(provider.id).compactMap { login in
-            let usage = LoginUsage.shared.state(LoginUsage.Key(provider.id, login, generation: store.generation(provider.id)))
+            let usage = store.loginUsage.state(LoginUsage.Key(provider.id, login, generation: store.generation(provider.id)))
             return LoginRow.pill(usage, plan: login.active ? identity?.plan : nil).map { (AccountStore.loginKey(login.id), $0) }
         })
     }
@@ -281,7 +291,7 @@ extension Chat {
     /// The caption under the action row ("Also signs out Terminal and VS Code on this Mac.",
     /// "Kept in a file only you can read.", "Pick Console account, then …").
     package var storyAccountCaption: String? {
-        let store = AccountStore.shared
+        let store = accountStore
         if account.askingSignOut {
             return AccountText.signOutCaption(working: store.workingChats(provider.id), setting: account.identity?.isKoreSetting == true)
         }
@@ -323,7 +333,12 @@ extension Chat {
     /// Whether a field or form is open in the popup, and has the keys.
     package var storyAccountEditing: Bool { account.isEditing }
     /// The account changed since the chat's CLI started: it hasn't started again yet.
-    package var storyAccountGeneration: Int { AccountStore.shared.generation(provider.id) }
+    /// A login's ⋯, then its sign-in: that login signed in again where it is.
+    package func storySignInLogin(_ id: String?) {
+        account.toggleLoginMenu(id)
+        account.signIn()
+    }
+    package var storyAccountGeneration: Int { accountStore.generation(provider.id) }
 
     /// The turn whose refused login shows its notice, newest first.
     package var storySignInNoticeTurn: String? {
@@ -353,6 +368,8 @@ extension Workspace {
 
     /// The History panel's chats, as listed: id and title.
     package var storyHistory: [(id: String, title: String)] { chats.map { ($0.id, $0.title) } }
+    /// The History's archived chats, by id.
+    package var storyArchivedHistory: [String] { chats.filter(\.archived).map(\.id) }
 
     /// ⌘R on the active tab: its chat opens again from its saved history.
     package func storyReload() { reload([activeTab]) }

@@ -34,7 +34,7 @@ package enum Reads {
             case "pending": try pending(client, options)
             case "history": try history(client, options)
             case "options": try Own.options(client, options)
-            case "fast", "compact", "rename", "model", "effort", "mode": try Own.set(name, client, options)
+            case "fast", "compact", "autocompact", "rename", "model", "effort", "mode": try Own.set(name, client, options)
             case "new", "fork", "send", "stop", "tab", "answer", "wait", "open", "close", "ask", "reply", "fetch": try Drive.run(name, client, options)
             default: return fail("no such command: \(name)", code: 2)
             }
@@ -68,6 +68,8 @@ package enum Reads {
                kore fast on|off      its fast mode
                kore mode <mode>      lower its mode (only you raise one)
                kore compact          compact it, once this turn ends
+               kore autocompact <50..90|off>
+                                     set its auto-compact point
                kore new [--claude|--codex] [--model M] [--mode X] [--folder F] [--silent] ["message"]
                                      a new chat in this window, in front (Act unlimited); --folder:
                                      another folder's window, opened if none is (path or device:path,
@@ -109,7 +111,7 @@ package enum Reads {
 
     /// The commands that go to Kore (`run`), by name.
     package static let names: Set = [
-        "ls", "show", "log", "pending", "history", "whoami", "caps", "options", "rename", "model", "effort", "fast", "mode", "compact", "new", "fork",
+        "ls", "show", "log", "pending", "history", "whoami", "caps", "options", "rename", "model", "effort", "fast", "mode", "compact", "autocompact", "new", "fork",
         "send", "stop", "tab", "answer", "wait", "open", "close", "ask", "reply", "fetch",
     ]
 
@@ -226,6 +228,7 @@ package enum Reads {
             var line = "\(str(chat["short"]))  \(pad(str(chat["state"]), state))  \(pad(str(chat["provider"]), provider))  \(str(chat["title"]))"
             line += "  · \(str(chat["window"]))"
             if let cards = chat["cards"] as? Int, cards > 0 { line += cards == 1 ? "  · 1 card" : "  · \(cards) cards" }
+            if chat["alwaysAllowed"] as? Bool == true { line += "  · always allow" }
             if chat["own"] as? Bool == true { line += "  (this chat)" }
             say(line)
         }
@@ -243,6 +246,7 @@ package enum Reads {
         rows.append(("cli", cli))
         var mode = (chat["modeLabel"] as? String) ?? str(chat["mode"])
         if chat["planOn"] as? Bool == true { mode += " · plan" }
+        if chat["alwaysAllowed"] as? Bool == true { mode += " · always allow" }
         rows.append(("mode", mode))
         rows.append(("folder", str(chat["folder"])))
         if let context = data["context"] as? Object, let used = context["used"] as? Int {

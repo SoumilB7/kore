@@ -165,11 +165,13 @@ package struct ChatSettings: Codable, Sendable, Equatable {
     /// A Mac's send back: whether they changed on the Mac since it took the chat, by the Mac's own
     /// clock (`Chat.settingsChangedAt`). Nil: it doesn't say, and the Mac's stand.
     package var changed: Bool?
+    /// How high its mode may go without its owner (`ModeCeilings`); absent: no ceiling.
+    package var modeCeiling: Int?
 
     package init(
         modelId: String? = nil, effort: String? = nil, mode: String? = nil, fast: Bool? = nil, plan: Bool? = nil, planAllow: Bool? = nil,
         autoCompact: Int? = nil, login: String? = nil, arsenal: String? = nil, draft: String? = nil, at: Int64? = nil,
-        changed: Bool? = nil
+        changed: Bool? = nil, modeCeiling: Int? = nil
     ) {
         self.modelId = modelId
         self.effort = effort
@@ -183,6 +185,7 @@ package struct ChatSettings: Codable, Sendable, Equatable {
         self.draft = draft
         self.at = at
         self.changed = changed
+        self.modeCeiling = modeCeiling
     }
 
     /// The same without the draft (a copy's: the original keeps it).
@@ -235,7 +238,7 @@ extension ChatSettings {
             fast: chat.launchFastMode ?? (c.fastKnown ? c.fastMode : nil), plan: chat.provider.planToggle != nil ? c.planMode : nil,
             planAllow: c.planAllow, autoCompact: chat.ownsAutoCompact ? chat.context.autoCompactAt ?? 0 : nil, login: login,
             arsenal: chat.arsenal?.rawValue, draft: draft ? Self.composer(chat) : nil, at: chat.settingsChangedAt.map(Self.ms),
-            changed: chat.settingsChangedAt != nil)
+            changed: chat.settingsChangedAt != nil, modeCeiling: chat.modeCeiling)
     }
 
     /// The composer as one line of text: its command, then the draft.

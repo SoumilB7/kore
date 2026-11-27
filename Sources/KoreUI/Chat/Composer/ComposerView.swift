@@ -158,10 +158,14 @@ struct ComposerView: View {
         .animation(Motion.fadeSlow, value: chat.controls.activeMode.id)
         .onAppear {
             pasteChat.value = chat
-            pasteMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-                pasteAttachments(event)
+            pasteMonitor.value = WindowEvents.monitor(.keyDown) { event in
+                noteCopyKey(event)
+                return pasteAttachments(event)
             }
-            clickMonitor.value = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { closeMenu(onClick: $0) }
+            clickMonitor.value = WindowEvents.monitor(.leftMouseDown) { event in
+                focusOnPress(event)
+                return closeMenu(onClick: event)
+            }
         }
         .onDisappear {
             for monitor in [pasteMonitor.value, clickMonitor.value].compactMap({ $0 }) { NSEvent.removeMonitor(monitor) }
@@ -283,6 +287,8 @@ struct ComposerView: View {
                 editor.placeCaret(at: event.locationInWindow)
             }
         }
+        // Named without an identifier of its own: the text's stays the text's.
+        .storyMark(StoryID.Composer.fieldBox)
     }
 
     private var textField: some View {
@@ -444,6 +450,31 @@ struct ComposerView: View {
         guard let urls = Attachments.fromPasteboard(board) else { return event }
         chat.attach(urls)
         return nil
+    }
+
+    /// ⌘C with text selected in the shown chat's composer: one ui.log line of where the copy
+    /// went (who had the keys, who took Copy, how much was selected, the whole draft or not, and
+    /// whether the clipboard changed), never the text. A copy that does nothing leaves its trace.
+    private func noteCopyKey(_ event: NSEvent) {
+        guard event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
+            event.charactersIgnoringModifiers?.lowercased() == "c",
+            let window = window.value, event.window === window,
+            let view = editor.view, let chat = pasteChat.value, workspace.activeTab.chat === chat
+        else { return }
+        let selected = view.selectedRange().length
+        guard selected > 0 else { return }
+        let before = DraftClipboard.pasteboard.changeCount
+        var target = window.firstResponder
+        while let current = target, !current.responds(to: #selector(NSText.copy(_:))) { target = current.nextResponder }
+        let responder = ComposerCopyKey.name(window.firstResponder), taker = ComposerCopyKey.name(target)
+        let whole = view.wholeDraft
+        // After the key has gone where it goes.
+        DispatchQueue.main.async {
+            ComposerCopyKey.Note(
+                responder: responder, target: taker, selected: selected, whole: whole,
+                wrote: DraftClipboard.pasteboard.changeCount != before
+            ).log()
+        }
     }
 
     // MARK: The whole draft (⌘A)
@@ -782,6 +813,22 @@ struct ComposerView: View {
             ])
     }
 
+    /// A press in the shown chat's text gives the text view the keys. The text view's own
+    /// gesture recognizers take the press before the window sees it, so the window never makes
+    /// it first responder, and ⌘C after a drag would go to whatever had the keys before. The
+    /// press goes on as it was.
+    private func focusOnPress(_ event: NSEvent) {
+        guard let window = window.value, event.window === window, let content = window.contentView,
+            let view = editor.view, view.isSelectable, window.firstResponder !== view,
+            let chat = pasteChat.value, workspace.activeTab.chat === chat
+        else { return }
+        // The scroll view sends a press on its clip view to the text.
+        guard let hit = content.hitTest(content.superview?.convert(event.locationInWindow, from: nil) ?? event.locationInWindow),
+            hit === view || (view.enclosingScrollView as? ComposerScrollView).map(hit.isDescendant(of:)) == true
+        else { return }
+        window.makeFirstResponder(view)
+    }
+
     /// A click outside the menu and the box closes the menu, and a press on the bar under the
     /// text (a chip, +, the context wheel) closes whatever is open before its own menu or panel
     /// opens, which the system's menus then hold the events for. The click goes on as it was.
@@ -798,5 +845,36 @@ struct ComposerView: View {
             chat.slashClosed = true
         }
         return event
+    }
+}
+
+/// ⌘C's line in ui.log (`composer-copy-key`); the last one's fields for storylines.
+package enum ComposerCopyKey {
+    struct Note {
+        let responder: String
+        let target: String
+        let selected: Int
+        let whole: Bool
+        let wrote: Bool
+
+        @MainActor func log() {
+            let yes = { (b: Bool) in b ? "yes" : "no" }
+            UILog.event(
+                "composer-copy-key",
+                ["responder": responder, "target": target, "selected": String(selected), "whole": yes(whole), "wrote": yes(wrote)])
+            if StoryHost.installed {
+                ComposerCopyKey.last = "responder=\(responder) target=\(target) selected=\(selected) whole=\(yes(whole)) wrote=\(yes(wrote))"
+            }
+        }
+    }
+
+    /// Storylines: the last ⌘C's fields, as the line has them.
+    @MainActor package static var last: String?
+
+    /// A responder's class, without a generic's parameters (a SwiftUI host's run long).
+    static func name(_ responder: NSResponder?) -> String {
+        guard let responder else { return "none" }
+        let full = String(describing: type(of: responder))
+        return full.firstIndex(of: "<").map { String(full[..<$0]) } ?? full
     }
 }

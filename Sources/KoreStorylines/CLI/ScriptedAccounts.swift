@@ -45,6 +45,10 @@ package final class ScriptedAccounts {
     package private(set) var log: [Call] = []
     /// Each CLI's status reply: Claude's `auth status --json`, Codex's `account/read`.
     package var status: [String: JSONValue] = [:]
+    /// A login folder's own reply, by "<cli>/<login>" ("main": the CLI's own folder): it answers
+    /// in place of `status` while that login is the one read (the one a sign-in is for, else the
+    /// active one), so another login read meanwhile keeps its own.
+    package var statusOf: [String: JSONValue] = [:]
     package var start: [String: Start] = [:]
     /// A sign-out that fails, with the CLI's words.
     package var signOutFails: [String: String] = [:]
@@ -81,6 +85,7 @@ package final class ScriptedAccounts {
         waiting = [:]
         log = []
         status = ["claude": Self.claude(), "codex": Self.codex()]
+        statusOf = [:]
         start = [:]
         signOutFails = [:]
         policy = [:]
@@ -95,9 +100,12 @@ package final class ScriptedAccounts {
         loginVault.removeAll()
         LoginMoves.shared.boxes = { [] }
         LoginMoves.shared.reset()
-        // The run's Claude settings start empty for each storyline.
-        try? FileManager.default.removeItem(at: ClaudeSettings.userFile())
-        try? FileManager.default.removeItem(at: SettingsFile.backup(of: ClaudeSettings.userFile()))
+        // The run's Claude settings start empty for each storyline: only the run's own (its
+        // CLAUDE_CONFIG_DIR), never the owner's ~/.claude, whatever order things were set up in.
+        if ProcessInfo.processInfo.environment["CLAUDE_CONFIG_DIR"]?.isEmpty == false {
+            try? FileManager.default.removeItem(at: ClaudeSettings.userFile())
+            try? FileManager.default.removeItem(at: SettingsFile.backup(of: ClaudeSettings.userFile()))
+        }
         // Logins side by side only where a storyline gives them a folder (`SeedLogins`).
         CLIProfiles.root.value = nil
         CLIProfiles.mains.value = [:]
@@ -108,6 +116,7 @@ package final class ScriptedAccounts {
     /// The browser finished: the CLI is now signed in as `reply` says.
     package func finish(_ provider: String, as reply: JSONValue) {
         status[provider] = reply
+        statusOf[Self.read(provider)] = nil
         // Codex answers its `account/read` with the end; Claude's status is read after it.
         let answer: JSONValue? = provider == "codex" ? .some(reply) : .none
         waiting.removeValue(forKey: provider)?.resume(returning: answer)
@@ -116,6 +125,11 @@ package final class ScriptedAccounts {
     /// The sign-in failed, the CLI saying `reason`.
     package func fail(_ provider: String, _ reason: String) {
         waiting.removeValue(forKey: provider)?.resume(throwing: Said(reason))
+    }
+
+    /// The login a status read is of: a sign-in's own, else the active one.
+    private static func read(_ provider: String) -> String {
+        "\(provider)/\((CLIProfiles.pinned.map { $0.id } ?? CLIProfiles.active(provider)) ?? "main")"
     }
 
     /// Whether a sign-in waits for the browser.
@@ -177,7 +191,7 @@ package final class ScriptedAccounts {
     /// The CLI's status as it would answer now: Claude's from the run's settings when they turn
     /// a platform or Kore's key on, with the policy the storyline set.
     private func reply(_ provider: String) -> JSONValue {
-        var reply = status[provider] ?? .null
+        var reply = statusOf[Self.read(provider)] ?? status[provider] ?? .null
         if provider == "claude", case .object(var fields) = reply {
             switch ClaudeSettings.saved(in: ClaudeSettingsStore.read()) {
             case .platform(let platform, _):

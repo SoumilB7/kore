@@ -140,14 +140,22 @@ public struct PlanLimit: Sendable, Equatable, Codable {
     public var scope: String?
     /// Claude's week as the plan splits it by surface (`seven_day_breakdown`), in points of it.
     public var surfaces: [PlanSurface]
+    /// A window that hasn't begun (Claude's session before its first message): 0%, no reset;
+    /// the row stays and says it starts with the next message. Optional on the wire: older
+    /// boxes and Macs leave it out.
+    public var idle: Bool?
 
-    public init(title: String, used: Double, resetsAt: Date?, window: TimeInterval? = nil, scope: String? = nil, surfaces: [PlanSurface] = []) {
+    public init(
+        title: String, used: Double, resetsAt: Date?, window: TimeInterval? = nil, scope: String? = nil, surfaces: [PlanSurface] = [],
+        idle: Bool? = nil
+    ) {
         self.title = title
         self.used = used
         self.resetsAt = resetsAt
         self.window = window
         self.scope = scope
         self.surfaces = surfaces
+        self.idle = idle
     }
 }
 
@@ -192,16 +200,58 @@ extension PlanReading {
                     title: title, used: used, resetsAt: date(window?["resets_at"]), window: hours * 3600, scope: scope,
                     surfaces: UsageAttribution.surfaces(breakdown, used: used)))
         }
-        add("Session (5hr)", limits?["five_hour"], hours: 5)
-        add("Weekly (7 day)", limits?["seven_day"], breakdown: limits?["seven_day_breakdown"])
+        // The structured list newer CLIs add (`rate_limits.limits`): each limit's kind, percent and
+        // scope. The older fields come first; the list fills in what they leave out.
+        let listed = limits?["limits"]?.array ?? []
+        func fromList(_ match: (JSONValue) -> Bool) -> JSONValue? {
+            guard let entry = listed.first(where: match), let percent = entry["percent"]?.double else { return Optional<JSONValue>.none }
+            return .object(["utilization": .number(percent), "resets_at": entry["resets_at"] ?? .null])
+        }
+        func listedName(_ entry: JSONValue) -> String? { entry["scope"]?["model"]?["display_name"]?.string }
+        // A window with a utilization, else none (`JSONValue` takes `nil` as its own `.null`, so
+        // this never says nil through a literal).
+        func measured(_ window: JSONValue?) -> JSONValue? {
+            guard let window, window["utilization"]?.double != nil else { return Optional<JSONValue>.none }
+            return window
+        }
+        let session = measured(limits?["five_hour"])
+            ?? fromList { ($0["group"]?.string == "session") || ($0["kind"]?.string ?? "").hasPrefix("session") }
+        if let session {
+            add("Session (5hr)", session, hours: 5)
+        } else if Self.notBegun(limits?["five_hour"]) {
+            // The plan has a session window, not begun yet (`five_hour: null`): the row stays, at 0%.
+            bars.append(PlanLimit(title: "Session (5hr)", used: 0, resetsAt: nil, window: 5 * 3600, idle: true))
+        }
+        let week = measured(limits?["seven_day"])
+            ?? fromList { $0["kind"]?.string == "weekly_all" }
+        add("Weekly (7 day)", week, breakdown: limits?["seven_day_breakdown"])
         if subscription == nil || subscription == "max" || subscription == "team" {
             add("Weekly Sonnet", limits?["seven_day_sonnet"], scope: "Sonnet")
         }
+        var scopedNames = Set(bars.compactMap(\.scope))
         for scoped in limits?["model_scoped"]?.array ?? [] {
-            if let name = scoped["display_name"]?.string, !name.isEmpty { add("Weekly \(name)", scoped, scope: name) }
+            if let name = scoped["display_name"]?.string, !name.isEmpty, !scopedNames.contains(name) {
+                add("Weekly \(name)", scoped, scope: name)
+                scopedNames.insert(name)
+            }
+        }
+        for entry in listed where entry["kind"]?.string == "weekly_scoped" {
+            guard let name = listedName(entry), !name.isEmpty, !scopedNames.contains(name) else { continue }
+            add("Weekly \(name)", fromList { $0 == entry }, scope: name)
+            scopedNames.insert(name)
         }
         reading.limits = PlanLimits(bars: bars, extras: extraUsage(limits?["extra_usage"], locale: locale).map { [$0] } ?? [])
         return reading
+    }
+
+    /// A window the answer names but hasn't measured: `null` itself, or one whose utilization is
+    /// `null`. Absent, or any other shape, isn't one.
+    static func notBegun(_ window: JSONValue?) -> Bool {
+        switch window {
+        case .null?: true
+        case .object(let fields)?: fields["utilization"].map { if case .null = $0 { true } else { false } } ?? false
+        default: false
+        }
     }
 
     /// The account alone: `get_usage` failed, saying `reason`.

@@ -100,7 +100,7 @@ struct ImageFileView: View {
 
     /// The image, with its markup when there is any.
     private func copy(_ editor: ImageEditor) {
-        let board = NSPasteboard.general
+        let board = StoryHost.pasteboard
         if editor.vector != nil {
             // The SVG's own bytes, with a picture of it for apps that don't read SVG.
             MediaMenu.copyImage(.init(url: url), to: board)

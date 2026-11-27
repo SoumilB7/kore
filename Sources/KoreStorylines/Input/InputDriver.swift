@@ -35,6 +35,7 @@ package final class InputDriver {
 
     /// The element's registered action, with no pointer; without one, a click at its centre.
     package func press(_ element: StoryElement) async throws {
+        StoryHost.touch(element.id.raw)
         guard let press = element.press else { return try await click(element) }
         press()
         await pass()
@@ -45,6 +46,27 @@ package final class InputDriver {
         for n in 1...max(count, 1) {
             click(.leftMouseDown, .leftMouseUp, at: point, in: window, clickCount: n, modifiers: modifiers)
         }
+        await pass()
+    }
+
+    /// A right-click through the app's own dispatch, its event monitors first, whatever view is under it.
+    package func pointerRightClick(_ element: StoryElement) async throws {
+        let (window, point) = try await aim(element)
+        for type in [NSEvent.EventType.rightMouseDown, .rightMouseUp] {
+            if let event = mouseEvent(type, at: point, in: window) { NSApp.sendEvent(event) }
+        }
+        await pass()
+    }
+
+    /// Clicks at a window point, `count` times in a row (a double-click where an element was).
+    package func click(at point: CGPoint, in window: NSWindow, count: Int = 1) async {
+        for n in 1...max(count, 1) { click(.leftMouseDown, .leftMouseUp, at: point, in: window, clickCount: n) }
+        await pass()
+    }
+
+    /// A right-click at a window point (an empty stretch no element names).
+    package func rightClick(at point: CGPoint, in window: NSWindow) async {
+        click(.rightMouseDown, .rightMouseUp, at: point, in: window)
         await pass()
     }
 
@@ -69,7 +91,12 @@ package final class InputDriver {
         else { return }
         Self.enqueue(up)
         let mask: NSEvent.EventTypeMask = upType == .rightMouseUp ? .rightMouseUp : .leftMouseUp
-        if let view = window.contentView?.hitTest(point), !window.isKeyWindow, !Self.isSwiftUI(view), !view.acceptsFirstMouse(for: down) {
+        let hit = window.contentView?.hitTest(point)
+        Self.lastRoute = "\(downType == .rightMouseDown ? "right" : "left") at \(point) on \(hit.map { String(describing: Swift.type(of: $0)) } ?? "nothing")"
+        // A right-click never activates a window first: the app's dispatch (its monitors, the
+        // context menus' routing) sees it as it sees a real one.
+        if let view = hit, downType == .leftMouseDown, !window.isKeyWindow, !Self.isSwiftUI(view), !view.acceptsFirstMouse(for: down) {
+            Self.lastRoute += ", straight to it"
             // Both halves to the view: the window, having kept no press, would drop the release.
             if view.acceptsFirstResponder, window.firstResponder !== view { window.makeFirstResponder(view) }
             if downType == .rightMouseDown { view.rightMouseDown(with: down) } else { view.mouseDown(with: down) }
@@ -90,6 +117,9 @@ package final class InputDriver {
     /// event to a loop that isn't reading events. Kore's host is always in it. A host that isn't,
     /// such as a test runner on a plain run loop, would have its main loop end and the process
     /// exit mid-run, so there the event is posted inside a short nested run that takes the stop.
+    /// The last click's point, the view under it, and whether it skipped the app's dispatch.
+    @MainActor package static var lastRoute = ""
+
     private static func enqueue(_ event: NSEvent) {
         if NSApp.isRunning {
             NSApp.postEvent(event, atStart: false)
@@ -119,10 +149,11 @@ package final class InputDriver {
 
     /// Presses and releases at a window point, `count` times in a row (a double or triple
     /// click), through the app as a person's clicks come.
-    package func click(at point: CGPoint, in window: NSWindow, count: Int = 1, modifiers: NSEvent.ModifierFlags = []) async {
+    package func click(at point: CGPoint, in window: NSWindow, count: Int = 1, modifiers: NSEvent.ModifierFlags = [], apart: Bool = false) async {
         for n in 1...max(count, 1) {
             if let down = mouseEvent(.leftMouseDown, at: point, in: window, clickCount: n, modifiers: modifiers) { NSApp.sendEvent(down) }
             if let up = mouseEvent(.leftMouseUp, at: point, in: window, clickCount: n, modifiers: modifiers) { NSApp.sendEvent(up) }
+            if apart, n < count { await pass() }
         }
         await pass()
     }
@@ -161,7 +192,7 @@ package final class InputDriver {
     /// become key: the press is then a first click, the stricter case (checked 2026-10-29).
     package func pointerClick(_ element: StoryElement, count: Int = 1, offset: CGVector = .zero) async throws {
         let (window, point) = try await pointerAim(element, offset)
-        await click(at: point, in: window, count: count)
+        await click(at: point, in: window, count: count, apart: true)
     }
 
     /// The same press, moved by `delta` (window space: y up) in steps and released.
@@ -273,6 +304,29 @@ package final class InputDriver {
         await pass()
     }
 
+    /// A sideways (and/or vertical) scroll over what shows of the element: a few continuous
+    /// wheel events, in-process, as a mouse's or trackpad's deltas arrive. `dx` > 0 moves the view
+    /// right (the content left).
+    package func scrollSideways(_ element: StoryElement, dx: CGFloat, dy: CGFloat = 0) async throws {
+        // A scroll view's document is wider or taller than the window: aim at what shows of it.
+        guard let window = element.window, let content = window.contentView, let frame = element.frame else {
+            throw StoryFailure.modelMissing("\(element.id)'s window")
+        }
+        let shown = frame.intersection(content.bounds)
+        guard !shown.isEmpty, let view = content.hitTest(CGPoint(x: shown.midX, y: shown.midY)) else {
+            throw StoryFailure.expectation("\(element.id) on screen")
+        }
+        for share in [0.25, 0.25, 0.25, 0.25] as [CGFloat] {
+            guard let event = CGEvent(
+                scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 2,
+                wheel1: Int32((-dy * share).rounded()), wheel2: Int32((-dx * share).rounded()), wheel3: 0),
+                let ns = NSEvent(cgEvent: event)
+            else { throw StoryFailure.other("can't make a scroll event") }
+            view.scrollWheel(with: ns)
+            await pass()
+        }
+    }
+
     /// Text pasted into the focused text view, as ⌘V pastes it, from a pasteboard of the
     /// storyline's own: the owner's clipboard is never touched.
     package func paste(_ text: String) async throws {
@@ -356,6 +410,7 @@ package final class InputDriver {
 
     /// The same, to another of the app's windows (Welcome).
     package func key(_ chord: KeyChord, in window: NSWindow) async throws {
+        StoryHost.touch("key \(chord)")
         guard let down = chord.event(.keyDown, in: window), let up = chord.event(.keyUp, in: window) else {
             throw StoryFailure.other("can't build the key \(chord)")
         }
@@ -448,6 +503,11 @@ package final class InputDriver {
     /// The element's window and centre, scrolled into view first when its list has it out of
     /// sight (as a person scrolls to what they click), and checked to be inside the window.
     private func aim(_ element: StoryElement) async throws -> (NSWindow, CGPoint) {
+        StoryHost.touch(element.id.raw)
+        // Aimed once it holds still: a list just changed (a row moved under another) puts its
+        // views in place on a later pass, and a frame read before then is where the row was, not
+        // where it's drawn and hit.
+        let element = await settled(element)
         guard let window = element.window, var frame = element.frame else {
             throw StoryFailure.elementNotFound(element.id.raw, nearby: StoryRegistry.nearest(to: element.id.raw))
         }
@@ -462,6 +522,20 @@ package final class InputDriver {
         return (window, point)
     }
 
+    /// The element once its window is laid out and its frame is the same over two passes (at
+    /// most ten), looked up again each time: laying out can put it in a view of its own.
+    private func settled(_ element: StoryElement) async -> StoryElement {
+        var element = element, was: CGRect?
+        for _ in 0..<10 {
+            element.window?.contentView?.layoutSubtreeIfNeeded()
+            element = element.window.flatMap { StoryElement(element.id, in: $0) } ?? StoryElement(element.id) ?? element
+            guard let now = element.frame, now != was else { return element }
+            was = now
+            await pass()
+        }
+        return element
+    }
+
     private func mouseEvent(
         _ type: NSEvent.EventType, at point: CGPoint, in window: NSWindow, clickCount: Int = 1, modifiers: NSEvent.ModifierFlags = []
     ) -> NSEvent? {
@@ -470,6 +544,42 @@ package final class InputDriver {
             windowNumber: window.windowNumber, context: nil, eventNumber: 0, clickCount: clickCount,
             pressure: type == .leftMouseUp || type == .rightMouseUp ? 0 : 1)
     }
+
+    /// A trackpad's event at a window point, built in the process and handed to the app as one
+    /// from the trackpad is (the monitors, then the window): a pinch's `magnify` step, or a
+    /// two-finger scroll's (`scrollDY` > 0 moves down the content), with its phase (1 began,
+    /// 2 changed, 4 ended) or its momentum's (1 begin, 2 continue, 3 end). Nothing is posted.
+    package func trackpad(magnify: CGFloat? = nil, scrollDY: CGFloat = 0, phase: Int64 = 0, momentum: Int64 = 0,
+                          at point: CGPoint, in window: NSWindow) throws {
+        let event: CGEvent?
+        if let magnify {
+            event = CGEvent(source: nil)
+            event?.type = CGEventType(rawValue: 29)!  // a gesture
+            event?.setIntegerValueField(CGEventField(rawValue: 110)!, value: 8)  // its kind: zoom
+            event?.setDoubleValueField(CGEventField(rawValue: 113)!, value: Double(magnify))
+            event?.setIntegerValueField(CGEventField(rawValue: 132)!, value: phase)
+        } else {
+            event = CGEvent(scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: Int32((-scrollDY).rounded()), wheel2: 0, wheel3: 0)
+            event?.setIntegerValueField(.scrollWheelEventIsContinuous, value: 1)
+            event?.setIntegerValueField(CGEventField(rawValue: 99)!, value: phase)
+            event?.setIntegerValueField(CGEventField(rawValue: 123)!, value: momentum)
+        }
+        guard let event else { throw StoryFailure.other("can't build a trackpad event") }
+        // Its window (field 51), and the point in it from the window's top-left: the window's
+        // location setter isn't public, but the test host may look it up (Kore never does).
+        event.setIntegerValueField(CGEventField(rawValue: 51)!, value: Int64(window.windowNumber))
+        guard let setter = Self.setWindowLocation else { throw StoryFailure.other("no CGEventSetWindowLocation to aim a trackpad event") }
+        setter(event, CGPoint(x: point.x, y: window.frame.height - point.y))
+        guard let ns = NSEvent(cgEvent: event), ns.window === window, hypot(ns.locationInWindow.x - point.x, ns.locationInWindow.y - point.y) < 1 else {
+            throw StoryFailure.other("a trackpad event built in the process didn't land on its window's point")
+        }
+        NSApp.sendEvent(ns)
+    }
+
+    private static let setWindowLocation: (@convention(c) (CGEvent, CGPoint) -> Void)? = {
+        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "CGEventSetWindowLocation") else { return nil }
+        return unsafeBitCast(symbol, to: (@convention(c) (CGEvent, CGPoint) -> Void).self)
+    }()
 
     private func mouse(_ type: NSEvent.EventType, at point: CGPoint, in window: NSWindow) {
         if let event = mouseEvent(type, at: point, in: window) { NSApp.sendEvent(event) }

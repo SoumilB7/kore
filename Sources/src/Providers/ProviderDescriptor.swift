@@ -36,6 +36,9 @@ package struct ProviderDescriptor: Identifiable, Sendable {
     package var fastMode = false
     /// The "/" commands it takes before its CLI has listed its own (a chat not started yet).
     package var commands: [SlashCommand] = []
+    /// A past session's newest page, read without starting its CLI (`PastPage`); nil when
+    /// there's none to read.
+    package var pastPage: @Sendable (_ id: String, _ folder: URL) async -> PastPage? = { _, _ in nil }
 }
 
 /// The install card's words for one CLI's official installer.
@@ -58,6 +61,17 @@ package struct UsageWording: Sendable {
     /// What fast mode costs, from the CLI maker's published rates: the multiplier shown by the
     /// bolt ("2×") and the line on hovering it.
     package var fastCost = FastCost(times: "", detail: "")
+    /// Where the plan's limit resets are, in the browser: the CLI's own link, for a CLI that
+    /// gives Kore no way to use one (Claude's /limit-reset is its TUI's alone); nil otherwise.
+    package var limitReset: URL?
+
+    /// The reset link for a signed-in account: only a plan's, not a per-token key or a cloud
+    /// platform's. Nil identity (not read yet): the link, as only a plan has limits to reset.
+    package func limitReset(for identity: AccountIdentity?) -> URL? {
+        guard let limitReset else { return nil }
+        guard let identity else { return limitReset }
+        return identity.platform == nil && identity.plan != "Claude Console" ? limitReset : nil
+    }
 
     /// Kore's wording for a CLI that isn't signed in: where to sign in.
     package var signedOut: String { "\(product) isn't signed in. Sign in from Account in the / menu." }

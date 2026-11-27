@@ -180,7 +180,7 @@ struct FileVerbTests {
     }
 
     @Test func theCapIsSaidToFullGrantsOnly() {
-        let host = HostDaemon(paths: HostPaths(environment: ["HOME": "/tmp/kfv-none"]))
+        let host = HostDaemon.forTest(paths: HostPaths(environment: ["HOME": "/tmp/kfv-none"]))
         #expect(host.welcome(control: .full).caps.contains(LinkFsOps.cap) == true)
         #expect(host.welcome(control: .act).caps.contains(LinkFsOps.cap) == false)
         #expect(host.welcome(control: .watch).caps.contains(LinkFsOps.cap) == false)

@@ -8,12 +8,16 @@ package struct TabGroup: Identifiable, Equatable, Codable {
     package var name: String
     package var color: TabGroupColor
     package var folded: Bool
+    /// The chat whose agent made it (its id), or nil for the user's own. Arsenal leaves the user's
+    /// groups as they are unless the user asked for it in that chat (`arsenalArrange`).
+    package var madeBy: String?
 
-    package init(id: UUID = UUID(), name: String = "", color: TabGroupColor, folded: Bool = false) {
+    package init(id: UUID = UUID(), name: String = "", color: TabGroupColor, folded: Bool = false, madeBy: String? = nil) {
         self.id = id
         self.name = name
         self.color = color
         self.folded = folded
+        self.madeBy = madeBy
     }
 }
 
@@ -175,6 +179,21 @@ extension Workspace {
 
     package func members(of group: UUID) -> [ChatTab] { tabs.filter { tabGroups.member[$0.id] == group } }
 
+    /// Where a new tab goes (owner, 0.3.10): at `wanted`, but a group stays whole. Opened from a
+    /// tab in a group (`from`: a file from the explorer, Go to File or a link, a new chat, a
+    /// fork), right after that group's last member, outside it; at a place inside a group (between
+    /// two of its tabs), right after that group. Its members keep their order, fold and chats.
+    /// An Arsenal `group` puts the tab in afterwards (`add(_:to:)`); a drag places it itself.
+    func newTabIndex(_ wanted: Int, from anchor: ChatTab? = nil) -> Int {
+        let wanted = min(max(wanted, 0), tabs.count)
+        let group = anchor.flatMap { tabGroups.member[$0.id] }
+            ?? (wanted > 0 && wanted < tabs.count ? tabGroups.member[tabs[wanted - 1].id].flatMap { group in
+                tabGroups.member[tabs[wanted].id] == group ? group : nil
+            } : nil)
+        guard let group, let last = tabs.lastIndex(where: { tabGroups.member[$0.id] == group }) else { return wanted }
+        return last + 1
+    }
+
     /// A tab held on another and dropped: they're grouped, the held one after the other. Onto a
     /// tab already in a group, it joins that group. Returns the group when it's a new one.
     @discardableResult
@@ -241,13 +260,20 @@ extension Workspace {
         tabGroups.normalize(order: tabs.map(\.id))
     }
 
+    /// The user's rename: a group a chat made is the user's from then on.
     package func rename(group: UUID, to name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        tabGroups.update(group) { $0.name = trimmed }
+        tabGroups.update(group) {
+            $0.name = trimmed
+            $0.madeBy = nil
+        }
     }
 
     package func recolor(group: UUID, _ color: TabGroupColor) {
-        tabGroups.update(group) { $0.color = color }
+        tabGroups.update(group) {
+            $0.color = color
+            $0.madeBy = nil
+        }
     }
 
     /// The chip's click: folded to the chip, or open again.

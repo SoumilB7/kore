@@ -72,12 +72,15 @@ struct BoxLoginsTests {
         #expect(switched == ["ajinkya"] && store.logins("claude").first { $0.active }?.id == "ajinkya")
         // Nothing of this Mac's logins moved.
         #expect(CLIProfiles.active("claude") == macActive)
-        // On another account the box doesn't sign in: no sign-in, add, remove or method list for it.
-        #expect(!store.signInOffered("claude") && store.loginMenu("claude", "ajinkya").isEmpty && !store.loginMenu("claude", nil).isEmpty)
+        // Every account of the box signs in there, in its own folder; accounts are added there
+        // (never removed: that would sign one out).
+        #expect(store.signInOffered("claude") && !store.loginMenu("claude", "ajinkya").isEmpty && !store.loginMenu("claude", nil).isEmpty)
         let state = AccountState()
         state.open(provider: "claude", folder: URL(fileURLWithPath: "/tmp"), store: store)
-        #expect(!state.addsLogins)
-        #expect(!state.hasLoginMenu(rows[1]) && state.hasLoginMenu(rows[0]))
+        #expect(state.addsLogins)
+        #expect(state.hasLoginMenu(rows[1]) && state.hasLoginMenu(rows[0]))
+        state.toggleLoginMenu("work")
+        #expect(state.removable == nil)
         state.close()
 
         // Never a sign-out on a box: not offered, and refused without asking the box.
@@ -89,6 +92,119 @@ struct BoxLoginsTests {
         }
         #expect(why?.contains("doesn't sign anyone out on a box") == true)
         #expect(signOuts.value == 0)
+    }
+
+    /// What a box's sign-in was asked for, and the accounts the box lists.
+    @MainActor private final class FakeBox {
+        var accounts = [LinkAccount(id: "main", email: "me@example.com", signedIn: true)]
+        var viewed = LinkAccount.main
+        var asked: [String?] = []
+        var switched: [String?] = []
+        /// Who the sign-in lands on.
+        var lands = "new@example.com"
+
+        func store(_ provider: String) -> AccountStore {
+            let methods = (Registry.provider(provider)?.account.methods ?? []).filter { LinkPolicy.boxSignIns.contains($0.id) }
+            let calls = AccountCalls(
+                status: { ["loggedIn": true, "authMethod": "claude.ai", "email": "me@example.com"] },
+                signIn: { @MainActor [self] _, context in
+                    asked.append(context.login)
+                    let login = context.login
+                    return SignInHandle(url: URL(string: "https://example.com"), wait: { @MainActor [self] in
+                        // The box makes the account's folder and lists it once it's signed in.
+                        if let login, !accounts.contains(where: { $0.id == login }) {
+                            accounts.append(LinkAccount(id: login, email: lands, signedIn: true))
+                        }
+                        return ["loggedIn": true, "authMethod": "claude.ai", "email": .string(lands)]
+                    }, cancel: {})
+                },
+                useKey: { _ in nil }, signOut: { Issue.record("a box was asked to sign out") })
+            let store = AccountStore(calls: { _ in
+                AccountOps(methods: methods, parse: { AccountText.claude(ClaudeAuth.Status($0)) }, calls: calls,
+                    loginFile: { _ in URL(fileURLWithPath: "/dev/null") }, stamp: nil)
+            })
+            guard provider == "claude" else { return store }
+            store.box = AccountStore.BoxLogins(
+                list: { [self] _ in BoxAccountStores.rows(accounts, active: viewed) },
+                switchTo: { [self] _, login in
+                    switched.append(login)
+                    viewed = login ?? LinkAccount.main
+                    return nil
+                },
+                usage: { _, _ in throw UsageUnavailable() }, viewedIsMain: { [self] in viewed == LinkAccount.main }, viewed: { [self] in viewed })
+            return store
+        }
+    }
+
+    private func outcome(_ store: AccountStore, _ provider: String) async throws -> AccountStore.Step? {
+        try await settle { store.flow(provider).map { !$0.step.live } ?? false }
+        return store.flow(provider)?.step
+    }
+
+    /// The owner's ask: Add account in a box chat makes an account on the box, signed in by
+    /// Claude's own sign-in there, and the chat moves to it, as Add account does here.
+    @Test func addAccountOnABoxMakesAnAccountThereAndMovesTheChatToIt() async throws {
+        let box = FakeBox()
+        let store = box.store("claude")
+        await store.refresh("claude")
+        try await settle { store.logins("claude").count == 1 }
+        let state = AccountState()
+        state.open(provider: "claude", folder: URL(fileURLWithPath: "/tmp"), store: store)
+        defer { state.close() }
+        #expect(state.addsLogins)
+        let macActive = CLIProfiles.active("claude")
+        state.toggleAdd()
+        if state.palette == .add, let method = store.addMenu("claude").compactMap(\.method).first { state.signIn(method) }
+        #expect(try await outcome(store, "claude") == .switched)
+        let added = try #require(box.asked.first ?? nil)
+        #expect(box.asked.count == 1 && added != LinkAccount.main && LinkPolicy.plainID(added))
+        // The box moves the chat just after the sign-in's outcome.
+        try await settle { box.viewed == added && store.logins("claude").first { $0.active }?.id == added }
+        #expect(box.switched == [added])
+        try await settle { store.logins("claude").count == 2 }
+        #expect(store.logins("claude").map(\.email) == ["me@example.com", "new@example.com"])
+        #expect(store.logins("claude").first { $0.active }?.id == added)
+        #expect(CLIProfiles.active("claude") == macActive)
+    }
+
+    /// The same account added again stays where the chat was; another listed account's sign-in
+    /// runs in its folder and moves nothing; the chat's own runs in its folder.
+    @Test func aBoxSignsInTheAccountAskedForAndASameOneMovesNothing() async throws {
+        let box = FakeBox()
+        box.accounts.append(LinkAccount(id: "work", signedIn: false))
+        let store = box.store("claude")
+        await store.refresh("claude")
+        try await settle { store.logins("claude").count == 2 }
+        box.lands = "me@example.com"
+        store.addLogin("claude", in: URL(fileURLWithPath: "/tmp"))
+        #expect(try await outcome(store, "claude") == .same)
+        #expect(box.switched.isEmpty && box.viewed == LinkAccount.main)
+        store.dismissOutcome("claude")
+        box.lands = "work@example.com"
+        store.signIn("claude", in: URL(fileURLWithPath: "/tmp"), aim: .login("work"))
+        #expect(try await outcome(store, "claude") == .signedIn)
+        #expect(box.asked.last == "work" && box.switched.isEmpty)
+        store.dismissOutcome("claude")
+        store.switchLogin("claude", to: "work", LoginPick.byHandOnLink())
+        try await settle { box.viewed == "work" }
+        store.signIn("claude", in: URL(fileURLWithPath: "/tmp"))
+        _ = try await outcome(store, "claude")
+        #expect(box.asked.last == "work")
+    }
+
+    /// Codex keeps one login on a box: no Add account, and its sign-in names no account.
+    @Test func aBoxsCodexKeepsOneLogin() async throws {
+        let box = FakeBox()
+        let store = box.store("codex")
+        await store.refresh("codex")
+        #expect(!store.addsOnBox("codex") && store.logins("codex").isEmpty)
+        let state = AccountState()
+        state.open(provider: "codex", folder: URL(fileURLWithPath: "/tmp"), store: store)
+        #expect(!state.addsLogins)
+        state.close()
+        store.addLogin("codex", in: URL(fileURLWithPath: "/tmp"))
+        _ = try await outcome(store, "codex")
+        #expect(box.asked == [nil] && box.switched.isEmpty)
     }
 
     @Test func aLoginMovedToABoxShowsOnItAndIsNeverSignedOut() async throws {

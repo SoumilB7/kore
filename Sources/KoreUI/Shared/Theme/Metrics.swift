@@ -243,6 +243,21 @@ extension EnvironmentValues {
 
 /// The model and mode pickers, and the Account card's in-card lists (model-picker.html's tokens).
 extension Size {
+    /// Kore's own hover tip (`KoreTip`).
+    enum Tip {
+        @MainActor static var maxWidth: CGFloat { Zoom.pt(280) }
+        /// Below the pointer, past the cursor's arrow.
+        @MainActor static var pointerGap: CGFloat { Zoom.pt(20) }
+        static let lines = 4
+    }
+
+    /// Kore's own question over a window (`KoreAsk`).
+    enum Ask {
+        @MainActor static var width: CGFloat { Zoom.pt(340) }
+        /// The page under it, dimmed.
+        static let scrim: Double = 0.45
+    }
+
     enum Picker {
         /// A family row; a mode row.
         @MainActor static var row: CGFloat { Zoom.pt(28) }

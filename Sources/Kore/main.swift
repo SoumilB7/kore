@@ -8,6 +8,8 @@ Disclaim.execIfAsked()
 // `--locate-cli claude|codex` (`kore setup`): the binary Kore would run, printed, with no window.
 if let status = CLIExecutable.headless(CommandLine.arguments) { exit(status) }
 Disclaim.trampoline = Bundle.main.executablePath
+// Kore's own NSApp, before anything makes AppKit's: an exception out of a Swift job ends Kore there.
+KoreApplication.install()
 // Tooltips (a tab's full name) at 90% of the system's usual second.
 UserDefaults.standard.register(defaults: ["NSInitialToolTipDelay": 900])
 // The local link's doorbell: a ring wakes it; nothing of it runs before.

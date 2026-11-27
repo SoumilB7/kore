@@ -10,7 +10,7 @@ import Testing
 /// and a move or copy from one keeps it; phones, act and standard grants and Arsenal stay at Auto
 /// (Codex's Approve for me). Claude's Full access as root is refused before its CLI starts. A box
 /// chat's agent never allows commands in a chat it made.
-@Suite("kore-host, Full access on a box", .serialized)
+@Suite("kore-host, Full access on a box", .ownCeilings, .serialized)
 @MainActor
 struct BoxFullAccessTests {
     func command(_ client: StreamClient, _ kind: ControlKind, _ args: ControlArgs) async throws -> MoveResult {
@@ -143,6 +143,12 @@ struct BoxFullAccessTests {
         let new = ControlArgs(provider: cli, mode: full)
         #expect(LinkPolicy.checkBox(.chatNew, new, nil, control: .full, levels: levels) != .allow)
         #expect(LinkPolicy.checkBox(.chatNew, new, nil, control: .full, levels: levels, fullAccess: true) == .allow)
+        // A fork of a session, whose history may end in Full access: held at what the link may give.
+        let forked = ControlArgs(entryId: "u1", provider: cli, sessionId: "s1", settings: ChatSettings(modeCeiling: 4))
+        #expect(LinkPolicy.forkHeld(forked, control: .standard, fullAccess: false).settings?.modeCeiling == 1)
+        #expect(LinkPolicy.forkHeld(forked, control: .full, fullAccess: false).settings?.modeCeiling == 3)
+        #expect(LinkPolicy.forkHeld(forked, control: .full, fullAccess: true).settings?.modeCeiling == 4)
+        #expect(LinkPolicy.forkHeld(new, control: .standard, fullAccess: false) == new)
         // A Mac with full control: in Full access, kept for the chat's next start.
         #expect(set(.full)?.ok == true)
         #expect(hc.record.mode == full && hc.live(services: rig.host.services).controls.mode == full)

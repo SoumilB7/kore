@@ -322,7 +322,16 @@ final class MessageReading: ObservableObject {
     var height: CGFloat = 0 {
         didSet { if height != oldValue { update() } }
     }
+    /// The view follows the end now (the timeline's; no update of its own): the last
+    /// message's row leaving then went off the top, wherever it last was (a send's glide carries it
+    /// off from mid-view in one move).
+    var following: Bool { isFollowing() }
+    /// The timeline's own flag, read live (a jump drops it before its rows go).
+    var isFollowing: () -> Bool = { false }
     private var tops: [String: CGFloat] = [:]
+    /// When each top was last reported, to tell a stale one (`dropStale`).
+    private var stamps: [String: Int] = [:]
+    private var clock = 0
     /// Each message row's place among the scroller's marks once its top reaches the top (the
     /// user's own, or a peer's: the user's last before it), and its turn's above it.
     private var at: [String: Int] = [:]
@@ -339,7 +348,10 @@ final class MessageReading: ObservableObject {
     func list(_ marks: [TranscriptStore.MessageMark], sections: [String] = []) {
         self.marks = marks
         let end: String? = if case .built(let section) = marks.last?.place { String(section.dropFirst(2)) } else { nil }
-        if end != lastRow { (lastRow, lastLeftAbove) = (end, nil) }
+        // A new last message while the end is followed (a send): the view goes on past it as the
+        // reply comes, so it's read till another message's row shows (its own row may never
+        // report: the reply can carry it off before it's laid out on screen).
+        if end != lastRow { (lastRow, lastLeftAbove) = (end, following && lastRow != nil ? true : nil) }
         at = [:]
         before = [:]
         var built: [String: Int] = [:]
@@ -360,7 +372,10 @@ final class MessageReading: ObservableObject {
             }
         }
         // The one being read stays itself while the list around it changes.
-        if let read, let place = marks.firstIndex(where: { $0.place == read }), place != index { index = place }
+        if let read, let place = marks.firstIndex(where: { $0.place == read }), place != index {
+            ScrollLog.write("reading", "kept \(index ?? -1)->\(place) marks=\(marks.count)")
+            index = place
+        }
         update()
     }
 
@@ -369,12 +384,71 @@ final class MessageReading: ObservableObject {
 
     /// A message row's top in the view; nil once it's gone from the list.
     func moved(_ row: String, _ top: CGFloat?) {
-        if row == lastRow, top == nil, let was = tops[row] { lastLeftAbove = was < 0 }
+        if row == lastRow, top == nil, let was = tops[row] { lastLeftAbove = was < 0 || following }
+        // An earlier message's row gone while the end is followed, the last message's row never
+        // reported (a reply can carry it off before it's laid out on screen): the view is past
+        // every row that did, on its way to the end, where the last message is. Another row still
+        // on screen gives the reading back to the rows (`update`).
+        if row != lastRow, top == nil, following, tops[row] != nil, let lastRow, tops[lastRow] == nil, stamps[lastRow] == nil {
+            lastLeftAbove = true
+        }
         tops[row] = top
+        clock &+= 1
+        stamps[row] = top == nil ? nil : clock
         update()
     }
 
+    /// The scroll view was built again (the blank check, a tab coming back): the old view's rows
+    /// went with it, none saying so. Their tops are dropped; the new view's rows report their own.
+    /// The message read stays lit until they do.
+    func rowsGone() {
+        guard !tops.isEmpty || lastLeftAbove != nil else { return }
+        ScrollLog.write("reading", "rows gone tops=\(tops.count) index=\(index ?? -1)")
+        tops = [:]
+        stamps = [:]
+        lastLeftAbove = nil
+        if let lastRow, let place = at[lastRow], index == place { lastLeftAbove = true }
+    }
+
+    /// A row's view can leave without saying so (a list built again, a page read in above, a jump
+    /// far off), its last top left behind: after a jump to the first message, message 25's old top
+    /// just under the read line lit it (a narrow window's heights put it nearest). Tops follow
+    /// the chat's order on screen; where two disagree, the one reported earlier is stale.
+    private func dropStale() {
+        struct Placed {
+            let row: String
+            let top: CGFloat
+            let place: Int
+            let stamp: Int
+        }
+        var placed: [Placed] = []
+        for (row, top) in tops {
+            if let place = at[row] { placed.append(Placed(row: row, top: top, place: place, stamp: stamps[row] ?? 0)) }
+        }
+        placed.sort { a, b in a.place != b.place ? a.place < b.place : a.top < b.top }
+        var kept: [Placed] = []
+        for row in placed {
+            var stale = false
+            while let last = kept.last, last.place < row.place, last.top > row.top {
+                if row.stamp < last.stamp {
+                    stale = true
+                    break
+                }
+                kept.removeLast()
+                tops[last.row] = nil
+                stamps[last.row] = nil
+            }
+            if stale {
+                tops[row.row] = nil
+                stamps[row.row] = nil
+            } else {
+                kept.append(row)
+            }
+        }
+    }
+
     private func update() {
+        dropStale()
         // Another message's row on screen and the last's not drawn: the reader isn't at the
         // last, whichever way it left (a jump up from the end left it "above" for good). With
         // none on screen after that, which side it's on is unknown again: the end's following
@@ -384,6 +458,16 @@ final class MessageReading: ObservableObject {
         let shown =
             if let top = lastRow.flatMap({ tops[$0] }) { top < height } else if let lastLeftAbove { lastLeftAbove } else { !otherShown }
         if shown != lastShown { lastShown = shown }
+        // The last message's row gone off the top with no other on screen: the reader is in its
+        // turn (a long answer streaming in under it), followed or not.
+        if lastLeftAbove == true, !otherShown, let row = lastRow, tops[row] == nil, let place = at[row] {
+            if place != index {
+                ScrollLog.write("reading", "index \(index ?? -1)->\(place) in the last turn")
+                index = place
+            }
+            if marks.indices.contains(place) { read = marks[place].place }
+            return
+        }
         // The row past the read line nearest it: the same as the latest one past it while the
         // tops are the rows' own, and not one whose top is left from a list built again since.
         var above: (place: Int, top: CGFloat)?
@@ -393,8 +477,16 @@ final class MessageReading: ObservableObject {
             if first.map({ top < $0.top }) ?? true { first = (top, row) }
             if top <= Size.railReadLine, above.map({ top > $0.top || top == $0.top && place > $0.place }) ?? true { above = (place, top) }
         }
-        guard let first, let now = above?.place ?? before[first.row] else { return }
-        if now != index { index = now }
+        guard let first, let now = above?.place ?? before[first.row] else {
+            ScrollLog.write("reading", "none tops=\(tops.count) mapped=\(tops.keys.filter { at[$0] != nil }.count) index=\(index ?? -1)")
+            return
+        }
+        if now != index {
+            ScrollLog.write(
+                "reading",
+                "index \(index ?? -1)->\(now) above=\(above.map { "\($0.place)@\(Int($0.top))" } ?? "-") first=\(at[first.row] ?? -1)@\(Int(first.top)) height=\(Int(height))")
+            index = now
+        }
         if marks.indices.contains(now) { read = marks[now].place }
     }
 }

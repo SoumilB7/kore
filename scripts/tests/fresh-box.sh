@@ -50,9 +50,9 @@ trap 'rm -rf $tool' EXIT
 cat > $tool/mac.py <<'EOF'
 import json, os, plistlib, shutil, subprocess, sys
 mode, domain, support, alias, folder = sys.argv[1:6]
-PREFIXES = ["boxGrant.", "boxKoreHost.", "boxRecents.", "boxRecentsForgotten.", "boxTabGroups."]
+PREFIXES = ["boxGrant.", "boxKoreHost.", "boxRecents.", "boxRecentsForgotten.", "boxTabGroups.", "boxHostKeys."]
 LISTS = ["boxHosts", "koreNetPaused"]
-JSONS = ["koreNodes", "koreNodeNames", "syncPairs"]
+JSONS = ["koreNodes", "koreNodeNames", "koreNodeHostnames", "syncPairs"]
 
 def load():
     out = subprocess.run(["defaults", "export", domain, "-"], capture_output=True)

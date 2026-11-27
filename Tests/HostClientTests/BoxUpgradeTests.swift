@@ -341,12 +341,23 @@ struct BoxUpgradeTests {
         switcher.set(false)
     }
 
+    /// An enroll dialled and then ended before the box answered is tried once more; the box's no
+    /// stands, and so does a dial that failed (nothing waits twice on a dead SSH alias).
+    @Test func onlyAnEnrollTheBoxDidntRefuseIsTriedAgain() {
+        #expect(KoreNetSwitch.mayEnrollAgain("closed"))
+        #expect(KoreNetSwitch.mayEnrollAgain("bye timeout"))
+        for no in ["grant", "refused", "unknown", "revoked", "paused", "proof"] { #expect(!KoreNetSwitch.mayEnrollAgain("bye " + no)) }
+        #expect(!KoreNetSwitch.mayEnrollAgain("couldn't reach it on KoreNet: ssh: Could not resolve hostname gone: nodename nor servname provided"))
+        #expect(!KoreNetSwitch.mayEnrollAgain("the connection broke"))
+    }
+
     /// The whole of it, both halves real, no window: a never-enrolled box's daemon with KoreNet
     /// off; this Mac's KoreNet on starts the upgrade by itself. `kore-host upgrade` (in process)
     /// turns the box on, the link it holds says `net.node`, this Mac enrolls over `attach --proto
     /// 2`, the link moves to the tailnet, then it lets go. Run again (Join): the box is unchanged
-    /// and this Mac isn't enrolled twice.
-    @Test func noWindowUpgradeEndsOnTheTailnetAndRunsTwiceTheSame() async throws {
+    /// and this Mac isn't enrolled twice. `slowFirst`: the first enroll's hello reaches the box
+    /// after its 2 s pre-auth window (a slow link, a busy box), which ends it: it's tried again.
+    @Test(arguments: [false, true]) func noWindowUpgradeEndsOnTheTailnetAndRunsTwiceTheSame(slowFirst: Bool) async throws {
         let root = URL(fileURLWithPath: "/tmp/kz-\(UUID().uuidString.prefix(6))")
         defer { try? FileManager.default.removeItem(at: root) }
         let work = root.appendingPathComponent("work")
@@ -362,7 +373,7 @@ struct BoxUpgradeTests {
             $0.whois["127.0.0.1"] = try! JSONDecoder().decode(
                 TailnetWhoIs.self, from: Data(#"{"Node":{"Key":"nodekey:mac","Name":"mac.tail.ts.net."},"UserProfile":{"ID":7,"LoginName":"me@example.com"}}"#.utf8))
         }
-        let host = HostDaemon(paths: paths)
+        let host = HostDaemon.forTest(paths: paths)
         host.makeTailnet = { boxNet }
         host.netPort = 0
         try host.start()
@@ -373,6 +384,7 @@ struct BoxUpgradeTests {
         let ran = Reports()
         let box = inProcessUpgrade(host, paths: paths, ran: ran)
         let attaches = Attaches()
+        let dials = Mutex(0)
 
         // This Mac: installed Tailscale running, the box its peer at 127.0.0.1.
         let macNet = FakeTailnet()
@@ -398,9 +410,20 @@ struct BoxUpgradeTests {
             support: support,
             upgradeDial: { _, _, _ in
                 guard let grant = GrantStore(paths.grants).load(grantName) else { throw TailnetError.sidecar("no grant yet") }
-                return try attaches.dial(paths.netSocket, grant)
+                let dialed = try attaches.dial(paths.netSocket, grant)
+                // Off the main actor: the box's window runs out while this hello waits.
+                if slowFirst, dials.withLock({ $0 += 1; return $0 }) == 1 { usleep(2_500_000) }
+                return dialed
             }, macName: { "MacBook" })
         let alias = "nz-\(UUID().uuidString.prefix(6).lowercased())"
+        // What the Mac noted for this box (enroll's reason among them), said if it doesn't join.
+        let noted = Mutex<[String]>([])
+        let tapped = HostLog.tap
+        HostLog.tap = { line in
+            tapped?(line)
+            noted.withLock { $0.append(line) }
+        }
+        defer { HostLog.tap = tapped }
         let directory = NodeDirectory(defaults: defaults)
         let connection = HostConnection(alias: alias, grant: grantName, cache: HostCache(alias: alias, root: support.appendingPathComponent("hosts"))) {
             guard let grant = GrantStore(paths.grants).load(grantName) else { return DaemonTransport(path: "/nonexistent", grant: Grant(name: grantName, socket: "", secret: "", control: .full, created: 0)) }
@@ -439,10 +462,15 @@ struct BoxUpgradeTests {
         // upgrade ends: `facts` reads both, as the box's row does.
         let joined = await holds { upgrades.facts(alias)?.joinedAt != nil }
         let join1 = upgrades.joins[alias] ?? upgrades.joins[connection.alias]
-        #expect(joined, "\(join1?.note ?? "-") \(join1?.rows ?? []) · \(String(describing: connection.route))")
+        let said = noted.withLock { $0 }.filter { $0.hasPrefix(alias) || $0.hasPrefix(connection.alias) || $0.contains("enroll") }
+        #expect(joined, "\(join1?.note ?? "-") \(join1?.rows ?? []) · \(String(describing: connection.route)) · noted: \(said.suffix(20))")
         // Nothing after it can come: the test ends here, not in waits that never would.
         guard joined else { return switcher.set(false) }
         #expect(upgrades.started == 1)
+        // The node the link reached is kept under the box's id, not the alias it was dialled by
+        // (a pipe dials it; korenet-rig `pipe-no-sshd`, 2026-11-25).
+        #expect(await holds { connection.alias != alias && switcher.linkNode[connection.alias] == "nodekey:box" })
+        #expect(switcher.linkNode[alias] == nil)
         let entry = try #require(directory.entry(forKey: connection.alias))
         #expect(entry.enrolled && entry.nodeKey == "nodekey:box")
         #expect(host.config.netOn && host.net?.listening == true)

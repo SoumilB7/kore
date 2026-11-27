@@ -8,6 +8,10 @@
 #
 #   scripts/tests/korenet-real/run.sh [scenario…]        (all when none; `korenet-rig list` names them)
 #
+# RIG_BUILD_ONLY=1 builds and stops (its builds take build slots of their own); RIG_BUILT=1 runs
+# with what's built, starting no build: the run under a runner that holds every slot already
+# (`quiet-run.sh`). KORE_ONE_BUILD: the build slot script (default scripts/one-build.sh).
+#
 # One line per scenario, ✔/✘ with its time; each scenario's story (Kore's lines, each box's
 # journal) in $RIG_RUN/logs/<scenario>.log. Everything made is labelled com.kore.rig=1 and goes at
 # the end, pass or fail: containers, the network, the box image, Headscale's nodes (its database
@@ -26,7 +30,7 @@ ts_version=$(sed -n 's/^\ttailscale.com \(v[0-9.]*\)$/\1/p' "$root/tools/kore-ta
 mkdir -p "$RIG_RUN" "$RIG_BIN" "$RIG_HOSTBIN"
 # A hard bound on a command (no coreutils timeout on a Mac).
 # Builds run niced, one swift build at a time (another's under way: waited for).
-swiftwait() { while pgrep -x swift-build >/dev/null; do sleep 5; done; }
+swiftwait() { [[ -n ${KORE_ONE_BUILD:-} ]] && return; while pgrep -x swift-build >/dev/null; do sleep 5; done; }
 bound() { perl -e '$s=shift; $p=fork; if(!$p){setpgrp(0,0); exec @ARGV or die "exec: $!"} $SIG{ALRM}=sub{kill -9,-$p; kill -9,$p; print STDERR "timed out after ${s}s\n"; exit 124}; alarm $s; waitpid $p,0; exit($?>>8)' "$@"; }
 t0=$EPOCHREALTIME
 lap() { printf '[%5.0fs] %s\n' $(( EPOCHREALTIME - t0 )) "$1"; }
@@ -43,11 +47,13 @@ cleanup() {
     rm -f ~/Library/Preferences/korenet-rig.plist ~/Library/Preferences/korenet-rig-fresh.plist
     lap "cleaned up (everything labelled com.kore.rig=1)"
 }
-trap cleanup EXIT
-trap 'exit 130' INT TERM
+[[ ${RIG_BUILD_ONLY:-} == 1 ]] || { trap cleanup EXIT; trap 'exit 130' INT TERM; }
+onebuild=${KORE_ONE_BUILD:-$root/scripts/one-build.sh}
 
 # 1. Binaries: tailscaled + tailscale (darwin: the Mac's "installed" one; linux: the boxes'),
-# derper, kore-tailnet -tags koretest (both), kore-host for Linux (static musl), korenet-rig.
+# derper, kore-tailnet -tags koretest (both), kore-host for Linux (static musl), korenet-rig and
+# kore-command beside it (`kore pipe`, as Kore.app's Helpers/kore).
+if [[ ${RIG_BUILT:-} != 1 ]]; then
 export CGO_ENABLED=0 GOFLAGS=-mod=mod
 ts=$(go env GOMODCACHE)/tailscale.com@$ts_version
 [[ -d $ts ]] || (cd "$root/tools/kore-tailnet" && go mod download tailscale.com)
@@ -63,11 +69,13 @@ for os in darwin linux; do
 done
 cp "$RIG_BIN/kore-tailnet-linux" "$RIG_HOSTBIN/kore-tailnet-linux-aarch64"
 linux=(--package-path "$root" --swift-sdk aarch64-swift-linux-musl -c release --product kore-host --scratch-path "$root/.build-linux")
-swiftwait; bound 2400 nice -n 10 "$root/scripts/one-build.sh" "$swift_linux" build "${linux[@]}" -Xlinker --strip-all >"$RIG_RUN/linux.log" 2>&1 || { tail -20 "$RIG_RUN/linux.log"; exit 1; }
+swiftwait; bound 2400 nice -n 10 "$onebuild" "$swift_linux" build "${linux[@]}" -Xlinker --strip-all >"$RIG_RUN/linux.log" 2>&1 || { tail -20 "$RIG_RUN/linux.log"; exit 1; }
 cp "$root/.build-linux/release/kore-host" "$RIG_HOSTBIN/kore-host-linux-aarch64"
-swiftwait; bound 1200 nice -n 10 "$root/scripts/one-build.sh" swift build --package-path "$root" --product korenet-rig >"$RIG_RUN/rig.log" 2>&1 || { tail -20 "$RIG_RUN/rig.log"; exit 1; }
+swiftwait; bound 1200 nice -n 10 "$onebuild" zsh -c 'swift build --package-path "$1" --product korenet-rig && swift build --package-path "$1" --product kore-command' _ "$root" >"$RIG_RUN/rig.log" 2>&1 || { tail -20 "$RIG_RUN/rig.log"; exit 1; }
+fi
 rig="$(swift build --package-path "$root" --product korenet-rig --show-bin-path)/korenet-rig"
 lap "built"
+[[ ${RIG_BUILD_ONLY:-} == 1 ]] && exit 0
 
 # 2. The box image, the DERP cert, Headscale + DERP, the owner's user, the run's ssh key.
 ctx="$RIG_BUILD/ctx"

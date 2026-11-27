@@ -20,7 +20,7 @@ struct SlashMenu: View {
                         Button { accept(command) } label: { row(command, lit: index == selected) }
                         .buttonStyle(.plain)
                         .highlightRow(StoryID.Composer.command(command.name), lit: index == selected) { select(index) }
-                        .help(command.description)
+                        .tip(command.description)
                         .storyID(StoryID.Composer.command(command.name), press: { accept(command) })
                         .id(command.id)
                     }
@@ -170,7 +170,7 @@ struct CommandChip: View {
         }
         .buttonStyle(.plain)
         .hitTargetRoom(Size.commandChipReach)
-        .help(command.description)
+        .tip(command.description)
         .storyID(StoryID.Composer.chip, press: { open() })
     }
 }

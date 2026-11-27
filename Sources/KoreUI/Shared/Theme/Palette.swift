@@ -55,6 +55,9 @@ enum Theme {
     static let commandHalo = accent.opacity(0.15)
     /// A small button under the pointer: a step above `surfaceHover`.
     static let surfaceRaised = Color(hex: 0x263036)
+    /// The raised fill one step up, under the pointer and pressed (History's current row).
+    static let surfaceRaisedHover = Color(hex: 0x2C383F)
+    static let surfaceRaisedPressed = Color(hex: 0x323F47)
     /// Send with nothing to send: the raised fill and a secondary arrow.
     static let sendOff = surfaceRaised
     static let sendOffGlyph = secondary

@@ -32,7 +32,7 @@ struct ComposerBar: View {
                         MainActor.assumeIsolated { if plusHovered.value { AttachPanel.warm() } }
                     }
                 }
-                .help("Attach")
+                .tip("Attach")
                 .accessibilityLabel(Text("Attach files"))
                 .storyID(StoryID.Composer.attach)
 
@@ -46,7 +46,7 @@ struct ComposerBar: View {
                 }
                 .buttonStyle(.plain)
                 .onHover { slashHovered.value = $0 }
-                .help("Slash commands")
+                .tip("Slash commands")
                 .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { slashFrame($0) }
                 .storyID(StoryID.Composer.slash)
             }
@@ -115,7 +115,7 @@ struct ComposerBar: View {
         }
         .buttonStyle(.plain)
         .disabled(off)
-        .help(stops ? "Stop (Esc)" : "Send (↩)")
+        .tip(stops ? "Stop (Esc)" : "Send (↩)")
         .accessibilityLabel(Text(stops ? "Stop" : "Send"))
         // One button: Stop while a turn runs or an empty composer's compaction does, else Send.
         .storyID(stops ? StoryID.Composer.stop : StoryID.Composer.send)
@@ -153,7 +153,7 @@ struct ModelMenu: View {
         .fixedSize()
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { chat.picker.chips[.model] = $0 }
         // The pill says it, unless a narrow bar has hidden the effort.
-        .help(showEffort ? "" : chat.controls.effortLabel.map { "\(chat.controls.modelLabel) · \($0)" } ?? "")
+        .tip(showEffort ? "" : chat.controls.effortLabel.map { "\(chat.controls.modelLabel) · \($0)" } ?? "")
     }
 }
 
@@ -199,7 +199,7 @@ struct ModeMenu: View {
         .buttonStyle(.plain)
         .fixedSize()
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { chat.picker.chips[.mode] = $0 }
-        .help(chat.controls.changedBy.map { "Changed by \($0)" } ?? "Mode (⇧Tab)")
+        .tip(chat.controls.changedBy.map { "Changed by \($0)" } ?? "Mode (⇧Tab)")
         // Only the agent's own change flashes, not a switch to a chat that had one.
         .onChange(of: AgentChange(chat: chat.id, seq: chat.controls.agentChangeSeq)) { old, new in
             guard !reduceMotion, old.chat == new.chat else { return }

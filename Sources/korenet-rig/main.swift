@@ -11,6 +11,7 @@ import Darwin
 import Foundation
 import HostClient
 import KoreCore
+import LinkProtocol
 import Tailnet
 
 @MainActor
@@ -113,6 +114,13 @@ final class Run {
         check(String(format: "Set up %@ → Ready (%.1fs)", alias, now() - start), ok, "\(status.map { "\($0)" } ?? "not listed")")
         check("Set up's last step: Kore's tailnet on \(alias) signed in", own?.signedIn == true, own.map { $0.line } ?? "nothing said")
         return ok
+    }
+
+    /// A box's line is Ready now; a check either way.
+    func expectReady(_ alias: String, _ what: String) -> Bool {
+        let status = BoxList.shared.box(alias)?.status
+        check(what, status == .ready, status.map { "\($0)" } ?? "not listed")
+        return status == .ready
     }
 
     /// The box's window opens; its link is up over KoreNet within `within`.
@@ -274,7 +282,7 @@ final class Once<T: Sendable>: @unchecked Sendable {
 
 let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Void)] = [
     ("plain-ssh", "plain SSH over the LAN to a box with no Tailscale → Set up → its own tailnet signs in → the link moves to KoreNet; SSH stays a route", plainSSH),
-    ("first-contact", "a box this Mac has never met: its own empty known_hosts, ssh's own host-key check → Set up stops with the one line to run; once run, Set up → Ready → KoreNet", firstContact),
+    ("first-contact", "a box this Mac has never met: its own empty known_hosts, ssh's own host-key check → Set up stops at the new key, its fingerprint shown with Trust; Trust → the key added as accept-new would → Set up goes on → Ready → KoreNet", firstContact),
     ("ts-ip", "SSH over the box's Tailscale IP, Tailscale on the box and the Mac → the upgrade uses installed Tailscale; the box's own signs in on standby", tsIP),
     ("box-ts-stops", "box tailscaled stops while its own is on standby → the box moves to its own, the Mac follows, SSH still works; tailscaled back → both move back, one box node online", boxTailscaleStops),
     ("mac-ts-quits", "the Mac's installed Tailscale quits → the Mac moves to its own; the box (on Tailscale) stays reachable, SSH over its Tailscale IP too; Tailscale back → the Mac moves back", macTailscaleQuits),
@@ -294,7 +302,11 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     ("forgotten", "a box forgotten on this Mac (Remove) and added again → a first add: Set up, the upgrade, the link on KoreNet; no duplicate own node", forgotten),
     ("fresh-box", "scripts/tests/fresh-box.sh: backup → wipe (Kore has never seen the box, the box has no kore-host) → Set up from scratch → restore → the original box back", freshBox),
     ("fresh-phase", "(a step of fresh-box, run as its own Kore)", freshPhase),
+    ("pipe-no-sshd", "a box set up over SSH, then its sshd stopped: copies both ways and the sync run over kore pipe on KoreNet, no SSH at all", pipeNoSSHD),
     ("interrupted", "the upgrade interrupted at each step (SSH killed mid-install, mid-join, mid-sign-in) → a retry completes, one own node, nothing stuck", interrupted),
+    ("host-restart", "kore-host restarted (systemctl restart, as an update does) with the link on Kore's own tailnet → the Mac hears `restart` and relinks on KoreNet within seconds, never through SSH", hostRestart),
+    ("dead-alias", "the box's SSH alias now names an address nothing answers (an old LAN address) while KoreNet carries it → reads, chats, copies, the sync, a probe, a window reopened and Check again take no SSH wait; the row stays online", deadAlias),
+    ("host-keys", "past first contact: the box's keys made again (ssh's own changed-key refusal), the same at a moved address (Kore's own), the old key at a new address (offered as moved, trusted), a key changed between its offer and Trust → never trusted, known_hosts keeps what it had, KoreNet keeps working", hostKeys),
 ]
 
 @MainActor func plainBox(_ r: Run, _ name: String, port: Int, user: String = "kore", lingerOn: Bool = false) async -> Bool {
@@ -384,6 +396,36 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     let ran = await docker("restart", "-t", "5", Boxes.container(box), timeout: 90)
     _ = await Boxes.exec(box, "for i in $(seq 100); do s=$(systemctl is-system-running 2>/dev/null || true); case $s in running|degraded) break;; esac; sleep 0.1; done")
     return ran.ok
+}
+
+/// 0.3.10: the box's `bye restart` went down with its tailnet (kore-tailnet stopped, then exit,
+/// before the bye crossed), so the Mac found the link dead by probe, relinked over SSH and moved
+/// back ~30 s later. Now the bye goes first: the Mac's restart path, KoreNet straight back.
+@MainActor func hostRestart(_ r: Run) async {
+    guard await plainBox(r, "b25", port: 22125, lingerOn: true) else { return }
+    await r.works("b25", "KoreNet before the restart")
+    guard let link = r.kore.link("b25") else { return r.check("b25's link", false, "") }
+    let t0 = now()
+    let ran = await Boxes.exec("b25", "XDG_RUNTIME_DIR=/run/user/$(id -u) systemctl --user restart kore-host", user: "kore")
+    r.check("kore-host restarted by systemd", ran.ok, ran.out)
+    // Watched every 100 ms until it's back: the reason the link ended, and any time on SSH.
+    var heard: [String] = []
+    var onSSH = false
+    var back: Double?
+    while now() - t0 < 30 {
+        if let why = link.lastReason, heard.last != why { heard.append(why) }
+        if link.isOnline, let route = link.route {
+            if !route.isNet { onSSH = true }
+            if route.isNet, now() - t0 > 0.5, await r.answers("b25") { back = now() - t0; break }
+        }
+        try? await Task.sleep(for: .milliseconds(100))
+    }
+    r.note("the link said: " + heard.joined(separator: " → "))
+    r.check("the Mac heard kore-host restarting", heard.contains { $0.contains("restarting") }, heard.joined(separator: " → "))
+    r.check("never through SSH meanwhile", !onSSH, "")
+    r.check(String(format: "back on KoreNet, answering, within 15 s (%.1fs)", back ?? -1), (back ?? 99) < 15, r.kore.describe("b25"))
+    await r.works("b25", "KoreNet after the restart")
+    r.logRow("b25")
 }
 
 @MainActor func reboot(_ r: Run) async {
@@ -638,10 +680,17 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
         guard await r.setUp("b17") else { continue }
         if await r.linkOnNet("b17", within: 60) { await r.works("b17", "KoreNet (after a \(what) kore-host)") }
         let v = await Boxes.exec("b17", "su - kore -c '~/.local/bin/kore-host --version'; ls \(bin)")
-        r.check("b17 runs this Mac's kore-host, nothing left over (\(what))", v.out.contains("0.3.8") && !v.out.contains(".new"), v.out)
+        r.check("b17 runs this Mac's kore-host, nothing left over (\(what))", v.out.contains("kore-host \(macVersion) ") && !v.out.contains(".new"), v.out)
     }
     r.check("one b17-kore node", (await Headscale.nodes()).filter { $0.name.hasPrefix("b17-kore") }.count == 1)
 }
+
+/// The version this Mac's kore-host says: the package's `VERSION`, as kore-host embeds it.
+let macVersion: String = {
+    let root = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+    let text = (try? String(contentsOf: root.appendingPathComponent("VERSION"), encoding: .utf8)) ?? ""
+    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+}()
 
 @MainActor func forgotten(_ r: Run) async {
     guard await plainBox(r, "b18", port: 22118) else { return }
@@ -717,7 +766,7 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     let left = await Boxes.exec("b12", "ls -a /home/kore/.local/bin /home/kore/.local/state /home/kore/.config/systemd/user 2>/dev/null; pgrep -u kore -x kore-host")
     r.check("b12 has no kore-host (binary, state, unit, daemon)", !left.out.contains("kore-host"), left.out)
     let prefs = runSync("/usr/bin/defaults", ["export", "korenet-rig-fresh", "-"]).out
-    r.check("Kore's settings name b12 nowhere", !prefs.contains("b12"), "")
+    r.check("Kore's settings name b12 nowhere", !prefs.contains("b12"), prefs.split(whereSeparator: \.isNewline).filter { $0.contains("b12") }.prefix(6).joined(separator: " "))
     let verify = await freshBoxSh(["--verify", "b12", "--expect", "fresh"])
     r.check("fresh-box.sh --verify b12 --expect fresh: clean", verify.ok, verify.out)
     let proof = r.places.run.appendingPathComponent("proof/fresh-box", isDirectory: true)
@@ -835,6 +884,7 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     let ssh = await r.kore.sshThroughKore("b3")
     r.check("Kore's SSH to b3 (its Tailscale IP is gone) still works", ssh.ok, ssh.out)
     r.logRow("b3")
+    await filesThroughKore(r, "b3")
     let t1 = now()
     _ = await Boxes.exec("b3", "systemctl start tailscaled")
     await r.expect("b3 back on installed Tailscale: own offline, installed online", within: 60) {
@@ -847,6 +897,50 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     r.logRow("b3")
 }
 
+/// The box's Tailscale gone, its alias still naming that address, the link on Kore's own
+/// tailnet: the sync (a pair, both ways), a copy's rsync (as moves, copies and carries run it) and
+/// a shell over SSH ride the same route (0.3.10: they went to the dead address and paused on
+/// "rsync: unexpected end of file").
+@MainActor func filesThroughKore(_ r: Run, _ alias: String, shell: Bool = true) async {
+    guard let link = r.kore.link(alias), let box = SyncBox.box(link) else { return r.check("\(alias)'s link and SSH alias", false, "") }
+    let home = "/home/kore"
+    // A copy's rsync and a shell, as ChatMoves, ChatCopies and FileCarry run them.
+    let local = r.places.scratch.appendingPathComponent("carry-\(alias)")
+    try? FileManager.default.createDirectory(at: local, withIntermediateDirectories: true)
+    try? "carried".write(to: local.appendingPathComponent("carried.txt"), atomically: true, encoding: .utf8)
+    let pushed = await SyncProcess.run("/usr/bin/rsync", ["-a"] + box.rsyncOptions(false) + [local.path + "/", box.spec(home + "/carry/")])
+    r.check("a copy's rsync to \(alias) rides Kore's tailnet", pushed.status == 0, pushed.said)
+    if shell {
+        let read = await box.shell(#"cat "$1""#, [home + "/carry/carried.txt"])
+        r.check("a shell over SSH reads it back", read.status == 0 && read.out.contains("carried"), read.said)
+    } else {
+        let there = await Boxes.exec(alias, "[ \"$(cat \(home)/carry/carried.txt)\" = carried ]", user: "kore")
+        r.check("the copy landed on \(alias)", there.ok, there.out)
+        let back = r.places.scratch.appendingPathComponent("back-\(alias)")
+        let pulled = await SyncProcess.run("/usr/bin/rsync", ["-a"] + box.rsyncOptions(false) + [box.spec(home + "/carry/"), back.path + "/"])
+        let landed = (try? String(contentsOf: back.appendingPathComponent("carried.txt"), encoding: .utf8)) ?? ""
+        r.check("a copy's rsync from \(alias) rides the pipe back", pulled.status == 0 && landed == "carried", pulled.said)
+    }
+    // The sync: a pair, a file each way.
+    _ = await Boxes.exec(alias, "mkdir -p \(home)/pair", user: "kore")
+    _ = await link.addFolder(home + "/pair")
+    let mac = r.places.scratch.appendingPathComponent("pair-\(alias)")
+    try? FileManager.default.createDirectory(at: mac, withIntermediateDirectories: true)
+    let pair = SyncPair(mac: mac.path, alias: alias, box: home + "/pair")
+    guard let sync = HostSync(pair: pair, connection: link, root: r.places.scratch.appendingPathComponent("sync-cache")) else {
+        return r.check("a sync for \(alias)", false, "")
+    }
+    sync.start()
+    defer { sync.stop() }
+    try? "from the Mac".write(to: mac.appendingPathComponent("from-mac.txt"), atomically: true, encoding: .utf8)
+    await r.expect("the sync carries a Mac file to \(alias)", within: 45) {
+        await Boxes.exec(alias, "cat \(home)/pair/from-mac.txt", user: "kore").out.contains("from the Mac")
+    }
+    _ = await Boxes.exec(alias, "echo from-box > \(home)/pair/from-box.txt", user: "kore")
+    await r.expect("the sync carries a box file here", within: 45) { FileManager.default.fileExists(atPath: mac.appendingPathComponent("from-box.txt").path) }
+    r.check("no paused line", sync.notice?.hasPrefix("Sync paused") != true, sync.notice ?? "")
+}
+
 @MainActor func firstContact(_ r: Run) async {
     guard await r.box(BoxSpec(name: "b24", sshPort: 22124)) else { return }
     let known = r.places.scratch.appendingPathComponent("known_hosts")
@@ -856,14 +950,28 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     let status = await r.kore.addAndSetUp("b24")
     let said: String
     if case .failed(let line, let fix)? = status { said = line + " · fix: \(fix.map { "\($0)" } ?? "none")" } else { said = "\(status.map { "\($0)" } ?? "-")" }
-    r.check("Set up stops at the new host key with the line to run", said.contains("host key is new") && said.contains("ssh b24"), said)
+    r.check("Set up stops at the new host key", said.contains("host key is new"), said)
     r.note("Set up said: \(said)")
-    // The owner runs it once in Terminal and answers yes.
-    let accepted = await run(r.places.sshWrapper.path, ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=accept-new", "b24", "true"])
-    r.check("ssh b24 once, its key accepted", accepted.ok, accepted.out)
-    r.check("known_hosts holds b24's key now", ((try? String(contentsOf: known, encoding: .utf8)) ?? "").contains("[127.0.0.1]:22124"))
-    guard await r.setUp("b24") else { return }
-    if await r.linkOnNet("b24") { await r.works("b24", "KoreNet (first contact)") }
+    // The line then shows the key's fingerprint, as ssh prints it, and Trust (no Terminal).
+    var offer: BoxHostKey.Offer?
+    guard await r.expect("b24's line shows its key's fingerprint and Trust", within: 30, box: "b24", {
+        if case .failed(_, .trust(let shown))? = BoxList.shared.box("b24")?.status { offer = shown }
+        return offer != nil
+    }), let offer else { return }
+    r.note("the line: \(offer.line)")
+    // The box's own keys, read apart from Kore: what's shown is one of them.
+    let scanned = await run("/bin/sh", ["-c", "ssh-keyscan -p 22124 127.0.0.1 2>/dev/null | ssh-keygen -lf -"])
+    let prints = offer.fingerprints.compactMap { $0.split(separator: " ").last.map(String.init) }
+    r.check("the fingerprint shown is b24's own key", !prints.isEmpty && prints.allSatisfy { scanned.out.contains($0) }, scanned.out)
+    r.check("known_hosts is still empty before Trust", ((try? String(contentsOf: known, encoding: .utf8)) ?? "").isEmpty)
+    let start = now()
+    await BoxList.shared.act(.trust(offer), on: "b24")
+    let after = BoxList.shared.box("b24")?.status
+    r.check(String(format: "Trust → Set up goes on → Ready (%.1fs)", now() - start), after == .ready, "\(after.map { "\($0)" } ?? "-")")
+    let kept = (try? String(contentsOf: known, encoding: .utf8)) ?? ""
+    r.check("known_hosts holds b24's key as accept-new writes it", kept.contains("[127.0.0.1]:22124") && offer.lines.allSatisfy(kept.contains), kept)
+    guard after == .ready else { return }
+    if await r.linkOnNet("b24") { await r.works("b24", "KoreNet (first contact, Trust)") }
 }
 
 @MainActor func plainSSH(_ r: Run) async {
@@ -877,6 +985,179 @@ let scenarios: [(name: String, what: String, body: @MainActor (Run) async -> Voi
     r.check("SSH still reaches b1", ssh.ok, ssh.out)
     r.check("sign-in pages opened: this Mac's once, b1's once", r.kore.browser.opened.count == 2, "\(r.kore.browser.opened.count) opened")
     r.logRow("b1")
+}
+
+/// Cell B: no sshd once set up. The link on KoreNet, every copy goes over `kore pipe` (owner,
+/// 2026-11-24); none waits on the alias, which now answers nothing.
+@MainActor func pipeNoSSHD(_ r: Run) async {
+    guard await r.box(BoxSpec(name: "b26", sshPort: 22126)) else { return }
+    RigSSH.write([RigSSH.Host(alias: "b26", lines: ["HostName 127.0.0.1", "Port 22126", "User kore", "ConnectTimeout 5"])], places: r.places)
+    guard await r.launch(installed: false) else { return }
+    guard await r.setUp("b26") else { return }
+    guard await r.linkOnNet("b26") else { return }
+    _ = await Boxes.exec("b26", "systemctl stop ssh.socket ssh 2>/dev/null; systemctl stop ssh")
+    let ssh = await RigSSH.exec("b26", "true", places: r.places, timeout: 10)
+    r.check("b26's sshd is off", !ssh.ok, ssh.out)
+    await r.works("b26", "KoreNet, sshd off")
+    if let link = r.kore.link("b26") {
+        r.check("b26 serves pipes", link.caps.contains(LinkPipe.cap), "\(link.caps)")
+        r.check("its copies choose the pipe", SyncBox.box(link)?.overPipe == true)
+    }
+    let t0 = now()
+    await filesThroughKore(r, "b26", shell: false)
+    r.note(String(format: "copies and the sync over the pipe in %.1fs", now() - t0))
+    r.logRow("b26")
+}
+
+/// 0.3.10: a box's alias left on an address that no longer answers (mybox's `Host mybox` on its
+/// old LAN address) while KoreNet carries the box. Nothing Kore does for it waits on an SSH
+/// connect there (Kore's are 5–10 s each), and its row doesn't say it can't be reached.
+@MainActor func deadAlias(_ r: Run) async {
+    guard await plainBox(r, "b28", port: 22128) else { return }
+    await r.works("b28", "KoreNet before the alias went dead")
+    // TEST-NET-1: routed nowhere, so a connect there waits out its timeout, as a dead LAN address does.
+    RigSSH.write([RigSSH.Host(alias: "b28", lines: ["HostName 192.0.2.1", "User kore"])], places: r.places)
+    let probe = now()
+    let ssh = await RigSSH.exec("b28", "true", places: r.places, timeout: 15)
+    r.check(String(format: "ssh b28 gets no answer now (%.1fs)", now() - probe), !ssh.ok, ssh.out)
+    let log = r.places.scratch.appendingPathComponent("kore-ssh.log")
+    let sshBefore = ((try? String(contentsOf: log, encoding: .utf8)) ?? "").count
+    /// One action, timed: within `limit`, well under an SSH connect's wait.
+    func quick(_ what: String, limit: Double = 3, _ work: () async -> String?) async {
+        let t0 = now()
+        let failed = await work()
+        let took = now() - t0
+        r.check(String(format: "%@ (%.1fs, under %.0fs)", what, took, limit), failed == nil && took < limit, failed ?? r.kore.describe("b28"))
+    }
+    await quick("fs.list over KoreNet, alias dead") { await r.kore.list("b28", "/home/kore") ? nil : "fs.list failed" }
+    await quick("chat.call over KoreNet, alias dead") { await r.kore.chatCall("b28", folder: "/home/kore") }
+    await quick("a probe of b28 finds it Ready") {
+        await BoxList.shared.probe("b28")
+        return BoxList.shared.box("b28")?.status == .ready ? nil : "status \(BoxList.shared.box("b28").map { "\($0.status)" } ?? "-")"
+    }
+    await quick("its window closed and opened again: online on KoreNet") {
+        r.kore.close("b28")
+        try? await Task.sleep(for: .milliseconds(500))
+        r.kore.open("b28")
+        let up = await r.until("b28 back online", within: 10) { r.onRoute("b28", net: true) }
+        return up == nil ? "not back on KoreNet" : nil
+    }
+    let files = now()
+    await filesThroughKore(r, "b28", shell: false)
+    let filesTook = now() - files
+    r.check(String(format: "copies both ways and the sync took no SSH wait (%.1fs, under 10s)", filesTook), filesTook < 10)
+    let row = r.kore.row("b28")
+    r.check("b28's row online, not \"can't reach\"", row?.status == .connected && row?.line.lowercased().contains("reach") != true, row.map { "\($0.status) · \($0.line)" } ?? "no row")
+    let spawned = String(((try? String(contentsOf: log, encoding: .utf8)) ?? "").dropFirst(sshBefore))
+        .split(whereSeparator: \.isNewline).filter { $0.contains("b28") }
+    r.check("Kore ran no ssh to b28 for any of it", spawned.isEmpty, spawned.prefix(5).joined(separator: " | "))
+    // Check again on its line: what's asked of a box that's working, and its line after.
+    await quick("Check again on b28: no SSH wait, its line stays Ready") {
+        await BoxList.shared.act(.checkAgain, on: "b28")
+        return BoxList.shared.box("b28")?.status == .ready ? nil : "status \(BoxList.shared.box("b28").map { "\($0.status)" } ?? "-")"
+    }
+    r.check("the link stayed on KoreNet throughout", r.onRoute("b28", net: true), r.kore.describe("b28"))
+    r.logRow("b28")
+}
+
+/// A box's line as it is: its words and what it offers.
+@MainActor func boxLine(_ alias: String) -> (line: String, fix: BoxList.Action?) {
+    switch BoxList.shared.box(alias)?.status {
+    case .failed(let line, let fix)?, .unreachable(let line, let fix)?: return (line, fix)
+    case let other?: return ("\(other)", nil)
+    case nil: return ("not listed", nil)
+    }
+}
+
+/// The Trust offer a box's line comes to, within `within`.
+@MainActor func trustOffer(_ r: Run, _ alias: String, _ what: String, within: Double = 30) async -> BoxHostKey.Offer? {
+    var offer: BoxHostKey.Offer?
+    _ = await r.expect(what, within: within, box: alias) {
+        if case .failed(_, .trust(let shown))? = BoxList.shared.box(alias)?.status { offer = shown }
+        return offer != nil
+    }
+    return offer
+}
+
+/// 0.3.10's host keys past first contact (first-contact has the new key and Trust). A box showing
+/// another key than before is never offered Trust, whether ssh knows the old key (its own refusal)
+/// or Kore does (the alias moved to an address known_hosts has nothing for); the box's old key at
+/// a new address is offered as moved; a key that changes between its offer and Trust isn't added.
+/// known_hosts keeps what it had through each, and KoreNet keeps carrying the box.
+@MainActor func hostKeys(_ r: Run) async {
+    guard await r.box(BoxSpec(name: "b27", sshPort: 22127)) else { return }
+    let known = r.places.scratch.appendingPathComponent("known_hosts")
+    FileManager.default.createFile(atPath: known.path, contents: nil)
+    func alias(_ lines: [String]) {
+        RigSSH.write([RigSSH.Host(alias: "b27", lines: lines + ["Port 22127", "User kore", "StrictHostKeyChecking ask", "UserKnownHostsFile \(known.path)"])], places: r.places)
+    }
+    func kept() -> String { (try? String(contentsOf: known, encoding: .utf8)) ?? "" }
+    /// The box's host keys made again (a reinstall, or someone in the middle); `keep` saves the old.
+    func newKeys(keep: Bool = false) async -> Bool {
+        let save = keep ? "mkdir -p /root/k1 && cp -p /etc/ssh/ssh_host_* /root/k1/ && " : ""
+        return await Boxes.exec("b27", save + "rm -f /etc/ssh/ssh_host_* && ssh-keygen -A >/dev/null && (systemctl restart ssh 2>/dev/null; true)").ok
+    }
+    alias(["HostName 127.0.0.1"])
+    guard await r.launch(installed: false) else { return }
+    // First contact, trusted: Kore has seen this key over b27.
+    _ = await r.kore.addAndSetUp("b27")
+    guard let first = await trustOffer(r, "b27", "b27's new key offered with Trust") else { return }
+    await BoxList.shared.act(.trust(first), on: "b27")
+    guard r.expectReady("b27", "Trust → Set up → Ready") else { return }
+    guard await r.linkOnNet("b27") else { return }
+    let trusted = kept()
+
+    // 1. Its keys made again, known_hosts holding the old. Check again asks the KoreNet link (no
+    // SSH: still Ready); what needs SSH (Update) meets ssh's own refusal, said as a possible attack.
+    r.check("b27's keys made again (old ones kept aside)", await newKeys(keep: true))
+    await BoxList.shared.act(.checkAgain, on: "b27")
+    _ = r.expectReady("b27", "Check again over KoreNet: still Ready, SSH not asked")
+    await BoxList.shared.act(.update, on: "b27")
+    var said = boxLine("b27")
+    r.check("Update over SSH: b27's key changed, could be an attack", said.line.contains("host key changed") && said.line.contains("attack"), said.line)
+    r.check("no Trust offered for a changed key", { if case .trust? = said.fix { return false }; return true }(), "\(said.fix.map { "\($0)" } ?? "-")")
+    r.check("known_hosts unchanged", kept() == trusted)
+    await r.works("b27", "KoreNet with its SSH key changed")
+
+    // 2. The alias moved to an address known_hosts has nothing for, the box on its new key: Kore's
+    // own comparison with the key it saw before.
+    alias(["HostName localhost"])
+    await BoxList.shared.act(.checkAgain, on: "b27")
+    let different = await r.expect("b27 at a new address shows a different key than before: no Trust", within: 30, box: "b27") {
+        let now = boxLine("b27")
+        if case .trust? = now.fix { return false }
+        return now.line.contains("shows a different key than before")
+    }
+    said = boxLine("b27")
+    r.note("b27 said: \(said.line)")
+    r.check("still no Trust after looking again", { if case .trust? = said.fix { return false }; return true }() && different)
+    r.check("known_hosts unchanged", kept() == trusted)
+
+    // 3. The box's old key back, at the new address: the alias moved, the box is the one it was.
+    r.check("b27's old keys back", await Boxes.exec("b27", "cp -p /root/k1/* /etc/ssh/ && (systemctl restart ssh 2>/dev/null; true)").ok)
+    await BoxList.shared.act(.checkAgain, on: "b27")
+    if let moved = await trustOffer(r, "b27", "b27's old key at a new address offered with Trust") {
+        r.check("said as moved: \(moved.line)", moved.moved && moved.line.contains("now points at a new address"), moved.line)
+        await BoxList.shared.act(.trust(moved), on: "b27")
+        r.check("Trust → b27 Ready at its new address", BoxList.shared.box("b27")?.status == .ready, boxLine("b27").line)
+        r.check("known_hosts gained the new address's lines", kept() != trusted && moved.lines.allSatisfy(kept().contains), kept())
+    }
+    let movedKept = kept()
+
+    // 4. A key offered (to what needs SSH: Update), then changed before Trust: Trust looks again
+    // and adds nothing.
+    alias(["HostName 127.0.0.1", "HostKeyAlias b27-elsewhere"])
+    await BoxList.shared.act(.update, on: "b27")
+    if let offered = await trustOffer(r, "b27", "b27 under another known_hosts name offered with Trust") {
+        r.check("b27's keys made again before Trust", await newKeys())
+        let t0 = now()
+        await BoxList.shared.act(.trust(offered), on: "b27")
+        said = boxLine("b27")
+        r.check(String(format: "Trust refused: another key just now, not trusted (%.1fs)", now() - t0), said.line.contains("another key just now") && said.line.contains("not trusted"), said.line)
+        r.check("known_hosts unchanged by the refused Trust", kept() == movedKept, kept())
+    }
+    await r.works("b27", "KoreNet after every key")
+    r.logRow("b27")
 }
 
 // MARK: Main

@@ -39,6 +39,7 @@ final class ArsenalForkAcross: ChatStoryline {
                 try (lines.joined(separator: "\n") + "\n").write(to: file, atomically: true, encoding: .utf8)
                 let provider = codex ? "codex" : "claude"
                 StorylineSeams.historyFile = { cli, _ in cli == provider ? file : nil }
+                story.atFinish { StorylineSeams.historyFile = nil }
                 imports.before = ScriptedWorld.shared.imports.count
             },
             SendTo("a", "Check the build number."), TurnsDone("a", 1),
@@ -55,7 +56,6 @@ final class ArsenalForkAcross: ChatStoryline {
                     && rows.contains { $0.kind == "divider" && $0.text.hasPrefix("Continued in") }
             },
             Expect("carried once, by Kore's import") { _ in ScriptedWorld.shared.imports.count == imports.before + 1 },
-            Do("the seam back") { _ in StorylineSeams.historyFile = nil },
         ]
     }
 }

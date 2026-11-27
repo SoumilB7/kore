@@ -16,6 +16,15 @@ public enum ClaudeAskSettings {
         home.appendingPathComponent(".claude/settings.json")
     }
 
+    /// The user settings file a Claude CLI started with `environment` reads, as the CLI finds it:
+    /// its `CLAUDE_CONFIG_DIR`'s (an added login's folder, a box account's), else `home`'s.
+    public static func file(environment: [String: String], home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
+        if let dir = environment["CLAUDE_CONFIG_DIR"], !dir.isEmpty {
+            return URL(fileURLWithPath: dir, isDirectory: true).appendingPathComponent("settings.json")
+        }
+        return file(home: home)
+    }
+
     /// Kore's entry is in the file: a PreToolUse hook running `… hook pretool` from a Kore helper.
     public static func installed(_ file: URL) -> Bool {
         guard let settings = try? read(file) else { return false }
@@ -59,7 +68,10 @@ public enum ClaudeAskSettings {
         return object
     }
 
-    static func write(_ settings: [String: Any], to file: URL) throws {
+    static func write(_ settings: [String: Any], to link: URL) throws {
+        // Through a link to the file it names (an added login's settings.json is main's): an
+        // atomic write to the link itself would leave a copy there and part the two.
+        let file = link.resolvingSymlinksInPath()
         let data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         // What's written must read back as the same object, or nothing is written.
         guard (try? JSONSerialization.jsonObject(with: data)) is [String: Any] else {

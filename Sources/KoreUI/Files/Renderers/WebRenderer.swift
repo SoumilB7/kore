@@ -363,7 +363,7 @@ private struct WebPage: NSViewRepresentable {
                         openFile(target.standardizedFileURL)
                     }
                 } else if ["http", "https", "mailto"].contains(target.scheme ?? "") {
-                    NSWorkspace.shared.open(target)
+                    StoryHost.open(target)
                 }
                 decisionHandler(.cancel)
             }

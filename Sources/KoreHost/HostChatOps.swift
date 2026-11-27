@@ -124,6 +124,8 @@ extension HostDaemon {
         if !arsenal { settings.arsenal = nil }
         let mode = LinkPolicy.cappedMode(chat.controls.mode, provider: hc.record.provider, fullAccess: fullAccess)
         if let kept = settings.mode { settings.mode = LinkPolicy.cappedMode(kept, provider: hc.record.provider, fullAccess: fullAccess) }
+        // Its history may end higher than it starts: its CLI never goes there by itself.
+        if !fullAccess { settings.modeCeiling = min(chat.modeCeiling ?? .max, LinkPolicy.raiseCap.rawValue) } else { settings.modeCeiling = chat.modeCeiling }
         guard
             let made = newChat(
                 folder: hc.record.folder, provider: hc.record.provider, modelId: chat.controls.modelId ?? chat.launchModel, fork: from,

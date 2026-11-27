@@ -50,7 +50,7 @@ struct BoxExplorer: View {
                 .foregroundStyle(Theme.secondary)
                 .lineLimit(1)
                 .truncationMode(.middle)
-                .help(searching ? "Search in \(workspace.folder.lastPathComponent)" : box.label)
+                .tip(searching ? "Search in \(workspace.folder.lastPathComponent)" : box.label)
                 // The folder's name clears the selection: New File then goes in the folder itself.
                 .contentShape(Rectangle())
                 .onTapGesture { if !searching { store.pickOnly(nil) } }
@@ -98,7 +98,9 @@ struct BoxExplorer: View {
                 Text("This folder is empty").font(Chrome.label).foregroundStyle(Theme.tertiary)
                 HStack(spacing: Space.sm) {
                     Button("New File") { store.startNew(folder: false) }.buttonStyle(SubtleButtonStyle())
+                        .storyID(StoryID.Explorer.boxEmptyNewFile)
                     Button("New Folder") { store.startNew(folder: true) }.buttonStyle(SubtleButtonStyle())
+                        .storyID(StoryID.Explorer.boxEmptyNewFolder)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -153,6 +155,7 @@ struct BoxExplorer: View {
                         focused = true
                         store.pickOnly(nil)
                     }
+                    .storyID(StoryID.Explorer.boxBelow)
                     .onDrop(of: BoxDrop.types, delegate: BoxDrop(folder: store.root, store: store, workspace: workspace))
             }
             .onAppear {
@@ -602,22 +605,18 @@ private struct BoxNameField: View {
     /// One question for all of them (as the Files explorer asks), then the box's trash.
     static func trash(_ paths: [String], store: BoxExplorerStore) {
         guard !paths.isEmpty else { return }
-        let alert = NSAlert()
-        alert.messageText = paths.count == 1
-            ? "Are you sure you want to delete “\((paths[0] as NSString).lastPathComponent)”?"
-            : "Are you sure you want to delete the following \(paths.count) items?"
-        alert.informativeText = (paths.count == 1 ? "" : paths.prefix(10).map { ($0 as NSString).lastPathComponent }.joined(separator: "\n") + "\n\n")
-            + "You can restore \(paths.count == 1 ? "it" : "them") from the trash on \(NodeNames.name(store.alias))."
-        alert.addButton(withTitle: "Move to Trash")
-        alert.addButton(withTitle: "Cancel")
-        guard StorylineSeams.confirm?("trash") ?? (alert.runModal() == .alertFirstButtonReturn) else { return }
-        Task { _ = await store.trash(paths) }
+        let window = NSApp.keyWindow
+        Task { @MainActor in
+            guard await KoreAsk.confirm(TreeActions.trashQuestion(paths),
+                                        detail: TreeActions.trashDetail(paths, from: "the trash on \(NodeNames.name(store.alias))"),
+                                        yes: "Move to Trash", danger: true, key: "trash", in: window) else { return }
+            _ = await store.trash(paths)
+        }
     }
 
     static func show(_ message: String) {
-        let alert = NSAlert()
-        alert.messageText = message
-        alert.runModal()
+        let window = NSApp.keyWindow
+        Task { @MainActor in await KoreAsk.tell(message, key: "box-files-failure", in: window) }
     }
 }
 
@@ -702,11 +701,8 @@ private struct BoxDrop: DropDelegate {
                 let movable = paths.filter { store.parent(of: $0) != folder && !LinkFiles.inside(folder, $0) }
                 guard !movable.isEmpty else { return }
                 if movable.count > 1 {
-                    let alert = NSAlert()
-                    alert.messageText = "Move \(movable.count) items into “\((folder as NSString).lastPathComponent)”?"
-                    alert.addButton(withTitle: "Move")
-                    alert.addButton(withTitle: "Cancel")
-                    guard StorylineSeams.confirm?("move") ?? (alert.runModal() == .alertFirstButtonReturn) else { return }
+                    guard await KoreAsk.confirm("Move \(movable.count) items into “\((folder as NSString).lastPathComponent)”?",
+                                                yes: "Move", key: "move") else { return }
                 }
                 _ = await store.move(movable, into: folder)
             }
@@ -719,7 +715,8 @@ private struct BoxDrop: DropDelegate {
             }
             // A local tree's drag carries its whole choice.
             let places = TreeDrag.expand(dropped).map { FilePlace.mac(realPath($0.path)) }
-            guard SyncBox.ssh(store.alias) == nil else {
+            // A carry goes over a pipe (the link on KoreNet) or SSH; with neither, an upload.
+            guard SyncBox.box(BoxBinding.connection(store.alias)) == nil else {
                 return FilePaste.carry(places, into: into, move: act == .move, done: landed)
             }
             await Self.upload(places.map { URL(fileURLWithPath: $0.path) }, into: folder, store: store)
@@ -847,6 +844,7 @@ private struct BoxSearchView: View {
         VStack(alignment: .leading, spacing: Space.sm) {
             TextField("", text: Binding(get: { search.query }, set: { search.query = $0 }), prompt: Text("Search").foregroundStyle(Theme.tertiary))
                 .textFieldStyle(.plain)
+                .storyID(StoryID.Explorer.boxSearchField)
                 .font(Chrome.label)
                 .focused($field)
                 .fieldWell(focused: field)
@@ -857,6 +855,7 @@ private struct BoxSearchView: View {
                     Text("in ./" + search.relative(within)).font(Chrome.caption).foregroundStyle(Theme.secondary).lineLimit(1)
                     Button { search.scope(nil) } label: { Image(systemName: "xmark").font(Chrome.caption) }.buttonStyle(.plain)
                         .foregroundStyle(Theme.tertiary)
+                        .storyID(StoryID.Explorer.boxSearchScope)
                 }
                 .padding(.horizontal, Space.md)
             }
@@ -887,6 +886,7 @@ private struct BoxSearchView: View {
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .storyID(StoryID.Explorer.boxHit(search.relative(hit.path), line: hit.line))
                         }
                     }
                     if search.more {
@@ -956,7 +956,7 @@ extension Workspace {
             tabs = [tab]
         } else {
             let index = tabs.firstIndex { $0.id == activeID } ?? tabs.count - 1
-            tabs.insert(tab, at: index + 1)
+            tabs.insert(tab, at: newTabIndex(index + 1, from: activeTab))
         }
         select(tab)
     }
@@ -994,4 +994,44 @@ extension Workspace {
             file.reloadFromBox()
         }
     }
+}
+
+// MARK: - Storylines
+
+extension StoryID.Explorer {
+    /// A box folder's empty state: its New File and New Folder.
+    package static let boxEmptyNewFile = StoryID(.explorer, "box.empty.newfile")
+    package static let boxEmptyNewFolder = StoryID(.explorer, "box.empty.newfolder")
+    /// The space under a box tree's rows.
+    package static let boxBelow = StoryID(.explorer, "box.below")
+    /// A box window's Search: its field, its Find in Folder… scope's ×, and a hit by its relative
+    /// path and line.
+    package static let boxSearchField = StoryID(.explorer, "box.search.field")
+    package static let boxSearchScope = StoryID(.explorer, "box.search.scope")
+    package static func boxHit(_ relativePath: String, line: Int?) -> StoryID {
+        StoryID(.explorer, "box.search.hit", key: relativePath + ":" + String(line ?? 0))
+    }
+}
+
+extension Workspace {
+    /// The box tree's selected row, relative to the box folder (storylines).
+    package var storyBoxTreeSelection: String? {
+        guard let box, box.filesMade else { return nil }
+        return box.files.selection.map(box.files.relative)
+    }
+
+    /// The box tree's rows, relative to the box folder (storylines).
+    package var storyBoxTreeRows: [String] {
+        guard let box, box.filesMade else { return [] }
+        return box.files.rows.compactMap { row -> String? in
+            if case .node = row.kind { return box.files.relative(row.id) }
+            return nil
+        }
+    }
+
+    /// The active file tab's path on the box (storylines).
+    package var storyBoxActivePath: String? { activeFile?.box?.path }
+
+    /// The box Search's folder from Find in Folder…, nil for the whole folder (storylines).
+    package var storyBoxSearchWithin: String? { box?.search.within }
 }

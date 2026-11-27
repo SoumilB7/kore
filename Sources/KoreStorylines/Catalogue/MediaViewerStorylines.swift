@@ -94,15 +94,22 @@ private struct SVGPlays: Step {
     func run(_ story: StoryContext) async throws {
         let element = try await story.element(.id(StoryID.Viewer.svg))
         guard let view = element.registeredView as? WKWebView else { throw StoryFailure.other("the SVG isn't in a web view") }
-        // WebKit pauses animation in a covered window, as it should; the storyline's window may
-        // be under the owner's.
+        // WebKit pauses animation in a covered window, as it should, and the storyline's window
+        // is off screen. The flag alone doesn't make WebKit look again: a page it already marked
+        // hidden stayed paused (4 of 12 runs), so the window's occlusion is said to change.
         if view.responds(to: NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")) {
             view.setValue(false, forKey: "windowOcclusionDetectionEnabled")
+            if let window = view.window { NotificationCenter.default.post(name: NSWindow.didChangeOcclusionStateNotification, object: window) }
         }
+        var seen = (none: 0, blank: 0, same: 0)
         for _ in 0..<20 {
-            if let first = await Self.picture(view), first.inked {
+            let first = await Self.picture(view)
+            if first == nil { seen.none += 1 } else if first?.inked == false { seen.blank += 1 }
+            if let first, first.inked {
                 try await Task.sleep(for: .milliseconds(500))
-                if let second = await Self.picture(view), second.inked, second.bytes != first.bytes {
+                let second = await Self.picture(view)
+                if let second, second.inked, second.bytes == first.bytes { seen.same += 1 }
+                if let second, second.inked, second.bytes != first.bytes {
                     let png = NSBitmapImageRep(cgImage: second.image).representation(using: .png, properties: [:])
                     try? png?.write(to: story.outputs.appendingPathComponent(shot + ".png"))
                     return
@@ -111,7 +118,8 @@ private struct SVGPlays: Step {
                 try await Task.sleep(for: .milliseconds(200))
             }
         }
-        throw StoryFailure.expectation("the SVG in \(place) to change over half a second")
+        let window = view.window
+        throw StoryFailure.expectation("the SVG in \(place) to change over half a second (no picture \(seen.none), blank \(seen.blank), unchanged \(seen.same); window occluded \(!(window?.occlusionState.contains(.visible) ?? false)))")
     }
 
     private struct Picture {

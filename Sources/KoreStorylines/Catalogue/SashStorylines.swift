@@ -28,9 +28,6 @@ final class SashHoldsChatScrolledUp: SashStoryline {
 /// The scroll view built again with the reader above the end: their place and what's being typed
 /// are as they were.
 final class SashRebuildKeepsPlace: SashStoryline {
-    // Not yet true: a rebuild restores the offset, not the row, so it stays out of the gate.
-    override class var tags: Set<Tag> { [.chat] }
-
     override func steps() -> [any Step] {
         let answer = Locator.answer(turn: 2)
         return super.steps() + [SashDrag(row: answer, by: 120), TypeText(SashHoldsChatAtEnd.draft), SashRebuildKeeps(row: answer)]
@@ -178,12 +175,19 @@ struct SashDrag: Step {
             // estimated height.
             let last = try await story.element(.answer(turn: 4))
             id = last.id
-            for _ in 0..<80 where !(DevNavProbe.scrollPlace(workspace).map { $0.offset + $0.visible >= $0.height - 2 } ?? false) {
+            // And following it: the scroll that gets there can be short of it as rows measured on the
+            // way shrink the content, which clamps the view at the end with nothing followed.
+            let transcript = try story.activeChat().storyTranscript
+            let there = {
+                transcript.endWhy.contains("following true")
+                    && (DevNavProbe.scrollPlace(workspace).map { $0.offset + $0.visible >= $0.height - 2 } ?? false)
+            }
+            for _ in 0..<80 where !there() {
                 try await story.input.scroll(last, to: .by(300))
                 try? await Task.sleep(for: .milliseconds(50))
             }
-            try await story.until("the view at the end, its last row built") {
-                StoryElement(last.id)?.frame != nil && (DevNavProbe.scrollPlace(workspace).map { $0.offset + $0.visible >= $0.height - 2 } ?? false)
+            try await story.until("the view at the end and following it, its last row built") {
+                StoryElement(last.id)?.frame != nil && there()
             }
         }
 

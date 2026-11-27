@@ -141,6 +141,7 @@ enum HostMeta {
         // Recency for a phone's list: kept with the record, else when the chat was made.
         made.lastAt = hc.record.lastAt ?? Int64(hc.record.created) * 1000
         made.last = hc.record.last
+        made.sessionId = chat?.sessionId ?? hc.record.session
         if !hc.ownedHere { made.can.send = false }
         // The composer's controls and Arsenal tier go to every client: an ask grant (a phone)
         // changes model, effort, draft and tier too (raises signed); `raise` widens modes and cards.

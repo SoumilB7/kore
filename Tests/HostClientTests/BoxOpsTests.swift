@@ -153,7 +153,7 @@ struct BoxOpsTests {
         // A typed destination: the user and port as options, the host one word after `--`.
         #expect(key.calls == ["ssh -o User=me -o Port=2222 10.0.0.5 sh -s: # kore: detect"])
         let changed = BoxSetup.sshFailure("mybox", "@@@ WARNING: REMOTE HOST IDENTIFICATION HAS CHANGED! @@@\nHost key verification failed.")
-        #expect(changed == BoxSetup.Failure(message: "mybox's host key changed · check it, then ssh-keygen -R mybox", fix: .copy("ssh-keygen -R mybox")))
+        #expect(changed == BoxSetup.Failure(message: "mybox's host key changed · this could be an attack, so Kore won't trust it · check with the box, then ssh-keygen -R mybox", fix: .copy("ssh-keygen -R mybox")))
         #expect(BoxSetup.sshFailure("x", "ssh: Could not resolve hostname x: nodename nor servname provided").message == "Can't find x · check the name")
     }
 

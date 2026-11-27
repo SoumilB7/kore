@@ -24,6 +24,8 @@ package struct AppProbe {
 package struct RunFlags: Sendable {
     /// `--real-input`: pointer events through the window server (the owner OKs each run in chat).
     package var realInput = false
+    /// `--drop`: each storyline again for each of its inputs, that one skipped: every one must fail.
+    package var drop = false
     /// `--real-input-dry`: real input's banner, countdown and activation, with nothing posted.
     package var realInputDry = false
     /// `--real-keys`: posted keystrokes too.
@@ -71,6 +73,16 @@ package final class StoryContext {
     }
 
     private var stashed: [ObjectIdentifier: AnyObject] = [:]
+
+    /// Run when the storyline ends, pass or fail (a seam taken out, a last step may be skipped).
+    func atFinish(_ back: @escaping @MainActor () -> Void) {
+        stash(FinishActions.self) { FinishActions() }.actions.append(back)
+    }
+
+    private final class FinishActions: StoryFinishing {
+        var actions: [@MainActor () -> Void] = []
+        func finish() { for action in actions.reversed() { action() } }
+    }
 
     /// Lets stashed objects put back what they changed (the cursor, the front app), pass or fail.
     func finish() {

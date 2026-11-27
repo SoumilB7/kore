@@ -473,7 +473,8 @@ class PopMenu(private val a: Activity) {
 
 /** One quiet line at the bottom of a screen, for a moment: a refusal or what just happened. */
 object Quiet {
-    fun say(a: Activity, text: String) {
+    /** One line for [holdMs] (a toast's 3.5 s; longer for work under way, until the next line replaces it). */
+    fun say(a: Activity, text: String, holdMs: Long = 3500) {
         val root = a.findViewById<FrameLayout>(android.R.id.content) ?: return
         val old = root.findViewWithTag<View>("kore.quiet")
         if (old != null) root.removeView(old)
@@ -490,7 +491,7 @@ object Quiet {
         root.addView(v, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
             setMargins(a.dp(24), 0, a.dp(24), a.dp(110))
         })
-        v.postDelayed({ root.removeView(v) }, 3500)
+        v.postDelayed({ root.removeView(v) }, holdMs)
     }
 }
 

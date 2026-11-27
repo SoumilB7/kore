@@ -23,6 +23,7 @@ struct MoveSheetView: View {
                 Spacer(minLength: 0)
                 Button("Cancel") { sheet.onClose() }.smallButton()
                     .keyboardShortcut(.cancelAction)
+                    .storyID(StoryID.Boxes.moveCancel)
                 Button(sheet.moving ? (sheet.way == .bring ? "Bringing…" : "Sending…") : sheet.button) { sheet.onGo() }
                     .smallButton(prominent: true)
                     .disabled(!sheet.ready)
@@ -48,7 +49,9 @@ struct MoveSheetView: View {
             Spacer(minLength: 0)
             if sheet.working, !sheet.moving, !sheet.waiting {
                 Button("Stop and move") { sheet.busy = .stopFirst }.smallButton(prominent: sheet.busy == .stopFirst)
+                    .storyID(StoryID.Boxes.moveStopFirst)
                 Button("Move when it finishes") { sheet.busy = .waitFirst }.smallButton(prominent: sheet.busy == .waitFirst)
+                    .storyID(StoryID.Boxes.moveWaitFirst)
             }
         }
     }
@@ -65,8 +68,10 @@ struct MoveSheetView: View {
             if let ask = sheet.ask {
                 Text(ask.question).font(Chrome.label).foregroundStyle(Theme.secondary).lineLimit(2)
                 Button(ask.start == .merge ? "Merge" : "Copy") { sheet.onAnswer() }.smallButton(prominent: true)
+                    .storyID(StoryID.Boxes.moveAnswer)
             } else if sheet.sync == .noPair, sheet.way == .bring {
                 Button("Sync with a Mac folder…") { sheet.onPair() }.smallButton(prominent: true)
+                    .storyID(StoryID.Boxes.movePair)
             }
         }
     }
@@ -114,6 +119,7 @@ struct MoveSheetLayer: View {
                 Theme.background.opacity(0.35)
                     .contentShape(Rectangle())
                     .onTapGesture { if !sheet.moving { sheet.onClose() } }
+                    .storyID(StoryID.Boxes.moveScrim)
                     .transition(.opacity)
                 MoveSheetView(sheet: sheet).transition(.opacity)
             }
@@ -142,7 +148,7 @@ struct ReplicaLine: View {
         .padding(.vertical, Space.sm)
         .background(Theme.surface, in: Capsule())
         .frame(maxWidth: .infinity)
-        .help(replica.here ? "It runs on this Mac now · read-only here" : "It runs on \(replica.name) · read-only here")
+        .tip(replica.here ? "It runs on this Mac now · read-only here" : "It runs on \(replica.name) · read-only here")
     }
 
     /// When a mirror last caught up.
@@ -153,4 +159,21 @@ struct ReplicaLine: View {
         if replica.mirror { return "on \(replica.name)" + (asOf.map { " · as of " + BoxBinding.when($0) } ?? "") }
         return replica.here ? "on this Mac" : "on \(replica.name) · read-only here"
     }
+}
+
+extension StoryID.Boxes {
+    /// A move's sheet: Cancel, Stop and move, Move when it finishes, and the dimmed window around
+    /// it (storylines).
+    package static let moveCancel = StoryID(.titlebar, "boxes.move.cancel")
+    package static let moveStopFirst = StoryID(.titlebar, "boxes.move.stopfirst")
+    package static let moveWaitFirst = StoryID(.titlebar, "boxes.move.waitfirst")
+    package static let moveScrim = StoryID(.titlebar, "boxes.move.scrim")
+    /// Its sync line's Merge/Copy answer and Sync with a Mac folder… (storylines).
+    package static let moveAnswer = StoryID(.titlebar, "boxes.move.answer")
+    package static let movePair = StoryID(.titlebar, "boxes.move.pair")
+}
+
+extension Workspace {
+    /// The move sheet's heading and its first two check lines, while it shows (storylines).
+    package var storyMoveSheet: [String]? { moveSheet.map { [$0.heading, $0.idleLine, $0.syncLine] } }
 }

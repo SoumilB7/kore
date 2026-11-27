@@ -82,3 +82,11 @@ extension Font {
         .custom("Menlo", fixedSize: size * zoom)
     }
 }
+
+/// Storylines: the app's zoom, set back to 100% before each one (it lives in memory, past the
+/// defaults a storyline starts from).
+@MainActor
+package enum StoryZoom {
+    package static var scale: CGFloat { Zoom.shared.scale }
+    package static func reset() { if Zoom.shared.scale != 1 { Zoom.shared.reset() } }
+}

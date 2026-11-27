@@ -78,8 +78,10 @@ extension HostDaemon {
             // Another folder (Act device): one this box serves here; any other the Mac's, as its
             // windows open folders.
             if let folder = args["folder"] as? String { return tier < .device || historyFolder(folder, of: hc) != nil || !mac }
+            // A tab group is the Mac window's: the Mac opens it there, in the box's folder.
+            if args["group"] != nil, mac { return false }
             return (args["place"] as? String).map { $0 != "mac" } ?? true
-        // Forks, opens from History, asks and their replies, files and tabs: the Mac's.
+        // Forks, opens from History, asks and their replies, files, tabs and their groups: the Mac's.
         default: return false
         }
     }
@@ -135,7 +137,8 @@ extension HostDaemon {
         case AgentCommand.caps.name:
             return Self.ok(AgentCaps(tier: tier(hc), commands: AgentCommand.allowed(tier(hc)).map(\.name)))
         case AgentCommand.chats.name:
-            return Self.ok(AgentChats(chats: readable(hc).map { agentChat($0, own: hc.id) }))
+            // Windows and their tab groups are the Mac's: with no Mac, none.
+            return Self.ok(AgentChats(chats: readable(hc).map { agentChat($0, own: hc.id) }, windows: []))
         case AgentCommand.cards.name:
             let shown: [HostChat]
             if args.chat != nil {
@@ -156,7 +159,7 @@ extension HostDaemon {
         case AgentCommand.wait.name:
             return await wait(hc, args)
         case AgentCommand.options.name, AgentCommand.rename.name, AgentCommand.model.name, AgentCommand.effort.name,
-            AgentCommand.mode.name, AgentCommand.fast.name, AgentCommand.compact.name:
+            AgentCommand.mode.name, AgentCommand.fast.name, AgentCommand.compact.name, AgentCommand.autoCompact.name:
             return change(hc, name, args)
         case AgentCommand.new.name:
             return newChat(hc, args)
@@ -229,7 +232,7 @@ extension HostDaemon {
             id: hc.id, short: AgentRefs.short(hc.id), title: Self.title(hc.title), provider: hc.provider.id, folder: Self.shownFolder(hc.record.folder),
             window: URL(fileURLWithPath: hc.record.folder).lastPathComponent, state: Self.state(meta), mode: mode,
             modeLabel: hc.provider.modes.first { $0.id == mode }?.label, planOn: meta.mode.planOn, model: meta.model, queued: meta.queued,
-            cards: meta.cards.count, own: hc.id == own ? true : nil)
+            cards: meta.cards.count, own: hc.id == own ? true : nil, alwaysAllowed: hc.chat?.alwaysAllowed == true ? true : nil)
     }
 
     private func detail(_ hc: HostChat, own: String?) -> AgentChatDetail {
@@ -329,7 +332,7 @@ extension HostDaemon {
     /// Act unlimited reaches a chat at or below its own mode (`AgentChannel.drivable`).
     private func drivable(_ target: HostChat, _ hc: HostChat) -> Data? {
         guard tier(hc) >= .drive else { return Self.failed(.notOwn, "Act limited changes only this chat.") }
-        guard noFreer(target, than: hc) else { return Self.failed(.notOwn, "That chat's mode is above this one's: only you drive it.") }
+        guard noFreer(target, than: hc) else { return Self.failed(.notOwn, Chat.freerLine(always: rank(target).always && !rank(hc).always)) }
         return nil
     }
 
@@ -391,6 +394,12 @@ extension HostDaemon {
                 return Self.done(chat.arsenalFast(on), target)
             case AgentCommand.compact.name:
                 return Self.done(chat.arsenalCompact(), target)
+            case AgentCommand.autoCompact.name:
+                guard let point = args.point, !point.isEmpty, point.utf8.count <= 16 else { return Self.failed(.invalid, "Say a point: 50, 60, 70, 80, 90 or off.") }
+                let outcome = chat.arsenalAutoCompact(point)
+                // The box's record keeps it, as the wheel's change from a client does.
+                if case .success = outcome { target.setAutoCompact(chat.context.autoCompactAt) }
+                return Self.done(outcome, target)
             default:
                 guard let value = args.to, !value.isEmpty, value.utf8.count <= 1024 else { return Self.failed(.invalid, "Say what to set it to.") }
                 let outcome = switch name {

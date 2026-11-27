@@ -51,16 +51,20 @@ struct SearchView: View {
                         }
                     SearchToggle(label: "Aa", isOn: store.caseSensitive, help: "Match Case (⌥⌘C)") { store.caseSensitive.toggle() }
                         .keyboardShortcut("c", modifiers: [.command, .option])
+                        .storyID(StoryID.Search.matchCase)
                     SearchToggle(label: "ab", isOn: store.wholeWord, underline: true, help: "Match Whole Word (⌥⌘W)") { store.wholeWord.toggle() }
                         .keyboardShortcut("w", modifiers: [.command, .option])
+                        .storyID(StoryID.Search.wholeWord)
                     SearchToggle(label: ".*", isOn: store.regex, help: "Use Regular Expression (⌥⌘R)") { store.regex.toggle() }
                         .keyboardShortcut("r", modifiers: [.command, .option])
+                        .storyID(StoryID.Search.regex)
                 }
                 .modifier(SearchField(height: Size.searchField, failed: failed, focused: field == .query))
                 // Stays lit while a filter is set, so hidden filters aren't forgotten.
                 IconButton(symbol: "ellipsis", kind: .small, font: Chrome.label, isOn: store.hasFilters, help: "Include and exclude") {
                     store.showsDetails.toggle()
                 }
+                .storyID(StoryID.Search.filters)
             }
             if store.showsDetails {
                 VStack(alignment: .leading, spacing: Space.xs) {
@@ -100,6 +104,7 @@ struct SearchView: View {
                             Button("Clear filters") { store.clearFilters() }
                                 .buttonStyle(.plain)
                                 .foregroundStyle(Theme.accent)
+                                .storyID(StoryID.Search.clearFilters)
                         }
                     }
                 } else {
@@ -272,7 +277,7 @@ private struct SearchFileRow: View {
         // brings the window forward, so one click opens the file there too.
         .onDrag { NSItemProvider(object: URL(fileURLWithPath: file.path) as NSURL) }
         .koreContextMenu("search") {
-            [OptionItem("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: file.path)]) },
+            [OptionItem("Reveal in Finder") { StoryHost.reveal([URL(fileURLWithPath: file.path)]) },
              OptionItem("Copy Path") { TreeActions.copy(file.path) }, OptionItem("Copy Relative Path") { TreeActions.copy(relative) }]
         }
     }
@@ -362,6 +367,17 @@ private struct SearchHitRow: View {
 
 // MARK: - Fields
 
+extension StoryID.Search {
+    /// The query's Aa, ab and .* toggles.
+    package static let matchCase = StoryID(.search, "case")
+    package static let wholeWord = StoryID(.search, "word")
+    package static let regex = StoryID(.search, "regex")
+    /// The ⋯ that shows the files to include and exclude.
+    package static let filters = StoryID(.search, "filters")
+    /// "Clear filters", under no results while a filter is set.
+    package static let clearFilters = StoryID(.search, "clearfilters")
+}
+
 private struct DetailField: View {
     let title: String
     @Binding var text: String
@@ -373,6 +389,7 @@ private struct DetailField: View {
             Text(title).font(Chrome.caption).foregroundStyle(Theme.tertiary)
             TextField("e.g. *.swift, Sources/**", text: $text)
                 .textFieldStyle(.plain)
+                .storyID((which == .exclude ? StoryID.Search.exclude : StoryID.Search.include).part(.field))
                 .font(Chrome.label)
                 .foregroundStyle(Theme.text)
                 .focused(focused, equals: which)
@@ -419,7 +436,7 @@ private struct SearchToggle: View {
         .buttonStyle(.plain)
         .hitTargetRoom(Size.Editor.findToggleReach)
         .onHover { hovered.value = $0 }
-        .help(help)
+        .tip(help)
     }
 }
 

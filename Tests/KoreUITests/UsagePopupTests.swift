@@ -12,6 +12,33 @@ import Testing
 struct UsagePopupTests {
     static let now = Date(timeIntervalSince1970: 1_800_000_000)
 
+    /// Claude's Reset ↗ goes to the CLI's own page, for a plan's sign-in only; Codex has none.
+    @Test func theResetLinkIsAPlansAlone() throws {
+        let claude = ProviderDescriptor.claude.usage
+        let page = try #require(URL(string: "https://claude.ai/settings/usage"))
+        #expect(claude.limitReset == page)
+        let id = { (plan: String?, method: String, platform: String?) in
+            AccountIdentity(plan: plan, method: method, changeable: true, platform: platform)
+        }
+        #expect(claude.limitReset(for: id("Claude Max", "Claude.ai", nil)) == page)
+        #expect(claude.limitReset(for: id("Claude Pro", "Token from env", nil)) == page)
+        #expect(claude.limitReset(for: nil) == page)
+        #expect(claude.limitReset(for: id("Claude Console", "API key", nil)) == nil)
+        #expect(claude.limitReset(for: id("Claude Console", "Console", nil)) == nil)
+        #expect(claude.limitReset(for: id(nil, "Set in Claude's settings", "Amazon Bedrock")) == nil)
+        #expect(ProviderDescriptor.codex.usage.limitReset == nil)
+        #expect(ProviderDescriptor.codex.usage.limitReset(for: id("ChatGPT Pro", "ChatGPT", nil)) == nil)
+    }
+
+    /// The notice links only when its words name the plan's limit, never the API's rate limit.
+    @Test func theNoticeLinksOnAPlanLimit() {
+        #expect(OutcomeLine.limitReset("You've hit your session limit · resets 3pm", .claude) != nil)
+        #expect(OutcomeLine.limitReset("Claude AI usage limit reached|1792615200", .claude) != nil)
+        #expect(OutcomeLine.limitReset("API Error: rate limit exceeded", .claude) == nil)
+        #expect(OutcomeLine.limitReset("You've hit your usage limit.", .codex) == nil)
+        #expect(OutcomeLine.limitReset("You've hit your session limit", nil) == nil)
+    }
+
     @Test func percentsAreFloored() {
         #expect(UsageText.percent(29.9) == "29%")
         #expect(UsageText.percent(0) == "0%")

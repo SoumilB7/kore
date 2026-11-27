@@ -93,8 +93,8 @@ struct FakeSSH {
         let calls = root.appendingPathComponent("calls").path
         let ssh = """
             #!/bin/sh
-            [ "$1 $2 $3 $4 $5" = "-T -o BatchMode=yes -o ConnectTimeout=10" ] || exit 99
-            shift 5
+            [ "$1 $2 $3 $4 $5 $6 $7 $8 $9" = "-T -o BatchMode=yes -o ConnectTimeout=10 -o ServerAliveInterval=5 -o ServerAliveCountMax=3" ] || exit 99
+            shift 9
             opts=""
             while [ "$1" != "--" ]; do opts="$opts $1"; shift; done
             shift
@@ -102,7 +102,7 @@ struct FakeSSH {
             line="ssh$opts $host $cmd"
             if [ "$cmd" = "sh -s" ]; then
               script=$(cat)
-              first=$(printf '%s\\n' "$script" | grep -v '^set -e$' | grep -v '^mkdir -p' | grep -v '^t=' | grep -v '^trap' | head -n 1)
+              first=$(printf '%s\\n' "$script" | grep -v '^set -e$' | grep -v '^mkdir -p' | grep -v '^t=' | grep -v '^trap' | grep -v '^echo kore-began-' | head -n 1)
               line="$line: $first"
             fi
             echo "$line" >> '\(calls)'

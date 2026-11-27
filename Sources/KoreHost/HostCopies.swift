@@ -14,6 +14,16 @@ extension HostDaemon {
     /// Where a cut's session files go: `state/trash/chats/<time>-<session>/`.
     package var chatTrash: URL { paths.state.appendingPathComponent("trash/chats", isDirectory: true) }
 
+    /// A copy a Mac makes for a phone: this box's own devices decide, as for that phone's own link
+    /// (removed, paused, or only watching is refused), whatever the Mac may do.
+    func refusesPhone(_ args: ControlArgs) -> String? {
+        guard let said = args.phone else { return nil }
+        let phone = UUID(uuidString: said).flatMap { id in devices.all().first { $0.id == id && $0.kind == .phone } }
+        if let phone, !phone.isPaused, phone.abilities.effective.contains(.ask) { return nil }
+        HostJournal.audit("denied", ["device": said.lowercased(), "kind": "copy"])
+        return "This phone isn't allowed on \(deviceName)"
+    }
+
     // MARK: chat.copy
 
     func copyOut(_ args: ControlArgs, id: String, from client: LinkClient) -> MoveResult {
@@ -21,6 +31,7 @@ extension HostDaemon {
         guard client.holder != nil, let phase = args.phase.flatMap(MovePhase.init(rawValue:)), let source = args.sourceId else {
             return refused(.invalid, "Name the chat and the phase.")
         }
+        if let line = refusesPhone(args) { return refused(.deniedControl, line) }
         // A box chat (open or closed) by its id or its session's; else a past session of the folder's CLI.
         let hc = boxChat(source)
         if let hc, let refusal = Self.held(hc) { return refused(refusal.code, refusal.message) }
@@ -89,6 +100,7 @@ extension HostDaemon {
         let dir = staging.appendingPathComponent(moveId, isDirectory: true)
         switch phase {
         case .prepare:
+            if let line = refusesPhone(args) { return refused(.deniedControl, line) }
             do {
                 try? FileManager.default.removeItem(at: dir)
                 try HostPaths.privateFolder(staging)
@@ -109,11 +121,18 @@ extension HostDaemon {
                 let folder = args.folder.map(Self.standard), serves(folder), !HostConfig.missing(folder)
             else { return refused(.goneFolder, "That folder isn't on this box.") }
             let files = SessionFiles.tree(staging, under: moveId).map { String($0.dropFirst(moveId.count + 1)) }
+            // Asked again (the link went before the Mac heard the answer): the copy stands, made once.
+            if files.isEmpty, let made = boxChat(new) { return MoveResult(id: id, ok: true, message: Self.joined(capped, made.carriedNote), chatId: made.id, settings: Self.said(made)) }
+            if let line = refusesPhone(args) { return refused(.deniedControl, line) }
             guard !files.isEmpty else { return refused(.goneSession, "Nothing was staged for that copy.") }
             // A new id is never one the box has: a chat of its own keeps its history.
             if boxChat(new) != nil { return refused(.staleGen, "A chat with that id is on this box already.") }
             let root = sessionRoot(provider, folder: folder)
             let rewrite = SessionCopy.rewrite(folders: args.folders ?? [], to: SessionFiles.real(folder), session: old, as: new)
+            // Its ceiling before its files: nothing here opens it above it.
+            ModeCeilings.put(args.settings?.modeCeiling, for: new)
+            var made = false
+            defer { if !made { ModeCeilings.put(nil, for: new) } }
             let placed: [String]
             do {
                 placed = try SessionCopy.place(files, from: dir, to: root, rewrite: rewrite, old: old, new: new)
@@ -135,6 +154,7 @@ extension HostDaemon {
             }
             // The copy resumes where its source was cut back to (a Claude rollback its file doesn't say).
             Self.keepRollbackPoint(args.rollbackAt, provider: provider, session: new)
+            made = true
             hc.adoptedCopy(transcript: main, line: args.copiedFrom)
             HostJournal.note("copy adopt", ["chat": hc.id, "move": moveId, "files": "\(placed.count)"])
             broadcast(chats: [hc])

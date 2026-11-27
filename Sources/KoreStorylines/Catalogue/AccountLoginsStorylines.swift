@@ -30,8 +30,8 @@ final class AccountLogins: ChatStoryline {
             UseScript(AccountPopup.script(provider), for: provider), SeedLogins(provider: provider), OpenFolder(), StartChat(),
             WaitForFocus(.id(StoryID.Composer.field)),
             Press(.id(StoryID.Composer.slash)), Press(.id(StoryID.Composer.command("account"))), WaitForElement(popup),
-            logins("main alone, the account in the header", ["✓ you@example.com"]),
-            ExpectElement(.id(StoryID.Composer.accountLogin("main")), .absent),
+            logins("main alone, listed with its usage", ["✓ you@example.com"]),
+            WaitForElement(.id(StoryID.Composer.accountLogin("main"))),
             // Add account: its palette, then a sign-in in a folder of its own, kept as someone new.
             Press(part(.switch)),
             Expect("only the methods that make a login", found: { $0.app.chat?.storyAccountMenu?.joined(separator: " | ") }) {
@@ -296,6 +296,13 @@ final class AccountLoginEdges: ChatStoryline {
                 return true
             }
         }
+        // Main's own folder: what a read of main answers, while work's keeps work's.
+        let mainStatus = { (what: String, _ reply: JSONValue) in
+            Expect(what) { _ in
+                accounts.statusOf["\(provider)/main"] = reply
+                return true
+            }
+        }
         return [UseScript(AccountPopup.script(provider), for: provider), SeedLogins(provider: provider), OpenFolder(), StartChat()]
             + [WaitForFocus(.id(StoryID.Composer.field))] + open + [
                 Press(part(.switch)),
@@ -306,11 +313,14 @@ final class AccountLoginEdges: ChatStoryline {
                     return true
                 },
                 logins("the new login active", ["you@example.com", "✓ work@acme.dev"]),
-                status("main's status, as its folder reads", me),
+                // Main's row is up from the start (one login lists too): pressed only once the
+                // sign-in has ended, as a row can't switch while one runs.
+                Expect("the sign-in's outcome", found: { $0.app.chat?.storyAccount.last }) { $0.app.chat?.storyAccount.last == "Switched accounts." },
+                mainStatus("main's status, as its folder reads", me),
                 Press(.id(main)),
                 logins("main active", ["✓ you@example.com", "work@acme.dev"]),
                 // Signed out from a terminal: the list stays, with the signed-out row under it.
-                status("main signed out outside Kore", out),
+                mainStatus("main signed out outside Kore", out),
                 Key(.escape),
                 ExpectElement(popup, .absent),
             ] + open + [
@@ -326,7 +336,7 @@ final class AccountLoginEdges: ChatStoryline {
                 Press(added(nil)),
                 logins("switched to work", ["you@example.com · Signed out", "✓ work@acme.dev"]),
                 // Main signs in again as work: the added login is the same account.
-                status("main's status, as its folder reads", out),
+                mainStatus("main's status, as its folder reads", out),
                 Press(.id(main)),
                 logins("main active, signed out", ["✓ you@example.com · Signed out", "work@acme.dev"]),
                 Press(part(.signIn)),
@@ -397,7 +407,8 @@ final class AccountUsageMeters: ChatStoryline {
         }
         return [
             UseScript(AccountPopup.script(provider), for: provider), SeedLogins(provider: provider),
-            Do("Add two isolated login fixtures") { _ in
+            Do("Add two isolated login fixtures") { story in
+                story.atFinish { StorylineSeams.loginUsage = nil }
                 let unused = try CLIProfiles.prepare(provider)
                 CLIProfiles.adopt(provider, unused, email: "unused@example.com", workspace: provider == "codex" ? "ChatGPT Pro Lite" : "Unused Org")
                 let mismatch = try CLIProfiles.prepare(provider)

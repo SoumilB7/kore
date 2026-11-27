@@ -38,6 +38,9 @@ struct ChatMoveWindowTests {
         let mac = root.appendingPathComponent("mac")
         for made in [folder, mac] { try FileManager.default.createDirectory(at: made, withIntermediateDirectories: true) }
         defer { try? FileManager.default.removeItem(at: root) }
+        // Its box chat lands here capped from the box daemon's own threads, outside any test's own store.
+        ModeCeilings.put(nil, for: Self.session)
+        defer { ModeCeilings.put(nil, for: Self.session) }
 
         // The box: a kore-host with one chat whose session file is on its scratch CLI folder.
         let paths = HostPaths(environment: [
@@ -45,7 +48,7 @@ struct ChatMoveWindowTests {
             "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
         ])
         try HostConfig(folders: [folder.path]).save(paths.config)
-        let host = HostDaemon(paths: paths)
+        let host = HostDaemon.forTest(paths: paths)
         try host.start()
         defer { host.stop() }
         host.sessionEnv = ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("boxclaude").path, "HOME": root.path]
@@ -79,7 +82,7 @@ struct ChatMoveWindowTests {
             moves.env = macEnv
             return moves
         }
-        ChatMoving.pairs = { _, _ in pair }
+        ChatMoving.pairs = { alias, box in alias == pair.alias && box == pair.box ? pair : nil }
         ChatMoving.makeSync = { _, _ in nil }
         ChatMoving.openLocal = { openedLocal.append($0) }
         ChatMoving.openBox = { openedBox.append(($0, $1)) }
@@ -160,12 +163,15 @@ struct ChatMoveWindowTests {
         let mac = root.appendingPathComponent("mac")
         for made in [folder, mac] { try FileManager.default.createDirectory(at: made, withIntermediateDirectories: true) }
         defer { try? FileManager.default.removeItem(at: root) }
+        // Its box chat lands here capped from the box daemon's own threads, outside any test's own store.
+        ModeCeilings.put(nil, for: Self.session)
+        defer { ModeCeilings.put(nil, for: Self.session) }
         let paths = HostPaths(environment: [
             "HOME": root.path, "XDG_STATE_HOME": root.appendingPathComponent("state").path,
             "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
         ])
         try HostConfig(folders: [folder.path]).save(paths.config)
-        let host = HostDaemon(paths: paths)
+        let host = HostDaemon.forTest(paths: paths)
         try host.start()
         defer { host.stop() }
         host.sessionEnv = ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("boxclaude").path, "HOME": root.path]
@@ -196,11 +202,13 @@ struct ChatMoveWindowTests {
             moves.env = ["CLAUDE_CONFIG_DIR": root.appendingPathComponent("macclaude").path, "HOME": root.path]
             return moves
         }
-        ChatMoving.pairs = { _, _ in pair }
+        // Only this test's folders: the seams are the app's, and other suites' windows (the agent
+        // channel's, beside this one) would take the box chat as a mirror tab of theirs.
+        ChatMoving.pairs = { alias, box in alias == pair.alias && box == pair.box ? pair : nil }
         ChatMoving.makeSync = { _, _ in nil }
         ChatMoving.openLocal = { openedLocal.append($0) }
         let pairFor = PairedBox.pairFor
-        PairedBox.pairFor = { _ in pair }
+        PairedBox.pairFor = { $0.standardizedFileURL.path == mac.standardizedFileURL.path ? pair : nil }
         defer {
             ChatMoving.engine = { connection in SyncBox.ssh(connection.alias).map { ChatMoves(connection: connection, box: $0) } }
             ChatMoving.pairs = { alias, box in SyncPairList.shared.pair(alias: alias, box: box) ?? SyncPairList.shared.around(alias: alias, box: box) }

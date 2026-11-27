@@ -129,8 +129,8 @@ struct FileEditorView: View {
         }
     }
 
-    private func openDefault() { NSWorkspace.shared.open(document.url) }
-    private func reveal() { NSWorkspace.shared.activateFileViewerSelecting([document.url]) }
+    private func openDefault() { StoryHost.open(document.url) }
+    private func reveal() { StoryHost.reveal([document.url]) }
 
     static func size(_ bytes: Int) -> String {
         ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
@@ -160,7 +160,7 @@ private struct PathRow: View {
                 }
                 .foregroundStyle(Theme.tertiary)
                 .padding(.horizontal, Space.xs)
-                .help("On \(NodeNames.name(box.alias)): \(box.path)")
+                .tip("On \(NodeNames.name(box.alias)): \(box.path)")
                 Image(systemName: "chevron.right").font(Chrome.glyphCrumb).foregroundStyle(Theme.tertiary)
             }
             ForEach(Array(parts.enumerated()), id: \.offset) { index, part in
@@ -172,6 +172,7 @@ private struct PathRow: View {
                     name: part, isFile: index == parts.count - 1, path: path,
                     gitState: index == parts.count - 1 && document.notice == .deleted ? .deleted : workspace.gitState(of: path), open: menu?.current == path || menu?.folder == path && menu?.current == nil,
                     openMenu: openMenu)
+                .storyID(StoryID.Editor.crumb(parts[0...index].joined(separator: "/")))
             }
             Spacer(minLength: Space.md)
             if let touch = workspace.turnTouches[document.path] {
@@ -181,6 +182,7 @@ private struct PathRow: View {
                         if !list.isEmpty { showChanges(list) }
                     }
                 }
+                .storyID(StoryID.Editor.turnMark)
             }
             RendererToggle(document: document)
         }
@@ -225,7 +227,7 @@ private struct Crumb: View {
         .onGeometryChange(for: [CGRect].self) { [$0.frame(in: .named(CrumbMenu.space)), $0.frame(in: .global)] } action: {
             frames.value = ($0[0], $0[1])
         }
-        .help(isFile ? "Files beside \(name)" : "Files in \(name)")
+        .tip(isFile ? "Files beside \(name)" : "Files in \(name)")
     }
 }
 
@@ -252,7 +254,7 @@ private struct TurnMark: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help("View changes")
+        .tip("View changes")
     }
 }
 
@@ -280,8 +282,8 @@ private struct NoticeBar: View {
             Spacer(minLength: Space.md)
             switch notice {
             case .deleted:
-                Button("Save") { document.save() }.buttonStyle(SubtleButtonStyle())
-                Button("Close", action: close).buttonStyle(SubtleButtonStyle())
+                Button("Save") { document.save() }.buttonStyle(SubtleButtonStyle()).storyID(StoryID.Editor.Notice.save)
+                Button("Close", action: close).buttonStyle(SubtleButtonStyle()).storyID(StoryID.Editor.Notice.close)
             case .saveFailed:
                 Button("Retry") { document.save() }.buttonStyle(SubtleButtonStyle()).storyID(StoryID.Editor.Notice.retry)
             case .changed:
@@ -335,12 +337,33 @@ private struct FileState: View {
             Text(line).font(Chrome.label).foregroundStyle(Theme.secondary).multilineTextAlignment(.center)
             HStack(spacing: Space.md) {
                 ForEach(Array(buttons.enumerated()), id: \.offset) { _, button in
-                    Button(button.0, action: button.1).buttonStyle(SubtleButtonStyle())
+                    Button(button.0, action: button.1).buttonStyle(SubtleButtonStyle()).storyID(StoryID.Editor.state(button.0))
                 }
             }
         }
         .frame(maxWidth: Size.Editor.stateWidth)
     }
+}
+
+extension StoryID.Editor {
+    /// A path row segment, by its path relative to the folder.
+    package static func crumb(_ relativePath: String) -> StoryID { StoryID(.editor, "crumb", key: relativePath) }
+    /// A row of a segment's menu, by the name it shows.
+    package static func crumbRow(_ name: String) -> StoryID { StoryID(.editor, "crumb.row", key: name) }
+    /// "+12 −3 this turn" at the path row's end.
+    package static let turnMark = StoryID(.editor, "turnmark")
+    /// A file tab's state's button (Try Again, Open Anyway…), by its word.
+    package static func state(_ title: String) -> StoryID { StoryID(.editor, "state", key: title) }
+    /// A renderer's state's button (Show Source, Open as Text…), by its word.
+    package static func rendererState(_ title: String) -> StoryID { StoryID(.editor, "renderer.state", key: title) }
+    /// The button on the notice over the source after a renderer failed (Show Preview).
+    package static let rendererNotice = StoryID(.editor, "renderer.notice")
+}
+
+extension StoryID.Editor.Notice {
+    /// A deleted file's Save and Close.
+    package static let save = StoryID(.editor, "notice").part(.save)
+    package static let close = StoryID(.editor, "notice").part(.close)
 }
 
 // MARK: - Status row
@@ -361,6 +384,7 @@ private struct StatusRow: View {
                 title: "Ln \(caret.line), Col \(caret.column)" + (caret.selected > 0 ? " (\(caret.selected) selected)" : ""),
                 help: "Go to Line (⌃G)"
             ) { [OptionItem("Go to Line…") { workspace.quickOpen = .line }] }
+            .storyID(StoryID(.editor, "status.caret"))
             StatusItem(title: document.indent.label, help: "Indentation") {
                 [OptionItem("Indent Using Spaces: 2") { document.setIndent(.spaces(2)) },
                  OptionItem("Indent Using Spaces: 4") { document.setIndent(.spaces(4)) },
@@ -419,6 +443,6 @@ private struct StatusItem: View {
         .padding(.horizontal, Space.xs)
         .background(hovered.value ? Theme.Row.hover(.window) : .clear, in: RoundedRectangle(cornerRadius: Radius.chip))
         .onHover { hovered.value = $0 }
-        .help(help)
+        .tip(help)
     }
 }

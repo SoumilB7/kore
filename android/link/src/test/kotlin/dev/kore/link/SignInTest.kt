@@ -33,13 +33,17 @@ class SignInTest {
         var downs = 0
         val troubles = mutableListOf<Exception>()
         var knocks = 0
+        /** A followed chat working ([TailnetKeeper]'s keep); time the phone spent asleep (no timers ran). */
+        var working = false
+        var slept = 0L
         lateinit var keeper: TailnetKeeper
         val flow = JoinFlow(tailnet, { _, _ -> knocks++; throw java.io.IOException("refused") }, scope.backgroundScope, {},
             { scope.testScheduler.currentTime }, io, start = { keeper.up() })
 
         init {
             keeper = TailnetKeeper(tailnet, switch, flow, scope.backgroundScope, { TailnetKeeper.Settings(networkOn, joined) },
-                { ups += it }, { downs++ }, { troubles += it }, io)
+                { ups += it }, { downs++ }, { troubles += it }, io,
+                realtime = { scope.testScheduler.currentTime + slept }, keep = { working })
         }
 
         /** The app in front with the Join screen. */
@@ -190,7 +194,7 @@ class SignInTest {
         fun want(on: Boolean = true, joined: Boolean = false, step: Step = Step.Join(), screen: Boolean = false) =
             TailnetKeeper.wants(TailnetKeeper.Settings(on, joined), step, screen)
         assertTrue(want(joined = true, screen = true))
-        assertFalse(want(joined = true)) // off screen: nothing, ever (no background mode)
+        assertFalse(want(joined = true)) // off screen (past its linger): nothing, no background mode
         assertFalse(want(on = false, joined = true, screen = true))
         assertFalse(want(screen = true)) // signed out, on the Join screen: nothing runs
         for (s in listOf(Step.Starting, Step.SigningIn(url), Step.NeedsApproval(null))) {
@@ -214,11 +218,63 @@ class SignInTest {
         assertEquals(listOf(true), w.ups)
         w.keeper.onScreen(false)
         runCurrent()
+        // Off screen it stays a while, then the links go.
+        assertEquals(0, w.downs)
+        advanceTimeBy(TailnetKeeper.LINGER_MS + 1)
         assertEquals(1, w.downs)
         // The links' byes get BYE_MS before the tailnet under them stops.
         assertTrue(w.switch.up)
         advanceTimeBy(TailnetKeeper.BYE_MS + 1)
         assertFalse(w.switch.up)
+    }
+
+    @Test fun anotherAppForFourMinutesAndBackKeepsEverythingUp() = runTest {
+        val w = World(this, FakeTailnet(Tailnet.RUNNING), joined = true)
+        w.keeper.onScreen(true)
+        advanceTimeBy(1_000)
+        w.keeper.onScreen(false)
+        advanceTimeBy(4 * 60_000)
+        assertTrue(w.keeper.lingering)
+        w.keeper.onScreen(true)
+        advanceTimeBy(TailnetKeeper.LINGER_CAP_MS)
+        assertEquals(0, w.downs)
+        assertEquals(0, w.tailnet.stops)
+        assertEquals(1, w.tailnet.started)
+        assertFalse(w.keeper.lingering)
+    }
+
+    @Test fun aWorkingChatKeepsItUpToTheCapThenItGoes() = runTest {
+        val w = World(this, FakeTailnet(Tailnet.RUNNING), joined = true)
+        w.keeper.onScreen(true)
+        advanceTimeBy(1_000)
+        w.working = true
+        w.keeper.onScreen(false)
+        advanceTimeBy(TailnetKeeper.LINGER_MS + 1)
+        assertEquals(0, w.downs)
+        advanceTimeBy(TailnetKeeper.LINGER_CAP_MS - TailnetKeeper.LINGER_MS)
+        assertEquals(1, w.downs)
+        // Its turn ending sooner lets it go at the next look.
+        val v = World(this, FakeTailnet(Tailnet.RUNNING), joined = true)
+        v.keeper.onScreen(true)
+        advanceTimeBy(1_000)
+        v.working = true
+        v.keeper.onScreen(false)
+        advanceTimeBy(TailnetKeeper.LINGER_MS + 1)
+        v.working = false
+        advanceTimeBy(TailnetKeeper.LINGER_CHECK_MS + 1)
+        assertEquals(1, v.downs)
+    }
+
+    @Test fun anHourAsleepEndsItAtTheFirstLookAfterWaking() = runTest {
+        val w = World(this, FakeTailnet(Tailnet.RUNNING), joined = true)
+        w.keeper.onScreen(true)
+        advanceTimeBy(1_000)
+        w.keeper.onScreen(false)
+        advanceTimeBy(30_000)
+        // Asleep an hour: the app's timers didn't run, the phone's clock did.
+        w.slept = 3_600_000
+        advanceTimeBy(TailnetKeeper.LINGER_CHECK_MS)
+        assertEquals(1, w.downs)
     }
 
     @Test fun backOnScreenWithinTheByeWindowKeepsTheTailnetUp() = runTest {

@@ -163,7 +163,7 @@ struct DeviceCardView: View {
             fact("Signed in as", info.login)
             fact("First seen", DeviceCardInfo.seen(info.firstSeen, now: Date()))
             if let code = info.code {
-                fact("Device", code, mono: true, strong: true).help(info.device?.uuidString.lowercased() ?? "")
+                fact("Device", code, mono: true, strong: true).tip(info.device?.uuidString.lowercased() ?? "")
             }
         }
     }

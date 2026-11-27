@@ -35,6 +35,9 @@ object DeviceList {
         val prompt: Boolean = false,
         /** It has Arsenal on, at any tier: its logo, spinner and ">_" in the Arsenal mark's blue. */
         val arsenal: Boolean = false,
+        /** What this phone pins it by ([pinKeys], the one to pin by first), and that it's pinned here: a pin glyph, at the list's top. */
+        val pinKeys: List<String> = emptyList(),
+        val pinned: Boolean = false,
     )
 
     /** Which chats moved since this phone last showed them: unread (its own record, nothing on the wire). */
@@ -42,6 +45,27 @@ object DeviceList {
         /** Whether a chat that last did something at [at] is unread; a chat first seen is not. */
         fun unread(chatId: String, at: Long?): Boolean
     }
+
+    /** Which chats this phone pinned on this device: its own record, nothing on the wire. */
+    fun interface Pins {
+        fun pinned(key: String): Boolean
+
+        companion object {
+            val NONE = Pins { false }
+        }
+    }
+
+    /**
+     * What a chat is pinned by, the one to pin by first: its CLI session ("s:…", the same key a
+     * History row has, and kept across the device's restarts: a Mac's chat ids are new each
+     * launch), then its id ("c:…"), which is all a chat has before its first turn. A pin made by
+     * the id still holds once the session comes.
+     */
+    fun pinKeys(chat: JsonObject): List<String> =
+        listOfNotNull(chat.str("sessionId")?.ifBlank { null }?.let { "s:$it" }, chat.str("id")?.let { "c:$it" })
+
+    /** A past chat's key in a window's History: its session. */
+    fun historyPinKey(sessionId: String) = "s:$sessionId"
 
     /** The windows, in the device's order, each with its chats' count. */
     fun chips(snapshot: JsonObject): List<Chip> {
@@ -71,9 +95,10 @@ object DeviceList {
 
     /**
      * The rows of [window] (null: every window), needs-you first, then working, then the most
-     * recent; a chat in a board is shown by its board's row.
+     * recent; pinned chats above the rest, in that order among themselves. A chat in a board is
+     * shown by its board's row.
      */
-    fun rows(snapshot: JsonObject, window: String?, now: Long, seen: Seen): List<Row> {
+    fun rows(snapshot: JsonObject, window: String?, now: Long, seen: Seen, pins: Pins = Pins.NONE): List<Row> {
         val chats = snapshot.objs("chats")
         val byId = chats.associateBy { it.str("id") }
         val windows = snapshot.objs("windows")
@@ -85,7 +110,7 @@ object DeviceList {
             if (window != null && wid != window) continue
             val prefix = if (many) "${w.str("name") ?: "Window"} · " else ""
             for (chat in chatsIn(w, chats)) {
-                val row = chatRow(chat, wid, prefix, many, now, seen) ?: continue
+                val row = chatRow(chat, wid, prefix, many, now, seen, pins) ?: continue
                 made += Made(row, rank(row.cue), lastAt(chat) ?: Long.MIN_VALUE, made.size)
             }
             for (board in boardsIn(w)) {
@@ -108,12 +133,13 @@ object DeviceList {
                 made += Made(row, rank(cue), at ?: Long.MIN_VALUE, made.size)
             }
         }
-        return made.sortedWith(compareBy<Made> { it.rank }.thenByDescending { it.at }.thenBy { it.order }).map { it.row }
+        return made.sortedWith(compareBy<Made> { !it.row.pinned }.thenBy { it.rank }.thenByDescending { it.at }.thenBy { it.order }).map { it.row }
     }
 
     /** One chat's row (the Device screen's and a window's): its cue, its line, its age, its symbols. */
-    fun chatRow(chat: JsonObject, wid: String?, prefix: String, many: Boolean, now: Long, seen: Seen): Row? {
+    fun chatRow(chat: JsonObject, wid: String?, prefix: String, many: Boolean, now: Long, seen: Seen, pins: Pins = Pins.NONE): Row? {
         val id = chat.str("id") ?: return null
+        val pinKeys = pinKeys(chat)
         val at = lastAt(chat)
         val waiting = Waiting.of(chat)
         // Background work keeps it working between turns (link 1.13).
@@ -132,6 +158,8 @@ object DeviceList {
             waiting = if (Waiting.promptOnly(chat)) waiting?.let { w -> Waiting(w.agents, 0).takeIf { it.agents > 0 } } else waiting,
             prompt = Waiting.promptOnly(chat),
             arsenal = arsenalOn(chat.str("arsenal")),
+            pinKeys = pinKeys,
+            pinned = pinKeys.any(pins::pinned),
         )
         return row
     }

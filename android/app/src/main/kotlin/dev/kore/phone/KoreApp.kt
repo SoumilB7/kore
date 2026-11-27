@@ -12,7 +12,7 @@ import kotlinx.coroutines.SupervisorJob
 
 /**
  * Holds the phone's KoreNet ([Mesh]): the tailnet and a link to each device, run while a Kore
- * screen shows (and, with the background setting on, under its foreground service). Screenshots
+ * screen shows and a few minutes after (see [dev.kore.link.node.TailnetKeeper]). Screenshots
  * are allowed unless turned off in Settings; backups stay off.
  */
 class KoreApp : Application() {
@@ -24,6 +24,10 @@ class KoreApp : Application() {
     val log by lazy { dev.kore.link.log.PhoneLog(java.io.File(noBackupFilesDir, "logs")) }
     /** Which chats this phone has shown since they last did something (the lists' unread). */
     val seen by lazy { dev.kore.phone.ui.SeenBook(getSharedPreferences("seen", MODE_PRIVATE)) }
+    /** The chat Copy holds for Paste chat (this run only, as the Mac's clipboard). */
+    @Volatile var chatClip: dev.kore.phone.ui.ChatCopy.Clip? = null
+    /** The chats this phone pinned, per device (the lists' top). */
+    val pins by lazy { dev.kore.phone.ui.PinBook(getSharedPreferences("pins", MODE_PRIVATE)) }
 
     /** A debug build (installed over adb), never a release one. */
     val debuggable get() = applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0

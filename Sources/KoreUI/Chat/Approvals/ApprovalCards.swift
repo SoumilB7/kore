@@ -59,19 +59,19 @@ struct PermissionCard: View {
                     // shows exactly what it lets run.
                     Button("Always allow") { decide(.allowAlways) }
                         .buttonStyle(SubtleButtonStyle())
-                        .help(approval.alwaysHelp)
+                        .tip(approval.alwaysHelp)
                         .storyID(StoryID.Approval.card(approval.id).part(.always))
                 } else if approval.canAlwaysAllow, !approval.autoStop {
                     Button("Always allow") { decide(.allowAlways) }
                         .buttonStyle(SubtleButtonStyle())
-                        .help(approval.alwaysHelp)
+                        .tip(approval.alwaysHelp)
                         .storyID(StoryID.Approval.card(approval.id).part(.always))
                 } else if let note = approval.alwaysAllowNote {
                     // A box's chat: offered by its CLI, set on the box itself.
                     Button("Always allow") {}
                         .buttonStyle(SubtleButtonStyle())
                         .disabled(true)
-                        .help(note)
+                        .tip(note)
                         .storyID(StoryID.Approval.card(approval.id).part(.always))
                 }
                 // A call only the person runs, in Manual (a critical removal), has no Run once.
@@ -80,7 +80,7 @@ struct PermissionCard: View {
                         .buttonStyle(SubtleButtonStyle(prominent: true))
                         // Held by a setting Kore can't change: dim, saying so.
                         .disabled(approval.allowNote != nil)
-                        .help(approval.allowNote ?? "")
+                        .tip(approval.allowNote ?? "")
                         .storyID(StoryID.Approval.card(approval.id).part(.allow))
                 }
             }
@@ -154,8 +154,10 @@ struct ImplementPlanCard: View {
     @ViewBuilder private var buttons: some View {
         Button(CardLabels.Implement.stay, action: stay)
             .buttonStyle(SubtleButtonStyle())
+            .storyID(StoryID.Approval.implementPlan.part(.keepplanning))
         Button(CardLabels.Implement.implement, action: implement)
             .buttonStyle(SubtleButtonStyle(prominent: true))
+            .storyID(StoryID.Approval.implementPlan.part(.allow))
     }
 
     var body: some View {
@@ -174,6 +176,11 @@ struct ImplementPlanCard: View {
         .panel(.card)
         .cornerMarks(Rung.plan.color, radius: Radius.card)
     }
+}
+
+extension StoryID.Approval {
+    /// Codex's "Implement this plan?" card: `.part(.allow)` is Implement, `.part(.keepplanning)` Stay.
+    package static let implementPlan = StoryID(.approval, "implement")
 }
 
 /// Codex extension's Plan indicator: lightbulb + "Plan"; hover shows × to turn it off.

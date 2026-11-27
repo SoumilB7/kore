@@ -130,6 +130,9 @@ package struct FilesResult: Codable, Sendable, Equatable {
     package var deleted: Int?
     package var made: Int?
     package var skipped: Int?
+    /// 1.16: `pipe.open`'s ticket (base64), and `pipe.send`'s rsync status.
+    package var ticket: String?
+    package var status: Int?
 
     package init(
         id: String, ok: Bool, code: ResultCode? = nil, message: String? = nil, path: String? = nil, entries: [FileEntry]? = nil,

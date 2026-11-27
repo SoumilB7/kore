@@ -27,7 +27,7 @@ struct HistoryButton: View {
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .global) } action: { frame = $0 }
-        .help("History")
+        .tip("History")
     }
 }
 
@@ -95,6 +95,8 @@ struct HistoryPanel: View {
                                 session: chat,
                                 hit: search.value.hits[chat.id],
                                 lit: (lit.value ?? 0) == index,
+                                tinted: lit.value == index,
+                                current: isOpen && workspace.historyIsCurrent(chat),
                                 showsActions: lit.value == index,
                                 isRenaming: renaming.value == chat.id,
                                 open: { open(chat) },
@@ -158,7 +160,7 @@ struct HistoryPanel: View {
             if open {
                 PointerGate.keyed()
                 searchFocused = true
-                monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { event in
+                monitor.value = WindowEvents.monitor([.leftMouseDown, .rightMouseDown, .keyDown]) { event in
                     handle(event)
                 }
                 kept.value = ArsenalMemory.all()
@@ -213,7 +215,8 @@ struct HistoryPanel: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help(showArchived.value ? "Show chats" : "Show archived chats")
+            .tip(showArchived.value ? "Show chats" : "Show archived chats")
+            .storyID(StoryID.History.archived)
         }
         .padding(Inset.search)
         .panel(.well)
@@ -295,6 +298,8 @@ struct HistoryPanel: View {
             return nil
         }
         let location = CGPoint(x: event.locationInWindow.x, y: content.bounds.height - event.locationInWindow.y)
+        // A row's own popup (its right-click), wherever it shows, is the panel's.
+        if OptionsMenu.shared.covers(event) { return event }
         if !frame.value.contains(location) && !anchor.contains(location) {
             // Let go of the search field now, before the click is handled: if SwiftUI still
             // thinks it's focused when the panel hides, it resets the window's focus and undoes
@@ -312,6 +317,10 @@ private struct HistoryRow: View {
     let hit: ChatTextIndex.Hit?
     /// The panel's one highlight: the pointer's row, or the keys'.
     let lit: Bool
+    /// Lit by the pointer or the keys (not only Return's first row): its faint accent tint.
+    var tinted = false
+    /// Its chat is the one this tab shows: raised, its name in light blue, while the panel is open.
+    var current = false
     /// Rename and Archive: on the row the pointer or the keys moved to.
     let showsActions: Bool
     let isRenaming: Bool
@@ -333,6 +342,8 @@ private struct HistoryRow: View {
     var clip: (Bool) -> Void = { _ in }
     var paste: (() -> Void)? = nil
     @StateObject private var draft = Local("")
+    /// The row's button is held down: its fill one step stronger.
+    @StateObject private var pressed = Local(false)
     /// Return and the focus loss that follows it both end a rename; only the first counts.
     @StateObject private var finished = Local(false)
     @FocusState private var fieldFocused: Bool
@@ -342,6 +353,7 @@ private struct HistoryRow: View {
             if isRenaming { renameField } else { title.storyID(StoryID.History.row(session.id)) }
             if showsActions && !isRenaming {
                 iconButton("pencil", help: locked ?? "Rename", action: startRename)
+                    .storyID(StoryID.History.rename(session.id))
                 iconButton(session.archived ? "tray.and.arrow.up" : "archivebox", help: locked ?? (session.archived ? "Unarchive" : "Archive"), action: toggleArchive)
                     .storyID(StoryID.History.row(session.id).part(.archive))
                     .padding(.trailing, Space.xs)
@@ -349,13 +361,18 @@ private struct HistoryRow: View {
         }
         // Archive is built only on hover: pressed through its action meanwhile.
         .storyAction(StoryID.History.row(session.id).part(.archive)) { if locked == nil { toggleArchive() } }
-        .hoverFill(lit || isRenaming, Theme.Row.selected(.surface))
+        .hoverFill(fill != nil, fill ?? .clear)
+        .background(StoryAnchor(id: current ? StoryID.History.row(session.id).part(.selected).raw : nil, press: nil))
         .koreContextMenu("history") {
             HistoryMenu.items(session, locked: locked, open: open, rename: startRename, archive: toggleArchive, clip: clip, paste: paste)
         }
         // Built only on the lit row: VoiceOver and the keyboard reach them on any row.
         .accessibilityAction(named: "Rename", startRename)
         .accessibilityAction(named: session.archived ? "Unarchive" : "Archive", toggleArchive)
+    }
+
+    private var fill: Color? {
+        Theme.Row.Current.fill(current: current, lit: tinted || isRenaming, pressed: pressed.value)
     }
 
     @ViewBuilder private var logo: some View {
@@ -382,15 +399,15 @@ private struct HistoryRow: View {
             .padding(.vertical, Space.md)
             .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
-        .help(session.title)
+        .buttonStyle(PressFill(pressed: { pressed.value = $0 }))
+        .tip(session.title)
     }
 
     private var titleLine: some View {
         HStack(spacing: Space.md) {
             Text(session.title)
                 .font(Chrome.body)
-                .foregroundStyle(session.archived ? Theme.secondary : Theme.text)
+                .foregroundStyle(current ? Theme.Row.Current.name : session.archived ? Theme.secondary : Theme.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
             // A chat Kore made by an import names where it came from.
@@ -438,6 +455,7 @@ private struct HistoryRow: View {
                     return .handled
                 }
                 .onChange(of: fieldFocused) { _, focused in if !focused { finish(draft.value) } }
+                .storyID(StoryID.History.rename(session.id).part(.field))
         }
         .padding(Inset.row)
 
@@ -465,7 +483,7 @@ private struct HistoryRow: View {
         }
         .buttonStyle(.plain)
         .disabled(locked != nil)
-        .help(help)
+        .tip(help)
     }
 }
 
@@ -499,4 +517,20 @@ enum HistoryMenu {
         if let locked { items += [.rule, OptionItem(locked, enabled: false)] }
         return items
     }
+}
+
+/// A plain button that says when it's held down, for its row's pressed fill.
+private struct PressFill: ButtonStyle {
+    let pressed: (Bool) -> Void
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.onChange(of: configuration.isPressed) { _, down in pressed(down) }
+    }
+}
+
+extension StoryID.History {
+    /// The search bar's archive button: archived chats, or back to the rest.
+    package static let archived = StoryID(.history, "archived")
+    /// A lit row's pencil (`.part(.field)` its name field while renaming).
+    package static func rename(_ session: String) -> StoryID { StoryID(.history, "rename", key: session) }
 }

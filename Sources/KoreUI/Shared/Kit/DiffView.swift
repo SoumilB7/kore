@@ -200,7 +200,8 @@ struct OpenInEditor: View {
 
     var body: some View {
         TextButton(title) { openURL(Self.url(path, in: folder)) }
-            .help("Open in editor")
+            .tip("Open in editor")
+            .storyID(StoryID.Changes.openInEditor((path as NSString).lastPathComponent))
     }
 
     static func url(_ path: String, in folder: URL?) -> URL {
@@ -236,4 +237,9 @@ struct TextButton: View {
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
     }
+}
+
+extension StoryID.Changes {
+    /// A diff too large to show, or binary: its "Open in editor", by the file's name.
+    package static func openInEditor(_ name: String) -> StoryID { StoryID(.changes, "openineditor", key: name) }
 }

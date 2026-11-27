@@ -58,6 +58,8 @@ package struct ChatRecord: Codable, Sendable, Equatable {
     package var fast: Bool?
     package var planMode: Bool?
     package var planAllow: Bool?
+    /// How high its mode may go without its owner (`ModeCeilings`), kept with the chat.
+    package var modeCeiling: Int?
     /// Renamed while its CLI slept: the title goes to the CLI's session at its next start.
     package var renamePending: Bool?
     /// Kore's rename its CLI hasn't taken yet: sent as it starts, and the chat's title until the
@@ -326,6 +328,25 @@ package final class HostChat {
         return made.count
     }
 
+    /// A session it resumes that the box never logged (a past session opened from History, one
+    /// run in a terminal here): nothing on disk yet, and no CLI has replayed it.
+    var neverLogged: Bool {
+        record.session != nil && record.forkFrom == nil && !FileManager.default.fileExists(atPath: logURL.path) && stream.isEmpty
+            && (chat?.transcriptView.log.entries.isEmpty ?? true)
+    }
+
+    /// Its session's newest page, read without its CLI (`PastPage`), in the log and the event
+    /// stream as a resumed CLI's replay would be: clients see its history before any send. The
+    /// CLI's own replay at its first start is then the wake (`expectingWake`), sent to no one again.
+    @discardableResult
+    func readIn(_ page: PastPage) -> Bool {
+        guard neverLogged, prependEarlier(page.events) > 0 else { return false }
+        stream.restart(with: [.replayed(page.events), .earlierHistory(page.more)])
+        // A chat already made (no CLI yet) takes its CLI's replay as the wake too.
+        if chat != nil { (expectingWake, wakeKept, wakeBase) = (true, nil, nil) }
+        return true
+    }
+
     /// Appends lines to the log; a reset writes it again from the start.
     private func write(_ lines: [LogLine], reset: Bool) {
         let encoder = JSONEncoder()
@@ -378,6 +399,8 @@ package final class HostChat {
         chat.controls.arsenalCap = LinkPolicy.raiseCap.rawValue
         if provider.planToggle != nil, let on = record.planMode { chat.controls.planMode = on }
         if let on = record.planAllow { chat.controls.planAllow = on }
+        if let ceiling = record.modeCeiling, chat.modeCeiling != ceiling { chat.setModeCeiling(ceiling) }
+        chat.controls.mode = provider.held(chat.controls.mode, under: chat.modeCeiling)
         chat.copiedFrom = record.copied
         // Arsenal names it by its box chat id: the origins of the chats it makes, and its own.
         chat.hostKey = id
@@ -538,6 +561,7 @@ package final class HostChat {
             next.title = chat.status.name ?? next.title
         }
         next.mode = chat.controls.mode
+        next.modeCeiling = chat.modeCeiling
         if provider.planToggle != nil { next.planMode = chat.controls.planMode }
         // Fast mode as its CLI last said it (a model without it says off, and keeps it for the next).
         if chat.controls.fastKnown, chat.controls.currentModel?.supportsFastMode != false { next.fast = chat.controls.fastMode }
@@ -794,6 +818,11 @@ package final class HostChat {
 
     func setMode(_ id: String) {
         record.mode = id
+        // A chat asleep: its ceiling comes up as the live one's would (`Chat.raiseCeiling`).
+        if chat == nil, let ceiling = modeCeiling, provider.held(id, under: ceiling) != id {
+            record.modeCeiling = provider.ceiling(picking: id)
+            if let session = record.session { ModeCeilings.put(record.modeCeiling, for: session) }
+        }
         try? saveRecord()
     }
 
@@ -818,6 +847,8 @@ package final class HostChat {
 
     // MARK: Settings
 
+    var modeCeiling: Int? { chat?.modeCeiling ?? record.modeCeiling ?? record.session.flatMap(ModeCeilings.at) }
+
     /// Its own settings, as a copy, move or fork carries them (the live chat's where it runs).
     package var settings: ChatSettings {
         let controls = HostMeta.controls(self)
@@ -827,12 +858,17 @@ package final class HostChat {
             fast: chat.flatMap { $0.launchFastMode ?? ($0.controls.fastKnown ? $0.controls.fastMode : nil) } ?? record.fast,
             plan: provider.planToggle != nil ? live?.planMode ?? record.planMode ?? false : nil, planAllow: live?.planAllow ?? record.planAllow ?? false,
             autoCompact: record.autoCompact, login: record.provider == "claude" ? record.account ?? LinkAccount.main : nil, arsenal: arsenal,
-            draft: record.draft ?? "", at: record.settingsAt)
+            draft: record.draft ?? "", at: record.settingsAt, modeCeiling: modeCeiling)
     }
 
     /// What came with a new chat (a copy, a move, a fork), kept before its CLI starts on it. Not a
     /// client's change: the time stays as it was.
     func carry(_ settings: ChatSettings, draft: Bool = true) {
+        if let ceiling = settings.modeCeiling {
+            record.modeCeiling = ceiling
+            if let session = record.session { ModeCeilings.put(ceiling, for: session) }
+            chat?.setModeCeiling(ceiling)
+        }
         if let fast = settings.fast {
             record.fast = fast
             record.controls?.fast = fast

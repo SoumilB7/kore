@@ -45,5 +45,7 @@ dependencies {
 }
 
 tasks.withType<Test>().configureEach {
+    // The link's message bodies, read in place (DeviceListTest's pin keys).
+    systemProperty("kore.fixturesV1", rootProject.projectDir.resolve("../Tests/Fixtures/link/v1").canonicalPath)
     testLogging { events("failed"); exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL }
 }

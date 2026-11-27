@@ -14,6 +14,9 @@ package final class HostDaemon {
     package let paths: HostPaths
     package let services = HostServices()
     package private(set) var config: HostConfig
+    /// The name this box says on KoreNet (`net.node`): its host name's first label. Tests that run
+    /// several boxes in one process name each.
+    package var deviceName = String(ProcessInfo.processInfo.hostName.split(separator: ".").first ?? "box")
     package private(set) var chats: [HostChat] = []
     /// Chats whose tabs were closed, oldest first: hidden from every client's state, kept to reopen.
     package private(set) var closedChats: [HostChat] = []
@@ -54,6 +57,16 @@ package final class HostDaemon {
         await provider.sessions(folder)
     }
     var historyKept: HostHistoryKept?
+    /// A past session's newest page, read without its CLI (`PastPage`; tests set their own), and
+    /// the chats being read in now.
+    package var pastPage: @Sendable (_ provider: ProviderDescriptor, _ id: String, _ folder: URL) async -> PastPage? = { provider, id, folder in
+        await provider.pastPage(id, folder)
+    }
+    var readingPast: Set<String> = []
+    /// When a chat's past page last came back with nothing: not asked again for `pastRetry` (a
+    /// Codex read starts an app-server).
+    var pastFailed: [String: Date] = [:]
+    package var pastRetry: TimeInterval = 600
     /// `kore-host mcp`'s binary: this one (a test runs the built one).
     package var mcpCommand = URL(fileURLWithPath: HostService.executable())
     package static let version = HostVersion.string
@@ -86,6 +99,8 @@ package final class HostDaemon {
     var rateLimits: [String: HostLimits] = [:]
     /// Phase 18: the devices this box trusts and those waiting (`devices/`).
     package let devices: DeviceStore
+    /// Link 1.16: rsync over KoreNet (`HostPipes`), its rsync found on first use (tests set their own).
+    package lazy var pipes = HostPipes(home: HostPaths.home().path)
     /// The KoreNet listener (`HostNet`), while Tailscale is up; nil in tests that don't ask.
     package private(set) var net: HostNet?
     /// The tailnet KoreNet listens on, made at once while the box is on KoreNet (`config.net`):
@@ -253,6 +268,7 @@ package final class HostDaemon {
     }
 
     package func stop(restarting: Bool = false) {
+        let told = connections.count
         for connection in connections { connection.end(restarting ? .restart : .quit) }
         net?.stop()
         net = nil
@@ -266,7 +282,8 @@ package final class HostDaemon {
         try? FileManager.default.removeItem(at: paths.pid)
         lock.release()
         self.lock = nil
-        HostJournal.note("stop")
+        // How the links' byes went: how many were told, and how long their ends took to go.
+        HostJournal.note("stop", ["restart": restarting ? "yes" : "no", "told": "\(told)", "ending": "\(lastSettle.ending)", "settled_ms": "\(Int(lastSettle.waited / .milliseconds(1)))"])
     }
 
     // MARK: Folders and chats
@@ -560,11 +577,14 @@ package final class HostDaemon {
         let mine = tailnetChoices
         net.choosing()
         let standby = takeOwnStandby()
+        let stopping = koreStopping
         let counting = HostNet.counting
         counting(true)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             defer { DispatchQueue.main.async { counting(false) } }
-            // Kore's own signing in beside Tailscale stops first: they share a folder.
+            // Kore's own signing in beside Tailscale stops first: they share a folder. So does
+            // one stopping after KoreNet went off, or the tailnet was chosen again.
+            stopping.wait()
             standby?()
             let pick = box.choose()
             DispatchQueue.main.async {
@@ -660,11 +680,17 @@ package final class HostDaemon {
         // `restart`, never `quit`, and while the old node still carries it: the box is back within
         // seconds on its other node, and Macs and phones dial again from their shortest wait (a
         // `quit` reads asleep: minutes).
-        for connection in connections where connection.route == .tailnet && connection.peer != nil { connection.end(.restart) }
+        let told = connections.filter { $0.route == .tailnet && $0.peer != nil }
+        for connection in told { connection.end(.restart) }
         net.leave()
         stopKoreTailnet()
         startNet()
     }
+
+    /// Kore's own tailnets still stopping, off the main thread.
+    let koreStopping = DispatchGroup()
+    /// The last stop's wait for the links' byes (`SocketEnd.settle`), for its journal line.
+    private var lastSettle: (ending: Int, waited: Duration) = (0, .zero)
 
     /// Kore's own tailnet ends (off the main thread: its stop is a round trip on its socket).
     private func stopKoreTailnet(wait: Bool = false) {
@@ -672,13 +698,21 @@ package final class HostDaemon {
         ownSSH = nil
         guard let kore = koreTailnet else { return }
         koreTailnet = nil
+        // The links' last words (their `bye`) still travel on it: they go first, a second at most.
         if wait {
+            lastSettle = SocketEnd.settle()
             kore.stop()
             Self.tailnetChosen?("stopped")
         } else {
+            // A start meanwhile waits for this stop (`koreStopping`): the stop asks the helper at
+            // the folder's socket, where the new one would be listening by then.
+            let stopping = koreStopping
+            stopping.enter()
             DispatchQueue.global(qos: .utility).async {
+                SocketEnd.settle()
                 kore.stop()
                 Self.tailnetChosen?("stopped")
+                stopping.leave()
             }
         }
     }
@@ -694,10 +728,12 @@ package final class HostDaemon {
         }
         besideWatch?.stop()
         besideWatch = nil
+        // Told first, while the tailnet under them still carries their `bye`.
+        let told = connections.filter { $0.route == .tailnet && $0.peer != nil }
+        for connection in told { connection.end(.quit) }
         net.leave()
         stopKoreTailnet()
         if let standby = takeOwnStandby() { DispatchQueue.global(qos: .utility).async { standby() } }
-        for connection in connections where connection.route == .tailnet && connection.peer != nil { connection.end(.quit) }
         HostJournal.note("korenet off")
     }
 
@@ -787,7 +823,7 @@ package final class HostDaemon {
             host: .init(name: ProcessInfo.processInfo.hostName, koreVersion: Self.version, kind: "box", ghSignedIn: ghSignedIn), providers: HostMeta.providers(calls: control == .full, installed: installed),
             policy: .init(sendMaxLevel: .danger, control: control == .full ? .full : .standard),
             caps: ["tx", "attn", "commands", "control", "box", BoxTools.deviceCap] + (control != .watch ? ["history", "blob", "diff"] : [])
-                + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, LinkFiles.bytesCap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap, LinkPolicy.alwaysAllowCap, LinkPolicy.fullAccessCap] : []))
+                + (control == .full ? ["stream", "live", "pty", "git", "move", "copy", "chatCopy", LinkFsOps.cap, LinkFiles.bytesCap, DevicesWire.mergeCap, UpdateWire.cap, LinkLogins.cap, LinkPolicy.alwaysAllowCap, LinkPolicy.fullAccessCap, LinkPolicy.copyForCap] + (pipes.available ? [LinkPipe.cap] : []) : []))
     }
 
     /// Whether a served folder's window is closed (`window.close`); one with a chat shows anyway.
@@ -961,7 +997,8 @@ package final class HostDaemon {
             if kind == .chatNew, let line = Self.rootRefusal(args.provider, args.mode) ?? Self.rootRefusal(args.provider, args.settings?.mode) {
                 return fail(.raiseMode, line)
             }
-            return self.control(kind, args, id: id, control: control, phone: phone, reply: reply)
+            let held = kind == .chatNew ? LinkPolicy.forkHeld(args, control: control == .full ? .full : .standard, fullAccess: fullAccess) : args
+            return self.control(kind, held, id: id, control: control, phone: phone, reply: reply)
         case .unknown:
             return fail(.invalid, LinkPolicy.unknownCommand)
         }
@@ -1148,8 +1185,9 @@ package final class HostDaemon {
     private func readGitHub() {
         guard ghRead.map({ Date().timeIntervalSince($0) > 60 }) ?? true else { return }
         ghRead = Date()
+        let environment = sessionEnv
         Task { [weak self] in
-            let now = await Task.detached(priority: .utility) { GitHubLogin.signedIn() }.value
+            let now = await Task.detached(priority: .utility) { await GitHubLogin.signedIn(environment: environment) }.value
             guard let self, now != self.ghSignedIn else { return }
             self.ghSignedIn = now
             for connection in self.connections where connection.proven {
@@ -1162,7 +1200,9 @@ package final class HostDaemon {
     /// them; `<id>:done` says how it ended, and `ghSignedIn` follows in a delta.
     private func gitHub(id: String, reply: @escaping @MainActor (LinkMessage.Result) -> Void) -> LinkMessage.Result? {
         if ghLogin?.isRunning == true { ghLogin?.terminate() }
+        let environment = sessionEnv
         ghLogin = GitHubLogin.start(
+            environment: environment,
             started: { found, said in
                 Task { @MainActor in
                     if let found {
@@ -1178,7 +1218,7 @@ package final class HostDaemon {
                     guard let self else { return }
                     self.ghLogin = nil
                     // Read off the main thread, as on a connect.
-                    self.ghSignedIn = await Task.detached(priority: .utility) { GitHubLogin.signedIn() }.value
+                    self.ghSignedIn = await Task.detached(priority: .utility) { await GitHubLogin.signedIn(environment: environment) }.value
                     reply(.init(id: id + ":done", ok: ok, message: ok ? "gh is signed in." : "gh didn't sign in."))
                     for connection in self.connections where connection.proven {
                         connection.send(.delta(rev: connection.nextRev(), windows: nil, chats: nil, removed: nil, extras: LinkExtras(ghSignedIn: self.ghSignedIn)))

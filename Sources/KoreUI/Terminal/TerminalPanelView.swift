@@ -52,6 +52,8 @@ private struct TerminalPanelView: View {
                             Text(failure).font(Chrome.label).foregroundStyle(Theme.warning).padding(Space.sm)
                         } else if !active.outputAvailable {
                             Text("Output is no longer available").font(Chrome.label).foregroundStyle(Theme.secondary).padding(Space.sm)
+                        } else if active.waiting {
+                            Text("No output yet — this command may print only when it ends").font(Chrome.label).foregroundStyle(Theme.tertiary).padding(Space.xs)
                         } else if active.truncated {
                             Text("Showing the latest output").font(Chrome.label).foregroundStyle(Theme.tertiary).padding(Space.xs)
                         }
@@ -96,7 +98,7 @@ private struct TerminalPanelView: View {
                     let title = panel.title(of: active)
                     Text(title).font(Chrome.label).foregroundStyle(Theme.text).lineLimit(1).truncationMode(.middle).layoutPriority(-1)
                         .storyID(StoryID.Terminal.title)
-                        .help(title)
+                        .tip(title)
                         .koreContextMenu("terminal") { terminalOptions(active, panel: panel) }
                     IconButton(symbol: "pencil", help: "Rename terminal") { panel.startRename(active) }
                         .storyID(StoryID.Terminal.rename)
@@ -165,7 +167,7 @@ private struct TerminalListRow: View {
         .padding(.leading, Space.sm)
         .background(panel.selected == entry.id ? Theme.surface : .clear, in: RoundedRectangle(cornerRadius: Radius.control))
         .onHover { hovered.value = $0 }
-        .help(panel.title(of: entry))
+        .tip(panel.title(of: entry))
         .koreContextMenu("terminal") { terminalOptions(entry, panel: panel) }
         .accessibilityAction(named: "Rename") { panel.startRename(entry) }
     }
@@ -316,9 +318,9 @@ struct TerminalKeys: ViewModifier {
     func body(content: Content) -> some View {
         content.onAppear {
             guard monitor.value == nil else { return }
-            monitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            monitor.value = WindowEvents.monitor(.keyDown) { event in
                 let flags = event.modifierFlags.intersection([.command, .control, .option, .shift])
-                guard event.window === workspace.window,
+                guard let window = workspace.window, event.window === window,
                       event.charactersIgnoringModifiers == "`" || event.charactersIgnoringModifiers == "~",
                       flags == .control || flags == [.control, .shift] else { return event }
                 guard !event.isARepeat else { return nil }

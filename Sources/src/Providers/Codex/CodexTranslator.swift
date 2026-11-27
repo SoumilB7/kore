@@ -921,7 +921,7 @@ package final class CodexTranslator {
 
     package struct Replayed: Sendable {
         package let events: [ChatEvent]
-        package let carried: Carried
+        package var carried: Carried
     }
 
     /// Replays a page of turns (`thread/turns/list`) on a translator of its own, off the main thread.

@@ -302,7 +302,9 @@ package final class LinkHost {
             .chatRelease, .chatAdopt, .chatMirror, .syncFlush, .chatCopy, .chatAdoptCopy, .syncApply, .fsStat, .fsFind:
             "Acted"
         case .accountImport, .accountExport: "Moved a login"
+        case .chatCopyVia: "Copied a chat"
         case .accountFingerprints: "Read the logins"
+        case .pipeOpen, .pipeExpect, .pipeSend: "Copied files"
         }
     }
 

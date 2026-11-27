@@ -253,4 +253,34 @@ class MarkdownTest {
         // A text that isn't an extension (an edit, another entry) parses whole.
         assertEquals(Markdown.parse("other"), cache.blocks("e1", "other", streaming = false))
     }
+
+    /** The owner's case (chat 90abea89): a bold section line, then points 5 and 6, as the Mac reads it. */
+    @Test fun aListGoingOnFromAnEarlierOneIsAList() {
+        val md = "**A. The tools**\n1. **A gate.** One check.\n2. **A map.** One picture.\n\n" +
+            "**B. The rule checker**\n5. **A 1-second rule checker.** Reads the rules.\n6. **Rules as tools.** Each one a check."
+        val blocks = Markdown.parse(md)
+        assertEquals(listOf("paragraph", "list", "paragraph", "list"), kinds(blocks))
+        assertEquals(1, blocks[1]["start"].int())
+        assertEquals("B. The rule checker", plain(spans(blocks[2]["spans"])))
+        assertEquals(5, blocks[3]["start"].int())
+        assertEquals(2, (blocks[3]["items"] as JsonArray).size)
+    }
+
+    @Test fun aColonLeadOrCountingOnStartsAListAtItsNumber() {
+        assertEquals(listOf("paragraph", "list"), kinds(Markdown.parse("Then, in order:\n3. Build it")))
+        assertEquals(3, Markdown.parse("Then, in order:\n3. Build it")[1]["start"].int())
+        assertEquals(listOf("paragraph", "list"), kinds(Markdown.parse("Two more steps\n4. Build\n5. Ship")))
+        assertEquals(listOf("paragraph", "list"), kinds(Markdown.parse("**Notes**\n- one\n- two")))
+    }
+
+    /** Near misses: a year or version at a line's start, numbers not counting on, two bold runs. */
+    @Test fun proseWithNumbersAtLineStartsStaysOneParagraph() {
+        for (md in listOf(
+            "We shipped it in\n2026. We moved on after that.",
+            "It came out as\nv0.3. Then more followed.",
+            "Prices rose in\n2026. A lot.\n2028. Less.",
+            "**a** and **b**\n5. is the answer here",
+            "The total was\n5.",
+        )) assertEquals(md, listOf("paragraph"), kinds(Markdown.parse(md)))
+    }
 }

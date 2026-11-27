@@ -29,6 +29,53 @@ struct TranscriptEndTests {
         return (window, scroll, shift)
     }
 
+    /// The reader's move, as AppKit makes one: the clip moved, then the live scroll said.
+    private func readerMoves(_ scroll: NSScrollView, by dy: CGFloat) {
+        let clip = scroll.contentView
+        clip.scroll(to: CGPoint(x: clip.bounds.minX, y: clip.bounds.minY + dy))
+        NotificationCenter.default.post(name: NSScrollView.didLiveScrollNotification, object: scroll)
+    }
+
+    /// SwiftUI aiming at the target of a scroll of Kore's once more: the clip set back.
+    private func swiftUIAims(_ scroll: NSScrollView, at y: CGFloat) {
+        scroll.contentView.scroll(to: CGPoint(x: scroll.contentView.bounds.minX, y: y))
+    }
+
+    @Test func theReadersFirstMoveAfterAScrollOfKoresIsntTakenBack() {
+        let (window, scroll, shift) = page()
+        defer { window.contentView = nil }
+        shift.readerKeeps = { _ in true }
+        var moved: [CGFloat] = []
+        shift.onReaderMoved = { moved.append($0) }
+        let landed = scroll.contentView.bounds.minY
+        shift.aim()
+        readerMoves(scroll, by: -300)
+        swiftUIAims(scroll, at: landed)
+        #expect(scroll.contentView.bounds.minY == landed - 300)
+        #expect(moved == [-300])
+        // Once only: the target is SwiftUI's no longer, and the reader's next move is theirs.
+        readerMoves(scroll, by: 100)
+        swiftUIAims(scroll, at: landed - 500)
+        #expect(scroll.contentView.bounds.minY == landed - 500)
+    }
+
+    @Test func withoutAScrollOfKoresOrWithinAFollowedEndNothingIsPutBack() {
+        let (window, scroll, shift) = page()
+        defer { window.contentView = nil }
+        let end = scroll.contentView.bounds.minY
+        // Nothing aimed: a move back is layout's own.
+        shift.readerKeeps = { _ in true }
+        readerMoves(scroll, by: -300)
+        swiftUIAims(scroll, at: end)
+        #expect(scroll.contentView.bounds.minY == end)
+        // A followed end the reader moved off by less than it takes to leave it: pinned back.
+        shift.readerKeeps = { $0 < -150 }
+        shift.aim()
+        readerMoves(scroll, by: -40)
+        swiftUIAims(scroll, at: end)
+        #expect(scroll.contentView.bounds.minY == end)
+    }
+
     @Test func aViewPastTheRowsEndIsFoundOnlyWhenTheRowsFillIt() {
         let (window, scroll, shift) = page()
         defer { window.contentView = nil }
@@ -201,15 +248,14 @@ struct TranscriptEndTests {
         #expect(!TranscriptTimeline.pinsEnd(grew: false, insetSettling: false, visibleMoved: false, magnified: false))
     }
 
-    @Test func aFoldFollowedLooksAtTheEndAndAboveKeepsTheAnswerOnScreen() {
-        // Following: the end is looked at, whatever answers are on screen.
-        #expect(FoldMove(following: true, answerTops: ["a": 100], visible: 600) == .checkEnd)
-        // Above the end: the answer starting lowest above the view's bottom stays where it is,
-        // one whose top went above the view included; one under the bottom isn't the reader's.
-        #expect(FoldMove(following: false, answerTops: ["a": -300, "b": 120, "c": 640], visible: 600) == .keep(id: "b", top: 120))
-        #expect(FoldMove(following: false, answerTops: ["a": -300], visible: 600) == .keep(id: "a", top: -300))
-        // No answer there: up by the height the fold took.
-        #expect(FoldMove(following: false, answerTops: ["c": 640], visible: 600) == .byHeight)
-        #expect(FoldMove(following: false, answerTops: [:], visible: 600) == .byHeight)
+    @Test func aFoldFollowedLooksAtTheEndAndAboveKeepsTheRowAtTheTop() {
+        // Following: the end is looked at, whatever rows are on screen.
+        #expect(FoldMove(following: true, kept: ("a", 100)) == .checkEnd)
+        // Above the end: the row at the top of the view (or the first below it) stays where it is,
+        // one whose top went above the view included.
+        #expect(FoldMove(following: false, kept: ("b", 120)) == .keep(id: "b", top: 120))
+        #expect(FoldMove(following: false, kept: ("a", -300)) == .keep(id: "a", top: -300))
+        // No row built there: nothing moves, the work folding never takes the view with it.
+        #expect(FoldMove(following: false, kept: nil) == .stay)
     }
 }

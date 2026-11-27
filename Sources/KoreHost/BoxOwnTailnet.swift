@@ -169,7 +169,10 @@ extension HostDaemon {
         guard let helper = box.helper() else { return }
         ownPreparing = true
         let mine = tailnetChoices
+        let stopping = koreStopping
         DispatchQueue.global(qos: .utility).async { [weak self] in
+            // After Kore's own still stopping in the same folder (`stopKoreTailnet`).
+            stopping.wait()
             let made = try? box.start(helper, try box.key())
             DispatchQueue.main.async {
                 MainActor.assumeIsolated {

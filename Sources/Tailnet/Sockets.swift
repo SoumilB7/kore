@@ -115,6 +115,34 @@ package enum Sockets {
         return fd
     }
 
+    /// A listening socket at `path` (any file there replaced), 0600, for one connection at a time.
+    package static func listenUnix(_ path: String, backlog: Int32 = 1) throws -> Int32 {
+        let fd = socket(AF_UNIX, streamType, 0)
+        guard fd >= 0 else { throw SocketError.failed("socket", errno) }
+        closeOnExec(fd)
+        var address = sockaddr_un()
+        address.sun_family = sa_family_t(AF_UNIX)
+        let bytes = Array(path.utf8)
+        guard bytes.count < MemoryLayout.size(ofValue: address.sun_path) else {
+            close(fd)
+            throw SocketError.badAddress(path)
+        }
+        withUnsafeMutableBytes(of: &address.sun_path) { raw in
+            raw.copyBytes(from: bytes)
+            raw[bytes.count] = 0
+        }
+        unlink(path)
+        let bound = withUnsafePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Glue.bind(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        guard bound == 0, chmod(path, 0o600) == 0, listen(fd, backlog) == 0 else {
+            let code = errno
+            close(fd)
+            throw SocketError.failed("listen \(path)", code)
+        }
+        return fd
+    }
+
     /// How long a TCP connect waits before giving up (a peer the tailnet calls online whose port
     /// is filtered would otherwise hold the caller for the kernel's ~75 s).
     package static let connectTimeoutMs: Int32 = 5000

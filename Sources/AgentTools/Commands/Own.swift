@@ -7,7 +7,7 @@ enum Own {
 
     /// What each takes after its name, for its usage line.
     static let usage = [
-        "rename": "<name>", "model": "<model>", "effort": "<level>", "fast": "on|off", "mode": "<mode>", "compact": "", "options": "",
+        "rename": "<name>", "model": "<model>", "effort": "<level>", "fast": "on|off", "mode": "<mode>", "compact": "", "autocompact": "50|60|70|80|90|off", "options": "",
     ]
 
     static func fits(_ name: String, _ positional: [String]) -> Bool {
@@ -27,7 +27,7 @@ enum Own {
     static func set(_ name: String, _ client: any AgentCalls, _ o: Reads.Options) throws(AgentFailure) {
         let (chat, value) = split(o.positional, valued: name != "compact")
         var args: Object = ["chat": chat]
-        if name == "fast" { args["on"] = value == "on" } else if let value { args["to"] = value }
+        if name == "fast" { args["on"] = value == "on" } else if name == "autocompact" { args["point"] = value } else if let value { args["to"] = value }
         let data = try client.run("chat.\(name)", args)
         if o.json { return Reads.printJSON(data) }
         Reads.say(Reads.str(data["message"]))

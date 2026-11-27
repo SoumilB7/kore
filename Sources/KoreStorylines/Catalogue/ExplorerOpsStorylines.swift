@@ -8,7 +8,11 @@ import KoreUI
 /// Answers Kore's confirmations ("trash", "move") with yes, and counts them.
 @MainActor final class Confirms {
     var asked: [String] = []
-    func install() { StorylineSeams.confirm = { [unowned self] what in asked.append(what); return true } }
+    /// Until `remove()`, or the storyline's end, pass or fail.
+    func install(_ story: StoryContext) {
+        StorylineSeams.confirm = { [self] what in asked.append(what); return true }
+        story.atFinish { StorylineSeams.confirm = nil }
+    }
     func remove() { StorylineSeams.confirm = nil }
 }
 
@@ -57,7 +61,7 @@ final class ExplorerMultiSelect: FilesStoryline {
 
     override func steps() -> [any Step] {
         super.steps() + [
-            Do("answer confirmations") { [confirms] _ in confirms.install() },
+            Do("answer confirmations") { [confirms] story in confirms.install(story) },
             Command(.toggleExplorer),
             WaitForElement(.treeRow("e.txt")),
             Click(.treeRow("a.txt")),
@@ -109,8 +113,8 @@ final class ExplorerFileOps: FilesStoryline {
 
     override func steps() -> [any Step] {
         super.steps() + [
-            Do("answer confirmations, and a file outside the folder") { [confirms] _ in
-                confirms.install()
+            Do("answer confirmations, and a file outside the folder") { [confirms] story in
+                confirms.install(story)
                 try "outside\n".write(to: Self.outside, atomically: true, encoding: .utf8)
             },
             Command(.toggleExplorer),
@@ -160,7 +164,10 @@ final class ExplorerFileOps: FilesStoryline {
             // Type to jump (back on the tree first: Search took the sidebar).
             Command(.toggleExplorer),
             WaitForElement(.treeRow("a.txt")),
-            Click(.treeRow("a.txt")),
+            // A folder's click puts the keys in the tree; a file's would open it, and an opened file
+            // closes the explorer floating over a narrow window.
+            Click(.treeRow("dest")),
+            Expect("the tree has the keys") { $0.app.workspace?.storyTreeHasKeys == true },
             TypeText("ze"),
             Expect("typing “ze” chose zeta.txt", found: { $0.app.workspace?.storyTreeSelection ?? "none" }) {
                 $0.app.workspace?.storyTreeSelection == "zeta.txt"
@@ -168,6 +175,8 @@ final class ExplorerFileOps: FilesStoryline {
             // Reveal: the active file shows in the tree when it opens.
             Click(.treeRow("deep/inner/x.txt"), count: 2),
             Expect.fileTabs("x.txt open") { tabs in tabs.contains { $0.path == "deep/inner/x.txt" && $0.active } },
+            // A file opened over a narrow window closes the floating explorer: open again, as a person would.
+            ExplorerShown(),
             // Another row chosen (a folder: a file's click would open it instead).
             Click(.treeRow("dest")),
             Command(.toggleExplorer),
@@ -190,6 +199,17 @@ final class ExplorerFileOps: FilesStoryline {
 }
 
 /// Holds for `span`, checked every few milliseconds: the first time it doesn't, the step fails.
+/// The explorer shown again if a file opened over a narrow window closed it (floating, it closes
+/// when the tab changes); docked, it never closed and this does nothing.
+struct ExplorerShown: Step {
+    var label: String { "Show the explorer if a file's tab closed it" }
+    func run(_ story: StoryContext) async throws {
+        guard story.app.workspace?.explorerOpen == false else { return }
+        try await Command(.toggleExplorer).run(story)
+        try await story.until("the explorer shown") { story.app.workspace?.explorerOpen == true }
+    }
+}
+
 struct Holds: Step {
     let what: String
     let span: Duration

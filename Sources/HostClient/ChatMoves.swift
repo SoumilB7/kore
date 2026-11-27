@@ -385,6 +385,13 @@ package struct ChatMoves {
         return { await Task.detached(priority: .utility) { CarryCount.mac(path)?.bytes }.value }
     }
 
+    /// A stopped copy's one plain line (`BoxCopyWords`); rsync's own goes to hosts.log.
+    private func plain(status: Int32, said: String) -> String {
+        guard said != "Cancelled" else { return said }
+        HostLog.note(box.alias, "move copy stopped", "exit \(status): " + said)
+        return BoxCopyWords.line(status: status, said: said, box: NodeNames.name(box.alias))
+    }
+
     struct Copied {
         var ok: Bool
         var said: String
@@ -428,11 +435,12 @@ package struct ChatMoves {
             ticker.cancel()
             poll?.cancel()
             progress?(meter.value, nil)
-            copied = Copied(ok: said == nil, said: said ?? "")
+            copied = Copied(ok: said == nil, said: said.map { plain(status: spawn.lastStatus, said: $0) } ?? "")
             out = tail.text
         } else {
             let output = await SyncProcess.run("/usr/bin/rsync", arguments)
-            copied = Copied(ok: [0, 24].contains(output.status), said: output.said)
+            let ok = [0, 24].contains(output.status)
+            copied = Copied(ok: ok, said: ok ? output.said : plain(status: output.status, said: output.said))
             out = output.out
         }
         // Both rsyncs end with "sent N bytes  received M bytes  …" (this side's view).

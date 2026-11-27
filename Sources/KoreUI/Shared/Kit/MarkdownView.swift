@@ -101,7 +101,7 @@ private struct MarkdownBlockView: View {
 }
 
 /// A fenced code block: a well that scrolls sideways (no wrap), with Copy just below it at its
-/// right edge on hover (`CopyBelow`). A fence that names its language is in the editor's colours
+/// right edge, faint until the pointer is over the block (`CopyBelow`). A fence that names its language is in the editor's colours
 /// (`SyntaxText`).
 private struct MarkdownCodeBlock: View {
     let text: String
@@ -128,14 +128,17 @@ private struct MarkdownCodeBlock: View {
     }
 }
 
-/// Copy just below a block at its right edge, shown on hover, in a row kept for it as under a
-/// message, so it covers none of the block: a code block's.
+/// Copy just below a block at its right edge, in a row kept for it as under a message, so it
+/// covers none of the block: a code block's. Always there, faint until the pointer is over the
+/// block (shown only on hover, it went unseen: owner, 0.3.10).
 private struct CopyBelow<Block: View>: View {
     let id: StoryID
     let text: () -> String
     @ViewBuilder let block: Block
     @StateObject private var hovered = Local(false)
     @StateObject private var copied = Local(false)
+    /// Copy's strength away from the block: there to find, quieter than the text.
+    static var resting: Double { 0.45 }
     /// How far the block's right edge runs past the visible page (pinched in and panned left):
     /// the button comes in by that much, so it's where the eye is, not off to the right.
     @StateObject private var past = Local(CGFloat(0))
@@ -144,13 +147,12 @@ private struct CopyBelow<Block: View>: View {
         VStack(alignment: .trailing, spacing: 0) {
             block
             HStack(spacing: 0) {
-                if hovered.value {
-                    IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy") {
-                        copyToBoard(text, copied)
-                    }
-                    .storyID(id.part(.copy))
-                    .padding(.trailing, past.value)
+                IconButton(symbol: copied.value ? "checkmark" : "doc.on.doc", kind: .mini, font: Chrome.label, help: "Copy") {
+                    copyToBoard(text, copied)
                 }
+                .opacity(hovered.value || copied.value ? 1 : Self.resting)
+                .storyID(id.part(.copy))
+                .padding(.trailing, past.value)
             }
             .frame(height: Size.MessageActions.row)
         }
@@ -160,7 +162,6 @@ private struct CopyBelow<Block: View>: View {
         .onHover { hovered.value = $0 }
         .storyID(id)
         .storyAction(id.part(.hover)) { hovered.value = true }
-        // The copy button is built only on hover.
         .accessibilityActions {
             Button("Copy") { copyToBoard(text, copied) }
         }

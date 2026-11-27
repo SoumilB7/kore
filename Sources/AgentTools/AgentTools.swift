@@ -31,6 +31,9 @@ package enum AgentTools {
         "Silent for several chats, background workers, fan-out, or tabs the user didn't ask to look at; in front for one chat the user wants to see or read. Unclear: one chat in front, several silent."
 
 
+    /// The tab a chat opens, put in a group of its window (the owner via Kore-main, 2026-11-24).
+    static let groupArg = ("group", "string", "Put its tab in this tab group, joined or made.")
+
     /// A chat on a box opens its new chats on that box, in its folder; `place` opens one on the Mac.
     static let placeArg = ("place", "string", "box (default: this chat's box and folder) or mac (a Kore window on the Mac).")
 
@@ -50,8 +53,8 @@ package enum AgentTools {
         Tool(name: "kore_caps", command: "agent.caps", description: "The Kore commands this caller's access allows.", args: [], required: []),
         Tool(
             name: "kore_list_chats", command: "chats.list",
-            description: "List the chats open in Kore (its tabs): id, title, CLI, folder, state (working, idle, needs-you), mode, model, waiting cards.", args: [],
-            required: []),
+            description: "List the chats open in Kore (its tabs): id, title, CLI, folder, state (working, idle, needs-you), mode, model, waiting cards; and each window's tab order, front tab and tab groups.",
+            args: [("window", "string", "Only this window.")], required: []),
         Tool(
             name: "kore_show_chat", command: "chat.show", description: "One chat in detail: state, model, effort, context use, waiting cards.",
             args: [chatArg], required: ["chat"]),
@@ -89,6 +92,10 @@ package enum AgentTools {
             name: "kore_lower_mode", command: "chat.mode",
             description: "Lower a chat's mode, to one kore_options marks allowed: this chat (Act limited), or another it reaches (Act unlimited). Only the user raises a mode.",
             args: [ownChatArg, ("to", "string", "The mode's id or label.")], required: ["to"]),
+        Tool(
+            name: "kore_set_compact", command: "chat.autocompact",
+            description: "Set a chat's auto-compact point, as its context wheel does: this chat (Act limited), or another it reaches (Act unlimited).",
+            args: [ownChatArg, ("point", "string", "50, 60, 70, 80 or 90 (percent of the context), or off.")], required: ["point"]),
         Tool(name: "kore_compact", command: "chat.compact", description: "Compact this chat once the current turn ends, or another it reaches with Act unlimited (Act limited).", args: [ownChatArg], required: []),
         Tool(
             name: "kore_new_chat", command: "chat.new",
@@ -98,7 +105,7 @@ package enum AgentTools {
                 ("model", "string", "A model the CLI lists, by id or name, written loosely (\"gpt 6 sol\" is gpt-6-sol). Default: the CLI's."),
                 ("mode", "string", "A mode at or below this chat's (default: the CLI's usual one, capped)."), ("text", "string", "The first message."),
                 ("folder", "string", "Another folder's window, opened if none is: an existing folder on this chat's device (~ and links resolved), or device:path on a connected box Kore has (Act device)."),
-                silentArg,
+                silentArg, groupArg,
             ], required: []),
         Tool(
             name: "kore_fork", command: "chat.fork",
@@ -108,6 +115,7 @@ package enum AgentTools {
                 ("at", "string", "Fork before this user message: -N for the Nth from the end (-1 the last, as the chat's message scroller counts), its row id (kore_read_chat) or its text. Default: after the last answer."),
                 ("provider", "string", "claude or codex: fork into the other CLI, carrying the whole conversation (no at). Default: the chat's own."),
                 ("model", "string", "A model the fork's CLI lists (default: the chat's, or that CLI's usual)."), ("text", "string", "A message to send the fork."),
+                groupArg,
             ], required: ["chat"]),
         Tool(
             name: "kore_wait", command: "chat.wait",
@@ -129,7 +137,7 @@ package enum AgentTools {
         Tool(
             name: "kore_open_chat", command: "chat.open",
             description: "Open a past chat (kore_history lists them) in a tab, in front, as History opens it; its tab if it's open already. silent: true when the user won't watch it now (Act unlimited).",
-            args: [("session", "string", "Its session id, or the start of it."), ("folder", "string", "Its folder (default: this chat's window)."), silentArg],
+            args: [("session", "string", "Its session id, or the start of it."), ("folder", "string", "Its folder (default: this chat's window)."), silentArg, groupArg],
             required: ["session"]),
         Tool(
             name: "kore_close", command: "chat.close",
@@ -150,6 +158,18 @@ package enum AgentTools {
             args: [("path", "string", "device:path (a box's name, then its path), or a path on this chat's device.")], required: ["path"]),
         Tool(name: "kore_show_tab", command: "tab.show", description: "Bring a chat's tab to the front (Act unlimited).", args: [chatArg], required: ["chat"]),
         Tool(
+            name: "kore_arrange", command: "tabs.arrange",
+            description: "Arrange tabs in this chat's window: group, move, fold, rename, show; never closes one. The user's own groups stay unless the user asked here. Returns the new order (Act limited).",
+            args: [
+                ("tabs", "array", "Tab ids (kore_list_chats), in order."),
+                ("group", "string", "Group name (@<tab id>: its group): the tabs join it, made if new; \"\" takes them out."),
+                ("to", "string", "start, end, before:<tab|group> or after:<tab|group>: for the tabs, else the group."),
+                ("fold", "boolean", "Fold (true) or open the group."), ("name", "string", "Rename the group."),
+                ("ungroup", "boolean", "Dissolve the group; tabs stay put."),
+                ("show", "boolean", "Select the first tab (out of a chat's group) and bring its window forward; a group alone: open it (Act unlimited)."),
+                ("asked", "boolean", "The user asked here for this change to their own group."),
+            ], required: []),
+        Tool(
             name: "kore_answer", command: "cards.answer",
             description: "Answer another chat's question card (kore_pending lists them), one answer per question; deny any card; or allow a permission card once, from a chat at Auto or above. An Auto asks card (sudo, a forced removal, a Keychain read, curl into a shell) is run once with allow, or kept with always, from a chat at Auto or above with Act unlimited or Act device; never a removal of the working folder or above, a home folder or a system path. A peer-hold card (messages from other sessions Claude held) is let in with allow, never by a chat whose own message is held. Plans, other cards' Always allow and sign-ins stay the user's (Act unlimited).",
             args: [
@@ -164,17 +184,17 @@ package enum AgentTools {
         Kore's own controls, for when the user asks for something in Kore: open a tab with a new claude or codex \
         chat (kore_new_chat), message another chat (kore_send), list and read chats, change this chat's model. \
         They act only while the user has Arsenal on for this chat; a tool says so when it's off. \
-        kore_new_chat, kore_open_chat and kore_send take silent: \(silentGuide)
+        kore_new_chat, kore_open_chat and kore_send take silent: \(silentGuide) Several opened together can share a tab group (group).
         """
 
     /// The tier each command needs, lowest first: wire ids (`tierName` names them).
     package static func tierNeeded(_ command: String) -> String {
         if ["chat.new", "chat.fork", "chat.send", "chat.stop", "tab.show", "cards.answer", "chat.open", "chat.close", "chat.ask", "chat.reply", "file.fetch"].contains(command) { return "drive" }
-        if ownCommands.contains(command) { return "own" }
+        if ownCommands.contains(command) || command == "tabs.arrange" { return "own" }
         return "watch"
     }
 
-    package static let ownCommands = ["chat.options", "chat.rename", "chat.model", "chat.effort", "chat.fast", "chat.mode", "chat.compact"]
+    package static let ownCommands = ["chat.options", "chat.rename", "chat.model", "chat.effort", "chat.fast", "chat.mode", "chat.compact", "chat.autocompact"]
 
     /// A tier's name as the user sees it, from its wire id (`watch`, `own`, `drive`, `device`, `full`, `off`).
     package static func tierName(_ id: String) -> String {
@@ -222,6 +242,8 @@ package enum AgentTools {
     package static func arguments(_ tool: Tool, _ given: Object) -> Object {
         var args = given.filter { key, _ in tool.args.contains { $0.0 == key } }
         if ownCommands.contains(tool.command) { args["chat"] = args["chat"] ?? "." }
+        // A point given as a number (50) is the same as "50".
+        if let point = args["point"] as? NSNumber { args["point"] = point.stringValue }
         return args
     }
 

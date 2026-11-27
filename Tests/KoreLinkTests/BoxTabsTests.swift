@@ -36,7 +36,7 @@ struct BoxTabsTests {
             "XDG_RUNTIME_DIR": root.appendingPathComponent("run").path, "XDG_CONFIG_HOME": root.appendingPathComponent("config").path,
         ])
         try HostConfig(folders: [root.path, app.path]).save(paths.config)
-        let host = HostDaemon(paths: paths)
+        let host = HostDaemon.forTest(paths: paths)
         host.pastSessions = { provider, folder in
             provider.id == "claude" && folder.path == app.path ? [SessionSummary(id: "s-past", agent: .claude, title: "Earlier work", updated: .now)] : []
         }

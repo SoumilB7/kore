@@ -85,7 +85,7 @@ final class FileCarries {
     /// Makes the boxes a carry reaches (tests: their own).
     @ObservationIgnored var reach: (String) -> (connection: HostConnection, box: CarryBox) = { alias in
         let connection = BoxBinding.connection(alias)
-        return (connection, CarryBox(alias: alias, files: connection, ssh: SyncBox.ssh(alias)))
+        return (connection, CarryBox(alias: alias, files: connection, ssh: SyncBox.box(connection)))
     }
     @ObservationIgnored private var sleepWatch: [NSObjectProtocol] = []
 
@@ -426,7 +426,15 @@ final class FileCarries {
 /// a copy into its own folder named " copy", a taken name kept as "name 2" (one item: Replace or
 /// Keep Both, asked in a Kore popup), then the carry.
 @MainActor
-enum FilePaste {
+package enum FilePaste {
+    /// Storylines: each carry's items as it starts them ("a 2.txt", "replace a.txt").
+    package static var storyPlans: [[String]] = []
+
+    private static func start(_ items: [CarryItem], into folder: FilePlace, move: Bool, done: @escaping @MainActor (CarryOutcome) async -> Void) {
+        if StoryHost.installed { storyPlans.append(items.map { $0.replace ? "replace " + $0.name : $0.name }) }
+        FileCarries.shared.start(items, into: folder, move: move, done: done)
+    }
+
     /// Plans and starts it; `done` after, on the destination's side (lists it again).
     static func carry(_ places: [FilePlace], into folder: FilePlace, move: Bool, done: @escaping @MainActor (CarryOutcome) async -> Void) {
         // A move into its own folder does nothing; into itself, never.
@@ -449,7 +457,7 @@ enum FilePaste {
                 taken.insert(item.name.lowercased())
                 items.append(item)
             }
-            guard let clash else { return FileCarries.shared.start(items, into: folder, move: move, done: done) }
+            guard let clash else { return start(items, into: folder, move: move, done: done) }
             let name = items[clash].name
             ask(name, in: folder.name) { replace in
                 if replace {
@@ -457,7 +465,7 @@ enum FilePaste {
                 } else {
                     items[clash].name = CopyNames.free(name, duplicate: false) { taken.contains($0.lowercased()) }
                 }
-                FileCarries.shared.start(items, into: folder, move: move, done: done)
+                start(items, into: folder, move: move, done: done)
             }
         }
     }
@@ -480,7 +488,7 @@ enum FilePaste {
     /// chosen (it closed): nothing happens.
     static func ask(_ name: String, in folder: String, answer: @escaping @MainActor (Bool) -> Void) {
         if let confirm = StorylineSeams.confirm { return answer(confirm("replace")) }
-        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return answer(false) }
+        guard let window = KoreAsk.front() else { return answer(false) }
         OptionsMenu.shared.show(
             [
                 OptionItem("“\(name)” is already in “\(folder)”", enabled: false), .rule,

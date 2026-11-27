@@ -2,6 +2,7 @@ package dev.kore.phone
 
 import dev.kore.phone.ui.DeviceList
 import dev.kore.phone.ui.DeviceList.Cue
+import dev.kore.phone.ui.objs
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -121,5 +122,50 @@ class DeviceListTest {
                 assertEquals(dev.kore.phone.ui.Tone.accent, dev.kore.phone.ui.workTint(provider, row.arsenal))
             }
         }
+    }
+
+    // Pins: this phone's own, per device.
+
+    @Test fun pinnedChatsComeFirstInTheirUsualOrder() {
+        val pins = DeviceList.Pins { it == "c:two" || it == "c:design" }
+        val rows = DeviceList.rows(mac, null, now, none, pins)
+        assertEquals(listOf("Kore-notes", "Kore-2", "Kore-3", "Kore-main"), rows.map { it.title })
+        assertEquals(listOf(true, true, false, false), rows.map { it.pinned })
+    }
+
+    @Test fun aWindowsListPinsToo() {
+        val rows = DeviceList.rows(box, "o", now, none, DeviceList.Pins { it == "c:sl" })
+        assertEquals(listOf("Slack", "Main-struc"), rows.map { it.title })
+    }
+
+    @Test fun noPinsKeepsTheOrder() {
+        assertEquals(DeviceList.rows(mac, null, now, none).map { it.title }, DeviceList.rows(mac, null, now, none, DeviceList.Pins.NONE).map { it.title })
+    }
+
+    @Test fun aChatPinsByItsSessionThenItsId() {
+        assertEquals(listOf("s:abc", "c:x"), DeviceList.pinKeys(o("""{"id":"x","sessionId":"abc"}""")))
+        assertEquals(listOf("c:x"), DeviceList.pinKeys(o("""{"id":"x"}""")))
+        assertEquals(listOf("c:x"), DeviceList.pinKeys(o("""{"id":"x","sessionId":""}""")))
+        // A History row's key is its session's: the same chat, closed.
+        assertEquals("s:abc", DeviceList.historyPinKey("abc"))
+    }
+
+    /** Pinned before its first turn (by its id), it stays pinned once its session comes. */
+    @Test fun aPinByIdHoldsOnceTheSessionComes() {
+        val pins = DeviceList.Pins { it == "c:x" }
+        val later = DeviceList.chatRow(o("""{"id":"x","sessionId":"abc","title":"T","state":"idle"}"""), null, "", false, now, none, pins)
+        assertTrue(later!!.pinned)
+        assertEquals(listOf("s:abc", "c:x"), later.pinKeys)
+    }
+
+    /** The contract: the session as the Mac and the box send it (`delta.session.json`). */
+    @Test fun theSessionIsReadAsTheLinkSendsIt() {
+        val dir = checkNotNull(System.getProperty("kore.fixturesV1")) { "kore.fixturesV1 is set by the app's test task" }
+        val delta = o(java.io.File(dir, "delta.session.json").readText())
+        val chat = delta.objs("chats").single()
+        assertEquals("s:0b4f6a2e-7c1d-4e8a-9f3b-5d2c1a0e9b77", DeviceList.pinKeys(chat).first())
+        val row = DeviceList.chatRow(chat, null, "", false, now, none, DeviceList.Pins { it == "s:0b4f6a2e-7c1d-4e8a-9f3b-5d2c1a0e9b77" })
+        assertTrue(row!!.pinned)
+        assertFalse(DeviceList.chatRow(chat, null, "", false, now, none)!!.pinned)
     }
 }

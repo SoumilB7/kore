@@ -111,6 +111,8 @@ class UnloadStoryline: ChatStoryline {
             for _ in 0..<6 {
                 guard let view = chat.storyTranscript.scrollView, let document = view.documentView else { throw StoryFailure.modelMissing("the scroll view") }
                 let y = document.bounds.height - view.contentView.bounds.height + view.contentInsets.bottom
+                // The reader's move (the scroll bar, End): theirs, so it takes up the end.
+                chat.storyTranscript.readerScrolled()
                 view.contentView.scroll(to: NSPoint(x: 0, y: y))
                 view.reflectScrolledClipView(view.contentView)
                 try await Task.sleep(for: .milliseconds(150))

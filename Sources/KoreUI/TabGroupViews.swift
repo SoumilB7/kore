@@ -49,7 +49,7 @@ struct GroupChip: View {
         }
         .buttonStyle(.plain)
         .onHover { hovered.value = $0 }
-        .help(line)
+        .tip(line)
         .accessibilityLabel(Text(line))
         .koreSecondaryClick("tab-group", perform: edit)
         .storyID(StoryID.TabGroups.chip(group.id))
@@ -168,7 +168,7 @@ struct TabGroupPopup: View {
         .onAppear {
             name.value = group?.name ?? ""
             if edit.naming { naming = true }
-            monitor.value = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown, .keyDown]) { handle($0) }
+            monitor.value = WindowEvents.monitor([.leftMouseDown, .rightMouseDown, .keyDown]) { handle($0) }
         }
         .onDisappear {
             if let m = monitor.value { NSEvent.removeMonitor(m) }
@@ -191,6 +191,7 @@ struct TabGroupPopup: View {
             HStack(spacing: Space.md) {
                 Spacer(minLength: 0)
                 Button("Cancel") { asking.value = false }.smallButton()
+                    .storyID(StoryID.TabGroups.close.part(.cancel))
                 Button("Stop and close") { finishClose() }
                     .smallButton(danger: true)
                     .storyID(StoryID.TabGroups.stopAndClose)
@@ -246,7 +247,7 @@ private struct GroupSwatch: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
-        .help(color.rawValue.capitalized)
+        .tip(color.rawValue.capitalized)
         .storyID(StoryID.TabGroups.swatch(color.rawValue))
     }
 }

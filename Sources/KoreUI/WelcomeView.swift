@@ -44,6 +44,12 @@ struct WelcomeView: View {
                     Text(Self.title(place))
                         .font(Chrome.display)
                         .foregroundStyle(Theme.text)
+                    // The box's route now, as the link moves: "Kore's tailnet", "SSH (mybox-cf)".
+                    if let place, let route = Devices.shared.boxRoute(place) {
+                        Text(route.line).font(Chrome.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+                            .tip(route.help ?? "")
+                            .storyID(StoryID.Boxes.route)
+                    }
                     if let place {
                         BoxWelcomeLine(alias: place)
                     } else {
@@ -67,6 +73,7 @@ struct WelcomeView: View {
             .buttonStyle(SubtleButtonStyle(prominent: true))
             // A box being set up (or one that can't be reached) has no folders to browse yet.
             .disabled(!opensFolders)
+            .storyID(StoryID.Boxes.welcomeOpen)
 
             if !items.isEmpty {
                 VStack(alignment: .leading, spacing: Space.xs) {
@@ -144,10 +151,13 @@ struct WelcomeView: View {
             hold(place)
         }
         .onAppear {
+            // Shown again (its window closed and opened), nothing is lit from last time: SwiftUI
+            // can keep the closed window's view and its state with it.
+            lit.value = nil
             // Peers coming and going on the tailnet reach the switcher while it shows.
             Devices.shared.net?.hold("welcome", true)
             sshHosts.value = StorylineSeams.sshHosts?() ?? !BoxList.shared.suggestions().isEmpty
-            if monitor.value == nil { monitor.value = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { key($0) } }
+            if monitor.value == nil { monitor.value = WindowEvents.monitor(.keyDown) { key($0) } }
             app.welcomeTakesKeys = true
         }
         .onDisappear {
@@ -302,7 +312,7 @@ private struct WelcomeRow: View {
         }
         .buttonStyle(.plain)
         .disabled(item.missing)
-        .help(item.missing || full.value > shown.value + 0.5 ? item.help : "")
+        .tip(item.missing || full.value > shown.value + 0.5 ? item.help : "")
         .storyID(item.story, press: item.open)
     }
 }

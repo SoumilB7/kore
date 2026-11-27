@@ -1,3 +1,4 @@
+import AppKit
 import KoreUI
 
 /// A menu command of the storyline's window, run as the menu runs it (`Workspace.perform`):
@@ -33,6 +34,28 @@ package struct Command: Step {
         guard let workspace = story.app.workspace else { throw StoryFailure.modelMissing("the folder's workspace") }
         guard workspace.can(command) else { throw StoryFailure.expectation("“\(label)” to be available (its menu item is disabled)") }
         workspace.perform(command)
+        try await story.idle()
+    }
+}
+
+/// A menu command that is the window's own, not the workspace's, run as its item runs it, on the
+/// storyline's window in place of the key one: File ▸ Close Window (⇧⌘W) closes it, asking first
+/// when it would lose work.
+package struct WindowCommand: Step {
+    package enum Item: Sendable { case closeWindow }
+    let item: Item
+    package var label: String {
+        switch item {
+        case .closeWindow: "Close the window"
+        }
+    }
+    package init(_ item: Item) { self.item = item }
+
+    package func run(_ story: StoryContext) async throws {
+        guard let window = story.window else { throw StoryFailure.modelMissing("the folder's window") }
+        switch item {
+        case .closeWindow: window.performClose(nil)
+        }
         try await story.idle()
     }
 }

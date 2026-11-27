@@ -21,6 +21,9 @@ final class AppChatServices: ChatServices {
 
     var agentTools: Bool { true }
 
+    /// A Mac chat left idle gives its CLI's memory back (`Chat.restAfter`).
+    var restsIdleCLI: Bool { true }
+
     var instructions: URL? { nil }
 
     func makeTranscript() -> any ChatTranscript { TranscriptStore() }

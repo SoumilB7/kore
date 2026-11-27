@@ -125,8 +125,11 @@ abstract class NodeActivity : Activity() {
         watch = kore.scope.launch {
             var shown: State? = null
             link.state.combine(link.snapshot) { s, snap -> shownState(s, kore.mesh.networkOn) to snap }.collectLatest { (s, snap) ->
-                // Trying again is said only once it takes a while.
-                if (s == State.Connecting && shown != State.Connecting) delay(RECONNECTING_AFTER_MS)
+                // Trying again is said only once it takes a while; what it holds shows at once meanwhile.
+                if (s == State.Connecting && shown != State.Connecting) {
+                    runOnUiThread { render(snap) }
+                    delay(RECONNECTING_AFTER_MS)
+                }
                 shown = s
                 runOnUiThread {
                     showBanner(link, s)

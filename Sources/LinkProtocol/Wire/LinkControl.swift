@@ -103,6 +103,10 @@ package enum ControlKind: String, Sendable, CaseIterable {
     /// adopted here under a new session id.
     case chatCopy = "chat.copy"
     case chatAdoptCopy = "chat.adoptCopy"
+    /// Cap "copyVia": a chat copied at a phone's ask (`copy`, a `CopyAsk`): the Mac runs it with its own
+    /// grants, from one of its chats or its boxes' to a window on itself or one of its boxes.
+    /// Copy only, never a cut; a box doesn't take it.
+    case chatCopyVia = "chat.copyVia"
     /// 1.12: what the Mac ran in a shell over SSH (`LinkFsOps.swift`): a sync round's deletes and
     /// folders, a folder's files and the room left, and the files under a folder.
     case syncApply = "sync.apply"
@@ -113,9 +117,15 @@ package enum ControlKind: String, Sendable, CaseIterable {
     case accountImport = "account.import"
     case accountExport = "account.export"
     case accountFingerprints = "account.fingerprints"
+    /// 1.16: rsync over KoreNet (`LinkPipe`): a ticket for one pipe session to this node, its
+    /// remote command checked (`pipe.open`); a ticket another box's pipe will bring, from the
+    /// Mac (`pipe.expect`); and a copy this box makes to another over a pipe (`pipe.send`).
+    case pipeOpen = "pipe.open"
+    case pipeExpect = "pipe.expect"
+    case pipeSend = "pipe.send"
 
     /// A file command (1.7, 1.8, 1.12's `sync.apply`): answered with a `FilesResult`, full grants only.
-    package var onFiles: Bool { rawValue.hasPrefix("fs.") || self == .syncApply }
+    package var onFiles: Bool { rawValue.hasPrefix("fs.") || rawValue.hasPrefix("pipe.") || self == .syncApply }
 
     /// It acts on a CLI's account.
     package var onAccount: Bool { rawValue.hasPrefix("account.") }
@@ -140,6 +150,43 @@ package struct ChatPlace: Codable, Sendable, Equatable {
         self.boardTabId = boardTabId
         self.sectionId = sectionId
         self.groupId = groupId
+    }
+}
+
+/// `chat.copyVia` (cap "copyVia"): what a phone asks the Mac to copy, and where to. An end is a window on the
+/// Mac (no `device`) or on one of its boxes (the box's device id); the source names an open chat
+/// (`chatId`) or a past session in the window's History (`sessionId`). `id` is the ask's own: the
+/// Mac runs an id once, and a phone whose link went before the answer asks `again` by it.
+package struct CopyAsk: Codable, Sendable, Equatable {
+    package struct End: Codable, Sendable, Equatable {
+        package var device: String?
+        package var windowId: String
+        package var chatId: String?
+        package var sessionId: String?
+
+        package init(device: String? = nil, windowId: String, chatId: String? = nil, sessionId: String? = nil) {
+            self.device = device
+            self.windowId = windowId
+            self.chatId = chatId
+            self.sessionId = sessionId
+        }
+    }
+
+    package var id: String
+    package var again: Bool?
+    package var from: End
+    package var to: End
+    /// The source's CLI and title, as the phone shows it (the Mac's own when it has the chat open).
+    package var provider: String
+    package var title: String
+
+    package init(id: String, again: Bool? = nil, from: End, to: End, provider: String, title: String) {
+        self.id = id
+        self.again = again
+        self.from = from
+        self.to = to
+        self.provider = provider
+        self.title = title
     }
 }
 
@@ -239,6 +286,16 @@ package struct ControlArgs: Codable, Sendable, Equatable {
     /// 1.15 (`LinkFiles.bytesCap`): `fs.read` from this byte: the file's own bytes (`data`), of any
     /// kind, at most `max` (`LinkFiles.readMax`), for a preview that needs the file on the Mac.
     package var offset: Int64?
+    /// `chat.copyVia` (cap "copyVia"): the copy asked for.
+    package var copy: CopyAsk?
+    /// The phone a copy is made for (`chat.copy`, `chat.adoptCopy`; cap "copyFor"): the box takes
+    /// it only for a phone its own devices allow to ask.
+    package var phone: String?
+    /// 1.16 (`LinkPipe`): the remote command rsync gave its remote shell (`pipe.open`,
+    /// `pipe.expect`), a pipe's ticket (base64), and the other box's device id.
+    package var argv: [String]?
+    package var ticket: String?
+    package var device: String?
 
     package init(
         chatId: String? = nil, windowId: String? = nil, title: String? = nil, force: Bool? = nil, modelId: String? = nil,

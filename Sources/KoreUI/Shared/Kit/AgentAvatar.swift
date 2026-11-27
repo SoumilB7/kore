@@ -68,7 +68,7 @@ struct AgentAvatar: View {
         .frame(width: place.box, height: place.box)
         .overlay(alignment: .topTrailing) { if waiting, place != .title { point(Theme.warning) } }
         .overlay(alignment: .bottomTrailing) { if status == .failed, place != .title { point(Theme.danger) } }
-        .help(label)
+        .tip(label)
         .accessibilityLabel(label)
     }
 

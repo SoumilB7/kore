@@ -1305,12 +1305,39 @@ package final class KoreNetSwitch: NetRouter {
                     // The node it answered on, proven: kept with its others.
                     if let key = reached.withLock({ $0 }) {
                         self.directory.know(key, device: entry.device)
-                        self.linkNode[alias] = key
+                        self.linkNode[connection.alias] = key
                         SSHTailnetRoute.linked(connection.sshAlias, node: key)
                     }
                     await self.welcomed(connection, id: entry.id)
                 }
             })
+    }
+
+    /// A pipe's session to the node the box's link reached (proven by its welcome): this Mac's
+    /// identity, service "pipe". Nil while the link isn't on the tailnet.
+    package func pipeDial(for connection: HostConnection) -> (@Sendable () throws -> NetTransport.Opened)? {
+        guard state.reaches, let tailnet, let env, connection.route == .net, let key = linkNode[connection.alias],
+              let entry = directory.entry(forKey: connection.alias), entry.enrolled
+        else { return nil }
+        let book = book(env)
+        let identities = identities
+        let server = entry.device
+        return {
+            let status = try tailnet.status()
+            guard status.backendState == .running, let me = status.selfNode else { throw TailnetError.notRunning(status.backendState) }
+            guard let address = status.peers.first(where: { $0.publicKey == key })?.tailscaleIPs.first else {
+                throw TailnetError.sidecar("the box's node is gone from the tailnet")
+            }
+            let who = try tailnet.whois(address)
+            guard who.node.key == key else { throw TailnetError.sidecar("another node answers at the box's address") }
+            let identity = try identities.get(env)
+            let fd = try tailnet.dial(address, port: NetListener.port)
+            var setup = NetSession.Client(
+                local: NetLocal(device: identity.device, kind: .mac, nodeKey: me.publicKey, signer: identity.signer), route: .tailnet,
+                peer: NetPeerFacts(nodeKey: who.node.key, userId: who.userId, tags: who.node.tags), book: book, server: server, service: "pipe")
+            setup.ownUser = me.owner
+            return NetTransport.Opened(fd: fd, setup: setup)
+        }
     }
 
     /// A node's connection as a restart's race made it.
@@ -1411,8 +1438,18 @@ package final class KoreNetSwitch: NetRouter {
     /// The box's first KoreNet welcome: its stores move from its alias to its id.
     private func welcomed(_ connection: HostConnection, id: NodeID) async {
         guard !NodeDirectory.isNodeKey(connection.alias) else { return }
-        let outcome = await rekeyer.rekey(connection, to: id, directory: directory)
+        let outcome = await rekey(connection, to: id)
         settled?("rekey \(outcome)")
+    }
+
+    /// The box's stores move to `id`, and the node its link reached with them: known under both
+    /// keys while they move, so a pipe (or a node going offline) finds it throughout.
+    private func rekey(_ connection: HostConnection, to id: NodeID) async -> NodeMigration.Outcome {
+        let old = connection.alias
+        if let key = linkNode[old] { linkNode[id.raw] = key }
+        let outcome = await rekeyer.rekey(connection, to: id, directory: directory)
+        if connection.alias != old { linkNode[old] = nil }
+        return outcome
     }
 
     /// The box forgot this Mac: not enrolled there any more, and its upgrade runs again (the box
@@ -1473,7 +1510,7 @@ package final class KoreNetSwitch: NetRouter {
             _ = try? book(env).update { $0.removeAll { $0.id == old.device } }
             directoryChanged?()
             // Its stores were kept under the old device's id: they move to the new one's.
-            if connection.alias == old.id.raw { Task { _ = await rekeyer.rekey(connection, to: entry.id, directory: directory) } }
+            if connection.alias == old.id.raw { Task { _ = await rekey(connection, to: entry.id) } }
         }
         learnKeys(entry, book: book(env), readIfMissing: true)
         // U0: a box reached over SSH that isn't on KoreNet yet upgrades (once per state).
@@ -1552,6 +1589,24 @@ package final class KoreNetSwitch: NetRouter {
             return .failed("\(error)")
         }
         if node.enrolled == identity.device { return .already }
+        let first = await enrollOnce(env: env, identity: identity, book: book, node: node, alias: alias, grant: grant, command: command)
+        // Dialled, then ended before the box answered (its pre-auth window ran out on a slow link or
+        // a busy box): tried once more. A refusal, or a dial that failed, stands; nothing was used
+        // on the box yet.
+        guard case .failed(let why) = first, Self.mayEnrollAgain(why) else { return first }
+        return await enrollOnce(env: env, identity: identity, book: book, node: node, alias: alias, grant: grant, command: command)
+    }
+
+    /// Whether an enroll that ended this way is worth one more try: only the line closing after
+    /// the dial worked, or the box's own timeout. Never a dial that failed (a dead alias, SSH
+    /// unreachable): nothing waits twice on that.
+    package nonisolated static func mayEnrollAgain(_ why: String) -> Bool {
+        why == "closed" || why == "bye " + NetControl.Reason.timeout
+    }
+
+    private nonisolated static func enrollOnce(
+        env: NetEnvironment, identity: MacIdentity, book: DeviceBook, node: NetNodeWire.Node, alias: String, grant: String, command: String
+    ) async -> Enrolled {
         let transport = NetTransport(route: .ssh) {
             let (fd, onClose) = try env.upgradeDial(alias, grant, command)
             var setup = NetSession.Client(

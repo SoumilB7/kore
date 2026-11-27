@@ -353,6 +353,14 @@ private final class HexDocumentView: NSView {
         return min(max(row, 0), rows - 1)
     }
 
+    /// Storylines: where a click lands on a byte's hex digits, in the window.
+    fileprivate func storyPoint(offset: Int64) -> NSPoint? {
+        guard offset >= 0, offset < pages.size else { return nil }
+        let byte = Int(offset % Int64(Size.Hex.bytesPerRow))
+        let point = NSPoint(x: x(ofColumn: hexColumn(of: byte)) + advance / 2, y: y(ofRow: offset / Int64(Size.Hex.bytesPerRow)) + rowHeight / 2)
+        return convert(point, to: nil)
+    }
+
     // MARK: Drawing
 
     /// Text and small fills only, on no ground of its own (the tab's shows through): a view
@@ -507,8 +515,8 @@ private final class HexDocumentView: NSView {
             inASCII
             ? String(data.map { $0 >= 0x20 && $0 < 0x7F ? Character(UnicodeScalar($0)) : "." })
             : data.map { String(format: "%02X", $0) }.joined(separator: " ")
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
+        StoryHost.pasteboard.clearContents()
+        StoryHost.pasteboard.setString(text, forType: .string)
     }
 
     /// Scrolls just enough to show the byte's row.
@@ -550,4 +558,23 @@ enum HexRenderer: FileRenderer {
     static func makeView(_ file: FileInfo, context: RendererContext) -> AnyView {
         AnyView(HexView(file: file, context: context))
     }
+}
+
+// MARK: - Storylines
+
+extension Workspace {
+    /// Where a click lands on a byte of the active hex view, in its window; nil off screen.
+    package func storyHexPoint(offset: Int64) -> (NSWindow, CGPoint)? {
+        guard let view = storyView(HexDocumentView.self), let window = view.window, let point = view.storyPoint(offset: offset) else { return nil }
+        return (window, point)
+    }
+
+    /// The middle of the active hex view, in its window.
+    package var storyHexMiddle: (NSWindow, CGPoint)? {
+        guard let view = storyView(HexDocumentView.self), let window = view.window else { return nil }
+        return (window, view.convert(NSPoint(x: view.bounds.midX, y: view.bounds.midY), to: nil))
+    }
+
+    /// How far down the hex view is scrolled.
+    package var storyHexTop: CGFloat? { storyView(HexDocumentView.self)?.bounds.minY }
 }

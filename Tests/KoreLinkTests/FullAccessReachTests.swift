@@ -109,6 +109,20 @@ extension AgentChannelTests {
             #expect(chat(lower.chat)?.controls.mode == "acceptEdits")
         }
 
+        /// From a Claude chat in Auto, a Codex chat asked for in Read only starts in it (the
+        /// ArsenalReach storyline's step), by its label or its id.
+        @Test(arguments: ["read only", "readOnly"]) func aCodexChatAskedForInReadOnlyStartsInIt(_ mode: String) async throws {
+            let rig = try Rig([])
+            defer { rig.finish() }
+            rig.caller.setMode("auto", remember: false)
+            await rig.caller.modeSettled()
+            let made = try await call(rig, "chat.new", ["provider": "codex", "mode": mode, "text": "write a paragraph"])
+            #expect(made.ok, "\(made)")
+            let shown = try #require(chat(made.chat))
+            await shown.modeSettled()
+            #expect(shown.controls.mode == CodexModes.readOnly && shown.noFreer(than: rig.caller), "\(shown.controls.mode)")
+        }
+
         @Test func arsenalsNewCodexChatStartsNoHigherThanTheCaller() async throws {
             Self.rememberFullAccess()
             defer { ModeMemory.standIn = nil }

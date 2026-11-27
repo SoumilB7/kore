@@ -407,7 +407,7 @@ struct TransferBar: View {
                 actions(item, failed: failed)
             }
             if failed, let why = details.first {
-                Text(why).font(Chrome.caption).foregroundStyle(Theme.secondary).lineLimit(4).fixedSize(horizontal: false, vertical: true).help(why)
+                Text(why).font(Chrome.caption).foregroundStyle(Theme.secondary).lineLimit(4).fixedSize(horizontal: false, vertical: true).tip(why)
             } else if !details.isEmpty {
                 ViewThatFits(in: .horizontal) {
                     ForEach(details, id: \.self) { Text($0).lineLimit(1).fixedSize() }
@@ -415,7 +415,7 @@ struct TransferBar: View {
                 .font(Chrome.caption).monospacedDigit().foregroundStyle(Theme.tertiary)
             }
         }
-        .help(failed ? "" : TransferProgress.line(item))
+        .tip(failed ? "" : TransferProgress.line(item))
     }
 
     /// Cancel while it goes (a carry's: Pause or remove its partial copy, asked in a popup);
@@ -437,7 +437,7 @@ struct TransferBar: View {
                 action("Cancel") { Self.ask(item.id, pause: false) }
             } else {
                 Button { progress.dismiss(item.id) } label: { Image(systemName: "xmark").font(Chrome.caption) }
-                    .buttonStyle(.plain).foregroundStyle(Theme.tertiary).help("Dismiss")
+                    .buttonStyle(.plain).foregroundStyle(Theme.tertiary).tip("Dismiss").storyID(StoryID.Explorer.transferDismiss)
             }
         case .done:
             EmptyView()
@@ -449,7 +449,7 @@ struct TransferBar: View {
     static func ask(_ id: UUID, pause: Bool) {
         let progress = TransferProgress.shared
         if let confirm = StorylineSeams.confirm { return confirm("remove partial") ? progress.cancel(id) : progress.pause(id) }
-        guard let window = NSApp.keyWindow ?? NSApp.mainWindow else { return }
+        guard let window = KoreAsk.front() else { return }
         var entries: [OptionItem] = []
         if pause { entries.append(OptionItem("Pause") { progress.pause(id) }) }
         entries.append(OptionItem("Cancel and remove the partial copy", destructive: true) { progress.cancel(id) })
@@ -458,6 +458,7 @@ struct TransferBar: View {
 
     private func action(_ title: String, _ run: @escaping () -> Void) -> some View {
         Button(title, action: run).buttonStyle(.plain).font(Chrome.caption).foregroundStyle(Theme.tertiary)
+            .storyID(StoryID.Explorer.transfer(title))
     }
 
     /// Determinate when the total is known, else a quiet sweep.
@@ -472,4 +473,21 @@ struct TransferBar: View {
         }
         .frame(height: 3)
     }
+}
+
+extension Workspace {
+    /// Storylines: a copy into this folder that stopped, its Retry running `retry`.
+    package func storyFailedTransfer(_ title: String, retry: @escaping @MainActor () -> Void) -> UUID {
+        let id = UUID()
+        TransferProgress.shared.begin(title, done: title, id: id, place: .mac(folder.path), shown: true, retry: retry)
+        TransferProgress.shared.finish(id, failure: "It stopped.", resumable: true)
+        return id
+    }
+
+    /// A carry going into this folder that can pause: its Cancel asks Pause or remove.
+    package func storyRunningTransfer(_ title: String, pause: @escaping @MainActor () -> Void, cancel: @escaping @MainActor () -> Void) -> UUID {
+        TransferProgress.shared.begin(title, done: title, place: .mac(folder.path), total: 1_000_000, shown: true, cancel: cancel, pause: pause)
+    }
+
+    package func storyForgetTransfer(_ id: UUID) { TransferProgress.shared.finish(id, cancelled: true) }
 }

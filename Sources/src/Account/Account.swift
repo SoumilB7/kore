@@ -286,10 +286,13 @@ package struct SignInContext: Sendable {
     package let folder: URL
     /// Opens a file as the app opens one (a terminal login's script).
     package let open: @MainActor @Sendable (URL) -> Void
+    /// On a box: the account it signs in (nil: the box's default; a new name: an account added).
+    package var login: String?
 
-    package init(folder: URL, open: @escaping @MainActor @Sendable (URL) -> Void) {
+    package init(folder: URL, open: @escaping @MainActor @Sendable (URL) -> Void, login: String? = nil) {
         self.folder = folder
         self.open = open
+        self.login = login
     }
 }
 

@@ -16,7 +16,7 @@ struct CommandCue: View {
                 Text("\(count)").font(TextStyle.caption.monospacedDigit()).foregroundStyle(Theme.secondary)
             }
             .fixedSize()
-            .help(count == 1 ? "1 in background" : "\(count) in background")
+            .tip(count == 1 ? "1 in background" : "\(count) in background")
             .accessibilityLabel(Text(count == 1 ? "1 command in background" : "\(count) commands in background"))
         }
     }
@@ -149,7 +149,7 @@ private struct CommandRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(command.command ?? command.title)
+                .tip(command.command ?? command.title)
                 .accessibilityHint(Text(open ? "Hides the command" : "Shows the command and its output"))
                 .accessibilityActions {
                     if command.canStop { Button("Stop") { map.askingStop = command.id } }
@@ -220,8 +220,9 @@ private struct CommandRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Select \(owner.name)")
+            .tip("Select \(owner.name)")
             .layoutPriority(-1)
+            .storyID(id.part(.choose))
         }
     }
 

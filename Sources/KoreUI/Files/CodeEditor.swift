@@ -10,7 +10,7 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
     unowned let document: FileDocument
     let scrollView = EditorScrollView()
     let textView: EditorTextView
-    private let gutter: GutterView
+    let gutter: GutterView
     let lines = LineIndex()
     private(set) var colorer: SyntaxColorer
     /// `.env` values show as bullets (`SecretMask`) but on these lines: the caret's while the
@@ -371,6 +371,12 @@ final class CodeEditorController: NSObject, NSTextViewDelegate, @preconcurrency 
         }
         focusPending = false
         window.makeFirstResponder(textView)
+    }
+
+    /// Something else takes the keys before the text view is in a window: its ask is off.
+    func dropPendingFocus() {
+        focusPending = false
+        document.rendering.focusPending = false
     }
 
     /// The text view is in a window now: it takes the caret if that was asked for meanwhile.
@@ -1599,7 +1605,7 @@ final class EditorTextView: NSTextView {
         super.viewDidMoveToWindow()
         MainActor.assumeIsolated { controller?.movedToWindow() }
         guard Self.keys == nil else { return }
-        Self.keys = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+        Self.keys = WindowEvents.monitor(.keyDown) { event in
             guard let text = event.window?.firstResponder as? EditorTextView, text.shortcut(event) else { return event }
             return nil
         }

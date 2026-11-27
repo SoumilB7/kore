@@ -52,9 +52,9 @@ struct LoginMeters: View {
                                     .monospacedDigit().fixedSize()
                                 reset(UsageText.resetsShort(bar.resetsAt, now: now))
                             }
-                            .help([UsageText.resetsAt(bar.resetsAt, now: now), UsageText.stamp(at, now: now)].compactMap { $0 }.joined(separator: " · "))
+                            .tip([UsageText.resetsAt(bar, now: now), UsageText.stamp(at, now: now)].compactMap { $0 }.joined(separator: " · "))
                             .accessibilityElement(children: .ignore)
-                            .accessibilityLabel(["\(UsageText.label(bar.title)), \(UsageText.percent(bar.used)) used", UsageText.resets(bar.resetsAt, now: now)].filter { !$0.isEmpty }.joined(separator: ", "))
+                            .accessibilityLabel(["\(UsageText.label(bar.title)), \(UsageText.percent(bar.used)) used", UsageText.resets(bar, now: now)].filter { !$0.isEmpty }.joined(separator: ", "))
                         }
                     }
                 }

@@ -274,7 +274,7 @@ final class UsageState {
 
     /// A bar's tooltip: Kore's share of it, else (none, or not worked out yet) when it resets.
     func barHelp(_ limit: PlanLimit, now: Date) -> String {
-        guard let kore = share(limit)?.kore, kore > 0 else { return UsageText.resetsAt(limit.resetsAt, now: now) }
+        guard let kore = share(limit)?.kore, kore > 0 else { return UsageText.resetsAt(limit, now: now) }
         return UsageText.inKore(kore)
     }
 
@@ -419,7 +419,7 @@ final class UsageState {
         let now = Date()
         let bars = (reading?.limits?.bars ?? []).map { bar in
             let kore = share(bar).flatMap { $0.kore > 0 ? UsageText.inKore($0.kore) : nil }
-            return [bar.title, UsageText.percent(bar.used), UsageText.resets(bar.resetsAt, now: now), kore].compactMap { $0 }
+            return [bar.title, UsageText.percent(bar.used), UsageText.resets(bar, now: now), kore].compactMap { $0 }
                 .joined(separator: " · ")
         }
         guard resetsOpen else { return bars }
@@ -496,7 +496,7 @@ struct UsagePopup: View {
                 .foregroundStyle(Theme.text)
                 .lineLimit(1)
                 .truncationMode(.tail)
-                .help(account.map(UsageText.who) ?? "")
+                .tip(account.map(UsageText.who) ?? "")
             Spacer(minLength: 0)
             freshness
             HStack(spacing: Space.xxs) {
@@ -512,12 +512,12 @@ struct UsagePopup: View {
                     IconButton(
                         symbol: "arrow.up.right", kind: .mini, font: Glyph.chevron, help: "Manage usage on \(url.host() ?? url.absoluteString)"
                     ) {
-                        NSWorkspace.shared.open(url)
+                        StoryHost.open(url)
                         state.close()
                     }
                     .storyID(StoryID.Composer.usage.part(.open))
                     .tabStop(StoryID.Composer.usage.part(.open)) {
-                        NSWorkspace.shared.open(url)
+                        StoryHost.open(url)
                         state.close()
                     }
                 }
@@ -562,12 +562,29 @@ struct UsagePopup: View {
             .opacity(unavailable == nil ? 1 : Theme.dimmed)
         }
         let extras = state.reading?.limits?.extras ?? []
-        if !extras.isEmpty {
-            extrasLine(extras, live: unavailable == nil && state.status != .loading)
-                .font(TextStyle.caption)
-                .foregroundStyle(Theme.secondary)
-                .padding(.top, Space.md)
-                .opacity(unavailable == nil ? 1 : Theme.dimmed)
+        // A plan's limits read: the CLI's own link to its limit resets, at the caption's end.
+        let reset = state.reading?.account.access == .plan && bars?.isEmpty == false ? wording.limitReset : nil
+        if !extras.isEmpty || reset != nil {
+            HStack(spacing: Space.md) {
+                if !extras.isEmpty { extrasLine(extras, live: unavailable == nil && state.status != .loading) }
+                Spacer(minLength: 0)
+                if let reset {
+                    CaptionButton(title: "Reset", tint: Theme.secondary, hover: Theme.accent, opens: true) {
+                        StoryHost.open(reset)
+                        state.close()
+                    }
+                    .tip("Limit resets on \(reset.host() ?? reset.absoluteString)")
+                    .storyID(StoryID.Composer.usage.part(.limitReset))
+                    .tabStop(StoryID.Composer.usage.part(.limitReset)) {
+                        StoryHost.open(reset)
+                        state.close()
+                    }
+                }
+            }
+            .font(TextStyle.caption)
+            .foregroundStyle(Theme.secondary)
+            .padding(.top, Space.md)
+            .opacity(unavailable == nil ? 1 : Theme.dimmed)
         }
         if state.resetsOpen, let caption = wording.resetsCaption {
             let rows = state.resetRows
@@ -592,7 +609,7 @@ struct UsagePopup: View {
                 .tabStop(StoryID.Composer.usage.part(.reset)) { state.toggleResets() }
             }
         } else {
-            Text(line).lineLimit(1).truncationMode(.tail).help(line)
+            Text(line).lineLimit(1).truncationMode(.tail).tip(line)
         }
     }
 
@@ -620,7 +637,7 @@ struct UsagePopup: View {
         return VStack(alignment: .leading, spacing: 0) {
             Rectangle().fill(Theme.border).frame(height: Stroke.hairline).padding(.vertical, Space.md)
             HStack(spacing: Space.xs) {
-                Text(caption).lineLimit(1).truncationMode(.tail).help(caption)
+                Text(caption).lineLimit(1).truncationMode(.tail).tip(caption)
                 Spacer(minLength: 0)
                 if state.rereading { SpinningArc().frame(width: Size.spinner, height: Size.spinner) }
             }
@@ -645,7 +662,7 @@ struct UsagePopup: View {
     /// share starts the bar's fill, hatched, and is the bar's tooltip ("~12% in Kore").
     private func row(_ limit: PlanLimit?, placeholder: String, now: Date) -> some View {
         let reset = limit.map { UsageText.resetsShort($0.resetsAt, now: now) } ?? ""
-        let help = limit.map { UsageText.resetsAt($0.resetsAt, now: now) } ?? ""
+        let help = limit.map { UsageText.resetsAt($0, now: now) } ?? ""
         let kore = limit.flatMap { state.share($0)?.kore } ?? 0
         return GridRow {
             CappedWidth(cap: Size.usageTitleMax) {
@@ -656,21 +673,21 @@ struct UsagePopup: View {
                     .truncationMode(.tail)
             }
             .frame(minHeight: Size.contextCardLine)
-            .help(help)
+            .tip(help)
                 .storyID(limit.map { StoryID.Composer.usageLimit($0.title) })
             LimitBar(
                 fraction: limit.map { UsageText.fraction($0.used) } ?? 0, kore: UsageText.fraction(kore),
                 share: limit.map { StoryID.Composer.usageLimit($0.title).part(.share) })
                 .frame(minWidth: Size.usageBarMin, maxWidth: .infinity)
                 .storyID(limit.map { StoryID.Composer.usageLimit($0.title).part(.track) })
-                .help(limit.map { state.barHelp($0, now: now) } ?? "")
+                .tip(limit.map { state.barHelp($0, now: now) } ?? "")
                 .accessibilityLabel(kore > 0 ? "about \(UsageText.kore(kore).dropFirst()) in Kore" : "")
             Text(limit.map { UsageText.percent($0.used) } ?? "—")
                 .font(TextStyle.label.monospacedDigit())
                 .foregroundStyle(Theme.secondary)
                 .lineLimit(1)
                 .gridColumnAlignment(.trailing)
-                .help(help)
+                .tip(help)
             // Blank while loading or without a time, still as wide as a short time.
             HStack(spacing: Space.xxs) {
                 Image(systemName: "arrow.clockwise").font(Glyph.chevron).foregroundStyle(Theme.tertiary)
@@ -679,18 +696,20 @@ struct UsagePopup: View {
             .lineLimit(1)
             .fixedSize()
             .opacity(reset.isEmpty ? 0 : 1)
-            .help(help)
+            .tip(help)
         }
     }
 }
 
 /// A text button in the caption's line: `tint` at rest, `hover` under the pointer. With
-/// `unfolds`, a ⌄ after it (tertiary at rest) turned over while what it unfolds is open.
-private struct CaptionButton: View {
+/// `unfolds`, a ⌄ after it (tertiary at rest) turned over while what it unfolds is open; with
+/// `opens`, a ↗ after it, for a page in the browser.
+struct CaptionButton: View {
     let title: String
     let tint: Color
     let hover: Color
     var unfolds: Bool?
+    var opens = false
     let action: () -> Void
     @StateObject private var hovered = Local(false)
     @Environment(\.isEnabled) private var isEnabled
@@ -700,7 +719,10 @@ private struct CaptionButton: View {
         let lit = hovered.value && isEnabled
         Button(action: action) {
             HStack(spacing: Space.xxs) {
-                Text(title).lineLimit(1).fixedSize()
+                // The ↗ inside the title's Text: one baseline, the line's, wherever it sits.
+                (opens ? Text(title) + Text(" ") + Text(Image(systemName: "arrow.up.right")).font(Glyph.chevron)
+                    .foregroundStyle(isEnabled && lit ? hover : Theme.tertiary) : Text(title))
+                    .lineLimit(1).fixedSize()
                 if let unfolds {
                     Image(systemName: "chevron.down")
                         .font(Glyph.chevron)
@@ -791,7 +813,7 @@ private struct ResetRowView: View {
         .hoverFill(step == .asking || (hovered.value && step == nil), step == .asking ? Theme.Row.selected(.surface) : Theme.Row.hover(.surface))
         .contentShape(Rectangle())
         .onHover { hovered.value = $0 }
-        .help(step == nil ? row.credit.map { UsageText.expiresAt($0.expiresAt, now: now) } ?? "" : "")
+        .tip(step == nil ? row.credit.map { UsageText.expiresAt($0.expiresAt, now: now) } ?? "" : "")
         // One element to VoiceOver, its "Use reset" a button on it.
         .accessibilityElement(children: .combine)
         .storyID(id)
@@ -817,7 +839,7 @@ private struct ResetRowView: View {
     }
 
     private func said(_ words: String, _ color: Color) -> some View {
-        Text(words).foregroundStyle(color).lineLimit(1).truncationMode(.tail).help(words)
+        Text(words).foregroundStyle(color).lineLimit(1).truncationMode(.tail).tip(words)
     }
 
     /// Never truncated, at the row's trailing edge.
